@@ -1,5 +1,5 @@
 import type { MiddlewareHandler } from 'hono'
-import { verify } from 'jsonwebtoken'
+import jwt from 'jsonwebtoken'
 import type { HonoVariables, SupabaseJwtPayload } from '../types'
 
 const JWT_SECRET = process.env.SUPABASE_JWT_SECRET ?? ''
@@ -20,7 +20,7 @@ export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = a
 
   let payload: SupabaseJwtPayload
   try {
-    payload = verify(token, JWT_SECRET) as SupabaseJwtPayload
+    payload = jwt.verify(token, JWT_SECRET) as SupabaseJwtPayload
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Token invalide'
     return c.json({ error: 'Token invalide', code: 'INVALID_TOKEN', details: message }, 401)
