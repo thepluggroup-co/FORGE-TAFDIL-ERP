@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "buildCommand": "pnpm build",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "framework": "vite",
+  "projects": {
+    "web": {
+      "root": "apps/web",
+      "buildCommand": "vite build",
+      "outputDirectory": "dist",
+      "framework": "vite"
+    },
+    "api": {
+      "root": "apps/api",
+      "buildCommand": "tsup",
+      "outputDirectory": "dist",
+      "framework": "nodejs"
+    },
+    "shop": {
+      "root": "apps/shop",
+      "buildCommand": "next build",
+      "outputDirectory": ".next",
+      "framework": "nextjs"
+    }
+  }
+}
