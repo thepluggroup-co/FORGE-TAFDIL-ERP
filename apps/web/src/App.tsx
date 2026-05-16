@@ -6,11 +6,15 @@ import { AuthProvider, useAuth } from '@/context/AuthContext'
 import { AppShell } from '@/components/layout/AppShell'
 
 // Pages
-const Login       = lazy(() => import('@/pages/Login'))
-const Dashboard   = lazy(() => import('@/pages/Dashboard'))
-const Stocks      = lazy(() => import('@/pages/Stocks'))
-const BonsSortie  = lazy(() => import('@/pages/stocks/BonsSortie'))
-const ModulePage  = lazy(() => import('@/pages/ModulePage'))
+const Login        = lazy(() => import('@/pages/Login'))
+const Dashboard    = lazy(() => import('@/pages/Dashboard'))
+const Stocks       = lazy(() => import('@/pages/Stocks'))
+const BonsSortie   = lazy(() => import('@/pages/stocks/BonsSortie'))
+const Commandes    = lazy(() => import('@/pages/Commandes'))
+const Devis        = lazy(() => import('@/pages/Devis'))
+const Clients      = lazy(() => import('@/pages/Clients'))
+const ClientDetail = lazy(() => import('@/pages/clients/ClientDetail'))
+const ModulePage   = lazy(() => import('@/pages/ModulePage'))
 
 function PageLoader() {
   return (
@@ -36,13 +40,13 @@ function Shell({ children }: { children: React.ReactNode }) {
 }
 
 const PLACEHOLDER_MODULES = [
-  'production', 'commandes', 'devis', 'finance', 'rh',
+  'production', 'finance', 'rh',
   'formation', 'projets', 'logistique', 'marketing',
   'securite', 'intelligence', 'iot', 'boutique',
 ] as const
 
 const MODULE_LABELS: Record<string, string> = {
-  production: 'Production', commandes: 'Commandes', devis: 'Devis',
+  production: 'Production',
   finance: 'Finance', rh: 'RH', formation: 'Formation',
   projets: 'Projets', logistique: 'Logistique', marketing: 'Marketing',
   securite: 'Sécurité', intelligence: 'Intelligence', iot: 'IoT', boutique: 'Boutique',
@@ -67,6 +71,12 @@ function AppRoutes() {
           {/* Stocks + sous-routes */}
           <Route path="/stocks" element={<Shell><Stocks /></Shell>} />
           <Route path="/stocks/bons-sortie" element={<Shell><BonsSortie /></Shell>} />
+
+          {/* Module commercial */}
+          <Route path="/commandes" element={<Shell><Commandes /></Shell>} />
+          <Route path="/devis" element={<Shell><Devis /></Shell>} />
+          <Route path="/clients" element={<Shell><Clients /></Shell>} />
+          <Route path="/clients/:id" element={<Shell><ClientDetail /></Shell>} />
 
           {/* Autres modules (placeholder) */}
           {PLACEHOLDER_MODULES.map((mod) => (
