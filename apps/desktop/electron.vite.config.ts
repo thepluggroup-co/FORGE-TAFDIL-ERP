@@ -1,8 +1,15 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { resolve } from 'path'
 
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin({ exclude: ['@forge/db', '@forge/shared'] })],
+    resolve: {
+      alias: {
+        '@forge/db':     resolve(__dirname, '../../packages/db/src/index.ts'),
+        '@forge/shared': resolve(__dirname, '../../packages/shared/src/index.ts'),
+      },
+    },
     build: {
       outDir: 'out/main',
       rollupOptions: {
@@ -16,10 +23,5 @@ export default defineConfig({
     build: {
       outDir: 'out/preload',
     },
-  },
-  // Pas de renderer : on charge apps/web depuis localhost (dev) ou file:// (prod)
-  renderer: {
-    root: '.',
-    build: { outDir: 'out/renderer', emptyOutDir: false },
   },
 })
