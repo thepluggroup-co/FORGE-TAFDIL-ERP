@@ -1,12 +1,30 @@
-import { APP_NAME, COMPANY_NAME } from '@forge/shared'
+import { Routes, Route, Navigate } from 'react-router-dom'
+import { Toaster } from 'sonner'
 
 export default function App() {
   return (
-    <div className="min-h-screen bg-gray-950 text-white flex items-center justify-center">
+    <>
+      <Routes>
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/dashboard" element={<PlaceholderPage title="Dashboard" />} />
+        <Route path="/orders" element={<PlaceholderPage title="Commandes" />} />
+        <Route path="/production" element={<PlaceholderPage title="Production" />} />
+        <Route path="/inventory" element={<PlaceholderPage title="Inventaire" />} />
+        <Route path="/clients" element={<PlaceholderPage title="Clients" />} />
+        <Route path="*" element={<PlaceholderPage title="404" />} />
+      </Routes>
+      <Toaster richColors position="top-right" />
+    </>
+  )
+}
+
+function PlaceholderPage({ title }: { title: string }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#F5F5F5' }}>
       <div className="text-center">
-        <h1 className="text-4xl font-bold text-orange-500">{APP_NAME}</h1>
-        <p className="mt-2 text-gray-400">ERP natif pour {COMPANY_NAME}</p>
-        <p className="mt-1 text-sm text-gray-600">Douala, Cameroun</p>
+        <div className="text-5xl font-bold mb-2" style={{ color: '#C62828' }}>FORGE</div>
+        <div className="text-xl font-medium mb-1" style={{ color: '#212121' }}>{title}</div>
+        <div className="text-sm" style={{ color: '#37474F' }}>TAFDIL · Douala, Cameroun</div>
       </div>
     </div>
   )

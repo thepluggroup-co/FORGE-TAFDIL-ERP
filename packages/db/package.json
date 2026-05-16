@@ -12,8 +12,9 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "drizzle-orm": "^0.33.0",
     "@libsql/client": "^0.13.0",
+    "@paralleldrive/cuid2": "^2.2.2",
+    "drizzle-orm": "^0.33.0",
     "drizzle-zod": "^0.5.0",
     "zod": "^3.23.0"
   },

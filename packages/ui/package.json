@@ -21,6 +21,10 @@
     "typescript": "^5.4.0"
   },
   "dependencies": {
-    "@forge/shared": "workspace:*"
+    "@forge/shared": "workspace:*",
+    "@radix-ui/react-dialog": "^1.1.0",
+    "clsx": "^2.1.0",
+    "framer-motion": "^11.11.0",
+    "tailwind-merge": "^2.5.0"
   }
 }

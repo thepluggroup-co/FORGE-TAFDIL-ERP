@@ -1,0 +1,39 @@
+@import 'tailwindcss';
+
+@theme {
+  /* FORGE brand colors */
+  --color-forge-red: #C62828;
+  --color-forge-red-dark: #B71C1C;
+  --color-forge-red-light: #FFEBEE;
+
+  /* FORGE neutrals */
+  --color-forge-dark: #212121;
+  --color-forge-steel: #37474F;
+  --color-forge-steel-light: #ECEFF1;
+  --color-forge-light: #F5F5F5;
+
+  /* FORGE typography */
+  --font-forge: 'Inter', sans-serif;
+  --font-forge-mono: 'JetBrains Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-forge);
+  background-color: var(--color-forge-light);
+  color: var(--color-forge-dark);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-forge-mono);
+}
