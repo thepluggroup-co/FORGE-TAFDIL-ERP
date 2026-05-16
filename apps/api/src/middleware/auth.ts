@@ -1,5 +1,6 @@
 import type { MiddlewareHandler } from 'hono'
-import { verify } from 'jsonwebtoken'
+import jwt from 'jsonwebtoken'
+const { verify } = jwt
 import type { HonoVariables, SupabaseJwtPayload } from '../types'
 
 const JWT_SECRET = process.env.SUPABASE_JWT_SECRET ?? ''
