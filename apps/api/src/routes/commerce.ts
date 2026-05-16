@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabase } from '@forge/db'
 import { requireRole } from '../middleware/rbac'
+import { generateDevisPDF, uploadPDF } from '../services/pdf.service'
 import type { HonoVariables } from '../types'
 
 // ── TVA Cameroun ────────────────────────────────────────────────────────────────
@@ -305,7 +306,21 @@ router.post('/devis', requireRole(['directeur', 'admin']), zValidator('json', de
     return c.json({ error: lignesErr.message }, 400)
   }
 
-  return c.json({ ...devis, lignes: lignesData }, 201)
+  // Générer et uploader le PDF devis
+  let pdf_url: string | null = null
+  try {
+    const dv = devis as { total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number }
+    const pdfBuf = await generateDevisPDF(
+      { numero, date_emission: body.date_emission, date_validite: body.date_validite, validite_jours: body.validite_jours, total_ht_xaf: dv.total_ht_xaf, tva_xaf: dv.tva_xaf, total_ttc_xaf: dv.total_ttc_xaf },
+      { nom: body.client_nom },
+      (lignesData ?? []) as { designation: string; unite: string; quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number }[],
+    )
+    pdf_url = await uploadPDF(pdfBuf, 'devis', `${numero}.pdf`)
+  } catch (e) {
+    console.error('[commerce] devis PDF error:', e)
+  }
+
+  return c.json({ ...devis, lignes: lignesData, pdf_url }, 201)
 })
 
 router.put('/devis/:id', requireRole(['directeur', 'admin']), zValidator('json', devisSchema.partial()), async (c) => {

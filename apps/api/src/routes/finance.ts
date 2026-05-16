@@ -1,186 +1,24 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import PDFDocument from 'pdfkit'
-import { supabase, supabaseAdmin } from '@forge/db'
+import { supabase } from '@forge/db'
 import { requireRole } from '../middleware/rbac'
+import { generateFacturePDF, uploadPDF } from '../services/pdf.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
 const TVA_RATE = 0.1925
 
-// ── Montant en lettres (français) ──────────────────────────────────────────────
-
-function montantEnLettres(montant: number): string {
-  const n = Math.round(Math.abs(montant))
-  if (n === 0) return 'zéro franc CFA'
-
-  const UNITES = ['', 'un', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf',
-    'dix', 'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize', 'dix-sept', 'dix-huit', 'dix-neuf']
-  const DIZ = ['', '', 'vingt', 'trente', 'quarante', 'cinquante', 'soixante']
-
-  function s100(x: number): string {
-    if (x === 0) return ''
-    if (x < 20) return UNITES[x]
-    const d = Math.floor(x / 10), u = x % 10
-    if (d === 7) return 'soixante-' + UNITES[10 + u]
-    if (d === 8) return u === 0 ? 'quatre-vingts' : `quatre-vingt-${UNITES[u]}`
-    if (d === 9) return u === 0 ? 'quatre-vingt-dix' : `quatre-vingt-${UNITES[10 + u]}`
-    if (u === 0) return DIZ[d]
-    return DIZ[d] + (u === 1 ? '-et-un' : `-${UNITES[u]}`)
-  }
-
-  function s1000(x: number): string {
-    const c = Math.floor(x / 100), r = x % 100
-    const cent = c === 0 ? '' : c === 1 ? 'cent' : `${UNITES[c]} cent${r === 0 ? 's' : ''}`
-    const bas = s100(r)
-    return [cent, bas].filter(Boolean).join(' ')
-  }
-
-  const G = Math.floor(n / 1_000_000_000)
-  const M = Math.floor((n % 1_000_000_000) / 1_000_000)
-  const K = Math.floor((n % 1_000_000) / 1_000)
-  const R = n % 1_000
-
-  const parts: string[] = []
-  if (G > 0) parts.push(`${s1000(G)} milliard${G > 1 ? 's' : ''}`)
-  if (M > 0) parts.push(`${s1000(M)} million${M > 1 ? 's' : ''}`)
-  if (K > 0) parts.push(K === 1 ? 'mille' : `${s1000(K)} mille`)
-  if (R > 0) parts.push(s1000(R))
-
-  return parts.join(' ') + ' francs CFA'
-}
-
-// ── Formatage XAF ──────────────────────────────────────────────────────────────
-
 function xaf(n: number): string {
   return n.toLocaleString('fr-FR') + ' XAF'
 }
 
-// ── Génération PDF facture ─────────────────────────────────────────────────────
-
 interface FactureLignePdf {
-  designation: string
-  unite: string
-  quantite: number
+  designation:          string
+  unite:                string
+  quantite:             number
   prix_unitaire_ht_xaf: number
-  total_ht_xaf: number
-}
-
-interface FacturePdfData {
-  numero: string
-  date_emission: string
-  date_echeance: string
-  client_nom: string
-  total_ht_xaf: number
-  tva_xaf: number
-  total_ttc_xaf: number
-  lignes: FactureLignePdf[]
-}
-
-async function genererFacturePdf(data: FacturePdfData): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: 0, info: { Title: data.numero, Author: 'TAFDIL SARL' } })
-    const chunks: Buffer[] = []
-    doc.on('data', (c: Buffer) => chunks.push(c))
-    doc.on('end', () => resolve(Buffer.concat(chunks)))
-    doc.on('error', reject)
-
-    const ML = 50   // margin left
-    const W  = 495  // usable width (595 - 50*2)
-
-    // ── En-tête bleu ────────────────────────────────────────────────
-    doc.rect(0, 0, 595, 115).fill('#1e40af')
-
-    doc.font('Helvetica-Bold').fontSize(22).fillColor('white')
-      .text('TAFDIL SARL', ML, 28)
-    doc.font('Helvetica').fontSize(8).fillColor('#bfdbfe')
-      .text('Microusine Métallurgique — Bassa Industrie, Douala, Cameroun', ML, 56)
-      .text('NIU : M0820000123456A  |  RCCM : RC/DLA/2020/B/1234', ML, 68)
-      .text('Tél : +237 699 000 000  |  info@tafdil.cm', ML, 80)
-
-    doc.font('Helvetica-Bold').fontSize(18).fillColor('white')
-      .text('FACTURE', 0, 28, { align: 'right', width: 545 })
-    doc.font('Helvetica-Bold').fontSize(12).fillColor('#93c5fd')
-      .text(data.numero, 0, 54, { align: 'right', width: 545 })
-    doc.font('Helvetica').fontSize(8).fillColor('#bfdbfe')
-      .text(`Émission : ${data.date_emission}`, 0, 71, { align: 'right', width: 545 })
-      .text(`Échéance : ${data.date_echeance}`, 0, 82, { align: 'right', width: 545 })
-
-    // ── Bloc client ──────────────────────────────────────────────────
-    doc.rect(ML, 130, W, 45).fill('#f3f4f6')
-    doc.font('Helvetica-Bold').fontSize(7).fillColor('#6b7280')
-      .text('FACTURÉ À', ML + 10, 138)
-    doc.font('Helvetica-Bold').fontSize(12).fillColor('#111827')
-      .text(data.client_nom, ML + 10, 150)
-
-    // ── En-tête tableau ──────────────────────────────────────────────
-    let y = 193
-    doc.rect(ML, y, W, 20).fill('#1e40af')
-    doc.font('Helvetica-Bold').fontSize(8).fillColor('white')
-    doc.text('DÉSIGNATION', ML + 8, y + 6)
-    doc.text('QTÉ', ML + 300, y + 6)
-    doc.text('P.U. HT (XAF)', ML + 348, y + 6)
-    doc.text('TOTAL HT (XAF)', ML + 425, y + 6)
-    y += 20
-
-    // ── Lignes ───────────────────────────────────────────────────────
-    data.lignes.forEach((l, i) => {
-      doc.rect(ML, y, W, 18).fill(i % 2 === 0 ? '#f9fafb' : '#ffffff')
-      doc.font('Helvetica').fontSize(8).fillColor('#111827')
-      doc.text(l.designation, ML + 8, y + 5, { width: 284 })
-      doc.text(`${l.quantite} ${l.unite}`, ML + 300, y + 5)
-      doc.text(l.prix_unitaire_ht_xaf.toLocaleString('fr-FR'), ML + 348, y + 5)
-      doc.text(l.total_ht_xaf.toLocaleString('fr-FR'), ML + 430, y + 5)
-      y += 18
-    })
-
-    // ── Totaux ───────────────────────────────────────────────────────
-    y += 12
-    doc.font('Helvetica').fontSize(9).fillColor('#374151')
-    doc.text('Total HT :', ML + 310, y)
-    doc.text(xaf(data.total_ht_xaf), ML + 390, y, { width: 155, align: 'right' })
-    y += 15
-    doc.text('TVA 19,25% :', ML + 310, y)
-    doc.text(xaf(data.tva_xaf), ML + 390, y, { width: 155, align: 'right' })
-    y += 5
-    doc.rect(ML + 310, y + 8, 185, 22).fill('#1e40af')
-    doc.font('Helvetica-Bold').fontSize(10).fillColor('white')
-    doc.text('TOTAL TTC :', ML + 318, y + 14)
-    doc.text(xaf(data.total_ttc_xaf), ML + 390, y + 14, { width: 97, align: 'right' })
-    y += 38
-
-    // ── Arrêté en lettres ────────────────────────────────────────────
-    y += 8
-    doc.rect(ML, y, W, 30).fill('#eff6ff')
-    doc.font('Helvetica').fontSize(8).fillColor('#374151')
-    doc.text('Arrêté à la somme de :', ML + 8, y + 6)
-    doc.font('Helvetica-Bold').fontSize(8).fillColor('#1e40af')
-    doc.text(montantEnLettres(data.total_ttc_xaf).toUpperCase(), ML + 8, y + 17, { width: W - 16 })
-    y += 42
-
-    // ── Mentions DGI ─────────────────────────────────────────────────
-    y += 6
-    doc.font('Helvetica-Bold').fontSize(7).fillColor('#6b7280')
-    doc.text('MENTIONS LÉGALES ET FISCALES OBLIGATOIRES', ML, y)
-    y += 10
-    doc.font('Helvetica').fontSize(7).fillColor('#6b7280')
-    const mentions = [
-      `• TVA collectée : ${xaf(data.tva_xaf)} au taux de 19,25% — Loi de Finances du Cameroun, CGI Art. 125.`,
-      '• Facture assujettie à la TVA. Droit à déduction pour les assujettis selon art. 145 CGI Cameroun.',
-      '• Toute facture fictive ou falsifiée est passible de sanctions pénales (CGI Art. 538 et suivants).',
-      '• Document à conserver 10 ans. Paiement par virement bancaire ou chèque certifié.',
-    ]
-    mentions.forEach((m) => { doc.text(m, ML, y); y += 10 })
-
-    // ── Pied de page ─────────────────────────────────────────────────
-    doc.moveTo(ML, 770).lineTo(ML + W, 770).strokeColor('#d1d5db').lineWidth(0.5).stroke()
-    doc.font('Helvetica').fontSize(7).fillColor('#9ca3af')
-    doc.text('TAFDIL SARL — Capital social : 10 000 000 XAF — NIU : M0820000123456A — RCCM : RC/DLA/2020/B/1234', ML, 775, { align: 'center', width: W })
-    doc.text('Bassa Industrie, Douala, Cameroun — +237 699 000 000 — info@tafdil.cm', ML, 785, { align: 'center', width: W })
-
-    doc.end()
-  })
+  total_ht_xaf:         number
 }
 
 // ── Schémas Zod ────────────────────────────────────────────────────────────────
@@ -234,12 +72,6 @@ const whatsappSchema = z.object({
   phone:   z.string().min(8),
   message: z.string().optional(),
 })
-
-// ── Helper storage ─────────────────────────────────────────────────────────────
-
-function storageFrom(bucket: string) {
-  return (supabaseAdmin ?? supabase).storage.from(bucket)
-}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // FACTURES
@@ -307,16 +139,12 @@ router.post('/factures', requireRole(['directeur', 'admin']), zValidator('json',
   // Générer et uploader le PDF
   let pdf_url: string | null = null
   try {
-    const pdfBuf = await genererFacturePdf({
-      numero, date_emission: body.date_emission, date_echeance: body.date_echeance,
-      client_nom: body.client_nom, total_ht_xaf, tva_xaf, total_ttc_xaf,
-      lignes: (lignesData ?? []) as FactureLignePdf[],
-    })
-
-    const { error: upErr } = await storageFrom('factures').upload(`${numero}.pdf`, pdfBuf, { contentType: 'application/pdf', upsert: true })
-    if (!upErr) {
-      pdf_url = supabase.storage.from('factures').getPublicUrl(`${numero}.pdf`).data.publicUrl
-    }
+    const pdfBuf = await generateFacturePDF(
+      { numero, date_emission: body.date_emission, date_echeance: body.date_echeance, total_ht_xaf, tva_xaf, total_ttc_xaf },
+      { nom: body.client_nom },
+      (lignesData ?? []) as FactureLignePdf[],
+    )
+    pdf_url = await uploadPDF(pdfBuf, 'factures', `${numero}.pdf`)
   } catch (e) {
     console.error('[finance] PDF generation error:', e)
   }
@@ -344,7 +172,7 @@ router.get('/factures/:id/pdf', async (c) => {
 
   // Essayer Supabase Storage
   try {
-    const { data: blob } = await storageFrom('factures').download(`${f.numero}.pdf`)
+    const { data: blob } = await supabase.storage.from('factures').download(`${f.numero}.pdf`)
     if (blob) {
       c.header('Content-Type', 'application/pdf')
       c.header('Content-Disposition', `inline; filename="${f.numero}.pdf"`)
@@ -354,11 +182,11 @@ router.get('/factures/:id/pdf', async (c) => {
   } catch { /* régénérer */ }
 
   // Régénération à la volée
-  const buf = await genererFacturePdf({
-    numero: f.numero, date_emission: f.date_emission, date_echeance: f.date_echeance,
-    client_nom: f.client_nom, total_ht_xaf: f.total_ht_xaf, tva_xaf: f.tva_xaf,
-    total_ttc_xaf: f.total_ttc_xaf, lignes: f.factures_lignes,
-  })
+  const buf = await generateFacturePDF(
+    { numero: f.numero, date_emission: f.date_emission, date_echeance: f.date_echeance, total_ht_xaf: f.total_ht_xaf, tva_xaf: f.tva_xaf, total_ttc_xaf: f.total_ttc_xaf },
+    { nom: f.client_nom },
+    f.factures_lignes,
+  )
 
   c.header('Content-Type', 'application/pdf')
   c.header('Content-Disposition', `inline; filename="${f.numero}.pdf"`)
