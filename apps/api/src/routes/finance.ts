@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { supabase } from '@forge/db'
 import { requireRole } from '../middleware/rbac'
 import { generateFacturePDF, uploadPDF } from '../services/pdf.service'
+import { genererEcritureVente, genererEcritureEncaissement } from '../services/comptabilite.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
@@ -148,6 +149,14 @@ router.post('/factures', requireRole(['directeur', 'admin']), zValidator('json',
   } catch (e) {
     console.error('[finance] PDF generation error:', e)
   }
+
+  // Trigger comptable : Dr 411 / Cr 701 / Cr 4431
+  const fRow = facture as { id: string; date_emission: string }
+  genererEcritureVente({
+    id: fRow.id, numero, date_emission: fRow.date_emission,
+    client_nom: body.client_nom, total_ht_xaf, tva_xaf, total_ttc_xaf,
+    created_by: user.id,
+  }).catch(e => console.error('[compta] vente trigger:', e))
 
   return c.json({ ...facture, lignes: lignesData, pdf_url }, 201)
 })
@@ -317,10 +326,10 @@ router.post('/credits/:id/rembourser', requireRole(['directeur', 'admin']), zVal
   const user   = c.get('user')
   const body   = c.req.valid('json')
 
-  const { data: credit } = await supabase.from('credits').select('solde_restant_xaf, statut').eq('id', id).single()
+  const { data: credit } = await supabase.from('credits').select('solde_restant_xaf, statut, client_nom, numero').eq('id', id).single()
   if (!credit) return c.json({ error: 'Crédit introuvable', code: 'NOT_FOUND' }, 404)
 
-  const cr = credit as { solde_restant_xaf: number; statut: string }
+  const cr = credit as { solde_restant_xaf: number; statut: string; client_nom: string; numero: string }
   if (cr.statut === 'rembourse') return c.json({ error: 'Crédit déjà remboursé', code: 'ALREADY_DONE' }, 422)
   if (body.montant_xaf > cr.solde_restant_xaf) {
     return c.json({ error: `Montant dépasse le solde restant (${xaf(cr.solde_restant_xaf)})`, code: 'AMOUNT_EXCEEDED' }, 422)
@@ -336,6 +345,16 @@ router.post('/credits/:id/rembourser', requireRole(['directeur', 'admin']), zVal
   const nouveauSolde  = Math.max(0, cr.solde_restant_xaf - body.montant_xaf)
   const nouveauStatut = nouveauSolde <= 0 ? 'rembourse' : 'en_cours'
   await supabase.from('credits').update({ solde_restant_xaf: nouveauSolde, statut: nouveauStatut, updated_at: new Date().toISOString() }).eq('id', id)
+
+  // Trigger comptable : Dr 521 Banque / Cr 411 Clients
+  genererEcritureEncaissement({
+    credit_id:   id,
+    reference:   cr.numero,
+    date:        body.date_paiement,
+    montant_xaf: body.montant_xaf,
+    client_nom:  cr.client_nom,
+    created_by:  user.id,
+  }).catch(e => console.error('[compta] encaissement trigger:', e))
 
   return c.json({ remboursement: remb, nouveau_solde_xaf: nouveauSolde, statut: nouveauStatut })
 })
