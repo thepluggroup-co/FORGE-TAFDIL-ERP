@@ -1,4 +1,7 @@
 {
+  "buildCommand": "cd ../.. && pnpm install --frozen-lockfile && pnpm --filter @forge/web build",
+  "outputDirectory": "dist",
+  "installCommand": "echo skip",
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
   ]
