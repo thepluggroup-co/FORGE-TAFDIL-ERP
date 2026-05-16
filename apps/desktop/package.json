@@ -1,0 +1,23 @@
+{
+  "name": "@forge/desktop",
+  "private": true,
+  "version": "0.0.1",
+  "main": "src/main.ts",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "@forge/shared": "workspace:*",
+    "electron-updater": "^6.3.0"
+  },
+  "devDependencies": {
+    "@types/electron": "^1.6.0",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.0",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.4.0"
+  }
+}

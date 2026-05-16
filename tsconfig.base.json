@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "paths": {
+      "@forge/ui": ["./packages/ui/src"],
+      "@forge/ui/*": ["./packages/ui/src/*"],
+      "@forge/db": ["./packages/db/src"],
+      "@forge/db/*": ["./packages/db/src/*"],
+      "@forge/shared": ["./packages/shared/src"],
+      "@forge/shared/*": ["./packages/shared/src/*"],
+      "@forge/ai": ["./packages/ai/src"],
+      "@forge/ai/*": ["./packages/ai/src/*"]
+    }
+  },
+  "exclude": ["node_modules"]
+}
