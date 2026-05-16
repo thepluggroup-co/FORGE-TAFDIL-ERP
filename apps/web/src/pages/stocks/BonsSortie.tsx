@@ -1,0 +1,361 @@
+import React, { useState } from 'react'
+import { motion } from 'framer-motion'
+import { Plus, Check, ChevronRight } from 'lucide-react'
+import { PageHeader, DataTable, StatusBadge, SlideOver, Button, EmptyState } from '@forge/ui'
+import type { Column } from '@forge/ui'
+import { formatXAF, formatDateTime } from '@/lib/utils'
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+type BonStatus = 'soumis' | 'valide' | 'execute'
+
+interface BonLigne {
+  produit: string
+  quantite: number
+  unite: string
+}
+
+interface BonSortie extends Record<string, unknown> {
+  id: string
+  code: string
+  technicien: string
+  statut: BonStatus
+  lignes: BonLigne[]
+  date: string
+  montant: number
+}
+
+// ── Mock data ──────────────────────────────────────────────────────────────────
+
+const BONS: BonSortie[] = [
+  {
+    id: '1', code: 'BS-2026-005', technicien: 'Jean Mbida', statut: 'execute',
+    lignes: [
+      { produit: 'Aluminium 6060 T5', quantite: 10, unite: 'kg' },
+      { produit: 'Électrode soudure 3.2mm', quantite: 2, unite: 'kg' },
+      { produit: 'Disque meulage 230mm', quantite: 5, unite: 'pcs' },
+      { produit: 'Câble électrique 2.5mm²', quantite: 20, unite: 'm' },
+    ],
+    date: '2026-05-14T09:00:00', montant: 85000,
+  },
+  {
+    id: '2', code: 'BS-2026-004', technicien: 'Marie Ngono', statut: 'valide',
+    lignes: [{ produit: 'Fer plat 40×4', quantite: 15, unite: 'kg' }],
+    date: '2026-05-15T10:30:00', montant: 15000,
+  },
+  {
+    id: '3', code: 'BS-2026-003', technicien: 'Paul Essomba', statut: 'soumis',
+    lignes: [
+      { produit: 'Tôle galvanisée 2mm', quantite: 50, unite: 'kg' },
+      { produit: 'Peinture anti-rouille', quantite: 5, unite: 'L' },
+      { produit: 'Boulonnerie inox M8', quantite: 100, unite: 'pcs' },
+      { produit: 'Profilé U 100', quantite: 30, unite: 'kg' },
+      { produit: 'Vitre claire 4mm', quantite: 3, unite: 'm²' },
+    ],
+    date: '2026-05-16T08:00:00', montant: 120000,
+  },
+  {
+    id: '4', code: 'BS-2026-002', technicien: 'Pierre Atangana', statut: 'soumis',
+    lignes: [
+      { produit: 'Câble électrique 2.5mm²', quantite: 30, unite: 'm' },
+      { produit: 'Disque meulage 230mm', quantite: 8, unite: 'pcs' },
+    ],
+    date: '2026-05-16T09:15:00', montant: 28000,
+  },
+  {
+    id: '5', code: 'BS-2026-001', technicien: 'Jean Mbida', statut: 'execute',
+    lignes: [
+      { produit: 'Aluminium 6060 T5', quantite: 5, unite: 'kg' },
+      { produit: 'Fer plat 40×4', quantite: 20, unite: 'kg' },
+    ],
+    date: '2026-05-13T14:00:00', montant: 45000,
+  },
+]
+
+const STEP_LABELS: Record<BonStatus, string> = {
+  soumis: 'Soumis',
+  valide: 'Validé',
+  execute: 'Exécuté',
+}
+
+const STEPS: BonStatus[] = ['soumis', 'valide', 'execute']
+
+// ── Stepper ────────────────────────────────────────────────────────────────────
+
+function WorkflowStepper({ status }: { status: BonStatus }) {
+  const currentIdx = STEPS.indexOf(status)
+
+  return (
+    <div className="flex items-center gap-1">
+      {STEPS.map((step, i) => (
+        <React.Fragment key={step}>
+          <div className="flex items-center gap-1">
+            <div
+              className="flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold shrink-0"
+              style={{
+                backgroundColor: i <= currentIdx ? '#C62828' : '#e5e7eb',
+                color: i <= currentIdx ? '#fff' : '#9ca3af',
+              }}
+            >
+              {i < currentIdx ? <Check className="h-3 w-3" /> : i + 1}
+            </div>
+            <span
+              className="text-xs font-medium hidden sm:inline"
+              style={{ color: i <= currentIdx ? '#C62828' : '#9ca3af' }}
+            >
+              {STEP_LABELS[step]}
+            </span>
+          </div>
+          {i < STEPS.length - 1 && (
+            <ChevronRight
+              className="h-3 w-3 mx-0.5 shrink-0"
+              style={{ color: i < currentIdx ? '#C62828' : '#d1d5db' }}
+            />
+          )}
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
+// ── Columns ────────────────────────────────────────────────────────────────────
+
+const COLUMNS: Column<BonSortie>[] = [
+  {
+    id: 'code',
+    header: 'Code',
+    accessor: 'code',
+    render: (v) => <span className="font-mono text-sm font-semibold text-[#212121]">{v as string}</span>,
+  },
+  {
+    id: 'technicien',
+    header: 'Technicien',
+    accessor: 'technicien',
+    render: (v) => (
+      <div className="flex items-center gap-2">
+        <div
+          className="flex items-center justify-center w-7 h-7 rounded-full text-white text-xs font-semibold shrink-0"
+          style={{ backgroundColor: '#C62828' }}
+        >
+          {(v as string).charAt(0)}
+        </div>
+        <span className="text-sm">{v as string}</span>
+      </div>
+    ),
+  },
+  {
+    id: 'statut',
+    header: 'Workflow',
+    accessor: 'statut',
+    render: (v) => <WorkflowStepper status={v as BonStatus} />,
+  },
+  {
+    id: 'badge',
+    header: 'Statut',
+    accessor: 'statut',
+    render: (v) => <StatusBadge status={v as string} />,
+  },
+  {
+    id: 'produits',
+    header: 'Produits',
+    accessor: 'lignes',
+    sortable: false,
+    render: (v) => {
+      const lignes = v as BonLigne[]
+      return (
+        <div>
+          <span className="text-sm font-medium">{lignes.length} article{lignes.length > 1 ? 's' : ''}</span>
+          <div className="text-xs text-gray-400 truncate max-w-40">
+            {lignes.map((l) => l.produit).join(', ')}
+          </div>
+        </div>
+      )
+    },
+  },
+  {
+    id: 'montant',
+    header: 'Montant',
+    accessor: 'montant',
+    render: (v) => <span className="text-sm font-semibold">{formatXAF(v as number)}</span>,
+  },
+  {
+    id: 'date',
+    header: 'Date',
+    accessor: 'date',
+    render: (v) => <span className="text-xs text-gray-500">{formatDateTime(v as string)}</span>,
+  },
+  {
+    id: 'actions',
+    header: '',
+    accessor: 'statut',
+    sortable: false,
+    render: (v, row) => (
+      <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+        {v === 'soumis' && (
+          <button
+            className="px-2 py-1 text-xs font-medium rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
+          >
+            Valider
+          </button>
+        )}
+        {v === 'valide' && (
+          <button
+            className="px-2 py-1 text-xs font-medium rounded-lg bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
+          >
+            Exécuter
+          </button>
+        )}
+      </div>
+    ),
+  },
+]
+
+// ── Nouveau bon form ───────────────────────────────────────────────────────────
+
+const TECHNICIENS = ['Jean Mbida', 'Marie Ngono', 'Paul Essomba', 'Pierre Atangana', 'Autre']
+const PRODUITS = ['Aluminium 6060 T5', 'Tôle galvanisée 2mm', 'Fer plat 40×4', 'Profilé U 100',
+  'Vitre claire 4mm', 'Câble électrique 2.5mm²', 'Électrode soudure 3.2mm',
+  'Disque meulage 230mm', 'Peinture anti-rouille grise', 'Boulonnerie inox M8']
+
+interface NouveauBonForm {
+  technicien: string
+  lignes: Array<{ produit: string; quantite: number; unite: string }>
+}
+
+function NouveauBonSlideOver({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [form, setForm] = useState<NouveauBonForm>({
+    technicien: '',
+    lignes: [{ produit: '', quantite: 1, unite: 'kg' }],
+  })
+
+  const addLigne = () => setForm((f) => ({
+    ...f, lignes: [...f.lignes, { produit: '', quantite: 1, unite: 'kg' }],
+  }))
+
+  const removeLigne = (i: number) => setForm((f) => ({
+    ...f, lignes: f.lignes.filter((_, idx) => idx !== i),
+  }))
+
+  const updateLigne = (i: number, field: keyof NouveauBonForm['lignes'][0], value: string | number) =>
+    setForm((f) => ({
+      ...f,
+      lignes: f.lignes.map((l, idx) => idx === i ? { ...l, [field]: value } : l),
+    }))
+
+  const valid = form.technicien !== '' && form.lignes.every((l) => l.produit !== '' && l.quantite > 0)
+
+  return (
+    <SlideOver isOpen={open} onClose={onClose} title="Nouveau bon de sortie" width="lg">
+      <div className="space-y-5">
+        {/* Technicien */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Technicien</label>
+          <select
+            value={form.technicien}
+            onChange={(e) => setForm((f) => ({ ...f, technicien: e.target.value }))}
+            className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+          >
+            <option value="">Sélectionner...</option>
+            {TECHNICIENS.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+
+        {/* Lignes produits */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-xs font-semibold text-gray-500 uppercase">Produits</label>
+            <button onClick={addLigne} className="text-xs text-[#C62828] hover:underline font-medium flex items-center gap-1">
+              <Plus className="h-3 w-3" /> Ajouter
+            </button>
+          </div>
+          <div className="space-y-2">
+            {form.lignes.map((ligne, i) => (
+              <div key={i} className="flex gap-2 items-start p-3 bg-gray-50 rounded-lg">
+                <div className="flex-1 space-y-2">
+                  <select
+                    value={ligne.produit}
+                    onChange={(e) => updateLigne(i, 'produit', e.target.value)}
+                    className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                  >
+                    <option value="">Produit...</option>
+                    {PRODUITS.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      min="1"
+                      value={ligne.quantite}
+                      onChange={(e) => updateLigne(i, 'quantite', Math.max(1, Number(e.target.value)))}
+                      className="w-20 px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                    />
+                    <select
+                      value={ligne.unite}
+                      onChange={(e) => updateLigne(i, 'unite', e.target.value)}
+                      className="flex-1 px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                    >
+                      {['kg', 'm', 'm²', 'pcs', 'L'].map((u) => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                  </div>
+                </div>
+                {form.lignes.length > 1 && (
+                  <button onClick={() => removeLigne(i)} className="text-gray-300 hover:text-[#C62828] transition-colors mt-1">
+                    ×
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-3 pt-2 border-t border-gray-100">
+          <Button variant="ghost" className="flex-1" onClick={onClose}>Annuler</Button>
+          <Button className="flex-1" disabled={!valid} onClick={() => { onClose() }}>
+            Soumettre le bon
+          </Button>
+        </div>
+      </div>
+    </SlideOver>
+  )
+}
+
+// ── Page ───────────────────────────────────────────────────────────────────────
+
+export default function BonsSortie() {
+  const [nouveauOpen, setNouveauOpen] = useState(false)
+  const enAttente = BONS.filter((b) => b.statut === 'soumis').length
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.3, ease: 'easeOut' }}
+      className="space-y-6"
+    >
+      <PageHeader
+        title="Bons de Sortie"
+        subtitle={enAttente > 0 ? `${enAttente} bon${enAttente > 1 ? 's' : ''} en attente de validation` : 'Aucun bon en attente'}
+        breadcrumbs={[
+          { label: 'FORGE', href: '/' },
+          { label: 'Stocks', href: '/stocks' },
+          { label: 'Bons de sortie' },
+        ]}
+        actions={
+          <Button size="sm" onClick={() => setNouveauOpen(true)}>
+            <Plus className="h-3.5 w-3.5" />
+            Nouveau Bon
+          </Button>
+        }
+      />
+
+      <DataTable<BonSortie>
+        columns={COLUMNS}
+        data={BONS}
+        keyField="id"
+      />
+
+      <NouveauBonSlideOver open={nouveauOpen} onClose={() => setNouveauOpen(false)} />
+    </motion.div>
+  )
+}

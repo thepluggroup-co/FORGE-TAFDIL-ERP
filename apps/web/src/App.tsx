@@ -5,8 +5,12 @@ import { Toaster } from 'sonner'
 import { AuthProvider, useAuth } from '@/context/AuthContext'
 import { AppShell } from '@/components/layout/AppShell'
 
-const Login = lazy(() => import('@/pages/Login'))
-const ModulePage = lazy(() => import('@/pages/ModulePage'))
+// Pages
+const Login       = lazy(() => import('@/pages/Login'))
+const Dashboard   = lazy(() => import('@/pages/Dashboard'))
+const Stocks      = lazy(() => import('@/pages/Stocks'))
+const BonsSortie  = lazy(() => import('@/pages/stocks/BonsSortie'))
+const ModulePage  = lazy(() => import('@/pages/ModulePage'))
 
 function PageLoader() {
   return (
@@ -23,22 +27,26 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
-const MODULES = [
-  { path: '/production',   label: 'Production' },
-  { path: '/stocks',       label: 'Stocks' },
-  { path: '/commandes',    label: 'Commandes' },
-  { path: '/devis',        label: 'Devis' },
-  { path: '/finance',      label: 'Finance' },
-  { path: '/rh',           label: 'RH' },
-  { path: '/formation',    label: 'Formation' },
-  { path: '/projets',      label: 'Projets' },
-  { path: '/logistique',   label: 'Logistique' },
-  { path: '/marketing',    label: 'Marketing' },
-  { path: '/securite',     label: 'Sécurité' },
-  { path: '/intelligence', label: 'Intelligence' },
-  { path: '/iot',          label: 'IoT' },
-  { path: '/boutique',     label: 'Boutique' },
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <ProtectedRoute>
+      <AppShell>{children}</AppShell>
+    </ProtectedRoute>
+  )
+}
+
+const PLACEHOLDER_MODULES = [
+  'production', 'commandes', 'devis', 'finance', 'rh',
+  'formation', 'projets', 'logistique', 'marketing',
+  'securite', 'intelligence', 'iot', 'boutique',
 ] as const
+
+const MODULE_LABELS: Record<string, string> = {
+  production: 'Production', commandes: 'Commandes', devis: 'Devis',
+  finance: 'Finance', rh: 'RH', formation: 'Formation',
+  projets: 'Projets', logistique: 'Logistique', marketing: 'Marketing',
+  securite: 'Sécurité', intelligence: 'Intelligence', iot: 'IoT', boutique: 'Boutique',
+}
 
 function AppRoutes() {
   const location = useLocation()
@@ -50,34 +58,22 @@ function AppRoutes() {
           {/* Public */}
           <Route path="/login" element={<Login />} />
 
-          {/* Protected modules — AppShell wraps each */}
-          <Route path="/" element={<Navigate to="/production" replace />} />
-          {MODULES.map(({ path, label }) => (
-            <Route
-              key={path}
-              path={path}
-              element={
-                <ProtectedRoute>
-                  <AppShell>
-                    <ModulePage title={label} />
-                  </AppShell>
-                </ProtectedRoute>
-              }
-            />
-          ))}
+          {/* Redirect racine */}
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
-          {/* Sub-routes (e.g. /commandes/123) */}
-          {MODULES.map(({ path, label }) => (
+          {/* Dashboard */}
+          <Route path="/dashboard" element={<Shell><Dashboard /></Shell>} />
+
+          {/* Stocks + sous-routes */}
+          <Route path="/stocks" element={<Shell><Stocks /></Shell>} />
+          <Route path="/stocks/bons-sortie" element={<Shell><BonsSortie /></Shell>} />
+
+          {/* Autres modules (placeholder) */}
+          {PLACEHOLDER_MODULES.map((mod) => (
             <Route
-              key={`${path}/*`}
-              path={`${path}/*`}
-              element={
-                <ProtectedRoute>
-                  <AppShell>
-                    <ModulePage title={label} />
-                  </AppShell>
-                </ProtectedRoute>
-              }
+              key={mod}
+              path={`/${mod}`}
+              element={<Shell><ModulePage title={MODULE_LABELS[mod]} /></Shell>}
             />
           ))}
 
