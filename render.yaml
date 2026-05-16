@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: forge-tafdil-api
+    env: node
+    plan: free
+    region: frankfurt
+
+    # Build depuis la racine du repo pour que pnpm résolve les workspace packages
+    buildCommand: pnpm install && pnpm --filter @forge/api build
+    startCommand: node apps/api/dist/index.js
+    healthCheckPath: /health
+
+    envVars:
+      # Runtime
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 20
+
+      # CORS — mettre l'URL Vercel après déploiement frontend
+      - key: FRONTEND_URL
+        value: https://forge-tafdil.vercel.app
+
+      # Supabase — à renseigner dans le dashboard Render
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+
+      # Claude / Anthropic
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+      # Paiement & Notifications
+      - key: NOTCHPAY_SECRET_KEY
+        sync: false
+      - key: CALLMEBOT_APIKEY
+        sync: false
+
+      # Auth JWT (si utilisé en dehors de Supabase)
+      - key: JWT_SECRET
+        sync: false

@@ -7,55 +7,30 @@ import type { Column } from '@forge/ui'
 import { formatXAF } from '@/lib/utils'
 import { KpiCard } from '@forge/ui'
 import { Package, AlertTriangle, TrendingDown, DollarSign } from 'lucide-react'
+import { useStocks, useMouvement } from '@/hooks/useStocks'
+import type { StockProduit } from '@/hooks/useStocks'
 
-// ── Types ──────────────────────────────────────────────────────────────────────
+// ── Types (alignés sur l'API) ─────────────────────────────────────────────────
 
-interface Product extends Record<string, unknown> {
-  id: string
-  ref: string
-  nom: string
-  categorie: string
-  stock: number
-  alertThreshold: number
-  criticalThreshold: number
-  maxStock: number
-  unite: string
-  valeurUnitaire: number
-  valeurTotal: number
-  status: string
-}
+type Product = StockProduit & Record<string, unknown>
 
-// ── Mock data ──────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-const PRODUCTS: Product[] = [
-  { id: '1', ref: 'ALU-6060-T5', nom: 'Aluminium 6060 T5', categorie: 'Métaux', stock: 2, alertThreshold: 50, criticalThreshold: 20, maxStock: 500, unite: 'kg', valeurUnitaire: 3500, valeurTotal: 7000, status: 'critique' },
-  { id: '2', ref: 'TOL-GALV-2MM', nom: 'Tôle galvanisée 2mm', categorie: 'Tôlerie', stock: 185, alertThreshold: 100, criticalThreshold: 50, maxStock: 500, unite: 'kg', valeurUnitaire: 850, valeurTotal: 157250, status: 'normal' },
-  { id: '3', ref: 'FER-PLAT-40X4', nom: 'Fer plat 40×4', categorie: 'Métaux', stock: 35, alertThreshold: 80, criticalThreshold: 30, maxStock: 400, unite: 'kg', valeurUnitaire: 650, valeurTotal: 22750, status: 'alerte' },
-  { id: '4', ref: 'PROF-U100', nom: 'Profilé U 100', categorie: 'Profilés', stock: 150, alertThreshold: 80, criticalThreshold: 30, maxStock: 300, unite: 'kg', valeurUnitaire: 720, valeurTotal: 108000, status: 'normal' },
-  { id: '5', ref: 'VIT-CLAIRE-4MM', nom: 'Vitre claire 4mm', categorie: 'Vitrage', stock: 20, alertThreshold: 30, criticalThreshold: 10, maxStock: 100, unite: 'm²', valeurUnitaire: 8500, valeurTotal: 170000, status: 'alerte' },
-  { id: '6', ref: 'CAB-ELEC-2.5', nom: 'Câble électrique 2.5mm²', categorie: 'Électricité', stock: 450, alertThreshold: 200, criticalThreshold: 100, maxStock: 1000, unite: 'm', valeurUnitaire: 950, valeurTotal: 427500, status: 'normal' },
-  { id: '7', ref: 'ELEC-SOUD-3.2', nom: 'Électrode soudure 3.2mm', categorie: 'Soudure', stock: 5, alertThreshold: 50, criticalThreshold: 20, maxStock: 500, unite: 'kg', valeurUnitaire: 2800, valeurTotal: 14000, status: 'critique' },
-  { id: '8', ref: 'DISC-MEUL-230', nom: 'Disque meulage 230mm', categorie: 'Abrasifs', stock: 120, alertThreshold: 80, criticalThreshold: 40, maxStock: 300, unite: 'pcs', valeurUnitaire: 1200, valeurTotal: 144000, status: 'normal' },
-  { id: '9', ref: 'PEIN-ANTI-R', nom: 'Peinture anti-rouille grise', categorie: 'Peinture', stock: 18, alertThreshold: 30, criticalThreshold: 15, maxStock: 100, unite: 'L', valeurUnitaire: 6500, valeurTotal: 117000, status: 'alerte' },
-  { id: '10', ref: 'BOU-INOX-M8', nom: 'Boulonnerie inox M8', categorie: 'Fixation', stock: 2500, alertThreshold: 1000, criticalThreshold: 500, maxStock: 5000, unite: 'pcs', valeurUnitaire: 25, valeurTotal: 62500, status: 'normal' },
-]
-
-const CATEGORIES = [...new Set(PRODUCTS.map((p) => p.categorie))]
 const MOTIFS = ['Achat fournisseur', 'Retour chantier', 'Correction inventaire', 'Don / perte', 'Autre']
 
 // ── Columns ────────────────────────────────────────────────────────────────────
 
 const buildColumns = (onEntree: (p: Product) => void, onSortie: (p: Product) => void): Column<Product>[] => [
   {
-    id: 'ref',
+    id: 'reference',
     header: 'Réf.',
-    accessor: 'ref',
+    accessor: 'reference',
     render: (v) => <span className="font-mono text-xs text-gray-500">{v as string}</span>,
   },
   {
-    id: 'nom',
+    id: 'designation',
     header: 'Produit',
-    accessor: 'nom',
+    accessor: 'designation',
     render: (v, row) => (
       <div>
         <div className="text-sm font-medium text-[#212121]">{v as string}</div>
@@ -66,15 +41,15 @@ const buildColumns = (onEntree: (p: Product) => void, onSortie: (p: Product) => 
   {
     id: 'niveau',
     header: 'Niveau stock',
-    accessor: 'stock',
+    accessor: 'stock_actuel',
     sortable: false,
     render: (_, row) => (
       <div className="w-36">
         <StockLevel
-          current={row.stock as number}
-          alertThreshold={row.alertThreshold as number}
-          criticalThreshold={row.criticalThreshold as number}
-          max={row.maxStock as number}
+          current={row.stock_actuel as number}
+          alertThreshold={row.stock_min as number}
+          criticalThreshold={row.stock_critique as number}
+          max={row.stock_max as number}
           unit={row.unite as string}
         />
       </div>
@@ -83,7 +58,7 @@ const buildColumns = (onEntree: (p: Product) => void, onSortie: (p: Product) => 
   {
     id: 'stock',
     header: 'Qté',
-    accessor: 'stock',
+    accessor: 'stock_actuel',
     render: (v, row) => (
       <span className="text-sm font-semibold">
         {(v as number).toLocaleString('fr-CM')} <span className="text-xs text-gray-400 font-normal">{row.unite as string}</span>
@@ -93,13 +68,13 @@ const buildColumns = (onEntree: (p: Product) => void, onSortie: (p: Product) => 
   {
     id: 'valeur',
     header: 'Valeur FCFA',
-    accessor: 'valeurTotal',
-    render: (v) => <span className="text-sm font-medium">{formatXAF(v as number)}</span>,
+    accessor: 'prix_unitaire_xaf',
+    render: (_, row) => <span className="text-sm font-medium">{formatXAF((row.stock_actuel as number) * (row.prix_unitaire_xaf as number))}</span>,
   },
   {
-    id: 'status',
+    id: 'statut',
     header: 'Statut',
-    accessor: 'status',
+    accessor: 'statut',
     render: (v) => <StatusBadge status={v as string} />,
   },
   {
@@ -146,11 +121,17 @@ const DEFAULT_FORM: MvtForm = { type: 'entree', produitId: '', quantite: 1, refe
 
 export default function Stocks() {
   const navigate = useNavigate()
-  const [search, setSearch] = useState('')
-  const [categorie, setCategorie] = useState('')
+  const [search, setSearch]           = useState('')
+  const [categorie, setCategorie]     = useState('')
   const [statusFilter, setStatusFilter] = useState('')
-  const [slideOpen, setSlideOpen] = useState(false)
-  const [form, setForm] = useState<MvtForm>(DEFAULT_FORM)
+  const [slideOpen, setSlideOpen]     = useState(false)
+  const [form, setForm]               = useState<MvtForm>(DEFAULT_FORM)
+
+  const { data, isLoading } = useStocks({ search, categorie, statut: statusFilter })
+  const mouvement = useMouvement()
+
+  const produits = (data?.data ?? []) as Product[]
+  const categories = useMemo(() => [...new Set(produits.map((p) => p.categorie as string))], [produits])
 
   const openEntree = (p?: Product) => {
     setForm({ ...DEFAULT_FORM, type: 'entree', produitId: p?.id ?? '' })
@@ -161,28 +142,17 @@ export default function Stocks() {
     setSlideOpen(true)
   }
 
-  const selectedProduct = PRODUCTS.find((p) => p.id === form.produitId)
-
-  const sortieError = form.type === 'sortie' && selectedProduct && form.quantite > selectedProduct.stock
-    ? `Stock insuffisant (disponible : ${selectedProduct.stock} ${selectedProduct.unite})`
+  const selectedProduct = produits.find((p) => p.id === form.produitId)
+  const sortieError = form.type === 'sortie' && selectedProduct && form.quantite > (selectedProduct.stock_actuel as number)
+    ? `Stock insuffisant (disponible : ${selectedProduct.stock_actuel} ${selectedProduct.unite})`
     : null
-
   const formValid = form.produitId !== '' && form.quantite > 0 && form.motif !== '' && !sortieError
 
-  const filtered = useMemo(() => {
-    return PRODUCTS.filter((p) => {
-      const matchSearch = !search || p.nom.toLowerCase().includes(search.toLowerCase()) || p.ref.toLowerCase().includes(search.toLowerCase())
-      const matchCat = !categorie || p.categorie === categorie
-      const matchStatus = !statusFilter || p.status === statusFilter
-      return matchSearch && matchCat && matchStatus
-    })
-  }, [search, categorie, statusFilter])
+  const critiques    = produits.filter((p) => p.statut === 'critique').length
+  const alertes      = produits.filter((p) => p.statut === 'alerte').length
+  const valeurTotale = produits.reduce((sum, p) => sum + (p.stock_actuel as number) * (p.prix_unitaire_xaf as number), 0)
 
   const columns = buildColumns(openEntree, openSortie)
-
-  const critiques = PRODUCTS.filter((p) => p.status === 'critique').length
-  const alertes = PRODUCTS.filter((p) => p.status === 'alerte').length
-  const valeurTotale = PRODUCTS.reduce((sum, p) => sum + p.valeurTotal, 0)
 
   return (
     <motion.div
@@ -216,7 +186,7 @@ export default function Stocks() {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-        <KpiCard title="Total produits" value={PRODUCTS.length} icon={<Package className="h-5 w-5" />} color="#1d4ed8" delay={0} />
+        <KpiCard title="Total produits" value={data?.total ?? 0} icon={<Package className="h-5 w-5" />} color="#1d4ed8" delay={0} />
         <KpiCard title="Valeur totale" value={formatXAF(valeurTotale)} icon={<DollarSign className="h-5 w-5" />} color="#15803d" delay={0.05} />
         <KpiCard title="Produits critiques" value={critiques} icon={<AlertTriangle className="h-5 w-5" />} color="#C62828" trend="down" trendValue="Rupture imminente" delay={0.1} />
         <KpiCard title="Produits en alerte" value={alertes} icon={<TrendingDown className="h-5 w-5" />} color="#d97706" delay={0.15} />
@@ -238,7 +208,7 @@ export default function Stocks() {
           className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
         >
           <option value="">Toutes catégories</option>
-          {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          {categories.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
         <select
           value={statusFilter}
@@ -252,11 +222,7 @@ export default function Stocks() {
           <option value="rupture">Rupture</option>
         </select>
         {(search || categorie || statusFilter) && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => { setSearch(''); setCategorie(''); setStatusFilter('') }}
-          >
+          <Button variant="ghost" size="sm" onClick={() => { setSearch(''); setCategorie(''); setStatusFilter('') }}>
             <RotateCcw className="h-3.5 w-3.5" />
             Réinitialiser
           </Button>
@@ -266,9 +232,10 @@ export default function Stocks() {
       {/* Table */}
       <DataTable<Product>
         columns={columns}
-        data={filtered}
+        data={produits}
         keyField="id"
         onRowClick={(row) => openEntree(row)}
+        loading={isLoading}
       />
 
       {/* SlideOver mouvement */}
@@ -289,15 +256,9 @@ export default function Stocks() {
                   onClick={() => setForm((f) => ({ ...f, type: t, quantite: 1 }))}
                   className="flex items-center justify-center gap-2 py-3 rounded-xl border-2 font-medium text-sm transition-all"
                   style={{
-                    borderColor: form.type === t
-                      ? (t === 'entree' ? '#16a34a' : '#C62828')
-                      : '#e5e7eb',
-                    backgroundColor: form.type === t
-                      ? (t === 'entree' ? '#dcfce7' : '#fee2e2')
-                      : 'transparent',
-                    color: form.type === t
-                      ? (t === 'entree' ? '#15803d' : '#C62828')
-                      : '#6b7280',
+                    borderColor: form.type === t ? (t === 'entree' ? '#16a34a' : '#C62828') : '#e5e7eb',
+                    backgroundColor: form.type === t ? (t === 'entree' ? '#dcfce7' : '#fee2e2') : 'transparent',
+                    color: form.type === t ? (t === 'entree' ? '#15803d' : '#C62828') : '#6b7280',
                   }}
                 >
                   {t === 'entree' ? <Plus className="h-4 w-4" /> : <Minus className="h-4 w-4" />}
@@ -317,9 +278,9 @@ export default function Stocks() {
                 focus:outline-none focus:ring-2 focus:ring-[#C62828]"
             >
               <option value="">Sélectionner un produit...</option>
-              {PRODUCTS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.nom} — Stock : {p.stock} {p.unite}
+              {produits.map((p) => (
+                <option key={p.id} value={p.id as string}>
+                  {p.designation as string} — Stock : {p.stock_actuel as number} {p.unite as string}
                 </option>
               ))}
             </select>
@@ -327,10 +288,10 @@ export default function Stocks() {
               <div className="mt-2 flex items-center gap-2">
                 <span className="text-xs text-gray-500">Stock actuel :</span>
                 <span className="text-xs font-semibold" style={{
-                  color: selectedProduct.status === 'critique' ? '#dc2626'
-                    : selectedProduct.status === 'alerte' ? '#d97706' : '#15803d',
+                  color: selectedProduct.statut === 'critique' ? '#dc2626'
+                    : selectedProduct.statut === 'alerte' ? '#d97706' : '#15803d',
                 }}>
-                  {selectedProduct.stock} {selectedProduct.unite}
+                  {selectedProduct.stock_actuel as number} {selectedProduct.unite as string}
                 </span>
               </div>
             )}
@@ -344,8 +305,7 @@ export default function Stocks() {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setForm((f) => ({ ...f, quantite: Math.max(1, f.quantite - 1) }))}
-                className="flex items-center justify-center w-10 h-10 rounded-lg border border-gray-200
-                  hover:bg-gray-50 transition-colors"
+                className="flex items-center justify-center w-10 h-10 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
               >
                 <Minus className="h-4 w-4" />
               </button>
@@ -359,15 +319,12 @@ export default function Stocks() {
               />
               <button
                 onClick={() => setForm((f) => ({ ...f, quantite: f.quantite + 1 }))}
-                className="flex items-center justify-center w-10 h-10 rounded-lg border border-gray-200
-                  hover:bg-gray-50 transition-colors"
+                className="flex items-center justify-center w-10 h-10 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
               >
                 <Plus className="h-4 w-4" />
               </button>
             </div>
-            {sortieError && (
-              <p className="mt-1.5 text-xs font-medium text-[#C62828]">{sortieError}</p>
-            )}
+            {sortieError && <p className="mt-1.5 text-xs font-medium text-[#C62828]">{sortieError}</p>}
           </div>
 
           {/* Référence bon */}
@@ -406,15 +363,24 @@ export default function Stocks() {
             </Button>
             <Button
               className="flex-1"
-              disabled={!formValid}
+              disabled={!formValid || mouvement.isPending}
               style={form.type === 'sortie' ? { backgroundColor: '#C62828' } : {}}
               onClick={() => {
-                // TODO: persist via API
-                setSlideOpen(false)
-                setForm(DEFAULT_FORM)
+                mouvement.mutate(
+                  {
+                    produitId: form.produitId,
+                    payload: { type: form.type, quantite: form.quantite, reference: form.reference || undefined, motif: form.motif },
+                  },
+                  {
+                    onSuccess: () => {
+                      setSlideOpen(false)
+                      setForm(DEFAULT_FORM)
+                    },
+                  },
+                )
               }}
             >
-              Valider {form.type === 'entree' ? 'l\'entrée' : 'la sortie'}
+              {mouvement.isPending ? 'Enregistrement…' : `Valider ${form.type === 'entree' ? "l'entrée" : 'la sortie'}`}
             </Button>
           </div>
         </div>

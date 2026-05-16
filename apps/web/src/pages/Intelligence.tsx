@@ -5,7 +5,8 @@ import {
   AlertCircle, Info, Zap, MessageCircle, RefreshCw,
 } from 'lucide-react'
 import { PageHeader, Button } from '@forge/ui'
-import { formatXAF } from '@/lib/utils'
+import { useAiChat, useAiRecommandations, useAiAlertes } from '@/hooks/useAI'
+import type { AiMessage, StockReco, AlerteIA } from '@/hooks/useAI'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -16,18 +17,7 @@ interface Message {
   ts: Date
 }
 
-interface StockReco {
-  produit: string; urgence: 'critique' | 'important' | 'conseil'
-  message: string; action: string
-}
-
-interface AlerteIA {
-  id: string; titre: string; description: string
-  severite: 'critique' | 'alerte' | 'info'; icone: 'alert' | 'warning' | 'info' | 'zap'
-  ts: string
-}
-
-// ── Mock AI responses ──────────────────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────────────
 
 const SUGGESTED_QUESTIONS = [
   'État des stocks critiques ?',
@@ -36,73 +26,22 @@ const SUGGESTED_QUESTIONS = [
   'Commandes en retard ?',
 ]
 
-const AI_RESPONSES: Record<string, string> = {
-  default: `Bonjour ! Je suis **FORGE AI**, votre assistant ERP pour TAFDIL.
+const INITIAL_CONTENT = `Bonjour ! Je suis **FORGE AI**, votre assistant ERP pour TAFDIL.
 
 Je peux analyser vos données de production, stocks, clients et finances pour vous fournir des insights actionnables.
 
-Que souhaitez-vous analyser aujourd'hui ?`,
+Que souhaitez-vous analyser aujourd'hui ?`
 
-  stocks: `## Analyse des stocks TAFDIL
-
-**3 ruptures imminentes** détectées sur 10 produits suivis :
-
-- **ALU-6060-T5** — Stock critique : 2 barres restantes (seuil : 10). Commande urgente chez ALCAM recommandée.
-- **TOL-NOIR-2MM** — Niveau bas : 8 feuilles. Seuil d'alerte franchi.
-- **ELEC-CÂBLE-6** — Stock épuisé depuis 3 jours. Blocage production possible.
-
-**Montant estimé à commander : 485 000 FCFA**`,
-
-  credits: `## Clients avec crédits en retard
-
-**2 clients** présentent des impayés à recouvrer :
-
-- **Fouda Jean** — 180 000 FCFA · Retard de 15 jours (échéance : 1er mai 2026)
-- **Nguema Paul** — 20 000 FCFA · Retard de 16 jours (échéance : 30 avril 2026)
-
-**Total à recouvrer : 200 000 FCFA**
-
-Je recommande des relances WhatsApp personnalisées aujourd'hui.`,
-
-  semaine: `## Rapport hebdomadaire — Semaine 20 / 2026
-
-### Production
-- **12 commandes** traitées — Taux de livraison dans les délais : **91,7 %**
-- CMD-2026-045 (MAETUR) en retard de 2 jours
-
-### Finance
-- **CA hebdomadaire : 1 250 000 FCFA** (+12 % vs semaine précédente)
-- 4 factures émises — 2 payées, 2 en attente
-- Crédits échus à recouvrer : **200 000 FCFA**
-
-### Stocks
-- 3 alertes de rupture détectées
-- 2 bons de réception validés
-
-### RH
-- Présence : **95 %** (1 absence maladie)
-- **Mbarga Jean-Pierre** atteint niveau 5 — candidat recrutement`,
-
-  commandes: `## Commandes en retard
-
-**1 commande** présente un retard de livraison :
-
-- **CMD-2026-045** (MAETUR) — Production démarrée le 10 mai, livraison prévue le 13 mai.
-  Retard actuel : **3 jours**. Cause : pénurie tôles noires 2 mm.
-
-### Actions recommandées
-- Déclencher la commande de tôles (voir alerte stock)
-- Informer MAETUR du décalage par WhatsApp
-- Envisager une livraison partielle si possible`,
+const URGENCE_CONFIG = {
+  critique: { color: '#dc2626', bg: '#fee2e2', border: '#fecaca', label: 'Critique' },
+  important: { color: '#d97706', bg: '#fef3c7', border: '#fde68a', label: 'Important' },
+  conseil:   { color: '#1d4ed8', bg: '#dbeafe', border: '#bfdbfe', label: 'Conseil' },
 }
 
-function pickResponse(q: string): string {
-  const lower = q.toLowerCase()
-  if (lower.includes('stock')) return AI_RESPONSES.stocks
-  if (lower.includes('crédit') || lower.includes('retard') && lower.includes('client')) return AI_RESPONSES.credits
-  if (lower.includes('semaine') || lower.includes('rapport') || lower.includes('résumé')) return AI_RESPONSES.semaine
-  if (lower.includes('commande')) return AI_RESPONSES.commandes
-  return `Je n'ai pas encore de données précises pour cette question, mais je peux analyser vos **stocks**, **crédits clients**, **commandes en retard** ou générer un **résumé hebdomadaire**. Essayez une de ces suggestions !`
+const SEVERITE_CONFIG = {
+  critique: { color: '#dc2626', bg: '#fee2e2', icon: AlertCircle },
+  alerte:   { color: '#d97706', bg: '#fef3c7', icon: AlertTriangle },
+  info:     { color: '#1d4ed8', bg: '#dbeafe', icon: Info },
 }
 
 // ── Markdown renderer ──────────────────────────────────────────────────────────
@@ -135,37 +74,6 @@ function inlineMd(text: string): React.ReactNode {
   )
 }
 
-// ── Mock stock recommendations ─────────────────────────────────────────────────
-
-const INITIAL_RECOS: StockReco[] = [
-  { produit: 'ALU-6060-T5', urgence: 'critique', message: 'Stock critique : 2 barres restantes sur 10 min.', action: 'Commander 50 barres chez ALCAM — ~245 000 FCFA' },
-  { produit: 'TOL-NOIR-2MM', urgence: 'important', message: 'Niveau bas : 8 feuilles. Seuil d'alerte franchi.', action: 'Commander 30 feuilles — ~150 000 FCFA' },
-  { produit: 'ELEC-CÂBLE-6', urgence: 'critique', message: 'Rupture de stock. Blocage production CNC.', action: 'Commander en urgence — ~90 000 FCFA' },
-  { produit: 'VIS-INOX-M8', urgence: 'conseil', message: 'Consommation supérieure à la moyenne (+40 %).', action: 'Prévoir réapprovisionnement prochaine semaine' },
-]
-
-// ── Proactive alerts ───────────────────────────────────────────────────────────
-
-const ALERTES: AlerteIA[] = [
-  { id: '1', titre: 'Stock critique détecté', description: 'ALU-6060-T5 : 2 unités restantes. Production à risque dans 48 h.', severite: 'critique', icone: 'alert', ts: '2026-05-16 09:15' },
-  { id: '2', titre: 'Crédit échu — Fouda Jean', description: '180 000 FCFA impayés depuis 15 jours. Relance recommandée.', severite: 'alerte', icone: 'warning', ts: '2026-05-16 08:30' },
-  { id: '3', titre: 'Commande en retard', description: 'CMD-2026-045 (MAETUR) dépasse la date de livraison prévue de 3 jours.', severite: 'alerte', icone: 'warning', ts: '2026-05-15 17:00' },
-  { id: '4', titre: 'Apprenant prêt au recrutement', description: 'Mbarga Jean-Pierre — Niveau 5, 9 mois de formation. Dossier disponible.', severite: 'info', icone: 'zap', ts: '2026-05-15 14:20' },
-  { id: '5', titre: 'Déclaration TVA à soumettre', description: 'TVA mai 2026 — Échéance le 15 juin. Pensez à la préparer.', severite: 'info', icone: 'info', ts: '2026-05-14 09:00' },
-]
-
-const URGENCE_CONFIG = {
-  critique: { color: '#dc2626', bg: '#fee2e2', border: '#fecaca', label: 'Critique' },
-  important: { color: '#d97706', bg: '#fef3c7', border: '#fde68a', label: 'Important' },
-  conseil:   { color: '#1d4ed8', bg: '#dbeafe', border: '#bfdbfe', label: 'Conseil' },
-}
-
-const SEVERITE_CONFIG = {
-  critique: { color: '#dc2626', bg: '#fee2e2', icon: AlertCircle },
-  alerte:   { color: '#d97706', bg: '#fef3c7', icon: AlertTriangle },
-  info:     { color: '#1d4ed8', bg: '#dbeafe', icon: Info },
-}
-
 // ── Typing indicator ───────────────────────────────────────────────────────────
 
 function TypingDots() {
@@ -183,7 +91,7 @@ function TypingDots() {
   )
 }
 
-// ── Widget wrappers ────────────────────────────────────────────────────────────
+// ── Widget wrapper ─────────────────────────────────────────────────────────────
 
 function Widget({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -200,21 +108,22 @@ function Widget({ title, icon, children }: { title: string; icon: React.ReactNod
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function Intelligence() {
-  // Chat state
   const [messages, setMessages] = useState<Message[]>([
-    { id: '0', role: 'assistant', content: AI_RESPONSES.default, ts: new Date() },
+    { id: '0', role: 'assistant', content: INITIAL_CONTENT, ts: new Date() },
   ])
   const [input, setInput] = useState('')
   const [typing, setTyping] = useState(false)
   const chatEnd = useRef<HTMLDivElement>(null)
 
-  // Stock widget state
-  const [recos, setRecos] = useState<StockReco[] | null>(null)
-  const [analyzingStocks, setAnalyzingStocks] = useState(false)
-
-  // Report widget state
   const [rapport, setRapport] = useState<string | null>(null)
   const [generatingReport, setGeneratingReport] = useState(false)
+
+  const aiChat          = useAiChat()
+  const recommandations = useAiRecommandations()
+  const alertes         = useAiAlertes()
+
+  const alertesList: AlerteIA[] = alertes.data?.alertes ?? []
+  const recos: StockReco[] | null = recommandations.data?.recommandations ?? null
 
   useEffect(() => {
     chatEnd.current?.scrollIntoView({ behavior: 'smooth' })
@@ -229,34 +138,39 @@ export default function Intelligence() {
     setMessages((prev) => [...prev, userMsg])
     setTyping(true)
 
-    setTimeout(() => {
-      const aiMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: pickResponse(q),
-        ts: new Date(),
-      }
-      setMessages((prev) => [...prev, aiMsg])
-      setTyping(false)
-    }, 1400 + Math.random() * 600)
+    const history: AiMessage[] = [...messages, userMsg].map((m) => ({ role: m.role, content: m.content }))
+
+    aiChat.mutate(history, {
+      onSuccess: (data) => {
+        setMessages((prev) => [...prev, {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: data.response,
+          ts: new Date(),
+        }])
+        setTyping(false)
+      },
+      onError: () => setTyping(false),
+    })
   }
 
   const analyserStocks = () => {
-    setAnalyzingStocks(true)
-    setRecos(null)
-    setTimeout(() => {
-      setRecos(INITIAL_RECOS)
-      setAnalyzingStocks(false)
-    }, 1800)
+    void recommandations.refetch()
   }
 
   const genererRapport = () => {
     setGeneratingReport(true)
     setRapport(null)
-    setTimeout(() => {
-      setRapport(AI_RESPONSES.semaine)
-      setGeneratingReport(false)
-    }, 2200)
+    aiChat.mutate([{
+      role: 'user',
+      content: 'Génère un rapport hebdomadaire complet de TAFDIL incluant production, finance, stocks et RH.',
+    }], {
+      onSuccess: (data) => {
+        setRapport(data.response)
+        setGeneratingReport(false)
+      },
+      onError: () => setGeneratingReport(false),
+    })
   }
 
   return (
@@ -270,7 +184,6 @@ export default function Intelligence() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* ── Chat Assistant ── */}
         <Widget title="Assistant IA — FORGE AI" icon={<Brain className="h-4 w-4" />}>
-          {/* Messages */}
           <div className="h-80 overflow-y-auto px-4 py-4 space-y-3 bg-gray-50/50">
             {messages.map((msg) => (
               <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -303,7 +216,6 @@ export default function Intelligence() {
             <div ref={chatEnd} />
           </div>
 
-          {/* Suggested questions */}
           <div className="px-4 pt-3 pb-2 flex flex-wrap gap-2">
             {SUGGESTED_QUESTIONS.map((q) => (
               <button key={q} onClick={() => sendMessage(q)}
@@ -313,7 +225,6 @@ export default function Intelligence() {
             ))}
           </div>
 
-          {/* Input */}
           <div className="px-4 pb-4 flex gap-2">
             <input
               value={input}
@@ -331,7 +242,15 @@ export default function Intelligence() {
         {/* ── Alertes Proactives ── */}
         <Widget title="Alertes proactives" icon={<Bell className="h-4 w-4" />}>
           <div className="p-4 space-y-3 max-h-[464px] overflow-y-auto">
-            {ALERTES.map((a, i) => {
+            {alertes.isLoading && (
+              <div className="flex items-center justify-center py-10 text-sm text-gray-400">
+                <RefreshCw className="h-4 w-4 animate-spin mr-2" /> Chargement…
+              </div>
+            )}
+            {!alertes.isLoading && alertesList.length === 0 && (
+              <p className="text-sm text-gray-400 text-center py-6">Aucune alerte active.</p>
+            )}
+            {alertesList.map((a, i) => {
               const cfg = SEVERITE_CONFIG[a.severite]
               const Icon = cfg.icon
               return (
@@ -359,8 +278,8 @@ export default function Intelligence() {
         <Widget title="Recommandations stock" icon={<BarChart2 className="h-4 w-4" />}>
           <div className="p-4 space-y-4">
             <div className="flex items-center gap-3">
-              <Button onClick={analyserStocks} disabled={analyzingStocks}>
-                {analyzingStocks ? (
+              <Button onClick={analyserStocks} disabled={recommandations.isFetching}>
+                {recommandations.isFetching ? (
                   <><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Analyse en cours…</>
                 ) : (
                   <><Zap className="h-3.5 w-3.5" /> Analyser les stocks</>
@@ -399,7 +318,7 @@ export default function Intelligence() {
               )}
             </AnimatePresence>
 
-            {!recos && !analyzingStocks && (
+            {!recos && !recommandations.isFetching && (
               <p className="text-sm text-gray-400">Cliquez sur "Analyser les stocks" pour obtenir des recommandations basées sur vos niveaux actuels.</p>
             )}
           </div>

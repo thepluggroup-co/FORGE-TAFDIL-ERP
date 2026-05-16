@@ -4,41 +4,13 @@ import { LayoutGrid, Table2, Plus, GripVertical } from 'lucide-react'
 import { PageHeader, DataTable, StatusBadge, SlideOver, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
+import { useCommandes, useStatutCommande } from '@/hooks/useCommandes'
+import type { Commande, CommandeLigne, CommandeHistorique } from '@/hooks/useCommandes'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type KanbanCol = 'confirmed' | 'in_production' | 'pret' | 'delivered' | 'cancelled'
-
-interface LigneCmd {
-  designation: string
-  quantite: number
-  prixUnitaire: number
-}
-
-interface Commande extends Record<string, unknown> {
-  id: string
-  ref: string
-  client: string
-  tel: string
-  montantTTC: number
-  date: string
-  statut: KanbanCol
-  lignes: LigneCmd[]
-  historique: Array<{ statut: string; date: string; user: string }>
-}
-
-// ── Mock data ──────────────────────────────────────────────────────────────────
-
-const INIT_ORDERS: Commande[] = [
-  { id: '1', ref: 'CMD-2026-047', client: 'SODECOTON', tel: '+237 699 001 001', montantTTC: 537225, date: '2026-05-15', statut: 'in_production', lignes: [{ designation: 'Châssis métallique 3m', quantite: 3, prixUnitaire: 150000 }], historique: [{ statut: 'confirmed', date: '2026-05-10', user: 'Admin' }, { statut: 'in_production', date: '2026-05-15', user: 'Jean Mbida' }] },
-  { id: '2', ref: 'CMD-2026-046', client: 'Fouda Jean', tel: '+237 677 234 567', montantTTC: 101406, date: '2026-05-14', statut: 'confirmed', lignes: [{ designation: 'Porte en fer forgé', quantite: 1, prixUnitaire: 85000 }], historique: [{ statut: 'confirmed', date: '2026-05-14', user: 'Admin' }] },
-  { id: '3', ref: 'CMD-2026-045', client: 'CAMRAIL SA', tel: '+237 222 300 000', montantTTC: 1431900, date: '2026-05-12', statut: 'delivered', lignes: [{ designation: 'Structure acier soudée', quantite: 1, prixUnitaire: 1200000 }], historique: [{ statut: 'confirmed', date: '2026-05-01', user: 'Admin' }, { statut: 'in_production', date: '2026-05-05', user: 'Jean Mbida' }, { statut: 'pret', date: '2026-05-10', user: 'Marie Ngono' }, { statut: 'delivered', date: '2026-05-12', user: 'Admin' }] },
-  { id: '4', ref: 'CMD-2026-044', client: 'Biyong & Fils', tel: '+237 655 876 543', montantTTC: 381840, date: '2026-05-11', statut: 'confirmed', lignes: [{ designation: 'Grille de sécurité fenêtre', quantite: 4, prixUnitaire: 80000 }], historique: [{ statut: 'confirmed', date: '2026-05-11', user: 'Admin' }] },
-  { id: '5', ref: 'CMD-2026-043', client: 'MAETUR', tel: '+237 222 200 400', montantTTC: 894788, date: '2026-05-10', statut: 'pret', lignes: [{ designation: 'Portail coulissant 4m', quantite: 1, prixUnitaire: 750000 }], historique: [{ statut: 'confirmed', date: '2026-05-03', user: 'Admin' }, { statut: 'in_production', date: '2026-05-06', user: 'Jean Mbida' }, { statut: 'pret', date: '2026-05-10', user: 'Marie Ngono' }] },
-  { id: '6', ref: 'CMD-2026-042', client: 'Nguema Paul', tel: '+237 691 234 000', montantTTC: 143190, date: '2026-05-08', statut: 'in_production', lignes: [{ designation: 'Escalier métallique 10 marches', quantite: 1, prixUnitaire: 120000 }], historique: [{ statut: 'confirmed', date: '2026-05-06', user: 'Admin' }, { statut: 'in_production', date: '2026-05-08', user: 'Paul Essomba' }] },
-  { id: '7', ref: 'CMD-2026-041', client: 'CDE Cameroun', tel: '+237 222 222 222', montantTTC: 2387175, date: '2026-05-05', statut: 'delivered', lignes: [{ designation: 'Structure hangar industriel', quantite: 1, prixUnitaire: 2000000 }], historique: [{ statut: 'confirmed', date: '2026-04-20', user: 'Admin' }, { statut: 'delivered', date: '2026-05-05', user: 'Admin' }] },
-  { id: '8', ref: 'CMD-2026-040', client: 'Essomba Marie', tel: '+237 677 000 111', montantTTC: 59663, date: '2026-05-02', statut: 'cancelled', lignes: [{ designation: 'Clôture grillagée 10m', quantite: 1, prixUnitaire: 50000 }], historique: [{ statut: 'confirmed', date: '2026-04-28', user: 'Admin' }, { statut: 'cancelled', date: '2026-05-02', user: 'Admin' }] },
-]
+type CommandeRecord = Commande & Record<string, unknown>
 
 // ── Kanban config ─────────────────────────────────────────────────────────────
 
@@ -50,10 +22,15 @@ const KANBAN_COLS: { id: KanbanCol; label: string; color: string }[] = [
   { id: 'cancelled',     label: 'Annulée',          color: '#6b7280' },
 ]
 
+const STATUS_LABELS: Record<KanbanCol, string> = {
+  confirmed: 'Confirmée', in_production: 'En Production',
+  pret: 'Prête à Livrer', delivered: 'Livrée', cancelled: 'Annulée',
+}
+
 // ── KanbanCard ────────────────────────────────────────────────────────────────
 
 interface KanbanCardProps {
-  order: Commande
+  order: CommandeRecord
   containerRef: React.RefObject<HTMLDivElement | null>
   columnRefs: React.MutableRefObject<Record<string, HTMLDivElement | null>>
   onDrop: (orderId: string, colId: KanbanCol) => void
@@ -89,13 +66,13 @@ function KanbanCard({ order, containerRef, columnRefs, onDrop, onClick }: Kanban
       className="bg-white rounded-xl border border-gray-100 shadow-sm p-3.5 cursor-grab select-none"
     >
       <div className="flex items-start justify-between gap-2 mb-2">
-        <span className="text-xs font-mono text-gray-400">{order.ref}</span>
+        <span className="text-xs font-mono text-gray-400">{order.reference}</span>
         <GripVertical className="h-3.5 w-3.5 text-gray-300 shrink-0" />
       </div>
-      <p className="text-sm font-semibold text-[#212121] mb-1">{order.client}</p>
-      <p className="text-base font-bold text-[#212121]">{formatXAF(order.montantTTC)}</p>
+      <p className="text-sm font-semibold text-[#212121] mb-1">{order.client.nom}</p>
+      <p className="text-base font-bold text-[#212121]">{formatXAF(order.montant_ttc_xaf)}</p>
       <div className="flex items-center justify-between mt-2.5">
-        <span className="text-xs text-gray-400">{formatDate(order.date)}</span>
+        <span className="text-xs text-gray-400">{formatDate(order.date_commande)}</span>
         <StatusBadge status={order.statut} />
       </div>
     </motion.div>
@@ -106,22 +83,21 @@ function KanbanCard({ order, containerRef, columnRefs, onDrop, onClick }: Kanban
 
 interface KanbanColumnProps {
   col: typeof KANBAN_COLS[0]
-  orders: Commande[]
+  orders: CommandeRecord[]
   containerRef: React.RefObject<HTMLDivElement | null>
   columnRefs: React.MutableRefObject<Record<string, HTMLDivElement | null>>
   onDrop: (orderId: string, colId: KanbanCol) => void
-  onCardClick: (order: Commande) => void
+  onCardClick: (order: CommandeRecord) => void
 }
 
 function KanbanColumn({ col, orders, containerRef, columnRefs, onDrop, onCardClick }: KanbanColumnProps) {
-  const total = orders.reduce((s, o) => s + o.montantTTC, 0)
+  const total = orders.reduce((s, o) => s + o.montant_ttc_xaf, 0)
 
   return (
     <div
       ref={(el) => { columnRefs.current[col.id] = el }}
       className="flex flex-col gap-2 min-w-[240px] w-[240px]"
     >
-      {/* Header */}
       <div className="flex items-center gap-2 px-1 mb-1">
         <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: col.color }} />
         <span className="text-xs font-semibold text-[#212121]">{col.label}</span>
@@ -133,8 +109,6 @@ function KanbanColumn({ col, orders, containerRef, columnRefs, onDrop, onCardCli
         </span>
       </div>
       <div className="text-xs text-gray-400 px-1 -mt-1 mb-1">{formatXAF(total)}</div>
-
-      {/* Cards */}
       <div className="flex flex-col gap-2 min-h-[80px] rounded-xl p-1" style={{ backgroundColor: `${col.color}08` }}>
         <AnimatePresence>
           {orders.map((order) => (
@@ -155,34 +129,29 @@ function KanbanColumn({ col, orders, containerRef, columnRefs, onDrop, onCardCli
 
 // ── Table columns ─────────────────────────────────────────────────────────────
 
-const TABLE_COLS: Column<Commande>[] = [
-  { id: 'ref', header: 'Référence', accessor: 'ref', render: (v) => <span className="font-mono text-xs">{v as string}</span> },
-  { id: 'client', header: 'Client', accessor: 'client', render: (v) => <span className="font-medium text-sm">{v as string}</span> },
-  { id: 'montant', header: 'Montant TTC', accessor: 'montantTTC', render: (v) => <span className="font-semibold">{formatXAF(v as number)}</span> },
-  { id: 'date', header: 'Date', accessor: 'date', render: (v) => <span className="text-xs text-gray-500">{formatDate(v as string)}</span> },
-  { id: 'statut', header: 'Statut', accessor: 'statut', render: (v) => <StatusBadge status={v as string} /> },
+const TABLE_COLS: Column<CommandeRecord>[] = [
+  { id: 'reference',       header: 'Référence',    accessor: 'reference',       render: (v) => <span className="font-mono text-xs">{v as string}</span> },
+  { id: 'client',          header: 'Client',        accessor: (r) => r.client.nom, render: (v) => <span className="font-medium text-sm">{v as string}</span> },
+  { id: 'montant_ttc_xaf', header: 'Montant TTC',  accessor: 'montant_ttc_xaf', render: (v) => <span className="font-semibold">{formatXAF(v as number)}</span> },
+  { id: 'date_commande',   header: 'Date',          accessor: 'date_commande',   render: (v) => <span className="text-xs text-gray-500">{formatDate(v as string)}</span> },
+  { id: 'statut',          header: 'Statut',        accessor: 'statut',          render: (v) => <StatusBadge status={v as string} /> },
 ]
 
-// ── SlideOver detail ──────────────────────────────────────────────────────────
+// ── OrderDetail ────────────────────────────────────────────────────────────────
 
-const STATUS_LABELS: Record<KanbanCol, string> = {
-  confirmed: 'Confirmée', in_production: 'En Production',
-  pret: 'Prête à Livrer', delivered: 'Livrée', cancelled: 'Annulée',
-}
-
-function OrderDetail({ order, onClose }: { order: Commande; onClose: () => void }) {
-  const totalHT = order.lignes.reduce((s, l) => s + l.quantite * l.prixUnitaire, 0)
+function OrderDetail({ order, onClose }: { order: CommandeRecord; onClose: () => void }) {
+  const totalHT = (order.lignes as CommandeLigne[]).reduce((s, l) => s + l.quantite * l.prix_unitaire_ht_xaf, 0)
   const tva = totalHT * 0.1925
   const ttc = totalHT + tva
 
   return (
-    <SlideOver isOpen={true} onClose={onClose} title={`Commande ${order.ref}`} width="lg">
+    <SlideOver isOpen={true} onClose={onClose} title={`Commande ${order.reference}`} width="lg">
       <div className="space-y-6">
         {/* Client */}
         <div>
           <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">Client</h3>
-          <p className="text-sm font-semibold text-[#212121]">{order.client}</p>
-          <p className="text-sm text-gray-500">{order.tel}</p>
+          <p className="text-sm font-semibold text-[#212121]">{order.client.nom}</p>
+          <p className="text-sm text-gray-500">{order.client.telephone}</p>
         </div>
 
         {/* Lignes */}
@@ -198,12 +167,12 @@ function OrderDetail({ order, onClose }: { order: Commande; onClose: () => void 
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {order.lignes.map((l, i) => (
+                {(order.lignes as CommandeLigne[]).map((l, i) => (
                   <tr key={i}>
                     <td className="px-3 py-2">{l.designation}</td>
                     <td className="px-3 py-2 text-center">{l.quantite}</td>
-                    <td className="px-3 py-2 text-right">{formatXAF(l.prixUnitaire)}</td>
-                    <td className="px-3 py-2 text-right font-semibold">{formatXAF(l.quantite * l.prixUnitaire)}</td>
+                    <td className="px-3 py-2 text-right">{formatXAF(l.prix_unitaire_ht_xaf)}</td>
+                    <td className="px-3 py-2 text-right font-semibold">{formatXAF(l.quantite * l.prix_unitaire_ht_xaf)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -220,15 +189,15 @@ function OrderDetail({ order, onClose }: { order: Commande; onClose: () => void 
         <div>
           <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">Historique</h3>
           <div className="space-y-2">
-            {order.historique.map((h, i) => (
+            {(order.historique as CommandeHistorique[]).map((h, i) => (
               <div key={i} className="flex items-center gap-3">
                 <div className="flex flex-col items-center">
                   <div className="w-2 h-2 rounded-full bg-[#C62828]" />
-                  {i < order.historique.length - 1 && <div className="w-px h-4 bg-gray-200" />}
+                  {i < (order.historique as CommandeHistorique[]).length - 1 && <div className="w-px h-4 bg-gray-200" />}
                 </div>
                 <div className="flex-1 pb-1">
                   <span className="text-xs font-medium text-[#212121]">{STATUS_LABELS[h.statut as KanbanCol] ?? h.statut}</span>
-                  <span className="text-xs text-gray-400 ml-2">· {h.user} · {formatDate(h.date)}</span>
+                  <span className="text-xs text-gray-400 ml-2">· {formatDate(h.created_at)}</span>
                 </div>
               </div>
             ))}
@@ -246,18 +215,18 @@ function OrderDetail({ order, onClose }: { order: Commande; onClose: () => void 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function Commandes() {
-  const [orders, setOrders] = useState<Commande[]>(INIT_ORDERS)
-  const [view, setView] = useState<'kanban' | 'table'>('kanban')
-  const [selected, setSelected] = useState<Commande | null>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
-  const columnRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const [view, setView]       = useState<'kanban' | 'table'>('kanban')
+  const [selected, setSelected] = useState<CommandeRecord | null>(null)
+  const containerRef  = useRef<HTMLDivElement>(null)
+  const columnRefs    = useRef<Record<string, HTMLDivElement | null>>({})
+
+  const { data, isLoading } = useCommandes()
+  const statutMutation = useStatutCommande()
+
+  const orders = (data?.data ?? []) as CommandeRecord[]
 
   const moveOrder = (orderId: string, colId: KanbanCol) => {
-    setOrders((prev) => prev.map((o) =>
-      o.id === orderId
-        ? { ...o, statut: colId, historique: [...o.historique, { statut: colId, date: new Date().toISOString().split('T')[0], user: 'Admin' }] }
-        : o,
-    ))
+    statutMutation.mutate({ id: orderId, statut: colId })
   }
 
   return (
@@ -270,7 +239,7 @@ export default function Commandes() {
     >
       <PageHeader
         title="Commandes"
-        subtitle={`${orders.length} commandes · ${formatXAF(orders.reduce((s, o) => s + o.montantTTC, 0))} de CA`}
+        subtitle={`${orders.length} commandes · ${formatXAF(orders.reduce((s, o) => s + o.montant_ttc_xaf, 0))} de CA`}
         breadcrumbs={[{ label: 'FORGE', href: '/' }, { label: 'Commandes' }]}
         actions={
           <>
@@ -328,11 +297,12 @@ export default function Commandes() {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
           >
-            <DataTable<Commande>
+            <DataTable<CommandeRecord>
               columns={TABLE_COLS}
               data={orders}
               keyField="id"
               onRowClick={setSelected}
+              loading={isLoading}
             />
           </motion.div>
         )}

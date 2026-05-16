@@ -8,114 +8,28 @@ import {
 import { PageHeader, DataTable, StatusBadge, Button, Modal, SlideOver } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
+import {
+  useFactures, useCredits, useEcritures, useEnvoyerFacture, useRemboursement,
+} from '@/hooks/useFinance'
+import type { Facture as FactureApi, Credit as CreditApi, FactureLigne } from '@/hooks/useFinance'
+import { useClients } from '@/hooks/useClients'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-interface FactureLigne { designation: string; qte: number; puHT: number }
+type FactureRecord = FactureApi & Record<string, unknown>
+type CreditRecord  = CreditApi  & Record<string, unknown>
 
-interface Facture extends Record<string, unknown> {
-  id: string; ref: string; client: string
-  lignes: FactureLigne[]
-  dateEmission: string; dateEcheance: string
-  statut: string
-}
-
-interface Credit extends Record<string, unknown> {
-  id: string; ref: string; client: string
-  montant: number; dateDebut: string; echeance: string
-  soldeRestant: number; statut: string
-}
-
-interface GrandLivreLigne {
-  date: string; libelle: string
-  compte: string; compteLabel: string
-  debit: number; credit: number; solde: number
-}
-
-interface Declaration extends Record<string, unknown> {
-  id: string; type: string; periode: string
-  statut: string; montant: number; echeance: string
-}
+// Local form ligne (matches API shape for simplicity)
+interface FormLigne { designation: string; quantite: number; prix_unitaire_ht_xaf: number }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const TVA = 0.1925
 
-function totals(lignes: FactureLigne[]) {
-  const ht = lignes.reduce((s, l) => s + l.qte * l.puHT, 0)
+function totalsFromLignes(lignes: FormLigne[]) {
+  const ht = lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire_ht_xaf, 0)
   return { ht, tva: ht * TVA, ttc: ht * (1 + TVA) }
 }
-
-// ── Mock data ──────────────────────────────────────────────────────────────────
-
-const FACTURES: Facture[] = [
-  {
-    id: '1', ref: 'FACT-2026-047', client: 'SODECOTON', statut: 'envoye',
-    dateEmission: '2026-05-15', dateEcheance: '2026-06-15',
-    lignes: [
-      { designation: 'Fabrication grille métallique 2m×1m', qte: 5, puHT: 45000 },
-      { designation: 'Soudure et finition', qte: 5, puHT: 12500 },
-    ],
-  },
-  {
-    id: '2', ref: 'FACT-2026-046', client: 'CAMRAIL SA', statut: 'valide',
-    dateEmission: '2026-05-14', dateEcheance: '2026-06-14',
-    lignes: [
-      { designation: 'Profilé aluminium 6060-T5 (6 m)', qte: 20, puHT: 18000 },
-      { designation: 'Façonnage et découpe', qte: 20, puHT: 3500 },
-    ],
-  },
-  {
-    id: '3', ref: 'FACT-2026-045', client: 'MAETUR', statut: 'paye',
-    dateEmission: '2026-05-10', dateEcheance: '2026-06-10',
-    lignes: [{ designation: 'Porte métallique sécurisée 90×210 cm', qte: 3, puHT: 125000 }],
-  },
-  {
-    id: '4', ref: 'FACT-2026-044', client: 'Fouda Jean', statut: 'brouillon',
-    dateEmission: '2026-05-08', dateEcheance: '2026-05-23',
-    lignes: [{ designation: 'Barrière résidentielle 3 m', qte: 2, puHT: 95000 }],
-  },
-  {
-    id: '5', ref: 'FACT-2026-043', client: 'CDE Cameroun', statut: 'paye',
-    dateEmission: '2026-04-30', dateEcheance: '2026-05-30',
-    lignes: [
-      { designation: 'Charpente métallique atelier 10×8 m', qte: 1, puHT: 1850000 },
-      { designation: "Main-d'œuvre montage", qte: 1, puHT: 320000 },
-    ],
-  },
-]
-
-const CREDITS: Credit[] = [
-  { id: '1', ref: 'CRED-2026-003', client: 'Fouda Jean', montant: 180000, dateDebut: '2026-02-01', echeance: '2026-05-01', soldeRestant: 180000, statut: 'echu' },
-  { id: '2', ref: 'CRED-2026-007', client: 'Biyong & Fils', montant: 75000, dateDebut: '2026-03-01', echeance: '2026-06-01', soldeRestant: 75000, statut: 'en_cours' },
-  { id: '3', ref: 'CRED-2026-009', client: 'Nguema Paul', montant: 45000, dateDebut: '2026-04-01', echeance: '2026-04-30', soldeRestant: 20000, statut: 'echu' },
-  { id: '4', ref: 'CRED-2026-011', client: 'Essomba Marie', montant: 30000, dateDebut: '2026-04-15', echeance: '2026-07-15', soldeRestant: 30000, statut: 'en_cours' },
-  { id: '5', ref: 'CRED-2026-001', client: 'SODECOTON', montant: 500000, dateDebut: '2026-01-01', echeance: '2026-03-01', soldeRestant: 0, statut: 'rembourse' },
-]
-
-const GRAND_LIVRE: GrandLivreLigne[] = [
-  { date: '2026-05-15', libelle: 'Facture FACT-2026-047 SODECOTON', compte: '411', compteLabel: 'Clients', debit: 640000, credit: 0, solde: 640000 },
-  { date: '2026-05-15', libelle: 'Ventes fabrication métallique', compte: '701', compteLabel: 'Ventes produits finis', debit: 0, credit: 537225, solde: -537225 },
-  { date: '2026-05-15', libelle: 'TVA collectée', compte: '443', compteLabel: 'TVA collectée', debit: 0, credit: 102775, solde: -102775 },
-  { date: '2026-05-12', libelle: 'Achat tôles galvanisées SOFAME', compte: '601', compteLabel: 'Achats matières premières', debit: 185000, credit: 0, solde: 185000 },
-  { date: '2026-05-12', libelle: 'Fournisseur SOFAME', compte: '401', compteLabel: 'Fournisseurs', debit: 0, credit: 185000, solde: -185000 },
-  { date: '2026-05-10', libelle: 'Règlement MAETUR FACT-2026-045', compte: '521', compteLabel: 'Banque', debit: 447187, credit: 0, solde: 447187 },
-  { date: '2026-05-10', libelle: 'Apurement client MAETUR', compte: '411', compteLabel: 'Clients', debit: 0, credit: 447187, solde: -447187 },
-  { date: '2026-05-05', libelle: 'Salaires mai 2026', compte: '641', compteLabel: 'Charges de personnel', debit: 890000, credit: 0, solde: 890000 },
-  { date: '2026-05-05', libelle: 'Virement salaires', compte: '521', compteLabel: 'Banque', debit: 0, credit: 890000, solde: -890000 },
-  { date: '2026-05-01', libelle: 'Loyer atelier mai 2026', compte: '612', compteLabel: 'Locations', debit: 250000, credit: 0, solde: 250000 },
-  { date: '2026-05-01', libelle: 'Paiement loyer caisse', compte: '571', compteLabel: 'Caisse', debit: 0, credit: 250000, solde: -250000 },
-  { date: '2026-04-30', libelle: 'Règlement CDE Cameroun', compte: '521', compteLabel: 'Banque', debit: 2586750, credit: 0, solde: 2586750 },
-  { date: '2026-04-30', libelle: 'Apurement client CDE', compte: '411', compteLabel: 'Clients', debit: 0, credit: 2586750, solde: -2586750 },
-]
-
-const DECLARATIONS: Declaration[] = [
-  { id: '1', type: 'TVA', periode: 'Avril 2026', statut: 'soumis', montant: 425000, echeance: '2026-05-15' },
-  { id: '2', type: 'IRCM (Retenues à la source)', periode: 'Avril 2026', statut: 'valide', montant: 89000, echeance: '2026-05-10' },
-  { id: '3', type: 'TVA', periode: 'Mai 2026', statut: 'a_declarer', montant: 0, echeance: '2026-06-15' },
-  { id: '4', type: 'DSF (Déclaration Statistique et Fiscale)', periode: 'Exercice 2025', statut: 'valide', montant: 0, echeance: '2026-03-31' },
-  { id: '5', type: 'IS (Impôt sur les Sociétés)', periode: 'Exercice 2025', statut: 'a_declarer', montant: 0, echeance: '2026-04-30' },
-]
 
 const SYSCOHADA = [
   { code: '411', label: '411 — Clients' },
@@ -127,6 +41,16 @@ const SYSCOHADA = [
   { code: '701', label: '701 — Ventes produits finis' },
   { code: '443', label: '443 — TVA collectée' },
   { code: '612', label: '612 — Locations' },
+]
+
+// ── Static fiscal declarations (no API endpoint yet) ───────────────────────────
+
+const DECLARATIONS = [
+  { id: '1', type: 'TVA', periode: 'Avril 2026', statut: 'soumis', montant: 425000, echeance: '2026-05-15' },
+  { id: '2', type: 'IRCM (Retenues à la source)', periode: 'Avril 2026', statut: 'valide', montant: 89000, echeance: '2026-05-10' },
+  { id: '3', type: 'TVA', periode: 'Mai 2026', statut: 'a_declarer', montant: 0, echeance: '2026-06-15' },
+  { id: '4', type: 'DSF (Déclaration Statistique et Fiscale)', periode: 'Exercice 2025', statut: 'valide', montant: 0, echeance: '2026-03-31' },
+  { id: '5', type: 'IS (Impôt sur les Sociétés)', periode: 'Exercice 2025', statut: 'a_declarer', montant: 0, echeance: '2026-04-30' },
 ]
 
 // ── Status helpers ─────────────────────────────────────────────────────────────
@@ -161,10 +85,18 @@ type Tab = typeof TABS[number]
 
 // ── PDF Preview ────────────────────────────────────────────────────────────────
 
-function InvoicePreview({ facture }: { facture: Facture }) {
-  const lignes = facture.lignes as FactureLigne[]
-  const { ht, tva, ttc } = totals(lignes)
+interface PreviewableFacture {
+  numero: string
+  client: { nom: string }
+  date_emission: string
+  date_echeance: string
+  lignes: FactureLigne[]
+  montant_ht_xaf: number
+  montant_tva_xaf: number
+  montant_ttc_xaf: number
+}
 
+function InvoicePreview({ facture }: { facture: PreviewableFacture }) {
   return (
     <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-inner" style={{ fontFamily: 'Georgia, serif' }}>
       <div className="p-8">
@@ -179,10 +111,10 @@ function InvoicePreview({ facture }: { facture: Facture }) {
           </div>
           <div className="text-right">
             <div className="text-2xl font-bold font-sans text-gray-800 tracking-widest uppercase">Facture</div>
-            <div className="font-mono font-bold text-[#C62828] text-lg mt-1">{facture.ref as string}</div>
+            <div className="font-mono font-bold text-[#C62828] text-lg mt-1">{facture.numero}</div>
             <div className="mt-2 text-xs font-sans text-gray-500 space-y-0.5">
-              <div>Émise le : <span className="font-semibold text-gray-700">{formatDate(facture.dateEmission as string)}</span></div>
-              <div>Échéance : <span className="font-semibold text-gray-700">{formatDate(facture.dateEcheance as string)}</span></div>
+              <div>Émise le : <span className="font-semibold text-gray-700">{formatDate(facture.date_emission)}</span></div>
+              <div>Échéance : <span className="font-semibold text-gray-700">{formatDate(facture.date_echeance)}</span></div>
             </div>
           </div>
         </div>
@@ -190,7 +122,7 @@ function InvoicePreview({ facture }: { facture: Facture }) {
         {/* Client */}
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-6 font-sans">
           <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide mb-1">Facturé à</div>
-          <div className="font-bold text-gray-800">{facture.client as string}</div>
+          <div className="font-bold text-gray-800">{facture.client.nom}</div>
           <div className="text-sm text-gray-500">Cameroun</div>
         </div>
 
@@ -205,12 +137,12 @@ function InvoicePreview({ facture }: { facture: Facture }) {
             </tr>
           </thead>
           <tbody>
-            {lignes.map((l, i) => (
+            {facture.lignes.map((l, i) => (
               <tr key={i} className="border-b border-gray-100">
                 <td className="py-2.5 text-gray-800">{l.designation}</td>
-                <td className="py-2.5 text-center text-gray-600">{l.qte}</td>
-                <td className="py-2.5 text-right text-gray-600">{formatXAF(l.puHT)}</td>
-                <td className="py-2.5 text-right font-semibold text-gray-800">{formatXAF(l.qte * l.puHT)}</td>
+                <td className="py-2.5 text-center text-gray-600">{l.quantite}</td>
+                <td className="py-2.5 text-right text-gray-600">{formatXAF(l.prix_unitaire_ht_xaf)}</td>
+                <td className="py-2.5 text-right font-semibold text-gray-800">{formatXAF(l.quantite * l.prix_unitaire_ht_xaf)}</td>
               </tr>
             ))}
           </tbody>
@@ -221,15 +153,15 @@ function InvoicePreview({ facture }: { facture: Facture }) {
           <div className="w-64 space-y-1.5">
             <div className="flex justify-between text-sm py-1 border-b border-gray-100">
               <span className="text-gray-500">Sous-total HT</span>
-              <span className="font-semibold text-gray-800">{formatXAF(ht)}</span>
+              <span className="font-semibold text-gray-800">{formatXAF(facture.montant_ht_xaf)}</span>
             </div>
             <div className="flex justify-between text-sm py-1 border-b border-gray-100">
               <span className="text-gray-500">TVA 19,25 %</span>
-              <span className="font-semibold text-gray-800">{formatXAF(tva)}</span>
+              <span className="font-semibold text-gray-800">{formatXAF(facture.montant_tva_xaf)}</span>
             </div>
             <div className="flex justify-between text-sm pt-2 border-t-2 border-gray-800">
               <span className="font-bold text-gray-800">TOTAL TTC</span>
-              <span className="font-black text-[#C62828] text-base">{formatXAF(ttc)}</span>
+              <span className="font-black text-[#C62828] text-base">{formatXAF(facture.montant_ttc_xaf)}</span>
             </div>
           </div>
         </div>
@@ -260,26 +192,35 @@ function InvoicePreview({ facture }: { facture: Facture }) {
 // ── Nouvelle Facture Slide-over ────────────────────────────────────────────────
 
 function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const [step, setStep] = useState(1)
-  const [client, setClient] = useState('')
-  const [dateEmission] = useState(new Date().toISOString().split('T')[0])
+  const [step, setStep]           = useState(1)
+  const [selectedClient, setSelectedClient] = useState('')
+  const [dateEmission]            = useState(new Date().toISOString().split('T')[0])
   const [dateEcheance, setDateEcheance] = useState('')
-  const [lignes, setLignes] = useState<FactureLigne[]>([{ designation: '', qte: 1, puHT: 0 }])
+  const [lignes, setLignes]       = useState<FormLigne[]>([{ designation: '', quantite: 1, prix_unitaire_ht_xaf: 0 }])
 
-  const { ht, tva, ttc } = totals(lignes)
+  const { data: clientsData } = useClients()
+  const clients = clientsData?.data ?? []
 
-  const previewFacture: Facture = {
-    id: 'new', ref: 'FACT-2026-NEW', client, statut: 'brouillon',
-    dateEmission, dateEcheance, lignes,
+  const { ht, tva, ttc } = totalsFromLignes(lignes)
+
+  const previewFacture: PreviewableFacture = {
+    numero: 'FACT-2026-NEW',
+    client: { nom: selectedClient },
+    date_emission: dateEmission,
+    date_echeance: dateEcheance,
+    lignes,
+    montant_ht_xaf:  ht,
+    montant_tva_xaf: tva,
+    montant_ttc_xaf: ttc,
   }
 
-  const updateLigne = (i: number, field: keyof FactureLigne, val: string | number) => {
+  const updateLigne = (i: number, field: keyof FormLigne, val: string | number) => {
     const next = [...lignes]
     ;(next[i] as Record<string, unknown>)[field] = val
     setLignes(next)
   }
 
-  const STEPS = ["Client & Dates", "Lignes", "Aperçu"]
+  const STEPS = ['Client & Dates', 'Lignes', 'Aperçu']
 
   return (
     <SlideOver isOpen={isOpen} onClose={onClose} title="Nouvelle facture" width="xl">
@@ -309,11 +250,11 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Client</label>
-            <select value={client} onChange={(e) => setClient(e.target.value)}
+            <select value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30 bg-white">
               <option value="">— Sélectionner —</option>
-              {['SODECOTON', 'CAMRAIL SA', 'MAETUR', 'CDE Cameroun', 'Fouda Jean', 'Biyong & Fils'].map((c) => (
-                <option key={c} value={c}>{c}</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.nom}>{c.nom}</option>
               ))}
             </select>
           </div>
@@ -330,7 +271,7 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
             </div>
           </div>
           <div className="flex justify-end pt-4">
-            <Button onClick={() => setStep(2)} disabled={!client || !dateEcheance}>
+            <Button onClick={() => setStep(2)} disabled={!selectedClient || !dateEcheance}>
               Suivant <ChevronRight className="h-3.5 w-3.5" />
             </Button>
           </div>
@@ -346,12 +287,12 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
                 <input placeholder="Désignation" value={l.designation} onChange={(e) => updateLigne(i, 'designation', e.target.value)}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
               </div>
-              <input type="number" placeholder="Qté" value={l.qte || ''} onChange={(e) => updateLigne(i, 'qte', +e.target.value)}
+              <input type="number" placeholder="Qté" value={l.quantite || ''} onChange={(e) => updateLigne(i, 'quantite', +e.target.value)}
                 className="w-16 border border-gray-200 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
-              <input type="number" placeholder="P.U. HT" value={l.puHT || ''} onChange={(e) => updateLigne(i, 'puHT', +e.target.value)}
+              <input type="number" placeholder="P.U. HT" value={l.prix_unitaire_ht_xaf || ''} onChange={(e) => updateLigne(i, 'prix_unitaire_ht_xaf', +e.target.value)}
                 className="w-32 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
               <div className="w-28 pt-2 text-sm font-semibold text-right text-gray-700 shrink-0">
-                {formatXAF(l.qte * l.puHT)}
+                {formatXAF(l.quantite * l.prix_unitaire_ht_xaf)}
               </div>
               {lignes.length > 1 && (
                 <button onClick={() => setLignes(lignes.filter((_, j) => j !== i))} className="pt-2.5 text-gray-400 hover:text-[#C62828]">
@@ -360,7 +301,7 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
               )}
             </div>
           ))}
-          <button onClick={() => setLignes([...lignes, { designation: '', qte: 1, puHT: 0 }])}
+          <button onClick={() => setLignes([...lignes, { designation: '', quantite: 1, prix_unitaire_ht_xaf: 0 }])}
             className="text-sm text-[#C62828] font-medium hover:underline flex items-center gap-1">
             <Plus className="h-3.5 w-3.5" /> Ajouter une ligne
           </button>
@@ -372,7 +313,7 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
             </div>
           </div>
           <div className="flex justify-between pt-4">
-            <Button variant="ghost" onClick={() => setStep(1)}>Retour</Button>
+            <Button variant="ghost" onClick={() => setStep(1)}><ChevronLeft className="h-3.5 w-3.5" /> Retour</Button>
             <Button onClick={() => setStep(3)} disabled={lignes.every((l) => !l.designation)}>
               Aperçu <ChevronRight className="h-3.5 w-3.5" />
             </Button>
@@ -385,7 +326,7 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
         <div className="space-y-4">
           <InvoicePreview facture={previewFacture} />
           <div className="flex gap-2 justify-between pt-2">
-            <Button variant="ghost" onClick={() => setStep(2)}>Retour</Button>
+            <Button variant="ghost" onClick={() => setStep(2)}><ChevronLeft className="h-3.5 w-3.5" /> Retour</Button>
             <div className="flex gap-2">
               <Button variant="ghost" size="sm" onClick={() => window.print()}>
                 <Printer className="h-3.5 w-3.5" /> Imprimer
@@ -403,20 +344,26 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
 
 // ── Remboursement Modal ────────────────────────────────────────────────────────
 
-function RemboursementModal({ isOpen, onClose, credit }: { isOpen: boolean; onClose: () => void; credit: Credit | null }) {
-  const [type, setType] = useState<'total' | 'partiel'>('total')
+function RemboursementModal({ isOpen, onClose, credit }: { isOpen: boolean; onClose: () => void; credit: CreditRecord | null }) {
+  const [type, setType]     = useState<'total' | 'partiel'>('total')
   const [montant, setMontant] = useState('')
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0])
+  const [date, setDate]     = useState(new Date().toISOString().split('T')[0])
+  const rembourser = useRemboursement()
 
   if (!credit) return null
+
+  const handleSubmit = () => {
+    const montantFinal = type === 'total' ? (credit.solde_restant_xaf as number) : Number(montant)
+    rembourser.mutate({ id: credit.id, montant: montantFinal }, { onSuccess: onClose })
+  }
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Enregistrer un remboursement" size="sm">
       <div className="space-y-4">
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-          <div className="text-sm font-semibold text-amber-800">{credit.client as string} — {credit.ref as string}</div>
+          <div className="text-sm font-semibold text-amber-800">{(credit.client as { nom: string }).nom} — {credit.reference as string}</div>
           <div className="text-xs text-amber-600 mt-0.5">
-            Solde restant : <span className="font-bold">{formatXAF(credit.soldeRestant as number)}</span>
+            Solde restant : <span className="font-bold">{formatXAF(credit.solde_restant_xaf as number)}</span>
           </div>
         </div>
         <div>
@@ -434,8 +381,8 @@ function RemboursementModal({ isOpen, onClose, credit }: { isOpen: boolean; onCl
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant remboursé (FCFA)</label>
             <input type="number" value={montant} onChange={(e) => setMontant(e.target.value)}
-              max={credit.soldeRestant as number}
-              placeholder={`Max : ${(credit.soldeRestant as number).toLocaleString('fr-CM')}`}
+              max={credit.solde_restant_xaf as number}
+              placeholder={`Max : ${(credit.solde_restant_xaf as number).toLocaleString('fr-CM')}`}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
           </div>
         )}
@@ -446,7 +393,9 @@ function RemboursementModal({ isOpen, onClose, credit }: { isOpen: boolean; onCl
         </div>
         <div className="flex gap-2 justify-end pt-2">
           <Button variant="ghost" onClick={onClose}>Annuler</Button>
-          <Button onClick={onClose}><CheckCircle className="h-3.5 w-3.5" /> Enregistrer</Button>
+          <Button onClick={handleSubmit} disabled={rembourser.isPending || (type === 'partiel' && !montant)}>
+            <CheckCircle className="h-3.5 w-3.5" /> {rembourser.isPending ? 'Enregistrement…' : 'Enregistrer'}
+          </Button>
         </div>
       </div>
     </Modal>
@@ -456,25 +405,34 @@ function RemboursementModal({ isOpen, onClose, credit }: { isOpen: boolean; onCl
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function Finance() {
-  const [activeTab, setActiveTab] = useState<Tab>('Factures')
+  const [activeTab, setActiveTab]         = useState<Tab>('Factures')
   const [showNewFacture, setShowNewFacture] = useState(false)
-  const [selectedFacture, setSelectedFacture] = useState<Facture | null>(null)
-  const [remboursementCredit, setRemboursementCredit] = useState<Credit | null>(null)
-  const [compteFilter, setCompteFilter] = useState('')
+  const [selectedFacture, setSelectedFacture] = useState<FactureRecord | null>(null)
+  const [remboursementCredit, setRemboursementCredit] = useState<CreditRecord | null>(null)
+  const [compteFilter, setCompteFilter]   = useState('')
   const [periodeFilter, setPeriodeFilter] = useState('')
 
-  const echusCount = CREDITS.filter((c) => c.statut === 'echu').length
-  const totalEchus = CREDITS.filter((c) => c.statut === 'echu').reduce((s, c) => s + (c.soldeRestant as number), 0)
+  const { data: facturesData, isLoading: facturesLoading } = useFactures()
+  const { data: creditsData,  isLoading: creditsLoading  } = useCredits()
+  const { data: ecrituresData, isLoading: ecrituresLoading } = useEcritures({
+    compte: compteFilter || undefined,
+    mois:   periodeFilter || undefined,
+  })
+  const envoyerFacture = useEnvoyerFacture()
 
-  const factureColumns: Column<Facture>[] = [
-    { id: 'ref', header: 'Référence', accessor: 'ref', render: (v) => <span className="font-mono text-xs font-semibold text-gray-700">{v as string}</span> },
-    { id: 'client', header: 'Client', accessor: 'client', render: (v) => <span className="text-sm font-semibold">{v as string}</span> },
-    {
-      id: 'montant', header: 'Montant TTC', accessor: (row) => totals(row.lignes as FactureLigne[]).ttc,
-      render: (v) => <span className="text-sm font-bold">{formatXAF(v as number)}</span>,
-    },
-    { id: 'date', header: 'Émission', accessor: 'dateEmission', render: (v) => <span className="text-sm text-gray-500">{formatDate(v as string)}</span> },
-    { id: 'echeance', header: 'Échéance', accessor: 'dateEcheance', render: (v) => <span className="text-sm text-gray-500">{formatDate(v as string)}</span> },
+  const factures  = (facturesData?.data  ?? []) as FactureRecord[]
+  const credits   = (creditsData?.data   ?? []) as CreditRecord[]
+  const ecritures = ecrituresData?.data  ?? []
+
+  const echusCount = credits.filter((c) => c.statut === 'echu').length
+  const totalEchus = credits.filter((c) => c.statut === 'echu').reduce((s, c) => s + (c.solde_restant_xaf as number), 0)
+
+  const factureColumns: Column<FactureRecord>[] = [
+    { id: 'numero', header: 'Référence', accessor: 'numero', render: (v) => <span className="font-mono text-xs font-semibold text-gray-700">{v as string}</span> },
+    { id: 'client', header: 'Client', accessor: (row) => (row.client as { nom: string }).nom, render: (v) => <span className="text-sm font-semibold">{v as string}</span> },
+    { id: 'montant', header: 'Montant TTC', accessor: 'montant_ttc_xaf', render: (v) => <span className="text-sm font-bold">{formatXAF(v as number)}</span> },
+    { id: 'date', header: 'Émission', accessor: 'date_emission', render: (v) => <span className="text-sm text-gray-500">{formatDate(v as string)}</span> },
+    { id: 'echeance', header: 'Échéance', accessor: 'date_echeance', render: (v) => <span className="text-sm text-gray-500">{formatDate(v as string)}</span> },
     { id: 'statut', header: 'Statut', accessor: 'statut', render: (v) => <Badge statut={v as string} map={FACT_MAP} /> },
     {
       id: 'actions', header: '', accessor: 'id', sortable: false,
@@ -487,7 +445,10 @@ export default function Finance() {
           <button title="Télécharger PDF" className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
             <Download className="h-3.5 w-3.5" />
           </button>
-          <button title="Envoyer WhatsApp" className="p-1.5 rounded hover:bg-green-50 text-gray-400 hover:text-green-600 transition-colors">
+          <button title="Envoyer WhatsApp"
+            onClick={(e) => { e.stopPropagation(); envoyerFacture.mutate(row.id as string) }}
+            disabled={envoyerFacture.isPending}
+            className="p-1.5 rounded hover:bg-green-50 text-gray-400 hover:text-green-600 transition-colors disabled:opacity-50">
             <MessageCircle className="h-3.5 w-3.5" />
           </button>
           <button title="Imprimer" onClick={(e) => { e.stopPropagation(); window.print() }}
@@ -499,12 +460,12 @@ export default function Finance() {
     },
   ]
 
-  const creditColumns: Column<Credit>[] = [
-    { id: 'ref', header: 'Référence', accessor: 'ref', render: (v) => <span className="font-mono text-xs font-semibold text-gray-700">{v as string}</span> },
-    { id: 'client', header: 'Client', accessor: 'client', render: (v) => <span className="text-sm font-semibold">{v as string}</span> },
-    { id: 'montant', header: 'Montant initial', accessor: 'montant', render: (v) => <span className="text-sm font-semibold">{formatXAF(v as number)}</span> },
-    { id: 'solde', header: 'Solde restant', accessor: 'soldeRestant', render: (v) => <span className="text-sm font-bold" style={{ color: (v as number) > 0 ? '#dc2626' : '#15803d' }}>{formatXAF(v as number)}</span> },
-    { id: 'echeance', header: 'Échéance', accessor: 'echeance', render: (v) => <span className="text-sm text-gray-500">{formatDate(v as string)}</span> },
+  const creditColumns: Column<CreditRecord>[] = [
+    { id: 'reference', header: 'Référence', accessor: 'reference', render: (v) => <span className="font-mono text-xs font-semibold text-gray-700">{v as string}</span> },
+    { id: 'client', header: 'Client', accessor: (row) => (row.client as { nom: string }).nom, render: (v) => <span className="text-sm font-semibold">{v as string}</span> },
+    { id: 'montant', header: 'Montant initial', accessor: 'montant_initial_xaf', render: (v) => <span className="text-sm font-semibold">{formatXAF(v as number)}</span> },
+    { id: 'solde', header: 'Solde restant', accessor: 'solde_restant_xaf', render: (v) => <span className="text-sm font-bold" style={{ color: (v as number) > 0 ? '#dc2626' : '#15803d' }}>{formatXAF(v as number)}</span> },
+    { id: 'echeance', header: 'Échéance', accessor: 'date_echeance', render: (v) => <span className="text-sm text-gray-500">{formatDate(v as string)}</span> },
     { id: 'statut', header: 'Statut', accessor: 'statut', render: (v) => <StatusBadge status={v as string} /> },
     {
       id: 'actions', header: '', accessor: 'id', sortable: false,
@@ -517,16 +478,6 @@ export default function Finance() {
       ) : null,
     },
   ]
-
-  const glFiltered = GRAND_LIVRE.filter((l) => {
-    if (compteFilter && l.compte !== compteFilter) return false
-    if (periodeFilter) {
-      const [y, m] = periodeFilter.split('-')
-      const [ly, lm] = l.date.split('-')
-      if (ly !== y || lm !== m) return false
-    }
-    return true
-  })
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} className="space-y-6">
@@ -582,18 +533,23 @@ export default function Finance() {
                     </button>
                     <div className="flex gap-2">
                       <Button variant="ghost" size="sm"><Download className="h-3.5 w-3.5" /> PDF</Button>
-                      <Button variant="ghost" size="sm"><MessageCircle className="h-3.5 w-3.5" /> WhatsApp</Button>
+                      <Button variant="ghost" size="sm"
+                        onClick={() => envoyerFacture.mutate(selectedFacture.id as string)}
+                        disabled={envoyerFacture.isPending}>
+                        <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
+                      </Button>
                       <Button variant="ghost" size="sm" onClick={() => window.print()}><Printer className="h-3.5 w-3.5" /> Imprimer</Button>
                     </div>
                   </div>
-                  <InvoicePreview facture={selectedFacture} />
+                  <InvoicePreview facture={selectedFacture as PreviewableFacture} />
                 </div>
               ) : (
-                <DataTable<Facture>
+                <DataTable<FactureRecord>
                   columns={factureColumns}
-                  data={FACTURES}
+                  data={factures}
                   keyField="id"
                   onRowClick={setSelectedFacture}
+                  loading={facturesLoading}
                 />
               )
             )}
@@ -615,7 +571,7 @@ export default function Finance() {
                     </div>
                   </div>
                 )}
-                <DataTable<Credit> columns={creditColumns} data={CREDITS} keyField="id" />
+                <DataTable<CreditRecord> columns={creditColumns} data={credits} keyField="id" loading={creditsLoading} />
               </div>
             )}
 
@@ -636,7 +592,7 @@ export default function Finance() {
                       <X className="h-3.5 w-3.5" /> Effacer
                     </button>
                   )}
-                  <span className="ml-auto text-xs text-gray-400">{glFiltered.length} écriture{glFiltered.length !== 1 ? 's' : ''}</span>
+                  <span className="ml-auto text-xs text-gray-400">{ecritures.length} écriture{ecritures.length !== 1 ? 's' : ''}</span>
                 </div>
 
                 <div className="overflow-x-auto rounded-xl border border-gray-100">
@@ -649,21 +605,24 @@ export default function Finance() {
                       </tr>
                     </thead>
                     <tbody>
-                      {glFiltered.map((l, i) => (
-                        <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+                      {ecrituresLoading && (
+                        <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400">Chargement…</td></tr>
+                      )}
+                      {!ecrituresLoading && ecritures.map((l, i) => (
+                        <tr key={l.id ?? i} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
                           <td className="px-4 py-3 font-mono text-xs text-gray-500 whitespace-nowrap">{formatDate(l.date)}</td>
                           <td className="px-4 py-3 text-sm text-gray-700">{l.libelle}</td>
                           <td className="px-4 py-3">
-                            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-mono">{l.compte} — {l.compteLabel}</span>
+                            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-mono">{l.compte} — {l.compte_label}</span>
                           </td>
-                          <td className="px-4 py-3 text-right font-semibold text-[#1d4ed8]">{l.debit > 0 ? formatXAF(l.debit) : '—'}</td>
-                          <td className="px-4 py-3 text-right font-semibold text-[#15803d]">{l.credit > 0 ? formatXAF(l.credit) : '—'}</td>
-                          <td className="px-4 py-3 text-right font-bold" style={{ color: l.solde >= 0 ? '#1d4ed8' : '#15803d' }}>
-                            {formatXAF(Math.abs(l.solde))}
+                          <td className="px-4 py-3 text-right font-semibold text-[#1d4ed8]">{l.debit_xaf > 0 ? formatXAF(l.debit_xaf) : '—'}</td>
+                          <td className="px-4 py-3 text-right font-semibold text-[#15803d]">{l.credit_xaf > 0 ? formatXAF(l.credit_xaf) : '—'}</td>
+                          <td className="px-4 py-3 text-right font-bold" style={{ color: l.solde_xaf >= 0 ? '#1d4ed8' : '#15803d' }}>
+                            {formatXAF(Math.abs(l.solde_xaf))}
                           </td>
                         </tr>
                       ))}
-                      {glFiltered.length === 0 && (
+                      {!ecrituresLoading && ecritures.length === 0 && (
                         <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400">Aucune écriture pour ces critères</td></tr>
                       )}
                     </tbody>
@@ -676,22 +635,22 @@ export default function Finance() {
             {activeTab === 'Déclarations Fiscales' && (
               <div className="p-5 space-y-3">
                 {DECLARATIONS.map((d) => {
-                  const s = DECL_MAP[d.statut as string] ?? DECL_MAP.a_declarer
+                  const s = DECL_MAP[d.statut] ?? DECL_MAP.a_declarer
                   return (
-                    <div key={d.id as string} className="flex items-center justify-between p-4 border border-gray-100 rounded-xl hover:bg-gray-50 transition-colors">
+                    <div key={d.id} className="flex items-center justify-between p-4 border border-gray-100 rounded-xl hover:bg-gray-50 transition-colors">
                       <div className="flex items-center gap-3">
                         <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-gray-100 shrink-0">
                           <ReceiptText className="h-5 w-5 text-gray-400" />
                         </div>
                         <div>
-                          <div className="font-semibold text-sm text-[#212121]">{d.type as string}</div>
+                          <div className="font-semibold text-sm text-[#212121]">{d.type}</div>
                           <div className="text-xs text-gray-400 mt-0.5">
-                            Période : {d.periode as string} · Échéance : {formatDate(d.echeance as string)}
+                            Période : {d.periode} · Échéance : {formatDate(d.echeance)}
                           </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        {(d.montant as number) > 0 && <span className="text-sm font-bold">{formatXAF(d.montant as number)}</span>}
+                        {d.montant > 0 && <span className="text-sm font-bold">{formatXAF(d.montant)}</span>}
                         <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ color: s.color, backgroundColor: s.bg }}>{s.label}</span>
                         {d.statut === 'a_declarer' && <Button size="sm">Déclarer</Button>}
                       </div>
