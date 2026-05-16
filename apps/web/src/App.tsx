@@ -14,6 +14,15 @@ const Commandes    = lazy(() => import('@/pages/Commandes'))
 const Devis        = lazy(() => import('@/pages/Devis'))
 const Clients      = lazy(() => import('@/pages/Clients'))
 const ClientDetail = lazy(() => import('@/pages/clients/ClientDetail'))
+const Finance      = lazy(() => import('@/pages/Finance'))
+const RH           = lazy(() => import('@/pages/RH'))
+const Intelligence = lazy(() => import('@/pages/Intelligence'))
+const Production   = lazy(() => import('@/pages/Production'))
+const Projets      = lazy(() => import('@/pages/Projets'))
+const Logistique   = lazy(() => import('@/pages/Logistique'))
+const Marketing    = lazy(() => import('@/pages/Marketing'))
+const Securite     = lazy(() => import('@/pages/Securite'))
+const IoT          = lazy(() => import('@/pages/IoT'))
 const ModulePage   = lazy(() => import('@/pages/ModulePage'))
 
 function PageLoader() {
@@ -39,17 +48,10 @@ function Shell({ children }: { children: React.ReactNode }) {
   )
 }
 
-const PLACEHOLDER_MODULES = [
-  'production', 'finance', 'rh',
-  'formation', 'projets', 'logistique', 'marketing',
-  'securite', 'intelligence', 'iot', 'boutique',
-] as const
+const PLACEHOLDER_MODULES = ['formation', 'boutique'] as const
 
 const MODULE_LABELS: Record<string, string> = {
-  production: 'Production',
-  finance: 'Finance', rh: 'RH', formation: 'Formation',
-  projets: 'Projets', logistique: 'Logistique', marketing: 'Marketing',
-  securite: 'Sécurité', intelligence: 'Intelligence', iot: 'IoT', boutique: 'Boutique',
+  formation: 'Formation', boutique: 'Boutique',
 }
 
 function AppRoutes() {
@@ -77,6 +79,17 @@ function AppRoutes() {
           <Route path="/devis" element={<Shell><Devis /></Shell>} />
           <Route path="/clients" element={<Shell><Clients /></Shell>} />
           <Route path="/clients/:id" element={<Shell><ClientDetail /></Shell>} />
+
+          {/* Modules réels */}
+          <Route path="/finance" element={<Shell><Finance /></Shell>} />
+          <Route path="/rh" element={<Shell><RH /></Shell>} />
+          <Route path="/intelligence" element={<Shell><Intelligence /></Shell>} />
+          <Route path="/production" element={<Shell><Production /></Shell>} />
+          <Route path="/projets" element={<Shell><Projets /></Shell>} />
+          <Route path="/logistique" element={<Shell><Logistique /></Shell>} />
+          <Route path="/marketing" element={<Shell><Marketing /></Shell>} />
+          <Route path="/securite" element={<Shell><Securite /></Shell>} />
+          <Route path="/iot" element={<Shell><IoT /></Shell>} />
 
           {/* Autres modules (placeholder) */}
           {PLACEHOLDER_MODULES.map((mod) => (
