@@ -216,7 +216,7 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
 
   const updateLigne = (i: number, field: keyof FormLigne, val: string | number) => {
     const next = [...lignes]
-    ;(next[i] as Record<string, unknown>)[field] = val
+    next[i] = { ...next[i], [field]: val }
     setLignes(next)
   }
 
