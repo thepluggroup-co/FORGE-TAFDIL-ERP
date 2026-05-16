@@ -1,31 +1,98 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
+import React, { lazy, Suspense } from 'react'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { AnimatePresence } from 'framer-motion'
 import { Toaster } from 'sonner'
+import { AuthProvider, useAuth } from '@/context/AuthContext'
+import { AppShell } from '@/components/layout/AppShell'
 
-export default function App() {
+const Login = lazy(() => import('@/pages/Login'))
+const ModulePage = lazy(() => import('@/pages/ModulePage'))
+
+function PageLoader() {
   return (
-    <>
-      <Routes>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/dashboard" element={<PlaceholderPage title="Dashboard" />} />
-        <Route path="/orders" element={<PlaceholderPage title="Commandes" />} />
-        <Route path="/production" element={<PlaceholderPage title="Production" />} />
-        <Route path="/inventory" element={<PlaceholderPage title="Inventaire" />} />
-        <Route path="/clients" element={<PlaceholderPage title="Clients" />} />
-        <Route path="*" element={<PlaceholderPage title="404" />} />
-      </Routes>
-      <Toaster richColors position="top-right" />
-    </>
+    <div className="flex items-center justify-center h-64">
+      <div className="h-8 w-8 rounded-full border-2 border-[#C62828] border-t-transparent animate-spin" />
+    </div>
   )
 }
 
-function PlaceholderPage({ title }: { title: string }) {
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth()
+  if (loading) return <PageLoader />
+  if (!user) return <Navigate to="/login" replace />
+  return <>{children}</>
+}
+
+const MODULES = [
+  { path: '/production',   label: 'Production' },
+  { path: '/stocks',       label: 'Stocks' },
+  { path: '/commandes',    label: 'Commandes' },
+  { path: '/devis',        label: 'Devis' },
+  { path: '/finance',      label: 'Finance' },
+  { path: '/rh',           label: 'RH' },
+  { path: '/formation',    label: 'Formation' },
+  { path: '/projets',      label: 'Projets' },
+  { path: '/logistique',   label: 'Logistique' },
+  { path: '/marketing',    label: 'Marketing' },
+  { path: '/securite',     label: 'Sécurité' },
+  { path: '/intelligence', label: 'Intelligence' },
+  { path: '/iot',          label: 'IoT' },
+  { path: '/boutique',     label: 'Boutique' },
+] as const
+
+function AppRoutes() {
+  const location = useLocation()
+
   return (
-    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#F5F5F5' }}>
-      <div className="text-center">
-        <div className="text-5xl font-bold mb-2" style={{ color: '#C62828' }}>FORGE</div>
-        <div className="text-xl font-medium mb-1" style={{ color: '#212121' }}>{title}</div>
-        <div className="text-sm" style={{ color: '#37474F' }}>TAFDIL · Douala, Cameroun</div>
-      </div>
-    </div>
+    <AnimatePresence mode="wait">
+      <Suspense fallback={<PageLoader />}>
+        <Routes location={location} key={location.pathname}>
+          {/* Public */}
+          <Route path="/login" element={<Login />} />
+
+          {/* Protected modules — AppShell wraps each */}
+          <Route path="/" element={<Navigate to="/production" replace />} />
+          {MODULES.map(({ path, label }) => (
+            <Route
+              key={path}
+              path={path}
+              element={
+                <ProtectedRoute>
+                  <AppShell>
+                    <ModulePage title={label} />
+                  </AppShell>
+                </ProtectedRoute>
+              }
+            />
+          ))}
+
+          {/* Sub-routes (e.g. /commandes/123) */}
+          {MODULES.map(({ path, label }) => (
+            <Route
+              key={`${path}/*`}
+              path={`${path}/*`}
+              element={
+                <ProtectedRoute>
+                  <AppShell>
+                    <ModulePage title={label} />
+                  </AppShell>
+                </ProtectedRoute>
+              }
+            />
+          ))}
+
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </Suspense>
+    </AnimatePresence>
+  )
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppRoutes />
+      <Toaster richColors position="top-right" expand closeButton />
+    </AuthProvider>
   )
 }
