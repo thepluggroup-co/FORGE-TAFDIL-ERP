@@ -6,7 +6,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin({ exclude: ['@forge/db', '@forge/shared', 'electron-log', 'electron-updater'] })],
     resolve: {
       alias: {
-        '@forge/db':     resolve(__dirname, '../../packages/db/src/index.ts'),
+        '@forge/db':     resolve(__dirname, '../../packages/db/src/supabase-client.ts'),
         '@forge/shared': resolve(__dirname, '../../packages/shared/src/index.ts'),
       },
     },
