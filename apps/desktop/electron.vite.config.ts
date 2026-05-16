@@ -3,7 +3,7 @@ import { resolve } from 'path'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@forge/db', '@forge/shared'] })],
+    plugins: [externalizeDepsPlugin({ exclude: ['@forge/db', '@forge/shared', 'electron-log', 'electron-updater'] })],
     resolve: {
       alias: {
         '@forge/db':     resolve(__dirname, '../../packages/db/src/index.ts'),
