@@ -9,8 +9,7 @@ export default defineConfig({
   clean: true,
   platform: 'node',
   target: 'node20',
-  // Inject ESM shims (__dirname, __filename, etc.)
   shims: true,
-  // Bundle workspace packages inline (they export .ts source files)
   noExternal: [/@forge\/.*/],
+  external: ['node-fetch', 'whatwg-url'],
 })
