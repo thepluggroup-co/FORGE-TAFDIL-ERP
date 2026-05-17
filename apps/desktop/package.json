@@ -39,11 +39,8 @@
     }
   },
   "dependencies": {
-    "@forge/db":       "workspace:*",
-    "@forge/shared":   "workspace:*",
     "better-sqlite3":  "^11.10.0",
-    "electron-log":    "^5.2.0",
-    "electron-updater":"^6.3.0"
+    "electron-log":    "^5.2.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

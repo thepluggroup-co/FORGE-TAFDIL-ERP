@@ -1,14 +1,15 @@
 import { app, BrowserWindow, Menu, shell, Notification, ipcMain } from 'electron'
 import { join } from 'path'
 import log from 'electron-log'
-import { autoUpdater } from 'electron-updater'
 import { registerDbHandlers } from './ipc/db-handler'
 import { SyncManager } from './ipc/sync-handler'
+
+// Set app name before anything else so userData path uses "FORGE by TAFDIL"
+app.setName('FORGE by TAFDIL')
 
 // ── Logging ────────────────────────────────────────────────────────────────────
 log.initialize()
 log.transports.file.level = 'info'
-autoUpdater.logger = log
 
 // ── Globals ────────────────────────────────────────────────────────────────────
 const isDev  = !app.isPackaged
@@ -134,10 +135,6 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 
-  // Auto-updater (prod seulement)
-  if (!isDev) {
-    autoUpdater.checkForUpdatesAndNotify()
-  }
 })
 
 app.on('window-all-closed', () => {

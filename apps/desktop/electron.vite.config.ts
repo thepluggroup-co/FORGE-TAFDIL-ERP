@@ -20,7 +20,6 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin({
       exclude: [
         'electron-log',
-        'electron-updater',
         // Supabase + ws are bundled inline: not direct desktop deps and not
         // accessible via pnpm's non-flat node_modules at runtime.
         'ws',

@@ -10,6 +10,9 @@ import { useAiChat, useAiRecommandations, useAiAlertes } from '@/hooks/useAI'
 import type { AiMessage, StockReco, AlerteIA } from '@/hooks/useAI'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
 import { formatXAF } from '@/lib/utils'
+import ShopPerformance from './intelligence/ShopPerformance'
+
+type Tab = 'intelligence' | 'shop'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -111,6 +114,8 @@ function Widget({ title, icon, children }: { title: string; icon: React.ReactNod
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function Intelligence() {
+  const [tab, setTab] = useState<Tab>('intelligence')
+
   const [messages, setMessages] = useState<Message[]>([
     { id: '0', role: 'assistant', content: INITIAL_CONTENT, ts: new Date() },
   ])
@@ -184,6 +189,35 @@ export default function Intelligence() {
         subtitle="Assistant IA · Recommandations · Rapports automatiques"
         breadcrumbs={[{ label: 'FORGE', href: '/' }, { label: 'Intelligence' }]}
       />
+
+      {/* ── Onglets ── */}
+      <div className="flex gap-1 rounded-xl border border-gray-100 bg-gray-50 p-1 w-fit">
+        {([
+          { key: 'intelligence', label: 'Intelligence IA', icon: Brain },
+          { key: 'shop',        label: 'Performance Shop', icon: ShoppingBag },
+        ] as { key: Tab; label: string; icon: React.ElementType }[]).map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-all ${
+              tab === key
+                ? 'bg-white text-[#C62828] shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Icon size={14} />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <AnimatePresence mode="wait">
+        {tab === 'shop' ? (
+          <motion.div key="shop" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
+            <ShopPerformance />
+          </motion.div>
+        ) : (
+          <motion.div key="intelligence" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* ── Chat Assistant ── */}
@@ -422,6 +456,9 @@ export default function Intelligence() {
           )}
         </div>
       </Widget>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   )
 }

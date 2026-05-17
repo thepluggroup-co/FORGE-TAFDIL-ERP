@@ -13,7 +13,7 @@ import { financeRouter } from './routes/finance'
 import { rhRouter } from './routes/rh'
 import { aiRouter } from './routes/ai'
 import { rapportsRouter } from './routes/rapports'
-import { shopRouter } from './routes/shop'
+import { shopRouter, shopErpRouter } from './routes/shop'
 import { paiementsRouter } from './routes/paiements'
 
 // ── Application typée ──────────────────────────────────────────────────────────
@@ -82,7 +82,8 @@ api.route('/',       commerceRouter)   // /clients, /devis, /commandes
 api.route('/',       financeRouter)    // /factures, /credits, /ecritures, /rapports
 api.route('/',       rhRouter)         // /rh/employes, /rh/presences, /rh/apprenants, /rh/paie
 api.route('/',       aiRouter)         // /ai/chat, /ai/recommandations/stock, /ai/alertes
-api.route('/rapports', rapportsRouter) // /grand-livre, /balance, /declarations/tva, /plan-comptable
+api.route('/rapports',  rapportsRouter)  // /grand-livre, /balance, /declarations/tva, /plan-comptable
+api.route('/shop-erp', shopErpRouter)   // analytics, produits toggle, devis web → ERP
 
 app.route('/api', api)
 

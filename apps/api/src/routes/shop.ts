@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabase } from '@forge/db/supabase'
+import type { HonoVariables } from '../types'
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
@@ -431,4 +432,267 @@ shopRouter.get('/livraison/tarifs', (c) => {
       zones_connues:   Object.keys(TARIFS_LIVRAISON),
     },
   })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SHOP ERP ROUTER — protégé par authMiddleware (opérateurs ERP)
+// Monté sur /api/shop-erp dans index.ts
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const shopErpRouter = new Hono<{ Variables: HonoVariables }>()
+
+// ── Helpers locaux ─────────────────────────────────────────────────────────────
+
+async function genererNumeroDevis(): Promise<string> {
+  const today     = new Date()
+  const yyyymmdd  = today.toISOString().slice(0, 10).replace(/-/g, '')
+  const startOfDay = `${today.toISOString().slice(0, 10)}T00:00:00.000Z`
+  const { count } = await supabase
+    .from('devis')
+    .select('*', { count: 'exact', head: true })
+    .gte('created_at', startOfDay)
+  return `DEV-${yyyymmdd}-${String((count ?? 0) + 1).padStart(4, '0')}`
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GET /api/shop-erp/analytics
+// KPIs + CA mensuel comparé ERP vs Shop (6 derniers mois)
+// ══════════════════════════════════════════════════════════════════════════════
+
+shopErpRouter.get('/analytics', async (c) => {
+  const today     = new Date().toISOString().split('T')[0]
+  const debutMois = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
+
+  const [todayRes, monthRes] = await Promise.all([
+    supabase.from('commandes_shop').select('montant_ttc, statut_commande')
+      .gte('created_at', `${today}T00:00:00.000Z`)
+      .neq('statut_commande', 'annulee'),
+    supabase.from('commandes_shop').select('montant_ttc, statut_commande')
+      .gte('created_at', debutMois)
+      .neq('statut_commande', 'annulee'),
+  ])
+
+  const todayRows = (todayRes.data ?? [])
+  const monthRows = (monthRes.data ?? [])
+  const caMois    = monthRows.reduce((s, r) => s + (r.montant_ttc ?? 0), 0)
+
+  const kpis = {
+    commandes_aujourd_hui: todayRows.length,
+    ca_aujourd_hui:        todayRows.reduce((s, r) => s + (r.montant_ttc ?? 0), 0),
+    commandes_mois:        monthRows.length,
+    ca_mois:               caMois,
+    panier_moyen:          monthRows.length > 0 ? Math.round(caMois / monthRows.length) : 0,
+  }
+
+  // CA mensuel sur 6 mois — shop vs ERP classique
+  const caMensuel: Array<{
+    mois: string
+    ca_shop: number
+    ca_erp: number
+    ca_total: number
+  }> = []
+
+  for (let i = 5; i >= 0; i--) {
+    const d     = new Date()
+    d.setMonth(d.getMonth() - i)
+    const year  = d.getFullYear()
+    const month = d.getMonth() + 1
+    const debut = new Date(year, month - 1, 1).toISOString()
+    const fin   = new Date(year, month, 0, 23, 59, 59, 999).toISOString()
+    const dateDebut = debut.split('T')[0]
+    const dateFin   = fin.split('T')[0]
+
+    const [shopMonth, erpMonth] = await Promise.all([
+      supabase.from('commandes_shop').select('montant_ttc')
+        .gte('created_at', debut).lte('created_at', fin)
+        .neq('statut_commande', 'annulee'),
+      supabase.from('commandes').select('total_ttc_xaf')
+        .gte('date_commande', dateDebut).lte('date_commande', dateFin)
+        .neq('statut', 'cancelled'),
+    ])
+
+    const caShop  = (shopMonth.data ?? []).reduce((s, r) => s + (r.montant_ttc ?? 0), 0)
+    const caTotal = (erpMonth.data ?? []).reduce((s, r) => s + (r.total_ttc_xaf ?? 0), 0)
+    const caErpSeul = Math.max(0, caTotal - caShop)
+
+    caMensuel.push({
+      mois:     `${year}-${String(month).padStart(2, '0')}`,
+      ca_shop:  Math.round(caShop),
+      ca_erp:   Math.round(caErpSeul),
+      ca_total: Math.round(caTotal),
+    })
+  }
+
+  return c.json({ data: { kpis, ca_mensuel: caMensuel } })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GET /api/shop-erp/produits
+// Tous les produits avec visibilité shop + stock ERP
+// ══════════════════════════════════════════════════════════════════════════════
+
+shopErpRouter.get('/produits', async (c) => {
+  const { data, error } = await supabase
+    .from('produits_shop')
+    .select(`
+      product_id,
+      visible_shop,
+      prix_public,
+      images,
+      updated_at,
+      produits!inner (
+        ref, designation, categorie, stock_actuel, stock_min, stock_critique, unite, statut
+      )
+    `)
+    .order('updated_at', { ascending: false })
+
+  if (error) return c.json({ error: 'Erreur DB', code: 'DB_ERROR' }, 500)
+
+  const produits = (data ?? []).map((r: any) => ({
+    id:             r.product_id,
+    ref:            r.produits.ref,
+    nom:            r.produits.designation,
+    categorie:      r.produits.categorie,
+    unite:          r.produits.unite,
+    stock_actuel:   r.produits.stock_actuel,
+    stock_min:      r.produits.stock_min,
+    stock_critique: r.produits.stock_critique,
+    statut:         r.produits.statut,
+    visible_shop:   r.visible_shop,
+    prix_public:    r.prix_public,
+    images:         r.images ?? [],
+  }))
+
+  return c.json({ data: produits, total: produits.length })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PUT /api/shop-erp/produits/:id/visibilite
+// Activer/désactiver la visibilité shop d'un produit
+// ══════════════════════════════════════════════════════════════════════════════
+
+shopErpRouter.put('/produits/:id/visibilite',
+  zValidator('json', z.object({ visible: z.boolean() })),
+  async (c) => {
+    const id      = c.req.param('id')
+    const { visible } = c.req.valid('json')
+
+    const { data, error } = await supabase
+      .from('produits_shop')
+      .update({ visible_shop: visible, updated_at: new Date().toISOString() })
+      .eq('product_id', id)
+      .select('product_id, visible_shop')
+      .single()
+
+    if (error || !data) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
+
+    return c.json({ data })
+  }
+)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PUT /api/shop-erp/produits/:id/prix
+// Mettre à jour le prix public d'un produit
+// ══════════════════════════════════════════════════════════════════════════════
+
+shopErpRouter.put('/produits/:id/prix',
+  zValidator('json', z.object({ prix: z.number().min(0) })),
+  async (c) => {
+    const id    = c.req.param('id')
+    const { prix } = c.req.valid('json')
+
+    const { data, error } = await supabase
+      .from('produits_shop')
+      .update({ prix_public: prix, updated_at: new Date().toISOString() })
+      .eq('product_id', id)
+      .select('product_id, prix_public')
+      .single()
+
+    if (error || !data) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
+
+    return c.json({ data })
+  }
+)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GET /api/shop-erp/devis-web
+// Demandes de devis web à traiter
+// ══════════════════════════════════════════════════════════════════════════════
+
+shopErpRouter.get('/devis-web', async (c) => {
+  const { statut } = c.req.query()
+
+  let query = supabase
+    .from('demandes_devis_web')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(50)
+
+  if (statut) {
+    query = query.eq('statut', statut)
+  }
+
+  const { data, error } = await query
+
+  if (error) return c.json({ error: 'Erreur DB', code: 'DB_ERROR' }, 500)
+
+  return c.json({ data: data ?? [], total: (data ?? []).length })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
+// POST /api/shop-erp/devis/:id/creer-erp
+// Créer un devis ERP à partir d'une demande web
+// ══════════════════════════════════════════════════════════════════════════════
+
+shopErpRouter.post('/devis/:id/creer-erp', async (c) => {
+  const id = c.req.param('id')
+
+  const { data: devisWeb, error: errFetch } = await supabase
+    .from('demandes_devis_web')
+    .select('*')
+    .eq('id', id)
+    .single()
+
+  if (errFetch || !devisWeb) {
+    return c.json({ error: 'Demande introuvable', code: 'NOT_FOUND' }, 404)
+  }
+
+  if (devisWeb.erp_devis_id) {
+    return c.json({ error: 'Devis ERP déjà créé', code: 'ALREADY_EXISTS', devis_id: devisWeb.erp_devis_id }, 409)
+  }
+
+  const numero  = await genererNumeroDevis()
+  const today   = new Date().toISOString().split('T')[0]
+  const validite = new Date(Date.now() + 30 * 86_400_000).toISOString().split('T')[0]
+
+  const { data: erpDevis, error: errCreate } = await supabase
+    .from('devis')
+    .insert({
+      numero,
+      client_nom:          devisWeb.nom,
+      statut:              'brouillon',
+      date_emission:       today,
+      date_validite:       validite,
+      validite_jours:      30,
+      conditions_paiement: 'Virement bancaire',
+      notes:               `[SOURCE WEB] ${devisWeb.description}`,
+      total_ht_xaf:        0,
+      tva_xaf:             0,
+      total_ttc_xaf:       0,
+      sync_status:         'synced',
+    })
+    .select('id, numero')
+    .single()
+
+  if (errCreate || !erpDevis) {
+    console.error('[shop-erp] create devis:', errCreate)
+    return c.json({ error: 'Erreur création devis ERP', code: 'DB_ERROR' }, 500)
+  }
+
+  await supabase
+    .from('demandes_devis_web')
+    .update({ statut: 'traitee', erp_devis_id: erpDevis.id })
+    .eq('id', id)
+
+  return c.json({ data: erpDevis }, 201)
 })
