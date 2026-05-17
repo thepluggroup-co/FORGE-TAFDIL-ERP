@@ -5,8 +5,6 @@
     "lib": ["ES2022"],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "emitDeclarationOnly": true,
     "skipLibCheck": true,
     "strict": true
   },

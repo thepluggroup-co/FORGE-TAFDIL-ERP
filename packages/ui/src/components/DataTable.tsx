@@ -14,6 +14,7 @@ export interface DataTableProps<T extends Record<string, unknown>> {
   onRowClick?: (row: T) => void
   loading?: boolean
   keyField?: keyof T
+  emptyMessage?: string
 }
 
 type SortDir = 'asc' | 'desc' | null
@@ -62,6 +63,7 @@ export function DataTable<T extends Record<string, unknown>>({
   onRowClick,
   loading = false,
   keyField,
+  emptyMessage = 'Aucun résultat',
 }: DataTableProps<T>) {
   const [search, setSearch] = useState('')
   const [sortCol, setSortCol] = useState<string | null>(null)
@@ -191,7 +193,7 @@ export function DataTable<T extends Record<string, unknown>>({
             ) : paginated.length === 0 ? (
               <tr>
                 <td colSpan={columns.length + 1} className="text-center py-12 text-sm text-gray-400">
-                  Aucun résultat
+                  {emptyMessage}
                 </td>
               </tr>
             ) : (
