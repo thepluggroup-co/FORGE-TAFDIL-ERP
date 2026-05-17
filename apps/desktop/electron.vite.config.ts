@@ -39,11 +39,23 @@ export default defineConfig({
       'process.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(env.SUPABASE_ANON_KEY ?? ''),
     },
     resolve: {
-      alias: {
-        '@forge/shared': resolve(__dirname, '../../packages/shared/src/index.ts'),
-        // ws is in pnpm virtual store but not linked to desktop/node_modules
-        'ws': resolve(__dirname, '../../node_modules/.pnpm/ws@8.20.1/node_modules/ws/index.js'),
-      },
+      alias: (() => {
+        // pnpm postinstall failures leave packages unlinked in desktop/node_modules.
+        // Point Rollup directly to the virtual store so it can bundle them inline.
+        const store = resolve(__dirname, '../../node_modules/.pnpm')
+        const sup = (pkg: string, ver: string, entry = 'dist/index.cjs') =>
+          ({ [`@supabase/${pkg}`]: `${store}/@supabase+${pkg}@${ver}/node_modules/@supabase/${pkg}/${entry}` })
+        return {
+          '@forge/shared': resolve(__dirname, '../../packages/shared/src/index.ts'),
+          'ws': `${store}/ws@8.20.1/node_modules/ws/index.js`,
+          ...sup('supabase-js',  '2.105.4', 'dist/index.cjs'),
+          ...sup('realtime-js',  '2.105.4', 'dist/main/index.js'),
+          ...sup('postgrest-js', '2.105.4', 'dist/index.cjs'),
+          ...sup('storage-js',   '2.105.4', 'dist/index.cjs'),
+          ...sup('functions-js', '2.105.4', 'dist/main/index.js'),
+          ...sup('auth-js',      '2.105.4', 'dist/main/index.js'),
+        }
+      })(),
     },
     build: {
       outDir: 'out/main',
