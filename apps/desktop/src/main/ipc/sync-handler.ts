@@ -15,9 +15,9 @@ const SYNC_TABLES: Array<{
   columns:  string
   orderBy:  string
 }> = [
-  { table: 'produits',   columns: 'id,reference,nom,categorie,unite,stock_actuel,stock_min,prix_vente_ht_xaf,statut,updated_at', orderBy: 'updated_at' },
-  { table: 'clients',    columns: 'id,nom,type,telephone,email,adresse,statut,score_fiabilite,updated_at',                       orderBy: 'updated_at' },
-  { table: 'commandes',  columns: 'id,reference,client_id,client_nom,statut,total_ttc_xaf,date_livraison,updated_at',            orderBy: 'updated_at' },
+  { table: 'produits',  columns: 'id,ref,designation,categorie,unite,stock_actuel,stock_min,prix_unitaire_xaf,statut,updated_at', orderBy: 'updated_at' },
+  { table: 'clients',   columns: 'id,nom,type,telephone,email,adresse,score_fiabilite,updated_at',                                orderBy: 'updated_at' },
+  { table: 'commandes', columns: 'id,numero,client_id,client_nom,statut,total_ttc_xaf,date_livraison_prevue,updated_at',          orderBy: 'updated_at' },
 ]
 
 // ── Types ─────────────────────────────────────────────────────────────────────

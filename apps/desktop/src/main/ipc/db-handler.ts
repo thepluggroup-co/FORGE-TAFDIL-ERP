@@ -88,6 +88,50 @@ function runMigrations(database: InstanceType<typeof Database>) {
         attempts   INTEGER DEFAULT 0
       );
     `,
+
+    // Aligne les colonnes locales avec le schéma Supabase réel (schema.pg.ts)
+    '002_align_schema': `
+      DROP TABLE IF EXISTS produits;
+      CREATE TABLE produits (
+        id               TEXT PRIMARY KEY,
+        ref              TEXT NOT NULL,
+        designation      TEXT NOT NULL,
+        categorie        TEXT,
+        unite            TEXT DEFAULT 'unité',
+        stock_actuel     REAL DEFAULT 0,
+        stock_min        REAL DEFAULT 5,
+        prix_unitaire_xaf REAL DEFAULT 0,
+        statut           TEXT DEFAULT 'normal',
+        sync_status      TEXT DEFAULT 'pending',
+        updated_at       TEXT
+      );
+
+      DROP TABLE IF EXISTS clients;
+      CREATE TABLE clients (
+        id               TEXT PRIMARY KEY,
+        nom              TEXT NOT NULL,
+        type             TEXT DEFAULT 'particulier',
+        telephone        TEXT,
+        email            TEXT,
+        adresse          TEXT,
+        score_fiabilite  INTEGER DEFAULT 50,
+        sync_status      TEXT DEFAULT 'pending',
+        updated_at       TEXT
+      );
+
+      DROP TABLE IF EXISTS commandes;
+      CREATE TABLE commandes (
+        id                    TEXT PRIMARY KEY,
+        numero                TEXT NOT NULL,
+        client_id             TEXT,
+        client_nom            TEXT NOT NULL,
+        statut                TEXT DEFAULT 'confirmed',
+        total_ttc_xaf         REAL DEFAULT 0,
+        date_livraison_prevue TEXT,
+        sync_status           TEXT DEFAULT 'pending',
+        updated_at            TEXT
+      );
+    `,
   }
 
   const alreadyRan = new Set(
