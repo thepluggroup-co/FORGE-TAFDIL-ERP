@@ -1,7 +1,7 @@
 import { ipcMain, net } from 'electron'
 import log from 'electron-log'
 import type { BrowserWindow } from 'electron'
-import { supabase } from '@forge/db'
+import { supabase } from '../supabase'
 import { getDb } from './db-handler'
 
 // ── Constantes ────────────────────────────────────────────────────────────────

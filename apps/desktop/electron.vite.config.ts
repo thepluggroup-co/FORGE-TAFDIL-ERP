@@ -2,7 +2,6 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import { resolve } from 'path'
 import { readFileSync } from 'fs'
 
-// Load apps/desktop/.env so Supabase credentials are available at build time
 function loadEnvFile(path: string): Record<string, string> {
   try {
     return Object.fromEntries(
@@ -16,19 +15,23 @@ function loadEnvFile(path: string): Record<string, string> {
 }
 const env = loadEnvFile(resolve(__dirname, '.env'))
 
-// Polyfill: Electron 31 / Node.js 20 has no native WebSocket.
-// Supabase RealtimeClient checks for it at module init time, before any
-// code in the bundle body can run. A Rollup banner is the only hook that
-// fires first, so we set global.WebSocket from the external 'ws' package here.
-const WS_POLYFILL = `
-if (typeof WebSocket === 'undefined') {
-  try { const _ws = require('ws'); global.WebSocket = _ws.WebSocket ?? _ws; } catch(_) {}
-}
-`
-
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@forge/db', '@forge/shared', 'electron-log', 'electron-updater'] })],
+    plugins: [externalizeDepsPlugin({
+      exclude: [
+        'electron-log',
+        'electron-updater',
+        // Supabase + ws are bundled inline: not direct desktop deps and not
+        // accessible via pnpm's non-flat node_modules at runtime.
+        'ws',
+        '@supabase/supabase-js',
+        '@supabase/realtime-js',
+        '@supabase/postgrest-js',
+        '@supabase/storage-js',
+        '@supabase/functions-js',
+        '@supabase/auth-js',
+      ],
+    })],
     define: {
       'process.env.SUPABASE_URL':           JSON.stringify(env.SUPABASE_URL      ?? ''),
       'process.env.VITE_SUPABASE_URL':      JSON.stringify(env.SUPABASE_URL      ?? ''),
@@ -37,17 +40,16 @@ export default defineConfig({
     },
     resolve: {
       alias: {
-        '@forge/db':     resolve(__dirname, '../../packages/db/src/supabase-client.ts'),
         '@forge/shared': resolve(__dirname, '../../packages/shared/src/index.ts'),
+        // ws is in pnpm virtual store but not linked to desktop/node_modules
+        'ws': resolve(__dirname, '../../node_modules/.pnpm/ws@8.20.1/node_modules/ws/index.js'),
       },
     },
     build: {
       outDir: 'out/main',
       rollupOptions: {
         // better-sqlite3 is a native addon — must stay external
-        // ws stays external so the banner's require('ws') resolves from node_modules
-        external: ['better-sqlite3', 'ws'],
-        output: { banner: WS_POLYFILL },
+        external: ['better-sqlite3'],
       },
     },
   },
