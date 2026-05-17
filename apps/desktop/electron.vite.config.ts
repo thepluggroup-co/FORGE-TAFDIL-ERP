@@ -48,8 +48,9 @@ export default defineConfig({
     build: {
       outDir: 'out/main',
       rollupOptions: {
-        // better-sqlite3 is a native addon — must stay external
-        external: ['better-sqlite3'],
+        // Native addons that must stay external
+        // bufferutil / utf-8-validate are optional perf addons for ws — not required
+        external: ['better-sqlite3', 'bufferutil', 'utf-8-validate'],
       },
     },
   },
