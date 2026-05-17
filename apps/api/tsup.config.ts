@@ -11,7 +11,11 @@ export default defineConfig({
   target: 'node20',
   shims: true,
   noExternal: [/@forge\/.*/],
-  // Prevent CJS transitive deps from being inlined into the ESM bundle.
-  // node-fetch@2 → whatwg-url → require("punycode") crashes on Node.js 24.
-  external: ['node-fetch', 'whatwg-url', 'punycode'],
+  // tsup's shims inject __require (underscored) but esbuild's bundled CJS
+  // wrapper checks for the plain `require` global and throws when absent.
+  // Defining require via createRequire in the banner bridges the gap so
+  // bundled CJS deps (agentkeepalive → require("http") etc.) work on Node 24.
+  banner: {
+    js: `import { createRequire as __cr } from 'module'; const require = __cr(import.meta.url);`,
+  },
 })
