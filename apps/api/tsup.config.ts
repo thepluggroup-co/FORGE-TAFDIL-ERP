@@ -11,5 +11,7 @@ export default defineConfig({
   target: 'node20',
   shims: true,
   noExternal: [/@forge\/.*/],
-  external: ['node-fetch', 'whatwg-url'],
+  esbuildOptions(options) {
+    options.packages = 'external'
+  },
 })
