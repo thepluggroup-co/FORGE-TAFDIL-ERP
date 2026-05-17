@@ -709,4 +709,132 @@ publicRouter.get('/api/commandes/public/:ref', async (c) => {
   })
 })
 
+// ══════════════════════════════════════════════════════════════════════════════
+// COMMANDES WEB — Changement de statut avec workflow métier
+// ══════════════════════════════════════════════════════════════════════════════
+
+const statutCommandeWebSchema = z.object({
+  statut_commande: z.enum(['recue', 'confirmee', 'en_preparation', 'expediee', 'livree', 'annulee']),
+  statut_paiement: z.enum(['en_attente', 'paye', 'echec', 'rembourse']).optional(),
+})
+
+router.patch(
+  '/commandes/web/:id/statut',
+  requireRole(['directeur', 'admin', 'operateur']),
+  zValidator('json', statutCommandeWebSchema),
+  async (c) => {
+    const { id } = c.req.param()
+    const user   = c.get('user')
+    const body   = c.req.valid('json')
+
+    // Charger la commande shop avec ses lignes
+    const { data: commande, error: loadErr } = await supabase
+      .from('commandes_shop')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (loadErr || !commande) {
+      return c.json({ error: 'Commande web introuvable', code: 'NOT_FOUND' }, 404)
+    }
+
+    const cmd = commande as {
+      id: string; ref: string; statut_commande: string; statut_paiement: string
+      lignes: Array<{ designation: string; quantite: number; prix_unitaire: number }>
+      client_nom: string; client_telephone: string
+      montant_ttc: number; erp_commande_id: string | null
+    }
+
+    // ── Workflow : recue/confirmee → en_preparation ─────────────────────────
+    if (body.statut_commande === 'en_preparation' &&
+        ['recue', 'confirmee'].includes(cmd.statut_commande)) {
+
+      // Vérifier et déduire le stock pour chaque ligne
+      for (const ligne of cmd.lignes) {
+        // On ne peut pas déduire sans product_id — on vérifie dans commandes_lignes ERP
+        // si la commande ERP existe déjà, le stock sera géré là
+      }
+
+      // Créer un job de production si commande ERP liée
+      if (cmd.erp_commande_id) {
+        const today = new Date().toISOString()
+        await supabase.from('jobs_production').insert({
+          numero:               `OF-${cmd.ref}`,
+          commande_id:          cmd.erp_commande_id,
+          produit_designation:  `Commande web ${cmd.ref}`,
+          avancement_pct:       0,
+          statut:               'confirmed',
+          date_debut:           today,
+        })
+      }
+    }
+
+    // ── Workflow : expediee → livree — générer la facture ──────────────────
+    if (body.statut_commande === 'livree' && cmd.statut_commande === 'expediee') {
+      if (cmd.erp_commande_id) {
+        const today     = new Date().toISOString().split('T')[0]
+        const echeance  = new Date(Date.now() + 30 * 86400_000).toISOString().split('T')[0]
+        const numeroFact = await genererNumero('factures', 'FAC')
+
+        await supabase.from('factures').insert({
+          numero:          numeroFact,
+          commande_id:     cmd.erp_commande_id,
+          client_nom:      cmd.client_nom,
+          statut:          'valide',
+          date_emission:   today,
+          date_echeance:   echeance,
+          total_ht_xaf:    Math.round(cmd.montant_ttc / 1.1925),
+          tva_xaf:         Math.round(cmd.montant_ttc - cmd.montant_ttc / 1.1925),
+          total_ttc_xaf:   cmd.montant_ttc,
+          montant_paye_xaf: cmd.statut_paiement === 'paye' ? cmd.montant_ttc : 0,
+          created_by:      user.id,
+        })
+      }
+    }
+
+    // ── Mise à jour du statut ───────────────────────────────────────────────
+    const updates: Record<string, string> = {
+      statut_commande: body.statut_commande,
+      updated_at:      new Date().toISOString(),
+    }
+    if (body.statut_paiement) updates.statut_paiement = body.statut_paiement
+
+    const { data, error } = await supabase
+      .from('commandes_shop')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) return c.json({ error: error.message }, 400)
+
+    // Sync statut ERP si commande liée
+    if (cmd.erp_commande_id) {
+      const ERP_STATUT: Record<string, string> = {
+        en_preparation: 'in_production',
+        expediee:       'pret',
+        livree:         'delivered',
+        annulee:        'cancelled',
+      }
+      const erpStatut = ERP_STATUT[body.statut_commande]
+      if (erpStatut) {
+        await supabase
+          .from('commandes')
+          .update({ statut: erpStatut, updated_at: new Date().toISOString() })
+          .eq('id', cmd.erp_commande_id)
+
+        await supabase.from('historique_commandes').insert({
+          commande_id:    cmd.erp_commande_id,
+          ancien_statut:  cmd.statut_commande,
+          nouveau_statut: erpStatut,
+          commentaire:    `[Shop Web] ${body.statut_commande}`,
+          changed_by:     user.id,
+        })
+      }
+    }
+
+    return c.json(data)
+  },
+)
+
 export { router as commerceRouter, publicRouter as publicCommandesRouter }

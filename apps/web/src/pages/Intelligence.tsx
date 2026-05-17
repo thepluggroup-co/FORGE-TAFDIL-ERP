@@ -3,10 +3,13 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Brain, Send, BarChart2, FileText, Bell, AlertTriangle,
   AlertCircle, Info, Zap, MessageCircle, RefreshCw,
+  ShoppingBag, TrendingUp, Package, Globe,
 } from 'lucide-react'
 import { PageHeader, Button } from '@forge/ui'
 import { useAiChat, useAiRecommandations, useAiAlertes } from '@/hooks/useAI'
 import type { AiMessage, StockReco, AlerteIA } from '@/hooks/useAI'
+import { useCommandesShop } from '@/hooks/useCommandesShop'
+import { formatXAF } from '@/lib/utils'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -121,6 +124,7 @@ export default function Intelligence() {
   const aiChat          = useAiChat()
   const recommandations = useAiRecommandations()
   const alertes         = useAiAlertes()
+  const { data: shopData } = useCommandesShop()
 
   const alertesList: AlerteIA[] = alertes.data?.alertes ?? []
   const recos: StockReco[] | null = recommandations.data?.recommandations ?? null
@@ -360,6 +364,64 @@ export default function Intelligence() {
           </div>
         </Widget>
       </div>
+
+      {/* ── Tableau de bord Shop ── */}
+      <Widget title="Tableau de bord Shop — FORGE Shop" icon={<Globe className="h-4 w-4" />}>
+        <div className="p-5">
+          {shopData ? (
+            <div className="space-y-4">
+              {/* KPIs */}
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {[
+                  { label: 'CA web ce mois', value: formatXAF(shopData.stats.ca_web_mois), icon: TrendingUp, color: '#1d4ed8' },
+                  { label: 'Nouvelles aujourd\'hui', value: shopData.stats.nouvelles_ce_jour, icon: ShoppingBag, color: '#C62828' },
+                  { label: 'En attente paiement', value: shopData.stats.en_attente_paiement, icon: Globe, color: '#d97706' },
+                  { label: 'Commandes confirmées', value: shopData.stats.confirmees, icon: Package, color: '#15803d' },
+                ].map((kpi) => {
+                  const Icon = kpi.icon
+                  return (
+                    <div key={kpi.label} className="rounded-xl border border-gray-100 p-3">
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="text-xs text-gray-400">{kpi.label}</span>
+                        <div className="rounded-lg p-1.5" style={{ backgroundColor: `${kpi.color}15` }}>
+                          <Icon size={13} style={{ color: kpi.color }} />
+                        </div>
+                      </div>
+                      <p className="text-lg font-bold text-[#212121]">{kpi.value}</p>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Top produits commandés */}
+              {shopData.data.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase text-gray-400">Dernières commandes web</p>
+                  <div className="space-y-1.5">
+                    {shopData.data.slice(0, 5).map((cmd) => (
+                      <div key={cmd.id} className="flex items-center justify-between rounded-lg bg-gray-50 px-3 py-2">
+                        <div>
+                          <span className="font-mono text-xs font-semibold text-[#C62828]">{cmd.ref}</span>
+                          <span className="ml-2 text-xs text-gray-500">{cmd.client_nom}</span>
+                        </div>
+                        <span className="text-xs font-semibold">{formatXAF(cmd.montant_ttc)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {shopData.data.length === 0 && (
+                <p className="text-sm text-gray-400 text-center py-4">Aucune commande web reçue.</p>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center justify-center py-8">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#C62828] border-t-transparent" />
+            </div>
+          )}
+        </div>
+      </Widget>
     </motion.div>
   )
 }

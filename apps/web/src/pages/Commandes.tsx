@@ -1,11 +1,14 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence, useDragControls } from 'framer-motion'
-import { LayoutGrid, Table2, Plus, GripVertical } from 'lucide-react'
+import { LayoutGrid, Table2, Plus, GripVertical, Globe } from 'lucide-react'
 import { PageHeader, DataTable, StatusBadge, SlideOver, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import { useCommandes, useStatutCommande } from '@/hooks/useCommandes'
 import type { Commande, CommandeLigne, CommandeHistorique } from '@/hooks/useCommandes'
+import { useCommandesShop } from '@/hooks/useCommandesShop'
+import { CommandesWebPage } from './commandes/CommandesWebPage'
+import { supabase } from '@/lib/supabase'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -15,11 +18,11 @@ type CommandeRecord = Commande & Record<string, unknown>
 // ── Kanban config ─────────────────────────────────────────────────────────────
 
 const KANBAN_COLS: { id: KanbanCol; label: string; color: string }[] = [
-  { id: 'confirmed',     label: 'Confirmée',       color: '#1d4ed8' },
-  { id: 'in_production', label: 'En Production',   color: '#d97706' },
-  { id: 'pret',          label: 'Prête à Livrer',  color: '#7c3aed' },
-  { id: 'delivered',     label: 'Livrée',           color: '#15803d' },
-  { id: 'cancelled',     label: 'Annulée',          color: '#6b7280' },
+  { id: 'confirmed',     label: 'Confirmée',      color: '#1d4ed8' },
+  { id: 'in_production', label: 'En Production',  color: '#d97706' },
+  { id: 'pret',          label: 'Prête à Livrer', color: '#7c3aed' },
+  { id: 'delivered',     label: 'Livrée',          color: '#15803d' },
+  { id: 'cancelled',     label: 'Annulée',         color: '#6b7280' },
 ]
 
 const STATUS_LABELS: Record<KanbanCol, string> = {
@@ -130,14 +133,14 @@ function KanbanColumn({ col, orders, containerRef, columnRefs, onDrop, onCardCli
 // ── Table columns ─────────────────────────────────────────────────────────────
 
 const TABLE_COLS: Column<CommandeRecord>[] = [
-  { id: 'reference',       header: 'Référence',    accessor: 'reference',       render: (v) => <span className="font-mono text-xs">{v as string}</span> },
-  { id: 'client',          header: 'Client',        accessor: (r) => r.client.nom, render: (v) => <span className="font-medium text-sm">{v as string}</span> },
-  { id: 'montant_ttc_xaf', header: 'Montant TTC',  accessor: 'montant_ttc_xaf', render: (v) => <span className="font-semibold">{formatXAF(v as number)}</span> },
-  { id: 'date_commande',   header: 'Date',          accessor: 'date_commande',   render: (v) => <span className="text-xs text-gray-500">{formatDate(v as string)}</span> },
-  { id: 'statut',          header: 'Statut',        accessor: 'statut',          render: (v) => <StatusBadge status={v as string} /> },
+  { id: 'reference',       header: 'Référence',   accessor: 'reference',           render: (v) => <span className="font-mono text-xs">{v as string}</span> },
+  { id: 'client',          header: 'Client',       accessor: (r) => r.client.nom,   render: (v) => <span className="font-medium text-sm">{v as string}</span> },
+  { id: 'montant_ttc_xaf', header: 'Montant TTC', accessor: 'montant_ttc_xaf',     render: (v) => <span className="font-semibold">{formatXAF(v as number)}</span> },
+  { id: 'date_commande',   header: 'Date',         accessor: 'date_commande',       render: (v) => <span className="text-xs text-gray-500">{formatDate(v as string)}</span> },
+  { id: 'statut',          header: 'Statut',       accessor: 'statut',              render: (v) => <StatusBadge status={v as string} /> },
 ]
 
-// ── OrderDetail ────────────────────────────────────────────────────────────────
+// ── OrderDetail (ERP) ──────────────────────────────────────────────────────────
 
 function OrderDetail({ order, onClose }: { order: CommandeRecord; onClose: () => void }) {
   const totalHT = (order.lignes as CommandeLigne[]).reduce((s, l) => s + l.quantite * l.prix_unitaire_ht_xaf, 0)
@@ -147,14 +150,12 @@ function OrderDetail({ order, onClose }: { order: CommandeRecord; onClose: () =>
   return (
     <SlideOver isOpen={true} onClose={onClose} title={`Commande ${order.reference}`} width="lg">
       <div className="space-y-6">
-        {/* Client */}
         <div>
           <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">Client</h3>
           <p className="text-sm font-semibold text-[#212121]">{order.client.nom}</p>
           <p className="text-sm text-gray-500">{order.client.telephone}</p>
         </div>
 
-        {/* Lignes */}
         <div>
           <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">Lignes de commande</h3>
           <div className="border border-gray-100 rounded-xl overflow-hidden">
@@ -185,7 +186,6 @@ function OrderDetail({ order, onClose }: { order: CommandeRecord; onClose: () =>
           </div>
         </div>
 
-        {/* Historique */}
         <div>
           <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">Historique</h3>
           <div className="space-y-2">
@@ -214,7 +214,10 @@ function OrderDetail({ order, onClose }: { order: CommandeRecord; onClose: () =>
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
+type Tab = 'erp' | 'web'
+
 export default function Commandes() {
+  const [tab, setTab]         = useState<Tab>('erp')
   const [view, setView]       = useState<'kanban' | 'table'>('kanban')
   const [selected, setSelected] = useState<CommandeRecord | null>(null)
   const containerRef  = useRef<HTMLDivElement>(null)
@@ -223,11 +226,17 @@ export default function Commandes() {
   const { data, isLoading } = useCommandes()
   const statutMutation = useStatutCommande()
 
+  // Badge commandes web (nouvelles non traitées)
+  const { data: shopData } = useCommandesShop()
+  const webBadge = shopData?.stats?.nouvelles_ce_jour ?? 0
+
   const orders = (data?.data ?? []) as CommandeRecord[]
 
   const moveOrder = (orderId: string, colId: KanbanCol) => {
     statutMutation.mutate({ id: orderId, statut: colId })
   }
+
+  const totalErp = orders.reduce((s, o) => s + o.montant_ttc_xaf, 0)
 
   return (
     <motion.div
@@ -239,71 +248,133 @@ export default function Commandes() {
     >
       <PageHeader
         title="Commandes"
-        subtitle={`${orders.length} commandes · ${formatXAF(orders.reduce((s, o) => s + o.montant_ttc_xaf, 0))} de CA`}
+        subtitle={
+          tab === 'erp'
+            ? `${orders.length} commandes ERP · ${formatXAF(totalErp)}`
+            : 'Commandes reçues depuis FORGE Shop'
+        }
         breadcrumbs={[{ label: 'FORGE', href: '/' }, { label: 'Commandes' }]}
         actions={
-          <>
-            <div className="flex items-center bg-gray-100 rounded-lg p-1 gap-1">
-              <button
-                onClick={() => setView('kanban')}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all"
-                style={{ backgroundColor: view === 'kanban' ? '#fff' : 'transparent', color: view === 'kanban' ? '#212121' : '#6b7280', boxShadow: view === 'kanban' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}
-              >
-                <LayoutGrid className="h-3.5 w-3.5" /> Kanban
-              </button>
-              <button
-                onClick={() => setView('table')}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all"
-                style={{ backgroundColor: view === 'table' ? '#fff' : 'transparent', color: view === 'table' ? '#212121' : '#6b7280', boxShadow: view === 'table' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}
-              >
-                <Table2 className="h-3.5 w-3.5" /> Tableau
-              </button>
-            </div>
-            <Button size="sm">
-              <Plus className="h-3.5 w-3.5" /> Nouvelle commande
-            </Button>
-          </>
+          tab === 'erp' ? (
+            <>
+              <div className="flex items-center bg-gray-100 rounded-lg p-1 gap-1">
+                <button
+                  onClick={() => setView('kanban')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all"
+                  style={{ backgroundColor: view === 'kanban' ? '#fff' : 'transparent', color: view === 'kanban' ? '#212121' : '#6b7280', boxShadow: view === 'kanban' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}
+                >
+                  <LayoutGrid className="h-3.5 w-3.5" /> Kanban
+                </button>
+                <button
+                  onClick={() => setView('table')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all"
+                  style={{ backgroundColor: view === 'table' ? '#fff' : 'transparent', color: view === 'table' ? '#212121' : '#6b7280', boxShadow: view === 'table' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}
+                >
+                  <Table2 className="h-3.5 w-3.5" /> Tableau
+                </button>
+              </div>
+              <Button size="sm">
+                <Plus className="h-3.5 w-3.5" /> Nouvelle commande
+              </Button>
+            </>
+          ) : null
         }
       />
 
+      {/* Onglets */}
+      <div className="flex items-center gap-1 border-b border-gray-200">
+        <button
+          onClick={() => setTab('erp')}
+          className={`relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+            tab === 'erp'
+              ? 'text-[#C62828] after:absolute after:bottom-0 after:left-0 after:h-0.5 after:w-full after:bg-[#C62828]'
+              : 'text-gray-500 hover:text-[#212121]'
+          }`}
+        >
+          Commandes ERP
+          <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-xs font-semibold text-gray-600">
+            {orders.length}
+          </span>
+        </button>
+        <button
+          onClick={() => setTab('web')}
+          className={`relative flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+            tab === 'web'
+              ? 'text-[#C62828] after:absolute after:bottom-0 after:left-0 after:h-0.5 after:w-full after:bg-[#C62828]'
+              : 'text-gray-500 hover:text-[#212121]'
+          }`}
+        >
+          <Globe size={14} />
+          Commandes Web
+          {webBadge > 0 && (
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#C62828] text-xs font-bold text-white">
+              {webBadge > 9 ? '9+' : webBadge}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* Contenu */}
       <AnimatePresence mode="wait">
-        {view === 'kanban' ? (
+        {tab === 'erp' ? (
           <motion.div
-            key="kanban"
+            key="erp"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            ref={containerRef}
-            className="flex gap-4 overflow-x-auto pb-4"
           >
-            {KANBAN_COLS.map((col) => (
-              <KanbanColumn
-                key={col.id}
-                col={col}
-                orders={orders.filter((o) => o.statut === col.id)}
-                containerRef={containerRef}
-                columnRefs={columnRefs}
-                onDrop={moveOrder}
-                onCardClick={setSelected}
-              />
-            ))}
+            <AnimatePresence mode="wait">
+              {view === 'kanban' ? (
+                <motion.div
+                  key="kanban"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  ref={containerRef}
+                  className="flex gap-4 overflow-x-auto pb-4"
+                >
+                  {KANBAN_COLS.map((col) => (
+                    <KanbanColumn
+                      key={col.id}
+                      col={col}
+                      orders={orders.filter((o) => o.statut === col.id)}
+                      containerRef={containerRef}
+                      columnRefs={columnRefs}
+                      onDrop={moveOrder}
+                      onCardClick={setSelected}
+                    />
+                  ))}
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="table"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <DataTable<CommandeRecord>
+                    columns={TABLE_COLS}
+                    data={orders}
+                    keyField="id"
+                    onRowClick={setSelected}
+                    loading={isLoading}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
         ) : (
           <motion.div
-            key="table"
+            key="web"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
           >
-            <DataTable<CommandeRecord>
-              columns={TABLE_COLS}
-              data={orders}
-              keyField="id"
-              onRowClick={setSelected}
-              loading={isLoading}
-            />
+            <CommandesWebPage />
           </motion.div>
         )}
       </AnimatePresence>

@@ -29,9 +29,17 @@ export function setupRealtime(queryClient: QueryClient): () => void {
     })
     .subscribe()
 
+  const commandesShop = supabase
+    .channel('forge-commandes-shop')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'commandes_shop' }, () => {
+      void queryClient.invalidateQueries({ queryKey: ['commandes-shop'] })
+    })
+    .subscribe()
+
   return () => {
     void supabase.removeChannel(produits)
     void supabase.removeChannel(bons)
     void supabase.removeChannel(commandes)
+    void supabase.removeChannel(commandesShop)
   }
 }

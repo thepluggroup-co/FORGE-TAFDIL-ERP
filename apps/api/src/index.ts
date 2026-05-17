@@ -13,6 +13,7 @@ import { financeRouter } from './routes/finance'
 import { rhRouter } from './routes/rh'
 import { aiRouter } from './routes/ai'
 import { rapportsRouter } from './routes/rapports'
+import { shopRouter } from './routes/shop'
 
 // ── Application typée ──────────────────────────────────────────────────────────
 
@@ -24,6 +25,7 @@ const ALLOWED_ORIGINS = [
   'http://localhost:5173',   // Vite dev
   'http://localhost:4173',   // Vite preview
   'http://localhost:3000',   // Next/autre client local
+  'http://localhost:3002',   // FORGE Shop dev
   process.env.FRONTEND_URL,  // Production
   process.env.TAURI_URL,     // Desktop Tauri
 ].filter(Boolean) as string[]
@@ -50,6 +52,7 @@ app.use('*', rateLimitMiddleware)
 // ── Routes publiques (avant authMiddleware) ────────────────────────────────────
 
 app.route('/', publicCommandesRouter)
+app.route('/api/shop', shopRouter)   // catalogue, commandes web, devis
 
 // ── Route santé (publique) ─────────────────────────────────────────────────────
 

@@ -7,19 +7,21 @@ import {
   Store, LogOut, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
+import { useCommandesShop } from '@/hooks/useCommandesShop'
 
 interface NavItem {
   path: string
   label: string
   icon: React.ElementType
   badge?: number
+  dynamicBadge?: boolean
 }
 
-const NAV_ITEMS: NavItem[] = [
+const NAV_ITEMS_BASE: NavItem[] = [
   { path: '/dashboard',    label: 'Dashboard',      icon: LayoutDashboard },
   { path: '/production',   label: 'Production',    icon: Wrench,         badge: 2 },
   { path: '/stocks',       label: 'Stocks',         icon: Package,        badge: 5 },
-  { path: '/commandes',    label: 'Commandes',      icon: ShoppingCart,   badge: 3 },
+  { path: '/commandes',    label: 'Commandes',      icon: ShoppingCart,   dynamicBadge: true },
   { path: '/devis',        label: 'Devis',          icon: FileText },
   { path: '/finance',      label: 'Finance',        icon: DollarSign,     badge: 1 },
   { path: '/rh',           label: 'RH',             icon: Users },
@@ -41,6 +43,15 @@ interface SidebarProps {
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { user, signOut } = useAuth()
   const navigate = useNavigate()
+
+  const { data: shopData } = useCommandesShop()
+  const webBadge = shopData?.stats?.nouvelles_ce_jour ?? 0
+
+  const NAV_ITEMS = NAV_ITEMS_BASE.map((item) =>
+    item.dynamicBadge
+      ? { ...item, badge: webBadge > 0 ? webBadge : undefined }
+      : item
+  )
 
   const handleSignOut = async () => {
     await signOut()

@@ -3,22 +3,35 @@
   "private": true,
   "version": "0.0.1",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3002",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 3002",
     "lint": "next lint"
   },
   "dependencies": {
-    "@forge/ui": "workspace:*",
     "@forge/shared": "workspace:*",
+    "@forge/ui": "workspace:*",
+    "@supabase/ssr": "^0.5.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "@tanstack/react-query": "^5.56.0",
+    "framer-motion": "^11.5.0",
+    "lucide-react": "^0.446.0",
     "next": "^14.2.0",
+    "next-themes": "^0.3.0",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0"
+    "react-dom": "^18.3.0",
+    "sharp": "^0.33.5",
+    "sonner": "^1.5.0",
+    "zod": "^3.23.0",
+    "zustand": "^5.0.13"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.13",
     "typescript": "^5.4.0"
   }
 }
