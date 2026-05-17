@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { supabase } from '@forge/db/supabase'
 import { requireRole } from '../middleware/rbac'
 import { generateDevisPDF, uploadPDF } from '../services/pdf.service'
+import { notifyStatutChange } from '../services/notifications'
 import type { HonoVariables } from '../types'
 
 // ── TVA Cameroun ────────────────────────────────────────────────────────────────
@@ -807,6 +808,19 @@ router.patch(
       .single()
 
     if (error) return c.json({ error: error.message }, 400)
+
+    // Notification WhatsApp client si statut significatif
+    void notifyStatutChange(
+      {
+        ref:              cmd.ref,
+        client_nom:       cmd.client_nom,
+        client_telephone: cmd.client_telephone,
+        montant_ttc:      cmd.montant_ttc,
+        erp_commande_id:  cmd.erp_commande_id,
+      },
+      cmd.statut_commande,
+      body.statut_commande,
+    )
 
     // Sync statut ERP si commande liée
     if (cmd.erp_commande_id) {

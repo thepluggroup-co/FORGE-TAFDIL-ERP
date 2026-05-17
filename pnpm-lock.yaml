@@ -182,6 +182,9 @@ importers:
       framer-motion:
         specifier: ^11.5.0
         version: 11.18.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      jose:
+        specifier: ^6.2.3
+        version: 6.2.3
       lucide-react:
         specifier: ^0.446.0
         version: 0.446.0(react@18.3.1)
@@ -191,6 +194,9 @@ importers:
       next-themes:
         specifier: ^0.3.0
         version: 0.3.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      otplib:
+        specifier: ^13.4.0
+        version: 13.4.0
       react:
         specifier: ^18.3.0
         version: 18.3.1
@@ -1627,6 +1633,10 @@ packages:
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
 
+  '@noble/hashes@2.2.0':
+    resolution: {integrity: sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg==}
+    engines: {node: '>= 20.19.0'}
+
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
     engines: {node: '>= 8'}
@@ -1638,6 +1648,24 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@otplib/core@13.4.0':
+    resolution: {integrity: sha512-JqOGcvZQi2wIkEQo8f3/iAjstavpXy6gouIDMHygjNuH6Q0FjbHOiXMdcE94RwfgDNMABhzwUmvaPsxvgm9NYw==}
+
+  '@otplib/hotp@13.4.0':
+    resolution: {integrity: sha512-MJjE0x06mn2ptymz5qZmQveb+vWFuaIftqE0b5/TZZqUOK7l97cV8lRTmid5BpAQMwJDNLW6RnYxGeCRiNdekw==}
+
+  '@otplib/plugin-base32-scure@13.4.0':
+    resolution: {integrity: sha512-/t9YWJmMbB8bF5z8mXrBZc2FXBe8B/3hG5FhWr9K8cFwFhyxScbPysmZe8s1UTzSA6N+s8Uv8aIfCtVXPNjJWw==}
+
+  '@otplib/plugin-crypto-noble@13.4.0':
+    resolution: {integrity: sha512-KrvE4m7Zv+TT1944HzgqFJWJpKb6AyoxDbvhPStmBqdMlv5Gekb80d66cuFRL08kkPgJ5gXUSb5SFpYeB+bACg==}
+
+  '@otplib/totp@13.4.0':
+    resolution: {integrity: sha512-dK+vl0f0ekzf6mCENRI9AKS2NJUC7OjI3+X8e7QSnhQ2WM7I+i4PGpb3QxKi5hxjTtwVuoZwXR2CFtXdcRtNdQ==}
+
+  '@otplib/uri@13.4.0':
+    resolution: {integrity: sha512-x1ozBa5bPbdZCrrTL/HK21qchiK7jYElTu+0ft22abeEhiLYgH1+SIULvOcVk3CK8YwF4kdcidvkq4ciejucJA==}
 
   '@paralleldrive/cuid2@2.3.1':
     resolution: {integrity: sha512-XO7cAxhnTZl0Yggq6jOgjiOHhbgcO4NqFqwSmQpjK3b6TEE6Uj/jfSk6wzYyemh3+I0sHirKSetjQwn5cZktFw==}
@@ -2133,6 +2161,9 @@ packages:
     resolution: {integrity: sha512-QVTUovf40zgTqlFVrKA1uXMVvU2QWEFWfAH8Wdc48IxLvrJMQVMBRjuQyUpzZCDkakImib9eVazbWlC6ksWtJw==}
     cpu: [x64]
     os: [win32]
+
+  '@scure/base@2.2.0':
+    resolution: {integrity: sha512-b8XEupJibegiXV+tDUseI8oLQc8ei3d/4Jkb2RpbHh3MfE054ov3uIz2dhFkB3FI8iwYkEh0gGCApkrYggkPNg==}
 
   '@sindresorhus/is@4.6.0':
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
@@ -3567,6 +3598,9 @@ packages:
     resolution: {integrity: sha512-2/OKlogiESf2Nh3TFCrRjrr9z1DRHeW0I+KReF67+4J0Ns+8hBtHRmoWAZ2OFU6I5+TWLEe6sVlSdXPjHm5UbQ==}
     engines: {node: '>= 20'}
 
+  jose@6.2.3:
+    resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
+
   joycon@3.1.1:
     resolution: {integrity: sha512-34wB/Y7MW7bzjKRjUKTa46I2Z7eV62Rkhva+KkopW7Qvv/OSWBqvkSY7vusOPrNuZcUG3tApvdVgNB8POj3SPw==}
     engines: {node: '>=10'}
@@ -3997,6 +4031,9 @@ packages:
   open@8.4.2:
     resolution: {integrity: sha512-7x81NCL719oNbsq/3mh+hVrAWmFuEYUqrq/Iw3kUzH8ReypT9QQ0BLoJS7/G9k6N81XjW4qHWtjWwe/9eLy1EQ==}
     engines: {node: '>=12'}
+
+  otplib@13.4.0:
+    resolution: {integrity: sha512-RUcYcRMCgRWhUE/XabRppXpUwCwaWBNHe5iPXhdvP8wwDGpGpsIf/kxX/ec3zFsOaM1Oq8lEhUqDwk6W7DHkwg==}
 
   p-cancelable@2.1.1:
     resolution: {integrity: sha512-BZOr3nRQHOntUjTrH8+Lh54smKHoHyur8We1V8DSMVrl5A2malOOwuJRnKRDjSnkoeBh4at6BwEnb5I7Jl31wg==}
@@ -5797,6 +5834,8 @@ snapshots:
 
   '@noble/hashes@1.8.0': {}
 
+  '@noble/hashes@2.2.0': {}
+
   '@nodelib/fs.scandir@2.1.5':
     dependencies:
       '@nodelib/fs.stat': 2.0.5
@@ -5808,6 +5847,33 @@ snapshots:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
+
+  '@otplib/core@13.4.0': {}
+
+  '@otplib/hotp@13.4.0':
+    dependencies:
+      '@otplib/core': 13.4.0
+      '@otplib/uri': 13.4.0
+
+  '@otplib/plugin-base32-scure@13.4.0':
+    dependencies:
+      '@otplib/core': 13.4.0
+      '@scure/base': 2.2.0
+
+  '@otplib/plugin-crypto-noble@13.4.0':
+    dependencies:
+      '@noble/hashes': 2.2.0
+      '@otplib/core': 13.4.0
+
+  '@otplib/totp@13.4.0':
+    dependencies:
+      '@otplib/core': 13.4.0
+      '@otplib/hotp': 13.4.0
+      '@otplib/uri': 13.4.0
+
+  '@otplib/uri@13.4.0':
+    dependencies:
+      '@otplib/core': 13.4.0
 
   '@paralleldrive/cuid2@2.3.1':
     dependencies:
@@ -6265,6 +6331,8 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.60.4':
     optional: true
+
+  '@scure/base@2.2.0': {}
 
   '@sindresorhus/is@4.6.0': {}
 
@@ -7844,6 +7912,8 @@ snapshots:
       '@hapi/topo': 6.0.2
       '@standard-schema/spec': 1.1.0
 
+  jose@6.2.3: {}
+
   joycon@3.1.1: {}
 
   js-base64@3.7.8: {}
@@ -8225,6 +8295,15 @@ snapshots:
       define-lazy-prop: 2.0.0
       is-docker: 2.2.1
       is-wsl: 2.2.0
+
+  otplib@13.4.0:
+    dependencies:
+      '@otplib/core': 13.4.0
+      '@otplib/hotp': 13.4.0
+      '@otplib/plugin-base32-scure': 13.4.0
+      '@otplib/plugin-crypto-noble': 13.4.0
+      '@otplib/totp': 13.4.0
+      '@otplib/uri': 13.4.0
 
   p-cancelable@2.1.1: {}
 

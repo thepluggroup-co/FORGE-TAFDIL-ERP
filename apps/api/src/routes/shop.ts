@@ -336,7 +336,7 @@ shopRouter.get('/commandes/:ref', async (c) => {
 
   const { data, error } = await supabase
     .from('commandes_shop')
-    .select('ref, statut_commande, statut_paiement, lignes, montant_ttc, frais_livraison, created_at, updated_at, client_ville')
+    .select('ref, statut_commande, statut_paiement, mode_paiement, payment_reference, lignes, montant_ttc, frais_livraison, created_at, updated_at, client_ville, photos_livraison')
     .eq('ref', ref)
     .single()
 

@@ -260,11 +260,11 @@ paiementsRouter.post('/webhook', async (c) => {
 
     // Mise à jour commande ERP liée
     if (commande.erp_commande_id) {
-      await supabase
+      const { error: errERP } = await supabase
         .from('commandes')
         .update({ statut: 'paye', updated_at: new Date().toISOString() })
         .eq('id', commande.erp_commande_id)
-        .catch((e) => console.error('[webhook] update commande ERP:', e))
+      if (errERP) console.error('[webhook] update commande ERP:', errERP)
     }
 
     // Décrémenter le stock pour chaque ligne
@@ -289,7 +289,7 @@ paiementsRouter.post('/webhook', async (c) => {
           .update({ stock_actuel: newStock })
           .eq('id', ligne.product_id)
 
-        // Mouvement de stock
+        // Mouvement de stock (table optionnelle — ignorer si absente)
         await supabase.from('mouvements_stock').insert({
           produit_id:     ligne.product_id,
           type:           'sortie',
@@ -298,7 +298,7 @@ paiementsRouter.post('/webhook', async (c) => {
           reference_doc:  commande.ref,
           source:         'web',
           created_at:     new Date().toISOString(),
-        }).catch(() => {}) // table optionnelle
+        })
       }
     }
 

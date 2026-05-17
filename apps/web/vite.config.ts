@@ -5,6 +5,8 @@ import path from 'path'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Relative base so assets load correctly from file:// in the desktop app
+  base: './',
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

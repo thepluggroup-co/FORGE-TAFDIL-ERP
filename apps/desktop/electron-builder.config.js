@@ -12,18 +12,15 @@ module.exports = {
   files: [
     'out/**',
     '!out/renderer/**',
+    'node_modules/**',
+    '!node_modules/**/{README.md,CHANGELOG.md,*.d.ts}',
+    '!node_modules/.bin/**',
     '!src/**',
-    '!*.ts',
-    '!*.config.*',
     '!.env',
   ],
 
-  // better-sqlite3's native .node binary must live outside the asar
-  // so Electron can dlopen() it at runtime.
-  asarUnpack: [
-    '**/better-sqlite3/build/Release/*.node',
-    '**/better-sqlite3/prebuilds/**/*.node',
-  ],
+  // Disable asar so native .node binaries can be dlopen()-ed directly.
+  asar: false,
 
   // Le renderer (apps/web/dist) est copié dans le paquet
   extraResources: [

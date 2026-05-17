@@ -1,0 +1,6 @@
+{
+  "buildCommand": "pnpm --filter @forge/shop build",
+  "outputDirectory": "apps/shop/.next",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "framework": "nextjs"
+}
