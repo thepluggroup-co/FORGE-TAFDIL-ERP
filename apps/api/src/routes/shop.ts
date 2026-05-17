@@ -244,6 +244,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
 
   // 4. Lignes JSONB
   const lignesJson = body.lignes.map((l) => ({
+    product_id:     l.product_id,   // requis pour décréments stock webhook
     designation:    l.designation,
     quantite:       l.quantite,
     prix_unitaire:  l.prix_unitaire,

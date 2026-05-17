@@ -300,7 +300,7 @@ export function CartDrawer() {
 
                   {/* Boutons d'action */}
                   <Link
-                    href="/panier"
+                    href="/commander"
                     onClick={closeDrawer}
                     className="flex w-full items-center justify-center gap-2 rounded-xl bg-forge-red py-3 text-sm font-bold text-white shadow-sm transition hover:bg-forge-red-dark active:scale-[0.98]"
                   >

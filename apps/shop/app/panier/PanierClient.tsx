@@ -211,13 +211,12 @@ export function PanierClient() {
               </div>
             </div>
 
-            <button
-              onClick={handleCommande}
-              disabled={loading}
-              className="mt-4 w-full rounded-xl bg-forge-red py-3 text-sm font-bold text-white transition hover:bg-forge-red-dark disabled:opacity-60"
+            <Link
+              href="/commander"
+              className="mt-4 flex w-full items-center justify-center rounded-xl bg-forge-red py-3 text-sm font-bold text-white transition hover:bg-forge-red-dark"
             >
-              {loading ? 'Envoi…' : 'Passer la commande'}
-            </button>
+              Passer la commande →
+            </Link>
 
             <div className="mt-3 flex items-center gap-2">
               <div className="h-px flex-1 bg-gray-100" />

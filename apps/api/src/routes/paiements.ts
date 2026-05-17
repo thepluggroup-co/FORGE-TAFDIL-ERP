@@ -1,0 +1,378 @@
+import { Hono } from 'hono'
+import { createHmac } from 'crypto'
+import { supabase } from '@forge/db/supabase'
+
+// ── Constants ──────────────────────────────────────────────────────────────────
+
+const NOTCHPAY_API = 'https://api.notchpay.co'
+
+// ── In-memory status cache (3s TTL) ───────────────────────────────────────────
+
+const statusCache = new Map<string, { data: unknown; expires: number }>()
+
+function getCached(ref: string) {
+  const entry = statusCache.get(ref)
+  if (entry && entry.expires > Date.now()) return entry.data
+  return null
+}
+
+function setCache(ref: string, data: unknown) {
+  statusCache.set(ref, { data, expires: Date.now() + 3_000 })
+  // Nettoyage si cache trop grand
+  if (statusCache.size > 500) {
+    const now = Date.now()
+    for (const [k, v] of statusCache.entries()) {
+      if (v.expires < now) statusCache.delete(k)
+    }
+  }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function notchpayHeader() {
+  return {
+    Authorization: process.env.NOTCHPAY_PUBLIC_KEY ?? '',
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  }
+}
+
+function verifySignature(rawBody: string, header: string): boolean {
+  const secret = process.env.NOTCHPAY_SECRET_KEY ?? ''
+  if (!secret) return true // pas de clé configurée = skip en dev
+  const expected = createHmac('sha256', secret).update(rawBody).digest('hex')
+  return expected === header
+}
+
+async function sendWhatsApp(to: string, message: string) {
+  const token   = process.env.WHATSAPP_API_TOKEN ?? ''
+  const phoneId = process.env.WHATSAPP_BUSINESS_PHONE_ID ?? ''
+  if (!token || !phoneId) {
+    console.info('[whatsapp]', to, message.slice(0, 80))
+    return
+  }
+  await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: to.replace(/\D/g, ''),
+      type: 'text',
+      text: { body: message },
+    }),
+  }).catch((e) => console.error('[whatsapp] send error:', e))
+}
+
+function fmt(n: number) {
+  return new Intl.NumberFormat('fr-CM', { style: 'currency', currency: 'XAF', maximumFractionDigits: 0 }).format(n)
+}
+
+// ── Router ─────────────────────────────────────────────────────────────────────
+
+export const paiementsRouter = new Hono()
+
+// ══════════════════════════════════════════════════════════════════════════════
+// POST /api/paiements/initier
+// Initialise un paiement Notchpay pour une commande web existante
+// ══════════════════════════════════════════════════════════════════════════════
+
+paiementsRouter.post('/initier', async (c) => {
+  const { commande_ref, montant, telephone, canal, email } = await c.req.json<{
+    commande_ref: string
+    montant:      number
+    telephone?:   string
+    canal?:       string
+    email?:       string
+  }>()
+
+  if (!commande_ref || !montant) {
+    return c.json({ error: 'commande_ref et montant sont requis' }, 400)
+  }
+
+  // Vérifier que la commande existe et est en attente de paiement
+  const { data: commande, error: errCommande } = await supabase
+    .from('commandes_shop')
+    .select('id, ref, montant_ttc, statut_paiement')
+    .eq('ref', commande_ref)
+    .single()
+
+  if (errCommande || !commande) {
+    return c.json({ error: 'Commande introuvable' }, 404)
+  }
+  if (commande.statut_paiement === 'paye') {
+    return c.json({ error: 'Cette commande est déjà payée' }, 409)
+  }
+
+  // Appel Notchpay
+  const siteUrl = process.env.SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? 'https://shop.tafdil.cm'
+  const payload: Record<string, unknown> = {
+    email:       email ?? 'client@forge.cm',
+    amount:      Math.round(montant),
+    currency:    'XAF',
+    reference:   commande_ref,
+    description: `Commande FORGE Shop ${commande_ref}`,
+    callback:    `${siteUrl}/paiement-en-cours?commande_ref=${commande_ref}`,
+  }
+  if (telephone) payload.phone   = telephone.replace(/\D/g, '')
+  if (canal)     payload.channel = canal
+
+  let notchJson: Record<string, unknown>
+  try {
+    const notchRes = await fetch(`${NOTCHPAY_API}/payments/initialize`, {
+      method:  'POST',
+      headers: notchpayHeader(),
+      body:    JSON.stringify(payload),
+    })
+
+    notchJson = await notchRes.json() as Record<string, unknown>
+
+    if (!notchRes.ok) {
+      console.error('[notchpay] init error:', notchJson)
+      return c.json({ error: 'Erreur Notchpay', details: notchJson }, 502)
+    }
+  } catch (e) {
+    console.error('[notchpay] network error:', e)
+    return c.json({ error: 'Notchpay injoignable' }, 503)
+  }
+
+  const transaction = notchJson.transaction as Record<string, unknown> | undefined
+  const paymentRef  = (transaction?.reference ?? notchJson.reference) as string | undefined
+
+  if (!paymentRef) {
+    return c.json({ error: 'Référence paiement absente dans la réponse Notchpay' }, 502)
+  }
+
+  // Sauvegarder la référence dans la commande
+  await supabase
+    .from('commandes_shop')
+    .update({ payment_reference: paymentRef, updated_at: new Date().toISOString() })
+    .eq('ref', commande_ref)
+
+  return c.json({
+    payment_reference: paymentRef,
+    checkout_url:      transaction?.checkout_url ?? null,
+    expires_at:        transaction?.expires_at   ?? null,
+    status:            transaction?.status       ?? 'pending',
+  }, 201)
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GET /api/paiements/:reference/statut
+// Poll du statut d'un paiement (cache 3s)
+// ══════════════════════════════════════════════════════════════════════════════
+
+paiementsRouter.get('/:reference/statut', async (c) => {
+  const reference = c.req.param('reference')
+  c.header('Cache-Control', 'no-store')
+
+  // Cache local 3s
+  const cached = getCached(reference)
+  if (cached) return c.json(cached)
+
+  let notchJson: Record<string, unknown>
+  try {
+    const notchRes = await fetch(`${NOTCHPAY_API}/payments/${reference}`, {
+      headers: notchpayHeader(),
+    })
+    if (notchRes.status === 404) {
+      return c.json({ error: 'Paiement introuvable' }, 404)
+    }
+    notchJson = await notchRes.json() as Record<string, unknown>
+  } catch {
+    return c.json({ error: 'Notchpay injoignable' }, 503)
+  }
+
+  const t = (notchJson.transaction ?? notchJson) as Record<string, unknown>
+  const result = {
+    statut:     t.status     ?? 'pending',
+    montant:    t.amount     ?? null,
+    devise:     t.currency   ?? 'XAF',
+    updated_at: t.updated_at ?? t.created_at ?? new Date().toISOString(),
+  }
+
+  setCache(reference, result)
+  return c.json(result)
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
+// POST /api/paiements/webhook
+// Reçoit les événements Notchpay (appelé directement par Notchpay, sans CORS)
+// ══════════════════════════════════════════════════════════════════════════════
+
+paiementsRouter.post('/webhook', async (c) => {
+  const rawBody  = await c.req.text()
+  const sigHeader = c.req.header('x-notch-signature') ?? c.req.header('notch-signature') ?? ''
+
+  // Vérification de signature
+  if (!verifySignature(rawBody, sigHeader)) {
+    console.warn('[security] Webhook Notchpay — signature invalide')
+    return c.json({ error: 'Signature invalide' }, 401)
+  }
+
+  let payload: { event: string; data: Record<string, unknown> }
+  try {
+    payload = JSON.parse(rawBody)
+  } catch {
+    return c.json({ error: 'Payload invalide' }, 400)
+  }
+
+  const { event, data } = payload
+  console.info(`[notchpay-webhook] ${event}`, data?.reference)
+
+  // ── payment.complete ────────────────────────────────────────────────────────
+
+  if (event === 'payment.complete' || event === 'payment.completed') {
+    const reference = data.reference as string
+    const amount    = Number(data.amount ?? 0)
+
+    // Récupérer la commande
+    const { data: commande, error: errFetch } = await supabase
+      .from('commandes_shop')
+      .select('id, ref, montant_ttc, client_nom, client_telephone, client_adresse, lignes, erp_commande_id')
+      .eq('payment_reference', reference)
+      .single()
+
+    if (errFetch || !commande) {
+      console.error('[webhook] commande introuvable pour payment_reference:', reference)
+      return c.json({ received: true }) // 200 pour éviter les retries Notchpay
+    }
+
+    // Anti-fraude : vérifier le montant (tolérance 1 XAF pour arrondis)
+    if (Math.abs(amount - Number(commande.montant_ttc)) > 1) {
+      console.error(`[fraude] ref=${reference} attendu=${commande.montant_ttc} reçu=${amount}`)
+      return c.json({ received: true })
+    }
+
+    // Mise à jour statut paiement + commande
+    const { error: errUpdate } = await supabase
+      .from('commandes_shop')
+      .update({
+        statut_paiement: 'paye',
+        statut_commande: 'confirmee',
+        updated_at:      new Date().toISOString(),
+      })
+      .eq('id', commande.id)
+
+    if (errUpdate) {
+      console.error('[webhook] update commande_shop:', errUpdate)
+      return c.json({ error: 'Erreur interne' }, 500)
+    }
+
+    // Mise à jour commande ERP liée
+    if (commande.erp_commande_id) {
+      await supabase
+        .from('commandes')
+        .update({ statut: 'paye', updated_at: new Date().toISOString() })
+        .eq('id', commande.erp_commande_id)
+        .catch((e) => console.error('[webhook] update commande ERP:', e))
+    }
+
+    // Décrémenter le stock pour chaque ligne
+    const lignes = (commande.lignes as Array<{
+      product_id?: string
+      quantite:    number
+      designation: string
+    }>) ?? []
+
+    for (const ligne of lignes) {
+      if (!ligne.product_id) continue
+      const { data: produit } = await supabase
+        .from('produits')
+        .select('stock_actuel')
+        .eq('id', ligne.product_id)
+        .single()
+
+      if (produit) {
+        const newStock = Math.max(0, Number(produit.stock_actuel) - Number(ligne.quantite))
+        await supabase
+          .from('produits')
+          .update({ stock_actuel: newStock })
+          .eq('id', ligne.product_id)
+
+        // Mouvement de stock
+        await supabase.from('mouvements_stock').insert({
+          produit_id:     ligne.product_id,
+          type:           'sortie',
+          quantite:       ligne.quantite,
+          motif:          `Commande web ${commande.ref}`,
+          reference_doc:  commande.ref,
+          source:         'web',
+          created_at:     new Date().toISOString(),
+        }).catch(() => {}) // table optionnelle
+      }
+    }
+
+    // Notifier l'ERP via Supabase Realtime
+    await supabase.channel('erp-notifications').send({
+      type:    'broadcast',
+      event:   'commande_web_payee',
+      payload: {
+        ref:        commande.ref,
+        montant:    commande.montant_ttc,
+        client_nom: commande.client_nom,
+      },
+    }).catch(() => {})
+
+    // WhatsApp — client
+    const siteUrl = process.env.SITE_URL ?? 'https://shop.tafdil.cm'
+    if (commande.client_telephone) {
+      await sendWhatsApp(
+        commande.client_telephone,
+        `✅ Paiement reçu pour la commande *${commande.ref}*.\n` +
+        `Montant : ${fmt(Number(commande.montant_ttc))}\n` +
+        `Suivi : ${siteUrl}/suivi/${commande.ref}\n\n` +
+        `Merci de votre confiance ! — TAFDIL`
+      )
+    }
+
+    // WhatsApp — secrétaire TAFDIL
+    const tafdilTel = process.env.WHATSAPP_TAFDIL_NUMBER ?? ''
+    if (tafdilTel) {
+      await sendWhatsApp(
+        tafdilTel,
+        `🔔 *Nouvelle commande web payée*\n` +
+        `Réf : ${commande.ref}\n` +
+        `Client : ${commande.client_nom} (${commande.client_telephone ?? '—'})\n` +
+        `Montant : ${fmt(Number(commande.montant_ttc))}\n` +
+        `Livraison : ${commande.client_adresse ?? '—'}`
+      )
+    }
+
+    // Invalidation cache statut
+    statusCache.delete(reference)
+
+    return c.json({ received: true })
+  }
+
+  // ── payment.failed / payment.cancelled ─────────────────────────────────────
+
+  if (event === 'payment.failed' || event === 'payment.cancelled') {
+    const reference = data.reference as string
+
+    const { data: commande } = await supabase
+      .from('commandes_shop')
+      .select('ref, client_nom, client_telephone')
+      .eq('payment_reference', reference)
+      .single()
+
+    if (commande) {
+      await supabase
+        .from('commandes_shop')
+        .update({ statut_paiement: 'echec', updated_at: new Date().toISOString() })
+        .eq('payment_reference', reference)
+
+      if (commande.client_telephone) {
+        await sendWhatsApp(
+          commande.client_telephone,
+          `❌ Paiement échoué pour la commande *${commande.ref}*.\n` +
+          `Votre commande est conservée. Réessayez ou contactez-nous : +237 95 88 45 28`
+        )
+      }
+    }
+
+    statusCache.delete(reference)
+    return c.json({ received: true })
+  }
+
+  return c.json({ received: true })
+})

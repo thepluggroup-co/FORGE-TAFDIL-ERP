@@ -14,6 +14,7 @@ import { rhRouter } from './routes/rh'
 import { aiRouter } from './routes/ai'
 import { rapportsRouter } from './routes/rapports'
 import { shopRouter } from './routes/shop'
+import { paiementsRouter } from './routes/paiements'
 
 // ── Application typée ──────────────────────────────────────────────────────────
 
@@ -52,7 +53,8 @@ app.use('*', rateLimitMiddleware)
 // ── Routes publiques (avant authMiddleware) ────────────────────────────────────
 
 app.route('/', publicCommandesRouter)
-app.route('/api/shop', shopRouter)   // catalogue, commandes web, devis
+app.route('/api/shop',      shopRouter)      // catalogue, commandes web, devis
+app.route('/api/paiements', paiementsRouter) // Notchpay: initier, webhook, statut
 
 // ── Route santé (publique) ─────────────────────────────────────────────────────
 

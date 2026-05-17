@@ -11,7 +11,7 @@ export default defineConfig({
   target: 'node20',
   shims: true,
   noExternal: [/@forge\/.*/],
-  esbuildOptions(options) {
-    options.packages = 'external'
-  },
+  // Prevent CJS transitive deps from being inlined into the ESM bundle.
+  // node-fetch@2 → whatwg-url → require("punycode") crashes on Node.js 24.
+  external: ['node-fetch', 'whatwg-url', 'punycode'],
 })
