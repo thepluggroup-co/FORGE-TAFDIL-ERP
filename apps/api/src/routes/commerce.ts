@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { supabase } from '@forge/db'
+import { supabase } from '@forge/db/supabase'
 import { requireRole } from '../middleware/rbac'
 import { generateDevisPDF, uploadPDF } from '../services/pdf.service'
 import type { HonoVariables } from '../types'

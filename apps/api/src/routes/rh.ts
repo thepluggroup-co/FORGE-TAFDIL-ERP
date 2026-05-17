@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import PDFDocument from 'pdfkit'
-import { supabase, supabaseAdmin } from '@forge/db'
+import { supabase, supabaseAdmin } from '@forge/db/supabase'
 import { requireRole } from '../middleware/rbac'
 import type { HonoVariables } from '../types'
 

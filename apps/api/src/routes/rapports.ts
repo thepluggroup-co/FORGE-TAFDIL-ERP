@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { supabase } from '@forge/db'
+import { supabase } from '@forge/db/supabase'
 import { requireRole } from '../middleware/rbac'
 import { planComptable } from '../services/comptabilite.service'
 import type { HonoVariables } from '../types'

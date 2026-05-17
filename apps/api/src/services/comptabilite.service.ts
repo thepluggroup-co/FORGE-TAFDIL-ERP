@@ -1,4 +1,4 @@
-import { supabase } from '@forge/db'
+import { supabase } from '@forge/db/supabase'
 import PLAN_RAW from '../data/plan-comptable.json'
 
 // ── Plan comptable SYSCOHADA (lookup) ──────────────────────────────────────────

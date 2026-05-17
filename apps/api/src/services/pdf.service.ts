@@ -1,5 +1,5 @@
 import PDFDocument from 'pdfkit'
-import { supabase } from '@forge/db'
+import { supabase } from '@forge/db/supabase'
 
 // ── Company info ───────────────────────────────────────────────────────────────
 const CO = {
