@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'https://forge-tafdil-api.up.railway.app'
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'https://forge-tafdil-erp-the-forge.up.railway.app'
 
 type ApiResult<T> = { data: T; error: null } | { data: null; error: string }
 
