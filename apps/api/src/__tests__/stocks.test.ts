@@ -51,7 +51,7 @@ describe('Test 1 — GET /api/stocks retourne un tableau paginé', () => {
 
     const res = await app.request('/api/stocks', {
       method:  'GET',
-      headers: new Headers({ 'Content-Type': 'application/json' }),
+      headers: new Headers(authHeaders('operateur')),
     })
 
     expect(res.status).toBe(200)
@@ -78,7 +78,8 @@ describe('Test 1 — GET /api/stocks retourne un tableau paginé', () => {
     )
 
     const res = await app.request('/api/stocks?statut=alerte', {
-      method: 'GET',
+      method:  'GET',
+      headers: new Headers(authHeaders('operateur')),
     })
 
     expect(res.status).toBe(200)
@@ -91,7 +92,10 @@ describe('Test 1 — GET /api/stocks retourne un tableau paginé', () => {
       mkChain({ data: [], count: 0, error: null }) as never,
     )
 
-    const res = await app.request('/api/stocks', { method: 'GET' })
+    const res = await app.request('/api/stocks', {
+      method:  'GET',
+      headers: new Headers(authHeaders('operateur')),
+    })
     expect(res.status).toBe(200)
     const body = await res.json() as { data: unknown[]; total: number }
     expect(body.data).toHaveLength(0)
@@ -103,14 +107,14 @@ describe('Test 2 — POST mouvement sortie > stock → 422', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('retourne 422 INSUFFICIENT_STOCK quand quantite > stock_actuel', async () => {
-    // RPC non déployée → fallback JS
-    vi.mocked(supabase.rpc).mockResolvedValueOnce({
+    // RPC non déployée → fallback JS (mockImplementation pour robustesse vitest 2.x)
+    vi.mocked(supabase.rpc).mockImplementation(async () => ({
       data:  null,
       error: { code: '42883', message: 'function fn_mouvement_stock does not exist' },
-    } as never)
+    }))
 
-    // Fallback JS : fetch du produit
-    vi.mocked(supabase.from).mockReturnValueOnce(
+    // Fallback JS : fetch du produit — stock_actuel 10 < quantite 15 → 422
+    vi.mocked(supabase.from).mockImplementation(() =>
       mkChain({ data: { stock_actuel: 10, stock_min: 20, stock_critique: 5 }, error: null }) as never,
     )
 
