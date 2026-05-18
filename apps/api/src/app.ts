@@ -22,7 +22,7 @@ const ALLOWED_ORIGINS = [
   'http://localhost:4173',
   'http://localhost:3000',
   'http://localhost:3002',
-  process.env.FRONTEND_URL,
+  ...(process.env.FRONTEND_URL?.split(',').map((u) => u.trim()) ?? []),
   process.env.TAURI_URL,
 ].filter(Boolean) as string[]
 
