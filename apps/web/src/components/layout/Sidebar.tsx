@@ -1,6 +1,7 @@
 import React from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
+import { TafdilIcon } from '@/components/ui/Logo'
 import {
   LayoutDashboard, Wrench, Package, ShoppingCart, FileText, DollarSign, Users,
   GraduationCap, Kanban, Truck, Megaphone, Shield, Brain, Wifi,
@@ -82,12 +83,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-5 border-b border-white/10 shrink-0">
-        <div
-          className="flex items-center justify-center rounded-lg shrink-0 font-black text-white text-lg"
-          style={{ width: 36, height: 36, backgroundColor: '#C62828' }}
-        >
-          F
-        </div>
+        <TafdilIcon size={36} variant="white" className="shrink-0" />
         {!collapsed && (
           <motion.div
             initial={{ opacity: 0 }}
@@ -95,7 +91,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             transition={{ delay: 0.1 }}
             className="min-w-0"
           >
-            <div className="text-white font-bold text-base leading-none">FORGE</div>
+            <div className="text-white font-bold text-base leading-none">
+              <span style={{ color: '#C62828' }}>FOR</span>GE
+            </div>
             <div className="text-white/40 text-xs mt-0.5 leading-none">ERP · TAFDIL</div>
           </motion.div>
         )}

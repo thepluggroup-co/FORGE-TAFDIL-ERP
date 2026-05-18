@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { MapPin, Phone, Mail } from 'lucide-react'
+import { MetalForgeLogo } from '@/components/ui/BrandLogo'
 
 export function Footer() {
   return (
@@ -8,7 +9,7 @@ export function Footer() {
         <div className="grid gap-8 md:grid-cols-3">
           {/* Brand */}
           <div>
-            <p className="text-xl font-bold text-forge-red">FORGE Shop</p>
+            <MetalForgeLogo size={28} variant="white" />
             <p className="mt-2 text-sm text-gray-400">
               Fournitures industrielles de qualité — Tuyaux, raccords et équipements pour professionnels.
             </p>

@@ -4,6 +4,10 @@ const SITE_URL = 'https://shop.tafdil.cm'
 
 export const siteMetadata: Metadata = {
   metadataBase: new URL(SITE_URL),
+  icons: {
+    icon: [{ url: '/metalforge-icon.svg', type: 'image/svg+xml' }],
+    shortcut: '/metalforge-icon.svg',
+  },
   title: {
     default: 'FORGE Shop — TAFDIL | Menuiserie & Métallurgie Douala',
     template: '%s | FORGE TAFDIL',

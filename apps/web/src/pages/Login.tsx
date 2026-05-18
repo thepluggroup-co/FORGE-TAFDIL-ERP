@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuth } from '@/context/AuthContext'
+import { TafdilLogoHero } from '@/components/ui/Logo'
 
 export default function Login() {
   const { signIn, user } = useAuth()
@@ -43,17 +44,8 @@ export default function Login() {
         className="w-full max-w-sm"
       >
         {/* Logo */}
-        <div className="text-center mb-10">
-          <div
-            className="inline-flex items-center justify-center w-16 h-16 rounded-2xl text-white text-3xl font-black mb-4"
-            style={{ backgroundColor: '#C62828' }}
-          >
-            F
-          </div>
-          <h1 className="text-4xl font-black text-white tracking-tight">FORGE</h1>
-          <p className="mt-1 text-sm" style={{ color: 'rgba(255,255,255,0.4)' }}>
-            ERP natif · TAFDIL · Douala
-          </p>
+        <div className="mb-10">
+          <TafdilLogoHero variant="white" />
         </div>
 
         {/* Form */}

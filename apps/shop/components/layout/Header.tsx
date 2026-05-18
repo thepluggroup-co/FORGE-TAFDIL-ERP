@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { ShoppingCart, Menu, X, Phone } from 'lucide-react'
 import { useState } from 'react'
 import { useCartStore, computeTotal } from '@/lib/cart'
+import { MetalForgeHeaderLogo } from '@/components/ui/BrandLogo'
 
 const NAV_LINKS = [
   { href: '/catalogue', label: 'Catalogue' },
@@ -22,9 +23,8 @@ export function Header() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between">
           {/* Logo */}
-          <Link href="/" className="flex items-center gap-2">
-            <span className="text-xl font-bold tracking-tight text-forge-red">FORGE</span>
-            <span className="hidden text-sm font-medium text-forge-steel sm:block">Shop</span>
+          <Link href="/" className="flex items-center">
+            <MetalForgeHeaderLogo label="Shop" />
           </Link>
 
           {/* Desktop nav */}
