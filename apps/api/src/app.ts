@@ -32,6 +32,8 @@ app.use('*', cors({
   origin: (origin) => {
     if (!origin) return origin
     if (ALLOWED_ORIGINS.includes(origin)) return origin
+    // Dev: allow any localhost port (Vite may shift to 5174, 5175, etc.)
+    if (process.env.NODE_ENV !== 'production' && /^https?:\/\/localhost(:\d+)?$/.test(origin)) return origin
     return null
   },
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

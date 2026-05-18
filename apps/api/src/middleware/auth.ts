@@ -14,8 +14,8 @@ export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = a
 
   const token = authHeader.slice(7)
 
-  if (!JWT_SECRET) {
-    console.error('[auth] SUPABASE_JWT_SECRET non configuré')
+  if (!JWT_SECRET || JWT_SECRET.startsWith('<')) {
+    console.error('[auth] SUPABASE_JWT_SECRET non configuré — récupérer depuis Supabase Dashboard → Project Settings → API')
     return c.json({ error: 'Configuration serveur invalide', code: 'SERVER_ERROR' }, 500)
   }
 
