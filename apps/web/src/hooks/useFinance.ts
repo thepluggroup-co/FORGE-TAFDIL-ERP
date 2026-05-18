@@ -73,6 +73,28 @@ export function useEnvoyerFacture() {
   })
 }
 
+// ── Créer facture ────────────────────────────────────────────────────────────
+
+interface CreerFacturePayload {
+  client_id: string
+  date_emission: string
+  date_echeance: string
+  lignes: FactureLigne[]
+}
+
+export function useCreerFacture() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreerFacturePayload) =>
+      apiClient.post<Facture>('/api/factures', payload),
+    onSuccess: (facture) => {
+      void qc.invalidateQueries({ queryKey: ['factures'] })
+      toast.success(`Facture ${facture.numero} créée`)
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
 // ── Crédits ───────────────────────────────────────────────────────────────────
 
 export function useCredits(params?: { statut?: string }) {

@@ -1,9 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence, useDragControls } from 'framer-motion'
 import { LayoutGrid, Table2, Plus, GripVertical, Globe } from 'lucide-react'
-import { PageHeader, DataTable, StatusBadge, SlideOver, Button } from '@forge/ui'
+import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
+import { toast } from 'sonner'
 import { useCommandes, useStatutCommande } from '@/hooks/useCommandes'
 import type { Commande, CommandeLigne, CommandeHistorique } from '@/hooks/useCommandes'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
@@ -223,7 +224,7 @@ export default function Commandes() {
   const containerRef  = useRef<HTMLDivElement>(null)
   const columnRefs    = useRef<Record<string, HTMLDivElement | null>>({})
 
-  const { data, isLoading } = useCommandes()
+  const { data, isLoading, isError } = useCommandes()
   const statutMutation = useStatutCommande()
 
   // Badge commandes web (nouvelles non traitées)
@@ -232,11 +233,26 @@ export default function Commandes() {
 
   const orders = (data?.data ?? []) as CommandeRecord[]
 
+  const [pendingMove, setPendingMove] = useState<{ orderId: string; colId: KanbanCol } | null>(null)
+
   const moveOrder = (orderId: string, colId: KanbanCol) => {
-    statutMutation.mutate({ id: orderId, statut: colId })
+    if (colId === 'cancelled') {
+      setPendingMove({ orderId, colId })
+      return
+    }
+    statutMutation.mutate({ id: orderId, statut: colId }, {
+      onSuccess: () => toast.success('Statut mis à jour'),
+    })
   }
 
-  const totalErp = orders.reduce((s, o) => s + o.montant_ttc_xaf, 0)
+  const ordersByStatus = useMemo(
+    () => Object.fromEntries(
+      KANBAN_COLS.map((col) => [col.id, orders.filter((o) => o.statut === col.id)])
+    ) as Record<KanbanCol, CommandeRecord[]>,
+    [orders]
+  )
+
+  const totalErp = useMemo(() => orders.reduce((s, o) => s + o.montant_ttc_xaf, 0), [orders])
 
   return (
     <motion.div
@@ -324,6 +340,11 @@ export default function Commandes() {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
           >
+            {isError && (
+              <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+                Impossible de charger les commandes. Veuillez réessayer.
+              </div>
+            )}
             <AnimatePresence mode="wait">
               {view === 'kanban' ? (
                 <motion.div
@@ -335,17 +356,32 @@ export default function Commandes() {
                   ref={containerRef}
                   className="flex gap-4 overflow-x-auto pb-4"
                 >
-                  {KANBAN_COLS.map((col) => (
-                    <KanbanColumn
-                      key={col.id}
-                      col={col}
-                      orders={orders.filter((o) => o.statut === col.id)}
-                      containerRef={containerRef}
-                      columnRefs={columnRefs}
-                      onDrop={moveOrder}
-                      onCardClick={setSelected}
-                    />
-                  ))}
+                  {isLoading ? (
+                    KANBAN_COLS.map((col) => (
+                      <div key={col.id} className="flex flex-col gap-2 min-w-[240px] w-[240px]">
+                        <div className="h-4 bg-gray-200 rounded animate-pulse w-24 mx-1 mb-1" />
+                        {[0, 1].map((i) => (
+                          <div key={i} className="bg-white rounded-xl border border-gray-100 p-3.5 space-y-2.5 animate-pulse">
+                            <div className="h-2.5 bg-gray-100 rounded w-16" />
+                            <div className="h-3.5 bg-gray-100 rounded w-32" />
+                            <div className="h-4 bg-gray-100 rounded w-20" />
+                          </div>
+                        ))}
+                      </div>
+                    ))
+                  ) : (
+                    KANBAN_COLS.map((col) => (
+                      <KanbanColumn
+                        key={col.id}
+                        col={col}
+                        orders={ordersByStatus[col.id] ?? []}
+                        containerRef={containerRef}
+                        columnRefs={columnRefs}
+                        onDrop={moveOrder}
+                        onCardClick={setSelected}
+                      />
+                    ))
+                  )}
                 </motion.div>
               ) : (
                 <motion.div
@@ -380,6 +416,33 @@ export default function Commandes() {
       </AnimatePresence>
 
       {selected && <OrderDetail order={selected} onClose={() => setSelected(null)} />}
+
+      <Modal
+        isOpen={!!pendingMove}
+        onClose={() => setPendingMove(null)}
+        title="Confirmer l'annulation"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Êtes-vous sûr de vouloir annuler cette commande ? Cette action est difficile à défaire.
+          </p>
+          <div className="flex gap-2 justify-end">
+            <Button variant="ghost" onClick={() => setPendingMove(null)}>Retour</Button>
+            <Button
+              onClick={() => {
+                if (!pendingMove) return
+                statutMutation.mutate({ id: pendingMove.orderId, statut: pendingMove.colId }, {
+                  onSuccess: () => { toast.success('Commande annulée'); setPendingMove(null) },
+                })
+              }}
+              disabled={statutMutation.isPending}
+            >
+              Confirmer l'annulation
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </motion.div>
   )
 }

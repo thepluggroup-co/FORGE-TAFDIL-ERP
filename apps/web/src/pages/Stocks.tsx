@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useCallback, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Minus, RotateCcw, FileOutput, PackagePlus } from 'lucide-react'
@@ -7,6 +7,7 @@ import type { Column } from '@forge/ui'
 import { formatXAF } from '@/lib/utils'
 import { KpiCard } from '@forge/ui'
 import { Package, AlertTriangle, TrendingDown, DollarSign } from 'lucide-react'
+import { toast } from 'sonner'
 import { useStocks, useMouvement } from '@/hooks/useStocks'
 import type { StockProduit } from '@/hooks/useStocks'
 
@@ -122,25 +123,32 @@ const DEFAULT_FORM: MvtForm = { type: 'entree', produitId: '', quantite: 1, refe
 export default function Stocks() {
   const navigate = useNavigate()
   const [search, setSearch]           = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [categorie, setCategorie]     = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [slideOpen, setSlideOpen]     = useState(false)
   const [form, setForm]               = useState<MvtForm>(DEFAULT_FORM)
 
-  const { data, isLoading } = useStocks({ search, categorie, statut: statusFilter })
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
+  const { data, isLoading, isError } = useStocks({ search: debouncedSearch, categorie, statut: statusFilter })
   const mouvement = useMouvement()
 
   const produits = (data?.data ?? []) as Product[]
   const categories = useMemo(() => [...new Set(produits.map((p) => p.categorie as string))], [produits])
 
-  const openEntree = (p?: Product) => {
+  const openEntree = useCallback((p?: Product) => {
     setForm({ ...DEFAULT_FORM, type: 'entree', produitId: p?.id ?? '' })
     setSlideOpen(true)
-  }
-  const openSortie = (p?: Product) => {
+  }, [])
+
+  const openSortie = useCallback((p?: Product) => {
     setForm({ ...DEFAULT_FORM, type: 'sortie', produitId: p?.id ?? '' })
     setSlideOpen(true)
-  }
+  }, [])
 
   const selectedProduct = produits.find((p) => p.id === form.produitId)
   const sortieError = form.type === 'sortie' && selectedProduct && form.quantite > (selectedProduct.stock_actuel as number)
@@ -148,11 +156,11 @@ export default function Stocks() {
     : null
   const formValid = form.produitId !== '' && form.quantite > 0 && form.motif !== '' && !sortieError
 
-  const critiques    = produits.filter((p) => p.statut === 'critique').length
-  const alertes      = produits.filter((p) => p.statut === 'alerte').length
-  const valeurTotale = produits.reduce((sum, p) => sum + (p.stock_actuel as number) * (p.prix_unitaire_xaf as number), 0)
+  const critiques    = useMemo(() => produits.filter((p) => p.statut === 'critique').length, [produits])
+  const alertes      = useMemo(() => produits.filter((p) => p.statut === 'alerte').length, [produits])
+  const valeurTotale = useMemo(() => produits.reduce((sum, p) => sum + (p.stock_actuel as number) * (p.prix_unitaire_xaf as number), 0), [produits])
 
-  const columns = buildColumns(openEntree, openSortie)
+  const columns = useMemo(() => buildColumns(openEntree, openSortie), [openEntree, openSortie])
 
   return (
     <motion.div
@@ -191,6 +199,13 @@ export default function Stocks() {
         <KpiCard title="Produits critiques" value={critiques} icon={<AlertTriangle className="h-5 w-5" />} color="#C62828" trend="down" trendValue="Rupture imminente" delay={0.1} />
         <KpiCard title="Produits en alerte" value={alertes} icon={<TrendingDown className="h-5 w-5" />} color="#d97706" delay={0.15} />
       </div>
+
+      {isError && (
+        <div className="flex items-center gap-2 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-[#dc2626]">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          Impossible de charger les stocks. Veuillez réessayer.
+        </div>
+      )}
 
       {/* Filtres */}
       <div className="flex flex-wrap items-center gap-3">
@@ -376,6 +391,7 @@ export default function Stocks() {
                       setSlideOpen(false)
                       setForm(DEFAULT_FORM)
                     },
+                    onError: (err: Error) => toast.error(err.message),
                   },
                 )
               }}

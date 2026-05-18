@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   FileText, CreditCard, ReceiptText,
@@ -9,7 +9,7 @@ import { PageHeader, DataTable, StatusBadge, Button, Modal, SlideOver } from '@f
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import {
-  useFactures, useCredits, useEcritures, useEnvoyerFacture, useRemboursement,
+  useFactures, useCredits, useEcritures, useEnvoyerFacture, useRemboursement, useCreerFacture,
 } from '@/hooks/useFinance'
 import type { Facture as FactureApi, Credit as CreditApi, FactureLigne } from '@/hooks/useFinance'
 import { useClients } from '@/hooks/useClients'
@@ -193,19 +193,21 @@ function InvoicePreview({ facture }: { facture: PreviewableFacture }) {
 
 function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [step, setStep]           = useState(1)
-  const [selectedClient, setSelectedClient] = useState('')
+  const [selectedClientId, setSelectedClientId] = useState('')
   const [dateEmission]            = useState(new Date().toISOString().split('T')[0])
   const [dateEcheance, setDateEcheance] = useState('')
   const [lignes, setLignes]       = useState<FormLigne[]>([{ designation: '', quantite: 1, prix_unitaire_ht_xaf: 0 }])
 
   const { data: clientsData } = useClients()
   const clients = clientsData?.data ?? []
+  const selectedClientNom = clients.find((c) => c.id === selectedClientId)?.nom ?? ''
+  const creerFacture = useCreerFacture()
 
   const { ht, tva, ttc } = totalsFromLignes(lignes)
 
   const previewFacture: PreviewableFacture = {
     numero: 'FACT-2026-NEW',
-    client: { nom: selectedClient },
+    client: { nom: selectedClientNom },
     date_emission: dateEmission,
     date_echeance: dateEcheance,
     lignes,
@@ -250,11 +252,11 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Client</label>
-            <select value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)}
+            <select value={selectedClientId} onChange={(e) => setSelectedClientId(e.target.value)}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30 bg-white">
               <option value="">— Sélectionner —</option>
               {clients.map((c) => (
-                <option key={c.id} value={c.nom}>{c.nom}</option>
+                <option key={c.id} value={c.id}>{c.nom}</option>
               ))}
             </select>
           </div>
@@ -271,7 +273,7 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
             </div>
           </div>
           <div className="flex justify-end pt-4">
-            <Button onClick={() => setStep(2)} disabled={!selectedClient || !dateEcheance}>
+            <Button onClick={() => setStep(2)} disabled={!selectedClientId || !dateEcheance}>
               Suivant <ChevronRight className="h-3.5 w-3.5" />
             </Button>
           </div>
@@ -331,8 +333,14 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
               <Button variant="ghost" size="sm" onClick={() => window.print()}>
                 <Printer className="h-3.5 w-3.5" /> Imprimer
               </Button>
-              <Button onClick={onClose}>
-                <CheckCircle className="h-3.5 w-3.5" /> Valider
+              <Button
+                onClick={() => creerFacture.mutate(
+                  { client_id: selectedClientId, date_emission: dateEmission, date_echeance: dateEcheance, lignes },
+                  { onSuccess: onClose },
+                )}
+                disabled={creerFacture.isPending}
+              >
+                <CheckCircle className="h-3.5 w-3.5" /> {creerFacture.isPending ? 'Enregistrement…' : 'Valider'}
               </Button>
             </div>
           </div>
@@ -349,6 +357,14 @@ function RemboursementModal({ isOpen, onClose, credit }: { isOpen: boolean; onCl
   const [montant, setMontant] = useState('')
   const [date, setDate]     = useState(new Date().toISOString().split('T')[0])
   const rembourser = useRemboursement()
+
+  useEffect(() => {
+    if (isOpen) {
+      setType('total')
+      setMontant('')
+      setDate(new Date().toISOString().split('T')[0])
+    }
+  }, [isOpen, credit?.id])
 
   if (!credit) return null
 
@@ -427,7 +443,7 @@ export default function Finance() {
   const echusCount = credits.filter((c) => c.statut === 'echu').length
   const totalEchus = credits.filter((c) => c.statut === 'echu').reduce((s, c) => s + (c.solde_restant_xaf as number), 0)
 
-  const factureColumns: Column<FactureRecord>[] = [
+  const factureColumns = useMemo<Column<FactureRecord>[]>(() => [
     { id: 'numero', header: 'Référence', accessor: 'numero', render: (v) => <span className="font-mono text-xs font-semibold text-gray-700">{v as string}</span> },
     { id: 'client', header: 'Client', accessor: (row) => (row.client as { nom: string }).nom, render: (v) => <span className="text-sm font-semibold">{v as string}</span> },
     { id: 'montant', header: 'Montant TTC', accessor: 'montant_ttc_xaf', render: (v) => <span className="text-sm font-bold">{formatXAF(v as number)}</span> },
@@ -458,9 +474,9 @@ export default function Finance() {
         </div>
       ),
     },
-  ]
+  ], [envoyerFacture.isPending])
 
-  const creditColumns: Column<CreditRecord>[] = [
+  const creditColumns = useMemo<Column<CreditRecord>[]>(() => [
     { id: 'reference', header: 'Référence', accessor: 'reference', render: (v) => <span className="font-mono text-xs font-semibold text-gray-700">{v as string}</span> },
     { id: 'client', header: 'Client', accessor: (row) => (row.client as { nom: string }).nom, render: (v) => <span className="text-sm font-semibold">{v as string}</span> },
     { id: 'montant', header: 'Montant initial', accessor: 'montant_initial_xaf', render: (v) => <span className="text-sm font-semibold">{formatXAF(v as number)}</span> },
@@ -477,7 +493,7 @@ export default function Finance() {
         </button>
       ) : null,
     },
-  ]
+  ], [])
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} className="space-y-6">

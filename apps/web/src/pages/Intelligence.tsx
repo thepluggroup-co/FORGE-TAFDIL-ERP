@@ -6,6 +6,7 @@ import {
   ShoppingBag, TrendingUp, Package, Globe,
 } from 'lucide-react'
 import { PageHeader, Button } from '@forge/ui'
+import { toast } from 'sonner'
 import { useAiChat, useAiRecommandations, useAiAlertes } from '@/hooks/useAI'
 import type { AiMessage, StockReco, AlerteIA } from '@/hooks/useAI'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
@@ -111,6 +112,29 @@ function Widget({ title, icon, children }: { title: string; icon: React.ReactNod
   )
 }
 
+// ── Chat Message ───────────────────────────────────────────────────────────────
+
+const ChatMessage = React.memo(function ChatMessage({ msg }: { msg: Message }) {
+  return (
+    <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+      {msg.role === 'assistant' && (
+        <div className="w-7 h-7 rounded-full bg-[#C62828] flex items-center justify-center text-white shrink-0 mr-2 mt-0.5">
+          <Brain className="h-3.5 w-3.5" />
+        </div>
+      )}
+      <div
+        className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm ${
+          msg.role === 'user'
+            ? 'bg-[#C62828] text-white rounded-tr-sm'
+            : 'bg-white border border-gray-100 shadow-sm rounded-tl-sm'
+        }`}
+      >
+        {msg.role === 'assistant' ? renderMd(msg.content) : msg.content}
+      </div>
+    </div>
+  )
+})
+
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function Intelligence() {
@@ -127,6 +151,7 @@ export default function Intelligence() {
   const [generatingReport, setGeneratingReport] = useState(false)
 
   const aiChat          = useAiChat()
+  const rapportMutation = useAiChat()
   const recommandations = useAiRecommandations()
   const alertes         = useAiAlertes()
   const { data: shopData } = useCommandesShop()
@@ -147,7 +172,7 @@ export default function Intelligence() {
     setMessages((prev) => [...prev, userMsg])
     setTyping(true)
 
-    const history: AiMessage[] = [...messages, userMsg].map((m) => ({ role: m.role, content: m.content }))
+    const history: AiMessage[] = [...messages, userMsg].slice(-20).map((m) => ({ role: m.role, content: m.content }))
 
     aiChat.mutate(history, {
       onSuccess: (data) => {
@@ -159,7 +184,15 @@ export default function Intelligence() {
         }])
         setTyping(false)
       },
-      onError: () => setTyping(false),
+      onError: (err: Error) => {
+        setMessages((prev) => [...prev, {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: `Désolé, une erreur est survenue : ${err.message}`,
+          ts: new Date(),
+        }])
+        setTyping(false)
+      },
     })
   }
 
@@ -170,7 +203,7 @@ export default function Intelligence() {
   const genererRapport = () => {
     setGeneratingReport(true)
     setRapport(null)
-    aiChat.mutate([{
+    rapportMutation.mutate([{
       role: 'user',
       content: 'Génère un rapport hebdomadaire complet de TAFDIL incluant production, finance, stocks et RH.',
     }], {
@@ -224,22 +257,7 @@ export default function Intelligence() {
         <Widget title="Assistant IA — FORGE AI" icon={<Brain className="h-4 w-4" />}>
           <div className="h-80 overflow-y-auto px-4 py-4 space-y-3 bg-gray-50/50">
             {messages.map((msg) => (
-              <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                {msg.role === 'assistant' && (
-                  <div className="w-7 h-7 rounded-full bg-[#C62828] flex items-center justify-center text-white shrink-0 mr-2 mt-0.5">
-                    <Brain className="h-3.5 w-3.5" />
-                  </div>
-                )}
-                <div
-                  className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm ${
-                    msg.role === 'user'
-                      ? 'bg-[#C62828] text-white rounded-tr-sm'
-                      : 'bg-white border border-gray-100 shadow-sm rounded-tl-sm'
-                  }`}
-                >
-                  {msg.role === 'assistant' ? renderMd(msg.content) : msg.content}
-                </div>
-              </div>
+              <ChatMessage key={msg.id} msg={msg} />
             ))}
             {typing && (
               <div className="flex justify-start">
@@ -256,8 +274,8 @@ export default function Intelligence() {
 
           <div className="px-4 pt-3 pb-2 flex flex-wrap gap-2">
             {SUGGESTED_QUESTIONS.map((q) => (
-              <button key={q} onClick={() => sendMessage(q)}
-                className="text-xs px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-[#C62828] hover:text-[#C62828] transition-colors bg-white">
+              <button key={q} onClick={() => sendMessage(q)} disabled={typing}
+                className="text-xs px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-[#C62828] hover:text-[#C62828] transition-colors bg-white disabled:opacity-40 disabled:cursor-not-allowed">
                 {q}
               </button>
             ))}
@@ -374,7 +392,7 @@ export default function Intelligence() {
                 )}
               </Button>
               {rapport && (
-                <Button variant="secondary" size="sm">
+                <Button variant="secondary" size="sm" onClick={() => toast.info('Envoi WhatsApp disponible prochainement')}>
                   <MessageCircle className="h-3.5 w-3.5" /> Envoyer WhatsApp
                 </Button>
               )}
