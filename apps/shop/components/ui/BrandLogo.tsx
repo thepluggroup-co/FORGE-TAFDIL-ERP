@@ -42,6 +42,7 @@ export function MetalForgeIcon({ size = 40, variant = 'color', className }: Icon
       width={size}
       height={size}
       viewBox="0 0 100 100"
+      preserveAspectRatio="xMidYMid meet"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
