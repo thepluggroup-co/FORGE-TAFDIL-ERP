@@ -10,8 +10,8 @@ export function createClient() {
 
 // Server-side only — requires SUPABASE_SERVICE_KEY
 export function createServiceClient() {
-  const serviceKey = process.env.SUPABASE_SERVICE_KEY
-  if (!serviceKey) throw new Error('SUPABASE_SERVICE_KEY non définie')
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_KEY
+  if (!serviceKey) throw new Error('SUPABASE_SERVICE_ROLE_KEY non définie')
   return createSupabaseClient(supabaseUrl, serviceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   })
