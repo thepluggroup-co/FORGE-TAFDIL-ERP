@@ -1,4 +1,4 @@
-name: CI
+name: FORGE CI
 
 on:
   push:
@@ -6,18 +6,25 @@ on:
   pull_request:
     branches: [main, develop]
 
+env:
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+
 jobs:
-  build:
-    name: Build & Lint
+  # ── 1. Lint + Typecheck ─────────────────────────────────────────────────────
+  lint-and-typecheck:
+    name: Lint & Typecheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        # version auto-détectée depuis packageManager dans package.json
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -25,12 +32,126 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Type check
+      - name: Typecheck (tous les packages)
         run: pnpm build
+        # turbo build lance tsc pour chaque package — échoue si erreur de type
 
-      - name: Run tests
-        run: pnpm test
+      - name: Lint
+        run: pnpm lint
+
+  # ── 2. Tests API avec couverture ────────────────────────────────────────────
+  test-api:
+    name: Test API (intégration)
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests with coverage
+        working-directory: apps/api
+        run: pnpm test:coverage
         env:
-          DATABASE_URL: file:test.db
-          JWT_SECRET: test-secret
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NODE_ENV: test
+          # JWT secret factice — hardcodé dans setup.ts, cohérent avec les mocks
+          SUPABASE_JWT_SECRET: forge-test-jwt-secret-x0x0x0x0x0x0x0x0x0x0
+          # Variables Supabase (non utilisées dans les tests mockés, mais requises au boot)
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ''
+          # Clé Anthropic factice — remplacée par mock vi dans les tests
+          ANTHROPIC_API_KEY: sk-ant-ci-test-forge-2026
+          NOTCHPAY_SECRET_KEY: ''
+          NOTCHPAY_PUBLIC_KEY: pk_test.ci-forge
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: api-coverage
+          path: apps/api/coverage/
+          retention-days: 14
+
+  # ── 3. Build Web (ERP frontend) ─────────────────────────────────────────────
+  build-web:
+    name: Build Web ERP
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web ERP
+        working-directory: apps/web
+        run: pnpm build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist/
+          retention-days: 7
+
+  # ── 4. Build Shop (Next.js) ─────────────────────────────────────────────────
+  build-shop:
+    name: Build Shop
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shop
+        run: pnpm --filter @forge/shop build
+        env:
+          NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_SITE_URL: https://shop.tafdil.cm
+          NEXT_PUBLIC_WHATSAPP_NUMBER: '+237 95884528'
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          NOTCHPAY_PUBLIC_KEY: ${{ secrets.NOTCHPAY_PUBLIC_KEY }}
+          NOTCHPAY_SECRET_KEY: ${{ secrets.NOTCHPAY_SECRET_KEY }}
+          AT_API_KEY: ${{ secrets.AT_API_KEY }}
+          AT_USERNAME: ${{ secrets.AT_USERNAME }}
+          AT_SENDER_ID: AFRICASTALKING
