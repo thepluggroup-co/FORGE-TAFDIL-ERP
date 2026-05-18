@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" fill="none">
   <!-- Bottom half of orbital ring (behind gear) -->
   <g transform="rotate(-18,50,52)">
     <path d="M6,52 A44,16,0,0,1,94,52" fill="none" stroke="#C62828" stroke-width="5.5" stroke-linecap="round"/>

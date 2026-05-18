@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" fill="none">
   <!-- Circuit-orbit arc -->
   <path d="M 70 70 A 38 38 0 1 0 30 22" fill="none" stroke="#C62828" stroke-width="6" stroke-linecap="round"/>
   <!-- Gear with center hole -->

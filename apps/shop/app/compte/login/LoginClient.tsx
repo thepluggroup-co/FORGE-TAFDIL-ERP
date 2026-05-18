@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback, KeyboardEvent, ClipboardEvent
 import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Phone, ArrowRight, Loader2, ChevronLeft, ShieldCheck } from 'lucide-react'
+import { MetalForgeLogo } from '@/components/ui/BrandLogo'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -170,10 +171,8 @@ export function LoginClient() {
   return (
     <div className="w-full max-w-sm mx-auto px-4">
       {/* Logo / En-tête */}
-      <div className="mb-8 text-center">
-        <span className="inline-block rounded-xl bg-forge-red px-4 py-1.5 text-xs font-black uppercase tracking-[.2em] text-white">
-          FORGE TAFDIL
-        </span>
+      <div className="mb-8 flex flex-col items-center text-center">
+        <MetalForgeLogo size={44} variant="color" />
         <h1 className="mt-4 text-2xl font-black text-forge-dark">Mon espace client</h1>
         <p className="mt-1 text-sm text-forge-steel">Connexion par SMS — sans mot de passe</p>
       </div>
@@ -223,6 +222,7 @@ export function LoginClient() {
             )}
 
             <button
+              type="button"
               onClick={handleSendOtp}
               disabled={loading}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-forge-red py-3.5 text-sm font-bold text-white transition disabled:opacity-60 hover:bg-red-700"
@@ -246,6 +246,7 @@ export function LoginClient() {
           >
             <div className="flex items-center gap-2">
               <button
+                type="button"
                 onClick={() => { setStep('phone'); setError('') }}
                 className="flex items-center gap-1 text-sm text-forge-steel hover:text-forge-red transition"
               >
@@ -278,6 +279,7 @@ export function LoginClient() {
             )}
 
             <button
+              type="button"
               onClick={handleVerifyOtp}
               disabled={loading || otp.join('').length < DIGITS}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-forge-red py-3.5 text-sm font-bold text-white transition disabled:opacity-50 hover:bg-red-700"
@@ -291,6 +293,7 @@ export function LoginClient() {
             <div className="text-center">
               {countdown === 0 ? (
                 <button
+                  type="button"
                   onClick={() => { setStep('phone'); setError('') }}
                   className="text-sm text-forge-red font-semibold hover:underline"
                 >
