@@ -472,4 +472,106 @@ router.get('/rapports/resultat', requireRole(['directeur', 'admin']), async (c) 
   })
 })
 
+// ── Dashboard KPIs ────────────────────────────────────────────────────────────
+
+router.get('/rapports/dashboard', requireRole(['directeur', 'admin', 'operateur', 'viewer']), async (c) => {
+  const maintenant = new Date()
+
+  // Plage : 1er jour du mois il y a 5 mois → aujourd'hui (6 mois complets)
+  const debut6Mois = new Date(maintenant)
+  debut6Mois.setMonth(debut6Mois.getMonth() - 5)
+  debut6Mois.setDate(1)
+  const debut6MoisStr = debut6Mois.toISOString().slice(0, 10)
+
+  const [
+    commandesMoisRes,
+    commandesActifRes,
+    alertesStockRes,
+    apprenantsRes,
+    bonsRes,
+    creditsRes,
+    recentCommandesRes,
+    recentMouvementsRes,
+  ] = await Promise.all([
+    supabase
+      .from('commandes')
+      .select('total_ttc_xaf, date_commande')
+      .gte('date_commande', debut6MoisStr)
+      .neq('statut', 'cancelled'),
+
+    supabase
+      .from('commandes')
+      .select('id', { count: 'exact', head: true })
+      .in('statut', ['confirmed', 'in_production', 'pret']),
+
+    supabase
+      .from('produits')
+      .select('id', { count: 'exact', head: true })
+      .in('statut', ['alerte', 'critique', 'rupture']),
+
+    supabase
+      .from('apprenants')
+      .select('id', { count: 'exact', head: true })
+      .eq('statut', 'actif'),
+
+    supabase
+      .from('bons_sortie')
+      .select('id', { count: 'exact', head: true })
+      .eq('statut', 'soumis'),
+
+    supabase
+      .from('credits')
+      .select('id', { count: 'exact', head: true })
+      .eq('statut', 'echu'),
+
+    supabase
+      .from('commandes')
+      .select('id, numero, client_nom, total_ttc_xaf, statut, date_commande')
+      .order('created_at', { ascending: false })
+      .limit(5),
+
+    supabase
+      .from('mouvements_stock')
+      .select('id, type, quantite, created_at, produits(designation, unite)')
+      .order('created_at', { ascending: false })
+      .limit(5),
+  ])
+
+  // Agréger le CA par mois (initialiser les 6 mois à 0)
+  const MOIS_FR = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jui', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
+  const caParMois = new Map<string, { label: string; ca: number }>()
+
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(maintenant)
+    d.setMonth(d.getMonth() - i)
+    const cle = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    caParMois.set(cle, { label: MOIS_FR[d.getMonth()], ca: 0 })
+  }
+
+  type CmdRow = { total_ttc_xaf: number; date_commande: string }
+  for (const cmd of (commandesMoisRes.data ?? []) as CmdRow[]) {
+    const cle = cmd.date_commande.slice(0, 7)
+    const existing = caParMois.get(cle)
+    if (existing) existing.ca += cmd.total_ttc_xaf
+  }
+
+  const ca_mensuel = Array.from(caParMois.values()).map(({ label, ca }) => ({
+    mois: label,
+    ca:   Math.round(ca),
+  }))
+
+  return c.json({
+    ca_mensuel,
+    kpis: {
+      commandes_actives: commandesActifRes.count ?? 0,
+      stocks_en_alerte:  alertesStockRes.count   ?? 0,
+      apprenants_actifs: apprenantsRes.count      ?? 0,
+      bons_en_attente:   bonsRes.count            ?? 0,
+      credits_echus:     creditsRes.count         ?? 0,
+    },
+    recent_commandes:  recentCommandesRes.data  ?? [],
+    recent_mouvements: recentMouvementsRes.data ?? [],
+  })
+})
+
 export { router as financeRouter }

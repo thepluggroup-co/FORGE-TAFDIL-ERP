@@ -97,6 +97,43 @@ export function useRemboursement() {
   })
 }
 
+// ── Dashboard KPIs ────────────────────────────────────────────────────────────
+
+export interface DashboardKpis {
+  ca_mensuel: { mois: string; ca: number }[]
+  kpis: {
+    commandes_actives: number
+    stocks_en_alerte:  number
+    apprenants_actifs: number
+    bons_en_attente:   number
+    credits_echus:     number
+  }
+  recent_commandes: {
+    id:             string
+    numero:         string
+    client_nom:     string
+    total_ttc_xaf:  number
+    statut:         string
+    date_commande:  string
+  }[]
+  recent_mouvements: {
+    id:         string
+    type:       'entree' | 'sortie'
+    quantite:   number
+    created_at: string
+    produits:   { designation: string; unite: string } | null
+  }[]
+}
+
+export function useDashboardKpis() {
+  return useQuery({
+    queryKey:       ['dashboard', 'kpis'],
+    queryFn:        () => apiClient.get<DashboardKpis>('/api/rapports/dashboard'),
+    staleTime:      30_000,
+    refetchInterval: 60_000,
+  })
+}
+
 // ── Écritures ─────────────────────────────────────────────────────────────────
 
 export function useEcritures(params?: { compte?: string; mois?: string }) {

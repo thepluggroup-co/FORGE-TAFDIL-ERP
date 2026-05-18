@@ -297,112 +297,28 @@ router.put(
       return c.json(rpcData ?? { success: true, bon_id: id })
     }
 
-    // Fallback JS si la fonction PG n'existe pas (best-effort, non atomique)
-    if (rpcError.code !== '42883' && !rpcError.message.includes('does not exist')) {
-      return c.json({ error: rpcError.message }, 400)
+    // Fonction absente — migration non appliquée
+    if (rpcError.code === '42883' || rpcError.message.includes('does not exist')) {
+      return c.json({
+        error: 'Configuration base de données incomplète : fn_executer_bon est manquante.',
+        code:  'RPC_MISSING',
+        fix:   'Appliquer packages/db/migrations/0001_fn_executer_bon.sql dans Supabase SQL Editor.',
+      }, 503)
     }
 
-    // 1. Vérifier le stock disponible pour TOUS les items avant toute modification
-    const lignesAvecProduit = b.bons_sortie_lignes.filter((l) => l.produit_id !== null)
-    const produitIds = [...new Set(lignesAvecProduit.map((l) => l.produit_id as string))]
-
-    if (produitIds.length > 0) {
-      const { data: stocks } = await supabase
-        .from('produits')
-        .select('id, stock_actuel, designation')
-        .in('id', produitIds)
-
-      const stockMap = new Map(
-        (stocks ?? []).map((p: { id: string; stock_actuel: number; designation: string }) => [p.id, p]),
-      )
-
-      const insuffisants: string[] = []
-      for (const ligne of lignesAvecProduit) {
-        const stock = stockMap.get(ligne.produit_id as string) as { stock_actuel: number; designation: string } | undefined
-        if (!stock || stock.stock_actuel < ligne.quantite_demandee) {
-          insuffisants.push(
-            `${ligne.designation} : ${stock?.stock_actuel ?? 0} disponible, ${ligne.quantite_demandee} demandé`,
-          )
-        }
-      }
-
-      if (insuffisants.length > 0) {
-        return c.json({
-          error: 'Stock insuffisant — aucune déduction effectuée (rollback)',
-          code: 'INSUFFICIENT_STOCK',
-          details: insuffisants,
-        }, 422)
-      }
+    // Erreurs métier renvoyées par la fonction PG
+    const msg = rpcError.message ?? ''
+    if (msg.includes('INSUFFICIENT_STOCK')) {
+      return c.json({ error: msg.replace('INSUFFICIENT_STOCK: ', ''), code: 'INSUFFICIENT_STOCK' }, 422)
+    }
+    if (msg.includes('INVALID_TRANSITION')) {
+      return c.json({ error: msg.replace('INVALID_TRANSITION: ', ''), code: 'INVALID_TRANSITION' }, 422)
+    }
+    if (msg.includes('BON_NOT_FOUND')) {
+      return c.json({ error: 'Bon introuvable', code: 'NOT_FOUND' }, 404)
     }
 
-    // 2. Déduire le stock et créer les mouvements (toutes les lignes valides)
-    const errors: string[] = []
-
-    for (const ligne of b.bons_sortie_lignes) {
-      const qteServie = body.quantites_reelles?.find((q) => q.ligne_id === ligne.id)?.quantite_servie
-        ?? ligne.quantite_demandee
-
-      // Mettre à jour quantite_servie sur la ligne
-      await supabase
-        .from('bons_sortie_lignes')
-        .update({ quantite_servie: qteServie })
-        .eq('id', ligne.id)
-
-      // Déduire du stock si produit référencé
-      if (ligne.produit_id && qteServie > 0) {
-        const { error: mvtErr } = await supabase
-          .from('mouvements_stock')
-          .insert({
-            produit_id: ligne.produit_id,
-            type:       'sortie',
-            quantite:   qteServie,
-            reference:  b.numero,
-            notes:      `Exécution bon ${b.numero}`,
-            created_by: user.id,
-          })
-
-        if (mvtErr) {
-          errors.push(`Mouvement stock ${ligne.designation}: ${mvtErr.message}`)
-          continue
-        }
-
-        // Recalculer et mettre à jour le statut du produit
-        const { data: produit } = await supabase
-          .from('produits')
-          .select('stock_actuel, stock_min, stock_critique')
-          .eq('id', ligne.produit_id)
-          .single()
-
-        if (produit) {
-          const p = produit as { stock_actuel: number; stock_min: number; stock_critique: number }
-          const nouvelleQte = Math.max(0, p.stock_actuel - qteServie)
-          const statut = nouvelleQte === 0 ? 'rupture'
-            : nouvelleQte <= p.stock_critique ? 'critique'
-            : nouvelleQte <= p.stock_min ? 'alerte'
-            : 'normal'
-
-          await supabase
-            .from('produits')
-            .update({ stock_actuel: nouvelleQte, statut, updated_at: new Date().toISOString() })
-            .eq('id', ligne.produit_id)
-        }
-      }
-    }
-
-    // 3. Marquer le bon comme exécuté
-    const { data: bonFinal, error: updateErr } = await supabase
-      .from('bons_sortie')
-      .update({ statut: 'execute', updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (updateErr) return c.json({ error: updateErr.message }, 500)
-
-    return c.json({
-      ...bonFinal,
-      warnings: errors.length > 0 ? errors : undefined,
-    })
+    return c.json({ error: msg }, 400)
   },
 )
 
