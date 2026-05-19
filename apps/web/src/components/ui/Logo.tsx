@@ -1,6 +1,7 @@
-// Tafdil brand logo components — gear + circuit-orbit design
-// variant='color'  → black gear + red orbit  (light backgrounds)
-// variant='white'  → white gear + red orbit  (dark backgrounds like sidebar, login)
+// Tafdil brand logo components — gear + Saturn-ring orbital design
+// Matches the MetalForge AI-generated logo concept:
+// variant='color'  → dark gear + red orbit  (light backgrounds)
+// variant='white'  → white gear + red orbit  (dark backgrounds: sidebar, login)
 
 const GEAR = [
   'M73.47,45.01 L81.76,46.1 L81.76,53.9 L73.47,54.99',
@@ -15,9 +16,13 @@ const GEAR = [
   'L45.01,26.53 L46.1,18.24 L53.9,18.24 L54.99,26.53',
   'L57.42,27.17 L62.5,20.54 L69.26,24.44 L66.06,32.17',
   'L67.83,33.94 L75.56,30.74 L79.46,37.5 L72.83,42.58 Z',
-  // hub hole (even-odd creates transparent cutout)
   'M50,39 A11,11,0,0,1,50,61 A11,11,0,0,1,50,39 Z',
 ].join(' ')
+
+// Full Saturn-ring orbital: bottom half (behind gear) + top half (in front)
+const ORBIT_BOTTOM = 'M6,52 A44,16,0,0,1,94,52'
+const ORBIT_TOP    = 'M94,52 A44,16,0,0,0,6,52'
+const ORBIT_ROTATE = 'rotate(-18,50,52)'
 
 interface IconProps {
   size?: number
@@ -25,7 +30,7 @@ interface IconProps {
   className?: string
 }
 
-/** Icon only — gear + circuit-orbit arc. No text. */
+/** Icon only — gear with Saturn-ring orbit + red accent dot. No text. */
 export function TafdilIcon({ size = 40, variant = 'color', className }: IconProps) {
   const gear = variant === 'white' ? '#ffffff' : '#1a1a1a'
   const red  = '#C62828'
@@ -41,18 +46,18 @@ export function TafdilIcon({ size = 40, variant = 'color', className }: IconProp
       className={className}
       aria-hidden="true"
     >
-      {/* Circuit-orbit arc — large sweep from lower-right to upper-left */}
-      <path
-        d="M 70 70 A 38 38 0 1 0 30 22"
-        fill="none"
-        stroke={red}
-        strokeWidth="6"
-        strokeLinecap="round"
-      />
+      {/* Bottom half of orbital ring — behind the gear */}
+      <g transform={ORBIT_ROTATE}>
+        <path d={ORBIT_BOTTOM} fill="none" stroke={red} strokeWidth="5.5" strokeLinecap="round" />
+      </g>
       {/* Gear body with center hole */}
       <path fillRule="evenodd" fill={gear} d={GEAR} />
-      {/* Circuit node — hollow circle at arc endpoint */}
-      <circle cx="30" cy="22" r="5" fill="none" stroke={red} strokeWidth="3" />
+      {/* Top half of orbital ring — in front of the gear */}
+      <g transform={ORBIT_ROTATE}>
+        <path d={ORBIT_TOP} fill="none" stroke={red} strokeWidth="5.5" strokeLinecap="round" />
+      </g>
+      {/* Red accent dot at bottom of orbit */}
+      <circle cx="55" cy="67" r="5.5" fill={red} />
     </svg>
   )
 }

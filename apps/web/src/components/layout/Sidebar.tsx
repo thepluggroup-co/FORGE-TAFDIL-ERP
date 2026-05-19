@@ -20,9 +20,10 @@ interface NavItem {
 
 const NAV_ITEMS_BASE: NavItem[] = [
   { path: '/dashboard',    label: 'Dashboard',      icon: LayoutDashboard },
-  { path: '/production',   label: 'Production',    icon: Wrench,         badge: 2 },
+  { path: '/boutique',     label: 'Boutique',       icon: Store,          dynamicBadge: true },
+  { path: '/production',   label: 'Production',     icon: Wrench,         badge: 2 },
   { path: '/stocks',       label: 'Stocks',         icon: Package,        badge: 5 },
-  { path: '/commandes',    label: 'Commandes',      icon: ShoppingCart,   dynamicBadge: true },
+  { path: '/commandes',    label: 'Commandes',      icon: ShoppingCart },
   { path: '/devis',        label: 'Devis',          icon: FileText },
   { path: '/finance',      label: 'Finance',        icon: DollarSign,     badge: 1 },
   { path: '/rh',           label: 'RH',             icon: Users },
@@ -33,7 +34,6 @@ const NAV_ITEMS_BASE: NavItem[] = [
   { path: '/securite',     label: 'Sécurité',       icon: Shield,         badge: 1 },
   { path: '/intelligence', label: 'Intelligence',   icon: Brain },
   { path: '/iot',          label: 'IoT',            icon: Wifi },
-  { path: '/boutique',     label: 'Boutique',       icon: Store },
 ]
 
 interface SidebarProps {
@@ -49,8 +49,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const webBadge = shopData?.stats?.nouvelles_ce_jour ?? 0
 
   const NAV_ITEMS = NAV_ITEMS_BASE.map((item) =>
-    item.dynamicBadge
+    item.dynamicBadge && item.path === '/boutique'
       ? { ...item, badge: webBadge > 0 ? webBadge : undefined }
+      : item.dynamicBadge
+      ? { ...item, badge: undefined }
       : item
   )
 

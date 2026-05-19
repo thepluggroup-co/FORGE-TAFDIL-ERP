@@ -25,6 +25,26 @@ export interface Commande {
   historique: CommandeHistorique[]
 }
 
+export interface CreateCommandeLigne {
+  produit_id?: string
+  designation: string
+  unite?: string
+  quantite: number
+  prix_unitaire_ht_xaf: number
+  ordre?: number
+}
+
+export interface CreateCommandePayload {
+  client_id?: string
+  client_nom: string
+  devis_id?: string
+  date_commande: string
+  date_livraison_prevue?: string
+  notes?: string
+  acompte_recu_xaf?: number
+  lignes: CreateCommandeLigne[]
+}
+
 interface CommandesResponse { data: Commande[]; total: number }
 
 export function useCommandes(params?: { statut?: string; search?: string }) {
@@ -37,6 +57,19 @@ export function useCommandes(params?: { statut?: string; search?: string }) {
     queryKey: ['commandes', params],
     queryFn:  () => apiClient.get<CommandesResponse>(`/api/commandes${q ? `?${q}` : ''}`),
     staleTime: 20_000,
+  })
+}
+
+export function useCreateCommande() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateCommandePayload) =>
+      apiClient.post<Commande>('/api/commandes', payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['commandes'] })
+      toast.success('Commande créée')
+    },
+    onError: (err: Error) => toast.error(err.message),
   })
 }
 

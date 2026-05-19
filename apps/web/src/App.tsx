@@ -23,6 +23,8 @@ const Logistique   = lazy(() => import('@/pages/Logistique'))
 const Marketing    = lazy(() => import('@/pages/Marketing'))
 const Securite     = lazy(() => import('@/pages/Securite'))
 const IoT          = lazy(() => import('@/pages/IoT'))
+const Formation    = lazy(() => import('@/pages/Formation'))
+const Boutique     = lazy(() => import('@/pages/Boutique'))
 const ModulePage   = lazy(() => import('@/pages/ModulePage'))
 
 function PageLoader() {
@@ -48,11 +50,9 @@ function Shell({ children }: { children: React.ReactNode }) {
   )
 }
 
-const PLACEHOLDER_MODULES = ['formation', 'boutique'] as const
+const PLACEHOLDER_MODULES = [] as const
 
-const MODULE_LABELS: Record<string, string> = {
-  formation: 'Formation', boutique: 'Boutique',
-}
+const MODULE_LABELS: Record<string, string> = {}
 
 function AppRoutes() {
   const location = useLocation()
@@ -90,6 +90,8 @@ function AppRoutes() {
           <Route path="/marketing" element={<Shell><Marketing /></Shell>} />
           <Route path="/securite" element={<Shell><Securite /></Shell>} />
           <Route path="/iot" element={<Shell><IoT /></Shell>} />
+          <Route path="/formation" element={<Shell><Formation /></Shell>} />
+          <Route path="/boutique" element={<Shell><Boutique /></Shell>} />
 
           {/* Autres modules (placeholder) */}
           {PLACEHOLDER_MODULES.map((mod) => (

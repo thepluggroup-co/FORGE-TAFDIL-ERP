@@ -5,7 +5,7 @@ import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal } from '@f
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import { toast } from 'sonner'
-import { useCommandes, useStatutCommande } from '@/hooks/useCommandes'
+import { useCommandes, useStatutCommande, useCreateCommande } from '@/hooks/useCommandes'
 import type { Commande, CommandeLigne, CommandeHistorique } from '@/hooks/useCommandes'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
 import { CommandesWebPage } from './commandes/CommandesWebPage'
@@ -217,15 +217,24 @@ function OrderDetail({ order, onClose }: { order: CommandeRecord; onClose: () =>
 
 type Tab = 'erp' | 'web'
 
+interface NouvelleCommandeForm {
+  client_nom: string; client_telephone: string
+  designation: string; quantite: number; prix_unitaire_ht_xaf: number
+}
+const DEFAULT_CMD: NouvelleCommandeForm = { client_nom: '', client_telephone: '', designation: '', quantite: 1, prix_unitaire_ht_xaf: 0 }
+
 export default function Commandes() {
   const [tab, setTab]         = useState<Tab>('erp')
   const [view, setView]       = useState<'kanban' | 'table'>('kanban')
   const [selected, setSelected] = useState<CommandeRecord | null>(null)
+  const [cmdSlide, setCmdSlide] = useState(false)
+  const [cmdForm, setCmdForm]   = useState<NouvelleCommandeForm>(DEFAULT_CMD)
   const containerRef  = useRef<HTMLDivElement>(null)
   const columnRefs    = useRef<Record<string, HTMLDivElement | null>>({})
 
   const { data, isLoading, isError } = useCommandes()
-  const statutMutation = useStatutCommande()
+  const statutMutation  = useStatutCommande()
+  const createCommande  = useCreateCommande()
 
   // Badge commandes web (nouvelles non traitées)
   const { data: shopData } = useCommandesShop()
@@ -289,7 +298,7 @@ export default function Commandes() {
                   <Table2 className="h-3.5 w-3.5" /> Tableau
                 </button>
               </div>
-              <Button size="sm">
+              <Button size="sm" onClick={() => { setCmdForm(DEFAULT_CMD); setCmdSlide(true) }}>
                 <Plus className="h-3.5 w-3.5" /> Nouvelle commande
               </Button>
             </>
@@ -416,6 +425,77 @@ export default function Commandes() {
       </AnimatePresence>
 
       {selected && <OrderDetail order={selected} onClose={() => setSelected(null)} />}
+
+      <SlideOver isOpen={cmdSlide} onClose={() => setCmdSlide(false)} title="Nouvelle commande ERP" width="md">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Nom du client *</label>
+            <input value={cmdForm.client_nom} onChange={(e) => setCmdForm((f) => ({ ...f, client_nom: e.target.value }))}
+              placeholder="ex. CAMRAIL SA" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Téléphone *</label>
+            <input value={cmdForm.client_telephone} onChange={(e) => setCmdForm((f) => ({ ...f, client_telephone: e.target.value }))}
+              placeholder="+237 6XX XXX XXX" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+          </div>
+          <div className="pt-2 border-t border-gray-100">
+            <p className="text-xs font-semibold text-gray-500 uppercase mb-3">Première ligne de commande</p>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Désignation *</label>
+            <input value={cmdForm.designation} onChange={(e) => setCmdForm((f) => ({ ...f, designation: e.target.value }))}
+              placeholder="ex. Grille métallique 2m×1m" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Quantité</label>
+              <input type="number" min="1" value={cmdForm.quantite} onChange={(e) => setCmdForm((f) => ({ ...f, quantite: Math.max(1, Number(e.target.value)) }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Prix unitaire HT (FCFA)</label>
+              <input type="number" min="0" value={cmdForm.prix_unitaire_ht_xaf} onChange={(e) => setCmdForm((f) => ({ ...f, prix_unitaire_ht_xaf: Number(e.target.value) }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+            </div>
+          </div>
+          {cmdForm.quantite > 0 && cmdForm.prix_unitaire_ht_xaf > 0 && (
+            <div className="bg-gray-50 rounded-lg px-3 py-2 text-xs text-gray-600">
+              Total HT : <span className="font-bold text-[#212121]">{(cmdForm.quantite * cmdForm.prix_unitaire_ht_xaf).toLocaleString('fr-CM')} FCFA</span>
+              {' · '}TTC (19.25%) : <span className="font-bold text-[#212121]">{Math.round(cmdForm.quantite * cmdForm.prix_unitaire_ht_xaf * 1.1925).toLocaleString('fr-CM')} FCFA</span>
+            </div>
+          )}
+          <div className="flex gap-3 pt-2 border-t border-gray-100">
+            <Button variant="ghost" className="flex-1" onClick={() => setCmdSlide(false)}>Annuler</Button>
+            <Button
+              className="flex-1"
+              disabled={!cmdForm.client_nom || !cmdForm.client_telephone || !cmdForm.designation || createCommande.isPending}
+              onClick={() => {
+                createCommande.mutate(
+                  {
+                    client_nom: cmdForm.client_nom,
+                    date_commande: new Date().toISOString().split('T')[0],
+                    notes: cmdForm.client_telephone ? `Tél: ${cmdForm.client_telephone}` : undefined,
+                    lignes: [{
+                      designation: cmdForm.designation,
+                      quantite: cmdForm.quantite,
+                      prix_unitaire_ht_xaf: cmdForm.prix_unitaire_ht_xaf,
+                      unite: 'unité',
+                    }],
+                  },
+                  {
+                    onSuccess: () => {
+                      setCmdSlide(false)
+                      setCmdForm(DEFAULT_CMD)
+                    },
+                  },
+                )
+              }}
+            >
+              {createCommande.isPending ? 'Création…' : 'Créer la commande'}
+            </Button>
+          </div>
+        </div>
+      </SlideOver>
 
       <Modal
         isOpen={!!pendingMove}

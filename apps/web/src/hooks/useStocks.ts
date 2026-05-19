@@ -49,6 +49,33 @@ export function useStockAlertes() {
   })
 }
 
+export interface CreateProduitPayload {
+  ref: string
+  designation: string
+  description?: string
+  categorie: string
+  unite: string
+  stock_actuel: number
+  stock_min: number
+  stock_critique: number
+  prix_unitaire_xaf: number
+  emplacement?: string
+  fournisseur?: string
+}
+
+export function useCreateProduit() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateProduitPayload) =>
+      apiClient.post<StockProduit>('/api/stocks', payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['stocks'] })
+      toast.success('Produit créé')
+    },
+    onError: (err: Error) => toast.error(err.message || 'Erreur création produit'),
+  })
+}
+
 export function useMouvement() {
   const qc = useQueryClient()
   return useMutation({

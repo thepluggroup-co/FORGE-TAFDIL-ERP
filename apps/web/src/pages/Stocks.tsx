@@ -8,8 +8,8 @@ import { formatXAF } from '@/lib/utils'
 import { KpiCard } from '@forge/ui'
 import { Package, AlertTriangle, TrendingDown, DollarSign } from 'lucide-react'
 import { toast } from 'sonner'
-import { useStocks, useMouvement } from '@/hooks/useStocks'
-import type { StockProduit } from '@/hooks/useStocks'
+import { useStocks, useMouvement, useCreateProduit } from '@/hooks/useStocks'
+import type { StockProduit, CreateProduitPayload } from '@/hooks/useStocks'
 
 // ── Types (alignés sur l'API) ─────────────────────────────────────────────────
 
@@ -18,6 +18,14 @@ type Product = StockProduit & Record<string, unknown>
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MOTIFS = ['Achat fournisseur', 'Retour chantier', 'Correction inventaire', 'Don / perte', 'Autre']
+const UNITES = ['pièce', 'kg', 'm', 'm²', 'm³', 'litre', 'barre', 'rouleau', 'unité']
+const CATEGORIES_DEFAULT = ['Acier', 'Aluminium', 'Inox', 'Consommable soudure', 'EPI', 'Outillage', 'Autre']
+
+const DEFAULT_PRODUIT: CreateProduitPayload = {
+  ref: '', designation: '', categorie: '', unite: 'pièce',
+  stock_actuel: 0, stock_min: 5, stock_critique: 2, prix_unitaire_xaf: 0,
+  emplacement: '', fournisseur: '',
+}
 
 // ── Columns ────────────────────────────────────────────────────────────────────
 
@@ -128,6 +136,8 @@ export default function Stocks() {
   const [statusFilter, setStatusFilter] = useState('')
   const [slideOpen, setSlideOpen]     = useState(false)
   const [form, setForm]               = useState<MvtForm>(DEFAULT_FORM)
+  const [newProduitOpen, setNewProduitOpen] = useState(false)
+  const [newProduit, setNewProduit]   = useState<CreateProduitPayload>(DEFAULT_PRODUIT)
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300)
@@ -136,6 +146,7 @@ export default function Stocks() {
 
   const { data, isLoading, isError } = useStocks({ search: debouncedSearch, categorie, statut: statusFilter })
   const mouvement = useMouvement()
+  const createProduit = useCreateProduit()
 
   const produits = (data?.data ?? []) as Product[]
   const categories = useMemo(() => [...new Set(produits.map((p) => p.categorie as string))], [produits])
@@ -187,6 +198,10 @@ export default function Stocks() {
             <Button size="sm" onClick={() => openEntree()}>
               <PackagePlus className="h-3.5 w-3.5" />
               Entrée stock
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => { setNewProduit(DEFAULT_PRODUIT); setNewProduitOpen(true) }}>
+              <Plus className="h-3.5 w-3.5" />
+              Nouveau produit
             </Button>
           </>
         }
@@ -252,6 +267,94 @@ export default function Stocks() {
         onRowClick={(row) => openEntree(row)}
         loading={isLoading}
       />
+
+      {/* SlideOver nouveau produit */}
+      <SlideOver
+        isOpen={newProduitOpen}
+        onClose={() => setNewProduitOpen(false)}
+        title="Nouveau produit"
+        width="md"
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Référence *</label>
+              <input value={newProduit.ref} onChange={(e) => setNewProduit((p) => ({ ...p, ref: e.target.value }))}
+                placeholder="ex. AC-001" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Unité</label>
+              <select value={newProduit.unite} onChange={(e) => setNewProduit((p) => ({ ...p, unite: e.target.value }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
+                {UNITES.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Désignation *</label>
+            <input value={newProduit.designation} onChange={(e) => setNewProduit((p) => ({ ...p, designation: e.target.value }))}
+              placeholder="ex. Fer plat 40×5 mm" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Catégorie *</label>
+            <select value={newProduit.categorie} onChange={(e) => setNewProduit((p) => ({ ...p, categorie: e.target.value }))}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
+              <option value="">Sélectionner…</option>
+              {CATEGORIES_DEFAULT.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Stock initial</label>
+              <input type="number" min="0" value={newProduit.stock_actuel}
+                onChange={(e) => setNewProduit((p) => ({ ...p, stock_actuel: Number(e.target.value) }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Seuil alerte</label>
+              <input type="number" min="0" value={newProduit.stock_min}
+                onChange={(e) => setNewProduit((p) => ({ ...p, stock_min: Number(e.target.value) }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Seuil critique</label>
+              <input type="number" min="0" value={newProduit.stock_critique}
+                onChange={(e) => setNewProduit((p) => ({ ...p, stock_critique: Number(e.target.value) }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Prix unitaire (FCFA)</label>
+            <input type="number" min="0" value={newProduit.prix_unitaire_xaf}
+              onChange={(e) => setNewProduit((p) => ({ ...p, prix_unitaire_xaf: Number(e.target.value) }))}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Emplacement</label>
+              <input value={newProduit.emplacement ?? ''} onChange={(e) => setNewProduit((p) => ({ ...p, emplacement: e.target.value }))}
+                placeholder="ex. Rack A-3" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Fournisseur</label>
+              <input value={newProduit.fournisseur ?? ''} onChange={(e) => setNewProduit((p) => ({ ...p, fournisseur: e.target.value }))}
+                placeholder="ex. ACIER CM" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+            </div>
+          </div>
+          <div className="flex gap-3 pt-2 border-t border-gray-100">
+            <Button variant="ghost" className="flex-1" onClick={() => setNewProduitOpen(false)}>Annuler</Button>
+            <Button
+              className="flex-1"
+              disabled={!newProduit.ref || !newProduit.designation || !newProduit.categorie || createProduit.isPending}
+              onClick={() => createProduit.mutate(newProduit, {
+                onSuccess: () => { setNewProduitOpen(false); setNewProduit(DEFAULT_PRODUIT) },
+              })}
+            >
+              {createProduit.isPending ? 'Création…' : 'Créer le produit'}
+            </Button>
+          </div>
+        </div>
+      </SlideOver>
 
       {/* SlideOver mouvement */}
       <SlideOver

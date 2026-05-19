@@ -53,6 +53,29 @@ interface PresencesResponse { data: Presence[];    total: number }
 interface BulletinsResponse { data: BulletinPaie[]; total: number }
 interface ApprenantsResponse { data: Apprenant[];  total: number }
 
+export interface CreateEmployePayload {
+  nom: string
+  poste: string
+  departement: string
+  type_contrat: 'CDI' | 'CDD' | 'stage' | 'freelance'
+  date_entree: string
+  salaire_base_xaf: number
+  telephone?: string
+  email?: string
+  cin?: string
+  cnps?: string
+  statut?: 'actif' | 'inactif' | 'conge' | 'essai'
+}
+
+export interface CreateApprenantPayload {
+  nom: string
+  specialite: string
+  niveau?: number
+  duree_mois?: number
+  statut?: 'actif' | 'suspendu' | 'diplome' | 'recrute'
+  notes?: string
+}
+
 // ── Employes ──────────────────────────────────────────────────────────────────
 
 export function useEmployes(params?: { search?: string; statut?: string }) {
@@ -65,6 +88,19 @@ export function useEmployes(params?: { search?: string; statut?: string }) {
     queryKey: ['employes', params],
     queryFn:  () => apiClient.get<EmployesResponse>(`/api/rh/employes${q ? `?${q}` : ''}`),
     staleTime: 60_000,
+  })
+}
+
+export function useCreateEmploye() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateEmployePayload) =>
+      apiClient.post<Employe>('/api/rh/employes', payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['employes'] })
+      toast.success('Employé ajouté')
+    },
+    onError: (err: Error) => toast.error(err.message),
   })
 }
 
@@ -111,6 +147,19 @@ export function useApprenants(params?: { statut?: string }) {
     queryKey: ['apprenants', params],
     queryFn:  () => apiClient.get<ApprenantsResponse>(`/api/rh/apprenants${q}`),
     staleTime: 60_000,
+  })
+}
+
+export function useCreateApprenant() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateApprenantPayload) =>
+      apiClient.post<Apprenant>('/api/rh/apprenants', payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['apprenants'] })
+      toast.success('Apprenant ajouté')
+    },
+    onError: (err: Error) => toast.error(err.message),
   })
 }
 

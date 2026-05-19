@@ -1,16 +1,18 @@
 import React, { useState } from 'react'
+import { toast } from 'sonner'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Users, Calendar, DollarSign, GraduationCap,
   Star, Award, UserPlus, CheckCircle, Plus,
   Clock, Briefcase, FileText,
 } from 'lucide-react'
-import { PageHeader, DataTable, StatusBadge, Button, Modal } from '@forge/ui'
+import { PageHeader, DataTable, StatusBadge, Button, Modal, SlideOver } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import {
   useEmployes, usePresences, useBulletinsPaie, useGenererPaie,
   useApprenants, useProgressionApprenant, useRecruterApprenant,
+  useCreateEmploye,
 } from '@/hooks/useRH'
 import type { Employe as EmployeApi, Presence as PresenceApi, BulletinPaie, Apprenant } from '@/hooks/useRH'
 
@@ -215,11 +217,23 @@ function ApprenantCard({
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
+interface NouvelEmployeForm {
+  nom: string; poste: string; departement: string
+  type_contrat: 'CDI' | 'CDD'; date_entree: string; salaire_base_xaf: number
+}
+const DEFAULT_EMP: NouvelEmployeForm = {
+  nom: '', poste: '', departement: 'Atelier soudure',
+  type_contrat: 'CDI', date_entree: new Date().toISOString().split('T')[0], salaire_base_xaf: 0,
+}
+const DEPARTEMENTS = ['Atelier soudure', 'Atelier découpe', 'Atelier CNC', 'Pliage', 'Logistique', 'Administration']
+
 export default function RH() {
   const [activeTab, setActiveTab]       = useState<Tab>('Employés')
   const [recruterApprenant, setRecruter] = useState<Apprenant | null>(null)
   const [presenceDate, setPresenceDate]  = useState(new Date().toISOString().split('T')[0])
   const [moisPaie, setMoisPaie]          = useState(new Date().toISOString().slice(0, 7))
+  const [empSlide, setEmpSlide] = useState(false)
+  const [empForm, setEmpForm]   = useState<NouvelEmployeForm>(DEFAULT_EMP)
 
   const isDirecteur = true
 
@@ -228,8 +242,9 @@ export default function RH() {
   const { data: bulletinsData, isLoading: bulletinsLoading } = useBulletinsPaie({ mois: moisPaie })
   const { data: appData,      isLoading: appLoading }      = useApprenants()
 
-  const genererPaie      = useGenererPaie()
+  const genererPaie          = useGenererPaie()
   const progressionApprenant = useProgressionApprenant()
+  const createEmploye        = useCreateEmploye()
 
   const employes  = (empData?.data ?? [])      as EmployeRecord[]
   const presences = (presData?.data ?? [])     as PresenceRecord[]
@@ -264,7 +279,7 @@ export default function RH() {
       ),
     },
     { id: 'entree', header: 'Ancienneté', accessor: 'date_entree', render: (v) => <span className="text-sm text-gray-500">{anciennete(v as string)}</span> },
-    { id: 'salaire', header: 'Salaire', accessor: 'salaire_brut_xaf', render: (v) => <span className="text-sm font-semibold">{formatXAF(v as number)}</span> },
+    { id: 'salaire', header: 'Salaire', accessor: 'salaire_base_xaf', render: (v) => <span className="text-sm font-semibold">{formatXAF(v as number)}</span> },
     { id: 'statut', header: 'Statut', accessor: 'statut', render: (v) => <StatusBadge status={v as string} /> },
     {
       id: 'actions', header: '', accessor: 'id', sortable: false,
@@ -302,7 +317,7 @@ export default function RH() {
         breadcrumbs={[{ label: 'FORGE', href: '/' }, { label: 'RH' }]}
         actions={
           activeTab === 'Employés' ? (
-            <Button size="sm"><Plus className="h-3.5 w-3.5" /> Nouvel employé</Button>
+            <Button size="sm" onClick={() => { setEmpForm(DEFAULT_EMP); setEmpSlide(true) }}><Plus className="h-3.5 w-3.5" /> Nouvel employé</Button>
           ) : activeTab === 'Paie' ? (
             <Button size="sm" disabled={genererPaie.isPending} onClick={() => genererPaie.mutate(moisPaie)}>
               <FileText className="h-3.5 w-3.5" /> {genererPaie.isPending ? 'Génération…' : 'Générer les bulletins'}
@@ -408,6 +423,75 @@ export default function RH() {
       </div>
 
       <RecruterModal isOpen={!!recruterApprenant} onClose={() => setRecruter(null)} apprenant={recruterApprenant} />
+
+      <SlideOver isOpen={empSlide} onClose={() => setEmpSlide(false)} title="Nouvel employé" width="md">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Nom complet *</label>
+            <input value={empForm.nom} onChange={(e) => setEmpForm((f) => ({ ...f, nom: e.target.value }))}
+              placeholder="ex. Kamga Jean-Pierre" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Poste *</label>
+            <input value={empForm.poste} onChange={(e) => setEmpForm((f) => ({ ...f, poste: e.target.value }))}
+              placeholder="ex. Technicien soudeur" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Département</label>
+            <select value={empForm.departement} onChange={(e) => setEmpForm((f) => ({ ...f, departement: e.target.value }))}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
+              {DEPARTEMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Type de contrat</label>
+              <select value={empForm.type_contrat} onChange={(e) => setEmpForm((f) => ({ ...f, type_contrat: e.target.value as 'CDI' | 'CDD' }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
+                <option value="CDI">CDI</option>
+                <option value="CDD">CDD</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Date d'entrée</label>
+              <input type="date" value={empForm.date_entree} onChange={(e) => setEmpForm((f) => ({ ...f, date_entree: e.target.value }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Salaire mensuel brut (FCFA) *</label>
+            <input type="number" min="0" value={empForm.salaire_base_xaf} onChange={(e) => setEmpForm((f) => ({ ...f, salaire_base_xaf: Number(e.target.value) }))}
+              placeholder="ex. 185 000" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+          </div>
+          <div className="flex gap-3 pt-2 border-t border-gray-100">
+            <Button variant="ghost" className="flex-1" onClick={() => setEmpSlide(false)}>Annuler</Button>
+            <Button
+              className="flex-1"
+              disabled={!empForm.nom || !empForm.poste || empForm.salaire_base_xaf <= 0 || createEmploye.isPending}
+              onClick={() => {
+                createEmploye.mutate(
+                  {
+                    nom: empForm.nom,
+                    poste: empForm.poste,
+                    departement: empForm.departement,
+                    type_contrat: empForm.type_contrat,
+                    date_entree: empForm.date_entree,
+                    salaire_base_xaf: empForm.salaire_base_xaf,
+                  },
+                  {
+                    onSuccess: () => {
+                      setEmpSlide(false)
+                      setEmpForm(DEFAULT_EMP)
+                    },
+                  },
+                )
+              }}
+            >
+              {createEmploye.isPending ? 'Enregistrement…' : 'Créer le dossier'}
+            </Button>
+          </div>
+        </div>
+      </SlideOver>
     </motion.div>
   )
 }
