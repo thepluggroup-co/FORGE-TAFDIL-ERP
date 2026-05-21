@@ -10,9 +10,10 @@ out/
 release/
 
 # Environment
-.env
 .env.local
 .env.*.local
+# .env files tracked for connection fix (config-as-code)
+!.env
 
 # Databases
 *.db
