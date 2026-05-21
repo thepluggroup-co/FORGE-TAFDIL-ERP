@@ -1,7 +1,8 @@
 import { supabase } from './supabase'
 import { toast } from 'sonner'
 
-const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001'
+const _raw = import.meta.env.VITE_API_URL as string | undefined
+const API_BASE = _raw?.startsWith('http') ? _raw : 'http://localhost:3001'
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const { data: { session } } = await supabase.auth.getSession()
