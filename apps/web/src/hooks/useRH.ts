@@ -176,11 +176,21 @@ export function useProgressionApprenant() {
   })
 }
 
+export interface RecruterPayload {
+  id: string
+  poste: string
+  departement: string
+  type_contrat: 'CDI' | 'CDD' | 'stage' | 'freelance'
+  date_entree: string
+  salaire_base_xaf: number
+  commentaire?: string
+}
+
 export function useRecruterApprenant() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, poste, salaire_brut_xaf }: { id: string; poste: string; salaire_brut_xaf: number }) =>
-      apiClient.post<Employe>(`/api/rh/apprenants/${id}/recruter`, { poste, salaire_brut_xaf }),
+    mutationFn: ({ id, ...body }: RecruterPayload) =>
+      apiClient.post<Employe>(`/api/rh/apprenants/${id}/recruter`, body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['apprenants'] })
       void qc.invalidateQueries({ queryKey: ['employes'] })

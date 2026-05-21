@@ -4,7 +4,7 @@ import { apiClient } from '@/lib/api-client'
 
 export interface StockProduit {
   id: string
-  reference: string
+  ref: string
   designation: string
   categorie: string
   stock_actuel: number

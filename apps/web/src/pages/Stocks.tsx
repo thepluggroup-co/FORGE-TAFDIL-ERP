@@ -33,7 +33,7 @@ const buildColumns = (onEntree: (p: Product) => void, onSortie: (p: Product) => 
   {
     id: 'reference',
     header: 'Réf.',
-    accessor: 'reference',
+    accessor: 'ref',
     render: (v) => <span className="font-mono text-xs text-gray-500">{v as string}</span>,
   },
   {

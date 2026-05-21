@@ -79,9 +79,6 @@ app.route('/api', api)
 
 app.onError((err, c) => {
   console.error(`[error] ${c.req.method} ${c.req.url}`, err)
-  if (err.message.includes('not found') || err.message.includes('404')) {
-    return c.json({ error: 'Ressource introuvable', code: 'NOT_FOUND' }, 404)
-  }
   return c.json(
     {
       error: 'Erreur serveur interne',

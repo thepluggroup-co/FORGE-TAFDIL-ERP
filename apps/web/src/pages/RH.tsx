@@ -14,7 +14,7 @@ import {
   useApprenants, useProgressionApprenant, useRecruterApprenant,
   useCreateEmploye,
 } from '@/hooks/useRH'
-import type { Employe as EmployeApi, Presence as PresenceApi, BulletinPaie, Apprenant } from '@/hooks/useRH'
+import type { Employe as EmployeApi, Presence as PresenceApi, BulletinPaie, Apprenant, RecruterPayload } from '@/hooks/useRH'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -71,22 +71,28 @@ function StarRating({ level }: { level: number }) {
 
 // ── Recruit Modal ──────────────────────────────────────────────────────────────
 
+const DEPARTEMENTS_RH = ['Atelier soudure', 'Atelier découpe', 'Atelier CNC', 'Pliage', 'Production', 'Commercial', 'Administration']
+
 function RecruterModal({
   isOpen, onClose, apprenant,
 }: {
   isOpen: boolean; onClose: () => void; apprenant: Apprenant | null
 }) {
-  const [poste, setPoste]         = useState('')
-  const [salaire, setSalaire]     = useState('')
-  const [dateDebut, setDateDebut] = useState(new Date().toISOString().split('T')[0])
+  const [form, setForm] = useState<Omit<RecruterPayload, 'id'>>({
+    poste: '', departement: '', type_contrat: 'CDI',
+    date_entree: new Date().toISOString().split('T')[0],
+    salaire_base_xaf: 0,
+  })
   const recruter = useRecruterApprenant()
 
   if (!apprenant) return null
 
+  const formValid = form.poste.trim() !== '' && form.departement !== '' && form.salaire_base_xaf > 0
+
   const handleRecruiter = () => {
-    if (!poste || !salaire) return
+    if (!formValid) return
     recruter.mutate(
-      { id: apprenant.id, poste, salaire_brut_xaf: Number(salaire) },
+      { id: apprenant.id, ...form },
       { onSuccess: onClose },
     )
   }
@@ -105,30 +111,49 @@ function RecruterModal({
         </div>
 
         <div>
-          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Poste</label>
-          <input
-            value={poste}
-            onChange={(e) => setPoste(e.target.value)}
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Poste *</label>
+          <input value={form.poste} onChange={(e) => setForm((f) => ({ ...f, poste: e.target.value }))}
             placeholder="Ex : Technicien soudeur"
-            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30"
-          />
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Département *</label>
+            <select value={form.departement} onChange={(e) => setForm((f) => ({ ...f, departement: e.target.value }))}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30">
+              <option value="">Sélectionner…</option>
+              {DEPARTEMENTS_RH.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Contrat *</label>
+            <select value={form.type_contrat} onChange={(e) => setForm((f) => ({ ...f, type_contrat: e.target.value as RecruterPayload['type_contrat'] }))}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30">
+              <option value="CDI">CDI</option>
+              <option value="CDD">CDD</option>
+              <option value="stage">Stage</option>
+              <option value="freelance">Freelance</option>
+            </select>
+          </div>
         </div>
 
         <div>
-          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Date de début</label>
-          <input type="date" value={dateDebut} onChange={(e) => setDateDebut(e.target.value)}
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Date d'entrée</label>
+          <input type="date" value={form.date_entree} onChange={(e) => setForm((f) => ({ ...f, date_entree: e.target.value }))}
             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
         </div>
 
         <div>
-          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Salaire mensuel brut (FCFA)</label>
-          <input type="number" value={salaire} onChange={(e) => setSalaire(e.target.value)} placeholder="Ex : 185 000"
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Salaire mensuel brut (FCFA) *</label>
+          <input type="number" min="0" value={form.salaire_base_xaf} onChange={(e) => setForm((f) => ({ ...f, salaire_base_xaf: Number(e.target.value) }))}
+            placeholder="Ex : 185 000"
             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
         </div>
 
         <div className="flex gap-2 justify-end pt-2">
           <Button variant="ghost" onClick={onClose}>Annuler</Button>
-          <Button onClick={handleRecruiter} disabled={!poste || !salaire || recruter.isPending}>
+          <Button onClick={handleRecruiter} disabled={!formValid || recruter.isPending}>
             <UserPlus className="h-3.5 w-3.5" /> {recruter.isPending ? 'Recrutement…' : 'Recruter'}
           </Button>
         </div>
