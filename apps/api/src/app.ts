@@ -29,6 +29,13 @@ const ALLOWED_ORIGINS = [
 
 app.use('*', logger())
 
+//Log de debug — AVANT le CORS
+app.use('*', async (c, next) => {
+  console.log('Origin reçue:', c.req.header('origin'))
+  console.log('ALLOWED_ORIGINS:', ALLOWED_ORIGINS)
+  await next()
+})
+
 app.use('*', cors({
   origin: (origin) => {
     if (!origin) return origin
