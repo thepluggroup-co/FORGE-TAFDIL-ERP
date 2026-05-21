@@ -1,0 +1,69 @@
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                    FORGE ERP - CONNECTION FIX SUMMARY                          ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+✅ FIXED: Frontend-Backend Connection (404 NOT_FOUND Error)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📋 FILES CREATED:
+
+  ✓ .env (root)
+  ✓ apps/api/.env
+  ✓ apps/web/.env
+  ✓ QUICK_START.md ..................... Start here! 
+  ✓ CONNECTION_STATUS.md ................ Detailed explanation
+  ✓ FRONTEND_BACKEND_FIX.md ............. Full troubleshooting guide
+  ✓ test-connection.sh .................. Run diagnostics
+  ✓ SETUP_SUMMARY.txt ................... This file
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 TO RUN:
+
+  Terminal 1: pnpm dev --filter @forge/api
+  Terminal 2: pnpm dev --filter @forge/web
+  Browser:    http://localhost:5173
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚠️  CRITICAL SETUP:
+
+  1. Update SUPABASE_JWT_SECRET in .env files
+     └─ Get from: Supabase Dashboard → Project Settings → API → JWT Secret
+
+  2. Restart dev servers after updating .env
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✨ WHAT CHANGED:
+
+  ✓ Created .env files with proper configuration
+  ✓ Set VITE_API_URL to http://localhost:3001 for frontend
+  ✓ Enhanced API client with debugging logs [v0] prefix
+  ✓ Better error messages for 404 and other HTTP errors
+  ✓ CORS already properly configured in backend
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔍 TO VERIFY CONNECTION:
+
+  1. Open browser: http://localhost:5173
+  2. Press F12 to open DevTools
+  3. Go to Console tab
+  4. Look for [v0] logs showing API requests/responses
+  5. If you see [v0] logs → Connection is working! ✓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📚 DOCUMENTATION:
+
+  For quick start:        Read QUICK_START.md
+  For full explanation:   Read CONNECTION_STATUS.md  
+  For troubleshooting:    Read FRONTEND_BACKEND_FIX.md
+  For diagnostics:        Run: bash test-connection.sh
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎉 Your frontend-backend connection is now properly configured!
+
