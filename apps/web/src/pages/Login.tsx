@@ -1,21 +1,16 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuth } from '@/context/AuthContext'
 import { TafdilLogoHero } from '@/components/ui/Logo'
 
 export default function Login() {
-  const { signIn, user } = useAuth()
+  const { signIn } = useAuth()
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-
-  // Already authenticated
-  React.useEffect(() => {
-    if (user) navigate('/production', { replace: true })
-  }, [user, navigate])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

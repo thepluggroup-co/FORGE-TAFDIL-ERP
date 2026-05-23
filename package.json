@@ -2,7 +2,7 @@
   "name": "forge-tafdil",
   "private": true,
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "turbo dev --continue",
     "build": "turbo build",
     "test": "turbo test",
     "lint": "turbo lint",

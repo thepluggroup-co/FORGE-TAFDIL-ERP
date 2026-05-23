@@ -42,6 +42,13 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function PublicRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth()
+  if (loading) return <PageLoader />
+  if (user) return <Navigate to="/production" replace />
+  return <>{children}</>
+}
+
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <ProtectedRoute>
@@ -62,7 +69,7 @@ function AppRoutes() {
       <Suspense fallback={<PageLoader />}>
         <Routes location={location} key={location.pathname}>
           {/* Public */}
-          <Route path="/login" element={<Login />} />
+          <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
 
           {/* Redirect racine */}
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
