@@ -23,7 +23,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   })
 
   if (res.status === 401) {
-    window.location.href = '/login'
+    toast.error('Session expirée — veuillez vous reconnecter')
     throw new Error('Session expirée')
   }
 
