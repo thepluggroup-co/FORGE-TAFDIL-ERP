@@ -58,3 +58,4 @@ android/
 ios/
 *.apk
 *.aab
+.vercel
