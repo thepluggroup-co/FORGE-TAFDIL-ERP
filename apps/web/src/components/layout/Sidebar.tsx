@@ -42,7 +42,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
-  const { user, signOut } = useAuth()
+  const { user, role: appRole, signOut } = useAuth()
   const navigate = useNavigate()
 
   const { data: shopData } = useCommandesShop()
@@ -63,7 +63,13 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   const email = user?.email ?? ''
   const initial = email.charAt(0).toUpperCase()
-  const role = (user?.user_metadata?.role as string) ?? 'Opérateur'
+  const roleLabels: Record<string, string> = {
+    admin:      'Administrateur',
+    directeur:  'Directeur',
+    operateur:  'Opérateur',
+    viewer:     'Lecteur',
+  }
+  const role = roleLabels[appRole ?? ''] ?? 'Opérateur'
 
   return (
     <motion.aside
