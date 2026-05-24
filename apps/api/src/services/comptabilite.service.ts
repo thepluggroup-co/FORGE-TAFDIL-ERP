@@ -1,4 +1,6 @@
-import { supabase } from '@forge/db/supabase'
+import { supabaseAdmin } from '@forge/db'
+
+const db = supabaseAdmin!
 import PLAN_RAW from '../data/plan-comptable.json'
 
 // ── Plan comptable SYSCOHADA (lookup) ──────────────────────────────────────────
@@ -37,7 +39,7 @@ export interface ComptaResult {
 async function insertEcritures(ecritures: EcritureInsert[]): Promise<ComptaResult> {
   if (ecritures.length === 0) return { ok: true, inserts: 0 }
 
-  const { error } = await supabase
+  const { error } = await db
     .from('ecritures_comptables')
     .insert(ecritures.map(e => ({ ...e, sync_status: 'synced' })))
 
@@ -55,7 +57,7 @@ async function ecrituresExistent(
   champ: 'facture_id' | 'commande_id' | 'reference_doc',
   valeur: string,
 ): Promise<boolean> {
-  const { count } = await supabase
+  const { count } = await db
     .from('ecritures_comptables')
     .select('*', { count: 'exact', head: true })
     .eq(champ, valeur)

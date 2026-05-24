@@ -1,7 +1,9 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { supabase } from '@forge/db/supabase'
+import { supabaseAdmin } from '@forge/db'
+
+const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import { generateFacturePDF, uploadPDF } from '../services/pdf.service'
 import { genererEcritureVente, genererEcritureEncaissement } from '../services/comptabilite.service'
@@ -84,7 +86,7 @@ router.get('/factures', async (c) => {
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
   const from    = (page - 1) * perPage
 
-  let q = supabase.from('factures').select('*, factures_lignes(*)', { count: 'exact' })
+  let q = db.from('factures').select('*, factures_lignes(*)', { count: 'exact' })
   if (statut)    q = q.eq('statut', statut)
   if (client_id) q = q.eq('client_id', client_id)
   if (search)    q = q.or(`numero.ilike.%${search}%,client_nom.ilike.%${search}%`)
@@ -100,7 +102,7 @@ router.post('/factures', requireRole(['directeur', 'admin']), zValidator('json',
   const body = c.req.valid('json')
 
   const year = new Date().getFullYear()
-  const { count } = await supabase.from('factures').select('*', { count: 'exact', head: true })
+  const { count } = await db.from('factures').select('*', { count: 'exact', head: true })
     .gte('created_at', `${year}-01-01T00:00:00.000Z`)
   const numero = `FAC-${year}-${String((count ?? 0) + 1).padStart(4, '0')}`
 
@@ -108,7 +110,7 @@ router.post('/factures', requireRole(['directeur', 'admin']), zValidator('json',
   const tva_xaf       = Math.round(total_ht_xaf * TVA_RATE)
   const total_ttc_xaf = total_ht_xaf + tva_xaf
 
-  const { data: facture, error: facErr } = await supabase
+  const { data: facture, error: facErr } = await db
     .from('factures')
     .insert({
       numero, client_id: body.client_id ?? null, client_nom: body.client_nom,
@@ -122,7 +124,7 @@ router.post('/factures', requireRole(['directeur', 'admin']), zValidator('json',
   if (facErr || !facture) return c.json({ error: facErr?.message, code: facErr?.code }, 400)
   const facId = (facture as { id: string }).id
 
-  const { data: lignesData, error: lignesErr } = await supabase
+  const { data: lignesData, error: lignesErr } = await db
     .from('factures_lignes')
     .insert(body.lignes.map((l, i) => ({
       facture_id: facId, designation: l.designation, unite: l.unite,
@@ -133,7 +135,7 @@ router.post('/factures', requireRole(['directeur', 'admin']), zValidator('json',
     .select()
 
   if (lignesErr) {
-    await supabase.from('factures').delete().eq('id', facId)
+    await db.from('factures').delete().eq('id', facId)
     return c.json({ error: lignesErr.message }, 400)
   }
 
@@ -163,17 +165,17 @@ router.post('/factures', requireRole(['directeur', 'admin']), zValidator('json',
 
 router.get('/factures/:id', async (c) => {
   const { id } = c.req.param()
-  const { data, error } = await supabase.from('factures').select('*, factures_lignes(*)').eq('id', id).single()
+  const { data, error } = await db.from('factures').select('*, factures_lignes(*)').eq('id', id).single()
   if (error || !data) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
 
   const f = data as { numero: string }
-  const pdf_url = supabase.storage.from('factures').getPublicUrl(`${f.numero}.pdf`).data.publicUrl
+  const pdf_url = db.storage.from('factures').getPublicUrl(`${f.numero}.pdf`).data.publicUrl
   return c.json({ ...data, pdf_url })
 })
 
 router.get('/factures/:id/pdf', async (c) => {
   const { id } = c.req.param()
-  const { data: facture, error } = await supabase
+  const { data: facture, error } = await db
     .from('factures').select('*, factures_lignes(*)').eq('id', id).single()
   if (error || !facture) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
 
@@ -181,7 +183,7 @@ router.get('/factures/:id/pdf', async (c) => {
 
   // Essayer Supabase Storage
   try {
-    const { data: blob } = await supabase.storage.from('factures').download(`${f.numero}.pdf`)
+    const { data: blob } = await db.storage.from('factures').download(`${f.numero}.pdf`)
     if (blob) {
       c.header('Content-Type', 'application/pdf')
       c.header('Content-Disposition', `inline; filename="${f.numero}.pdf"`)
@@ -206,11 +208,11 @@ router.post('/factures/:id/whatsapp', requireRole(['directeur', 'admin']), zVali
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
-  const { data: facture } = await supabase.from('factures').select('numero, client_nom, total_ttc_xaf').eq('id', id).single()
+  const { data: facture } = await db.from('factures').select('numero, client_nom, total_ttc_xaf').eq('id', id).single()
   if (!facture) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
 
   const f = facture as { numero: string; client_nom: string; total_ttc_xaf: number }
-  const pdfUrl = supabase.storage.from('factures').getPublicUrl(`${f.numero}.pdf`).data.publicUrl
+  const pdfUrl = db.storage.from('factures').getPublicUrl(`${f.numero}.pdf`).data.publicUrl
 
   const message = body.message ??
     `Bonjour,\nVeuillez trouver votre facture TAFDIL :\nN° ${f.numero}\nClient : ${f.client_nom}\nMontant TTC : ${xaf(f.total_ttc_xaf)}\nPDF : ${pdfUrl}`
@@ -244,7 +246,7 @@ router.get('/credits/alertes', async (c) => {
   const in7j   = new Date(today.getTime() + 7 * 86400000).toISOString().slice(0, 10)
   const todayS = today.toISOString().slice(0, 10)
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('credits')
     .select('*')
     .or(`statut.eq.echu,and(statut.eq.en_cours,echeance.lte.${in7j})`)
@@ -270,7 +272,7 @@ router.get('/credits', async (c) => {
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
   const from    = (page - 1) * perPage
 
-  let q = supabase.from('credits').select('*', { count: 'exact' })
+  let q = db.from('credits').select('*', { count: 'exact' })
   if (statut)    q = q.eq('statut', statut)
   if (client_id) q = q.eq('client_id', client_id)
 
@@ -285,11 +287,11 @@ router.post('/credits', requireRole(['directeur', 'admin']), zValidator('json', 
   const body = c.req.valid('json')
 
   const year = new Date().getFullYear()
-  const { count } = await supabase.from('credits').select('*', { count: 'exact', head: true })
+  const { count } = await db.from('credits').select('*', { count: 'exact', head: true })
     .gte('created_at', `${year}-01-01T00:00:00.000Z`)
   const numero = `CRD-${year}-${String((count ?? 0) + 1).padStart(4, '0')}`
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('credits')
     .insert({
       numero, client_id: body.client_id ?? null, client_nom: body.client_nom,
@@ -306,7 +308,7 @@ router.post('/credits', requireRole(['directeur', 'admin']), zValidator('json', 
 
 router.get('/credits/:id', async (c) => {
   const { id } = c.req.param()
-  const { data, error } = await supabase.from('credits').select('*, remboursements_credit(*)').eq('id', id).single()
+  const { data, error } = await db.from('credits').select('*, remboursements_credit(*)').eq('id', id).single()
   if (error || !data) return c.json({ error: 'Crédit introuvable', code: 'NOT_FOUND' }, 404)
   return c.json(data)
 })
@@ -314,7 +316,7 @@ router.get('/credits/:id', async (c) => {
 router.put('/credits/:id', requireRole(['directeur', 'admin']), zValidator('json', creditSchema.partial()), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
-  const { data, error } = await supabase.from('credits')
+  const { data, error } = await db.from('credits')
     .update({ ...body, updated_at: new Date().toISOString() }).eq('id', id).select().single()
   if (error) return c.json({ error: error.message }, 400)
   if (!data)  return c.json({ error: 'Crédit introuvable', code: 'NOT_FOUND' }, 404)
@@ -326,7 +328,7 @@ router.post('/credits/:id/rembourser', requireRole(['directeur', 'admin']), zVal
   const user   = c.get('user')
   const body   = c.req.valid('json')
 
-  const { data: credit } = await supabase.from('credits').select('solde_restant_xaf, statut, client_nom, numero').eq('id', id).single()
+  const { data: credit } = await db.from('credits').select('solde_restant_xaf, statut, client_nom, numero').eq('id', id).single()
   if (!credit) return c.json({ error: 'Crédit introuvable', code: 'NOT_FOUND' }, 404)
 
   const cr = credit as { solde_restant_xaf: number; statut: string; client_nom: string; numero: string }
@@ -335,7 +337,7 @@ router.post('/credits/:id/rembourser', requireRole(['directeur', 'admin']), zVal
     return c.json({ error: `Montant dépasse le solde restant (${xaf(cr.solde_restant_xaf)})`, code: 'AMOUNT_EXCEEDED' }, 422)
   }
 
-  const { data: remb, error: rembErr } = await supabase
+  const { data: remb, error: rembErr } = await db
     .from('remboursements_credit')
     .insert({ credit_id: id, montant_xaf: body.montant_xaf, date_paiement: body.date_paiement, type: body.type, notes: body.notes ?? null, created_by: user.id })
     .select().single()
@@ -344,7 +346,7 @@ router.post('/credits/:id/rembourser', requireRole(['directeur', 'admin']), zVal
 
   const nouveauSolde  = Math.max(0, cr.solde_restant_xaf - body.montant_xaf)
   const nouveauStatut = nouveauSolde <= 0 ? 'rembourse' : 'en_cours'
-  await supabase.from('credits').update({ solde_restant_xaf: nouveauSolde, statut: nouveauStatut, updated_at: new Date().toISOString() }).eq('id', id)
+  await db.from('credits').update({ solde_restant_xaf: nouveauSolde, statut: nouveauStatut, updated_at: new Date().toISOString() }).eq('id', id)
 
   // Trigger comptable : Dr 521 Banque / Cr 411 Clients
   genererEcritureEncaissement({
@@ -371,7 +373,7 @@ router.post('/ecritures', requireRole(['directeur', 'admin']), zValidator('json'
     return c.json({ error: 'Débit ou crédit requis', code: 'INVALID_ENTRY' }, 422)
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('ecritures_comptables')
     .insert({ ...body, created_by: user.id, sync_status: 'synced' })
     .select().single()
@@ -387,7 +389,7 @@ router.post('/ecritures', requireRole(['directeur', 'admin']), zValidator('json'
 router.get('/rapports/bilan', requireRole(['directeur', 'admin']), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
 
-  const { data: ecritures, error } = await supabase
+  const { data: ecritures, error } = await db
     .from('ecritures_comptables')
     .select('compte_syscohada, compte_label, debit_xaf, credit_xaf')
     .gte('date', `${exercice}-01-01`)
@@ -429,7 +431,7 @@ router.get('/rapports/bilan', requireRole(['directeur', 'admin']), async (c) => 
 router.get('/rapports/resultat', requireRole(['directeur', 'admin']), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
 
-  const { data: ecritures, error } = await supabase
+  const { data: ecritures, error } = await db
     .from('ecritures_comptables')
     .select('compte_syscohada, compte_label, debit_xaf, credit_xaf')
     .gte('date', `${exercice}-01-01`)
@@ -493,44 +495,44 @@ router.get('/rapports/dashboard', requireRole(['directeur', 'admin', 'operateur'
     recentCommandesRes,
     recentMouvementsRes,
   ] = await Promise.all([
-    supabase
+    db
       .from('commandes')
       .select('total_ttc_xaf, date_commande')
       .gte('date_commande', debut6MoisStr)
       .neq('statut', 'cancelled'),
 
-    supabase
+    db
       .from('commandes')
       .select('id', { count: 'exact', head: true })
       .in('statut', ['confirmed', 'in_production', 'pret']),
 
-    supabase
+    db
       .from('produits')
       .select('id', { count: 'exact', head: true })
       .in('statut', ['alerte', 'critique', 'rupture']),
 
-    supabase
+    db
       .from('apprenants')
       .select('id', { count: 'exact', head: true })
       .eq('statut', 'actif'),
 
-    supabase
+    db
       .from('bons_sortie')
       .select('id', { count: 'exact', head: true })
       .eq('statut', 'soumis'),
 
-    supabase
+    db
       .from('credits')
       .select('id', { count: 'exact', head: true })
       .eq('statut', 'echu'),
 
-    supabase
+    db
       .from('commandes')
       .select('id, numero, client_nom, total_ttc_xaf, statut, date_commande')
       .order('created_at', { ascending: false })
       .limit(5),
 
-    supabase
+    db
       .from('mouvements_stock')
       .select('id, type, quantite, created_at, produits(designation, unite)')
       .order('created_at', { ascending: false })

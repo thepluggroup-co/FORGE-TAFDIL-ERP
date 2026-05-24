@@ -1,9 +1,12 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { supabase } from '@forge/db/supabase'
+import { supabaseAdmin } from '@forge/db'
 import { requireRole } from '../middleware/rbac'
 import type { HonoVariables } from '../types'
+
+// auth middleware already rejects requests when supabaseAdmin is null
+const db = supabaseAdmin!
 
 const router = new Hono<{ Variables: HonoVariables }>()
 
@@ -51,13 +54,16 @@ const mouvementSchema = z.object({
 
 /** Produits sous seuil critique — triés du plus urgent au moins urgent */
 router.get('/alertes', async (c) => {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('produits')
     .select('*')
     .in('statut', ['alerte', 'critique', 'rupture'])
     .order('stock_actuel', { ascending: true })
 
-  if (error) return c.json({ error: error.message }, 500)
+  if (error) {
+    console.error('[stocks] GET /alertes error:', error.message, '| code:', error.code)
+    return c.json({ error: error.message }, 500)
+  }
 
   return c.json({
     data,
@@ -76,11 +82,14 @@ router.get('/inventaire/journalier', requireRole(['directeur', 'admin']), async 
   const startOfDay = `${today}T00:00:00.000Z`
 
   const [produitsRes, mouvementsRes] = await Promise.all([
-    supabase.from('produits').select('*').order('categorie').order('designation'),
-    supabase.from('mouvements_stock').select('*').gte('created_at', startOfDay),
+    db.from('produits').select('*').order('categorie').order('designation'),
+    db.from('mouvements_stock').select('*').gte('created_at', startOfDay),
   ])
 
-  if (produitsRes.error) return c.json({ error: produitsRes.error.message }, 500)
+  if (produitsRes.error) {
+    console.error('[stocks] GET /inventaire error:', produitsRes.error.message)
+    return c.json({ error: produitsRes.error.message }, 500)
+  }
 
   const produits = produitsRes.data ?? []
   const mouvements = mouvementsRes.data ?? []
@@ -91,7 +100,6 @@ router.get('/inventaire/journalier', requireRole(['directeur', 'admin']), async 
     0,
   )
 
-  // Regroupement par catégorie
   const categoriesMap = new Map<string, { count: number; valeur_xaf: number; stock_total: number }>()
   for (const p of produits as Array<{ categorie: string; stock_actuel: number; prix_unitaire_xaf: number }>) {
     const entry = categoriesMap.get(p.categorie) ?? { count: 0, valeur_xaf: 0, stock_total: 0 }
@@ -130,7 +138,7 @@ router.get('/', async (c) => {
   const from = (page - 1) * perPage
   const to = from + perPage - 1
 
-  let query = supabase
+  let query = db
     .from('produits')
     .select('*', { count: 'exact' })
 
@@ -142,7 +150,10 @@ router.get('/', async (c) => {
     .order('designation')
     .range(from, to)
 
-  if (error) return c.json({ error: error.message }, 500)
+  if (error) {
+    console.error('[stocks] GET / error:', error.message, '| code:', error.code, '| details:', error.details)
+    return c.json({ error: error.message }, 500)
+  }
 
   return c.json({
     data,
@@ -163,7 +174,7 @@ router.post(
     const body = c.req.valid('json')
     const statut = calcStatut(body.stock_actuel, body.stock_min, body.stock_critique)
 
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('produits')
       .insert({ ...body, statut, created_by: user.id, sync_status: 'synced' })
       .select()
@@ -180,8 +191,8 @@ router.get('/:id', async (c) => {
   const since30j = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
 
   const [produitRes, mouvementsRes] = await Promise.all([
-    supabase.from('produits').select('*').eq('id', id).single(),
-    supabase
+    db.from('produits').select('*').eq('id', id).single(),
+    db
       .from('mouvements_stock')
       .select('*')
       .eq('produit_id', id)
@@ -217,14 +228,12 @@ router.put(
     const { id } = c.req.param()
     const body = c.req.valid('json')
 
-    // Recalculer le statut si le stock change
     const updates: Record<string, unknown> = { ...body, updated_at: new Date().toISOString() }
     if (body.stock_actuel !== undefined) {
-      // Récupérer les seuils actuels si non fournis dans le body
       let min = body.stock_min
       let critique = body.stock_critique
       if (min === undefined || critique === undefined) {
-        const { data: existing } = await supabase
+        const { data: existing } = await db
           .from('produits')
           .select('stock_min, stock_critique')
           .eq('id', id)
@@ -235,7 +244,7 @@ router.put(
       updates.statut = calcStatut(body.stock_actuel, min, critique)
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('produits')
       .update(updates)
       .eq('id', id)
@@ -258,8 +267,7 @@ router.post(
     const user = c.get('user')
     const body = c.req.valid('json')
 
-    // Appel de la fonction PostgreSQL atomique
-    const { data: rpcData, error: rpcError } = await (supabase as never as {
+    const { data: rpcData, error: rpcError } = await (db as never as {
       rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { code: string; message: string } | null }>
     }).rpc('fn_mouvement_stock', {
       p_produit_id: id,
@@ -272,7 +280,7 @@ router.post(
 
     // Fallback JS si la fonction PG n'existe pas encore
     if (rpcError && (rpcError.code === '42883' || rpcError.message.includes('does not exist'))) {
-      const { data: produit, error: fetchErr } = await supabase
+      const { data: produit, error: fetchErr } = await db
         .from('produits')
         .select('stock_actuel, stock_min, stock_critique')
         .eq('id', id)
@@ -288,7 +296,6 @@ router.post(
       } else if (body.type === 'entree') {
         nouvelleQte = p.stock_actuel + body.quantite
       } else {
-        // sortie ou transfert
         if (p.stock_actuel < body.quantite) {
           return c.json({ error: `Stock insuffisant : ${p.stock_actuel} disponible`, code: 'INSUFFICIENT_STOCK' }, 422)
         }
@@ -298,7 +305,7 @@ router.post(
       const statut = calcStatut(nouvelleQte, p.stock_min, p.stock_critique)
 
       const [mvtRes, updRes] = await Promise.all([
-        supabase.from('mouvements_stock').insert({
+        db.from('mouvements_stock').insert({
           produit_id: id,
           type:       body.type,
           quantite:   body.quantite,
@@ -306,7 +313,7 @@ router.post(
           notes:      body.notes ?? null,
           created_by: user.id,
         }).select().single(),
-        supabase.from('produits').update({
+        db.from('produits').update({
           stock_actuel: nouvelleQte,
           statut,
           updated_at: new Date().toISOString(),

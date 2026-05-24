@@ -1,7 +1,9 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { supabase } from '@forge/db/supabase'
+import { supabaseAdmin } from '@forge/db'
+
+const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import { generateDevisPDF, uploadPDF } from '../services/pdf.service'
 import { notifyStatutChange } from '../services/notifications'
@@ -106,7 +108,7 @@ async function genererNumero(table: string, prefix: string): Promise<string> {
   const yyyymmdd = today.toISOString().slice(0, 10).replace(/-/g, '')
   const startOfDay = `${today.toISOString().slice(0, 10)}T00:00:00.000Z`
 
-  const { count } = await supabase
+  const { count } = await db
     .from(table)
     .select('*', { count: 'exact', head: true })
     .gte('created_at', startOfDay)
@@ -125,7 +127,7 @@ router.get('/clients', async (c) => {
   const from    = (page - 1) * perPage
   const to      = from + perPage - 1
 
-  let query = supabase.from('clients').select('*', { count: 'exact' })
+  let query = db.from('clients').select('*', { count: 'exact' })
 
   if (statut) query = query.eq('statut', statut)
   if (type)   query = query.eq('type', type)
@@ -149,7 +151,7 @@ router.get('/clients', async (c) => {
 router.get('/clients/:id', async (c) => {
   const { id } = c.req.param()
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('clients')
     .select('*, commandes(id, numero, statut, total_ttc_xaf, date_commande), credits(id, numero, montant_xaf, solde_restant_xaf, statut, echeance)')
     .eq('id', id)
@@ -163,7 +165,7 @@ router.post('/clients', requireRole(['directeur', 'admin']), zValidator('json', 
   const user = c.get('user')
   const body = c.req.valid('json')
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('clients')
     .insert({ ...body, created_by: user.id, sync_status: 'synced' })
     .select()
@@ -177,7 +179,7 @@ router.put('/clients/:id', requireRole(['directeur', 'admin']), zValidator('json
   const { id }  = c.req.param()
   const body    = c.req.valid('json')
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('clients')
     .update({ ...body, updated_at: new Date().toISOString() })
     .eq('id', id)
@@ -193,7 +195,7 @@ router.delete('/clients/:id', requireRole(['directeur']), async (c) => {
   const { id } = c.req.param()
 
   // Vérifier qu'il n'y a pas de commandes actives
-  const { count } = await supabase
+  const { count } = await db
     .from('commandes')
     .select('*', { count: 'exact', head: true })
     .eq('client_id', id)
@@ -206,7 +208,7 @@ router.delete('/clients/:id', requireRole(['directeur']), async (c) => {
     }, 422)
   }
 
-  const { error } = await supabase.from('clients').delete().eq('id', id)
+  const { error } = await db.from('clients').delete().eq('id', id)
   if (error) return c.json({ error: error.message }, 400)
   return c.body(null, 204)
 })
@@ -222,7 +224,7 @@ router.get('/devis', async (c) => {
   const from    = (page - 1) * perPage
   const to      = from + perPage - 1
 
-  let query = supabase.from('devis').select('*, devis_lignes(*)', { count: 'exact' })
+  let query = db.from('devis').select('*, devis_lignes(*)', { count: 'exact' })
 
   if (statut)    query = query.eq('statut', statut)
   if (client_id) query = query.eq('client_id', client_id)
@@ -246,7 +248,7 @@ router.get('/devis', async (c) => {
 router.get('/devis/:id', async (c) => {
   const { id } = c.req.param()
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('devis')
     .select('*, devis_lignes(*), clients(nom, telephone, email, adresse)')
     .eq('id', id)
@@ -263,7 +265,7 @@ router.post('/devis', requireRole(['directeur', 'admin']), zValidator('json', de
   const numero   = await genererNumero('devis', 'DEV')
   const totaux   = calculerTotaux(body.lignes)
 
-  const { data: devis, error: devisErr } = await supabase
+  const { data: devis, error: devisErr } = await db
     .from('devis')
     .insert({
       numero,
@@ -297,13 +299,13 @@ router.post('/devis', requireRole(['directeur', 'admin']), zValidator('json', de
     ordre:                l.ordre !== 0 ? l.ordre : i,
   }))
 
-  const { data: lignesData, error: lignesErr } = await supabase
+  const { data: lignesData, error: lignesErr } = await db
     .from('devis_lignes')
     .insert(lignes)
     .select()
 
   if (lignesErr) {
-    await supabase.from('devis').delete().eq('id', (devis as { id: string }).id)
+    await db.from('devis').delete().eq('id', (devis as { id: string }).id)
     return c.json({ error: lignesErr.message }, 400)
   }
 
@@ -328,7 +330,7 @@ router.put('/devis/:id', requireRole(['directeur', 'admin']), zValidator('json',
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
-  const { data: existing } = await supabase.from('devis').select('statut').eq('id', id).single()
+  const { data: existing } = await db.from('devis').select('statut').eq('id', id).single()
   if (!existing) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
   if (['accepte', 'transforme'].includes((existing as { statut: string }).statut)) {
     return c.json({ error: 'Impossible de modifier un devis accepté ou transformé', code: 'IMMUTABLE' }, 422)
@@ -343,7 +345,7 @@ router.put('/devis/:id', requireRole(['directeur', 'admin']), zValidator('json',
     Object.assign(updates, totaux)
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('devis')
     .update(updates)
     .eq('id', id)
@@ -354,8 +356,8 @@ router.put('/devis/:id', requireRole(['directeur', 'admin']), zValidator('json',
 
   // Remplacer les lignes si fournies
   if (lignes) {
-    await supabase.from('devis_lignes').delete().eq('devis_id', id)
-    await supabase.from('devis_lignes').insert(
+    await db.from('devis_lignes').delete().eq('devis_id', id)
+    await db.from('devis_lignes').insert(
       lignes.map((l, i) => ({
         devis_id:             id,
         designation:          l.designation,
@@ -376,14 +378,14 @@ router.put('/devis/:id', requireRole(['directeur', 'admin']), zValidator('json',
 router.delete('/devis/:id', requireRole(['directeur', 'admin']), async (c) => {
   const { id } = c.req.param()
 
-  const { data: existing } = await supabase.from('devis').select('statut').eq('id', id).single()
+  const { data: existing } = await db.from('devis').select('statut').eq('id', id).single()
   if (!existing) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
   if ((existing as { statut: string }).statut === 'transforme') {
     return c.json({ error: 'Impossible de supprimer un devis transformé en commande', code: 'IMMUTABLE' }, 422)
   }
 
-  await supabase.from('devis_lignes').delete().eq('devis_id', id)
-  const { error } = await supabase.from('devis').delete().eq('id', id)
+  await db.from('devis_lignes').delete().eq('devis_id', id)
+  const { error } = await db.from('devis').delete().eq('id', id)
   if (error) return c.json({ error: error.message }, 400)
   return c.body(null, 204)
 })
@@ -394,7 +396,7 @@ router.post('/devis/:id/transformer-commande', requireRole(['directeur', 'admin'
   const user     = c.get('user')
 
   // Charger le devis avec ses lignes
-  const { data: devis, error: devisErr } = await supabase
+  const { data: devis, error: devisErr } = await db
     .from('devis')
     .select('*, devis_lignes(*)')
     .eq('id', id)
@@ -422,7 +424,7 @@ router.post('/devis/:id/transformer-commande', requireRole(['directeur', 'admin'
   const numeroCommande = await genererNumero('commandes', 'CMD')
 
   // Créer la commande
-  const { data: commande, error: cmdErr } = await supabase
+  const { data: commande, error: cmdErr } = await db
     .from('commandes')
     .insert({
       numero:           numeroCommande,
@@ -447,7 +449,7 @@ router.post('/devis/:id/transformer-commande', requireRole(['directeur', 'admin'
   const cmd = commande as { id: string; numero: string }
 
   // Créer les lignes commande depuis les lignes devis
-  await supabase.from('commandes_lignes').insert(
+  await db.from('commandes_lignes').insert(
     d.devis_lignes.map((l) => ({
       commande_id:          cmd.id,
       designation:          l.designation,
@@ -460,13 +462,13 @@ router.post('/devis/:id/transformer-commande', requireRole(['directeur', 'admin'
   )
 
   // Marquer le devis comme transformé
-  await supabase
+  await db
     .from('devis')
     .update({ statut: 'transforme', updated_at: new Date().toISOString() })
     .eq('id', id)
 
   // Historique de la commande créée
-  await supabase.from('historique_commandes').insert({
+  await db.from('historique_commandes').insert({
     commande_id:    cmd.id,
     ancien_statut:  null,
     nouveau_statut: 'confirmed',
@@ -488,7 +490,7 @@ router.get('/commandes', async (c) => {
   const from    = (page - 1) * perPage
   const to      = from + perPage - 1
 
-  let query = supabase.from('commandes').select('*, commandes_lignes(*)', { count: 'exact' })
+  let query = db.from('commandes').select('*, commandes_lignes(*)', { count: 'exact' })
 
   if (statut)    query = query.eq('statut', statut)
   if (client_id) query = query.eq('client_id', client_id)
@@ -512,7 +514,7 @@ router.get('/commandes', async (c) => {
 router.get('/commandes/:id', async (c) => {
   const { id } = c.req.param()
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('commandes')
     .select(`
       *,
@@ -534,7 +536,7 @@ router.post('/commandes', requireRole(['directeur', 'admin']), zValidator('json'
   const numero = await genererNumero('commandes', 'CMD')
   const totaux = calculerTotaux(body.lignes)
 
-  const { data: commande, error: cmdErr } = await supabase
+  const { data: commande, error: cmdErr } = await db
     .from('commandes')
     .insert({
       numero,
@@ -568,14 +570,14 @@ router.post('/commandes', requireRole(['directeur', 'admin']), zValidator('json'
     ordre:                l.ordre !== 0 ? l.ordre : i,
   }))
 
-  const { error: lignesErr } = await supabase.from('commandes_lignes').insert(lignes)
+  const { error: lignesErr } = await db.from('commandes_lignes').insert(lignes)
   if (lignesErr) {
-    await supabase.from('commandes').delete().eq('id', cmd.id)
+    await db.from('commandes').delete().eq('id', cmd.id)
     return c.json({ error: lignesErr.message }, 400)
   }
 
   // Historique initial
-  await supabase.from('historique_commandes').insert({
+  await db.from('historique_commandes').insert({
     commande_id:    cmd.id,
     ancien_statut:  null,
     nouveau_statut: 'confirmed',
@@ -596,7 +598,7 @@ router.put(
     const user   = c.get('user')
     const body   = c.req.valid('json')
 
-    const { data: existing } = await supabase
+    const { data: existing } = await db
       .from('commandes')
       .select('statut, numero')
       .eq('id', id)
@@ -615,7 +617,7 @@ router.put(
       }, 422)
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('commandes')
       .update({ statut: body.statut, updated_at: new Date().toISOString() })
       .eq('id', id)
@@ -625,7 +627,7 @@ router.put(
     if (error) return c.json({ error: error.message }, 400)
 
     // Enregistrer dans l'historique
-    await supabase.from('historique_commandes').insert({
+    await db.from('historique_commandes').insert({
       commande_id:    id,
       ancien_statut:  current,
       nouveau_statut: body.statut,
@@ -640,7 +642,7 @@ router.put(
 router.delete('/commandes/:id', requireRole(['directeur']), async (c) => {
   const { id } = c.req.param()
 
-  const { data: existing } = await supabase.from('commandes').select('statut').eq('id', id).single()
+  const { data: existing } = await db.from('commandes').select('statut').eq('id', id).single()
   if (!existing) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
   if (!['confirmed', 'cancelled'].includes((existing as { statut: string }).statut)) {
     return c.json({
@@ -649,9 +651,9 @@ router.delete('/commandes/:id', requireRole(['directeur']), async (c) => {
     }, 422)
   }
 
-  await supabase.from('commandes_lignes').delete().eq('commande_id', id)
-  await supabase.from('historique_commandes').delete().eq('commande_id', id)
-  const { error } = await supabase.from('commandes').delete().eq('id', id)
+  await db.from('commandes_lignes').delete().eq('commande_id', id)
+  await db.from('historique_commandes').delete().eq('commande_id', id)
+  const { error } = await db.from('commandes').delete().eq('id', id)
   if (error) return c.json({ error: error.message }, 400)
   return c.body(null, 204)
 })
@@ -663,7 +665,7 @@ router.delete('/commandes/:id', requireRole(['directeur']), async (c) => {
 publicRouter.get('/api/commandes/public/:ref', async (c) => {
   const { ref } = c.req.param()
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('commandes')
     .select(`
       numero, statut, client_nom, date_commande, date_livraison_prevue,
@@ -729,7 +731,7 @@ router.patch(
     const body   = c.req.valid('json')
 
     // Charger la commande shop avec ses lignes
-    const { data: commande, error: loadErr } = await supabase
+    const { data: commande, error: loadErr } = await db
       .from('commandes_shop')
       .select('*')
       .eq('id', id)
@@ -759,7 +761,7 @@ router.patch(
       // Créer un job de production si commande ERP liée
       if (cmd.erp_commande_id) {
         const today = new Date().toISOString()
-        await supabase.from('jobs_production').insert({
+        await db.from('jobs_production').insert({
           numero:               `OF-${cmd.ref}`,
           commande_id:          cmd.erp_commande_id,
           produit_designation:  `Commande web ${cmd.ref}`,
@@ -777,7 +779,7 @@ router.patch(
         const echeance  = new Date(Date.now() + 30 * 86400_000).toISOString().split('T')[0]
         const numeroFact = await genererNumero('factures', 'FAC')
 
-        await supabase.from('factures').insert({
+        await db.from('factures').insert({
           numero:          numeroFact,
           commande_id:     cmd.erp_commande_id,
           client_nom:      cmd.client_nom,
@@ -800,7 +802,7 @@ router.patch(
     }
     if (body.statut_paiement) updates.statut_paiement = body.statut_paiement
 
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('commandes_shop')
       .update(updates)
       .eq('id', id)
@@ -832,12 +834,12 @@ router.patch(
       }
       const erpStatut = ERP_STATUT[body.statut_commande]
       if (erpStatut) {
-        await supabase
+        await db
           .from('commandes')
           .update({ statut: erpStatut, updated_at: new Date().toISOString() })
           .eq('id', cmd.erp_commande_id)
 
-        await supabase.from('historique_commandes').insert({
+        await db.from('historique_commandes').insert({
           commande_id:    cmd.erp_commande_id,
           ancien_statut:  cmd.statut_commande,
           nouveau_statut: erpStatut,

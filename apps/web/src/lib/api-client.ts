@@ -33,8 +33,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
 
   if (res.status >= 500) {
-    toast.error('Erreur serveur — réessayez dans quelques instants')
-    throw new Error(`Erreur ${res.status}`)
+    const body = await res.json().catch(() => ({})) as { error?: string; code?: string; details?: string }
+    const detail = body.details ?? body.error ?? `Erreur ${res.status}`
+    console.error(`[API ${res.status}] ${method} ${path}`, body)
+    toast.error(`Erreur serveur — ${detail}`)
+    throw new Error(detail)
   }
 
   if (!res.ok) {

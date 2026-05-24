@@ -107,7 +107,7 @@ function InvoicePreview({ facture }: { facture: PreviewableFacture }) {
             <div className="text-gray-600 text-sm font-sans font-semibold mt-1">TAFDIL SARL</div>
             <div className="text-gray-400 text-xs font-sans mt-0.5">Zone Industrielle de Bassa, Douala</div>
             <div className="text-gray-400 text-xs font-sans">RC : DLA-2020-B-1234 · NINEA : 123456789</div>
-            <div className="text-gray-400 text-xs font-sans">+237 699 001 200 · admin@tafdil.cm</div>
+            <div className="text-gray-400 text-xs font-sans">+237 699 001 200 · admin@tafdil.com</div>
           </div>
           <div className="text-right">
             <div className="text-2xl font-bold font-sans text-gray-800 tracking-widest uppercase">Facture</div>
