@@ -174,7 +174,7 @@ function CommandeShopDetail({ commande, onClose }: { commande: CommandeShop; onC
 export default function Boutique() {
   const [tab, setTab]                     = useState<Tab>('catalogue')
   const [editPrix, setEditPrix]           = useState<ProduitShopErp | null>(null)
-  const [selectedCommande, setSelectedCmd] = useState<CommandeShop | null>(null)
+  const [selectedCommande, setSelectedCommande] = useState<CommandeShop | null>(null)
 
   const { data: analytics }                   = useShopAnalytics()
   const { data: produits, isLoading: pLoad }  = useProduitsShop()
@@ -186,7 +186,7 @@ export default function Boutique() {
   const kpis      = analytics?.kpis
   const produitsList = produits ?? []
   const commandes = shopData?.data ?? []
-  const devisList = devisData?.data ?? []
+  const devisList = devisData ?? []
 
   // ── Colonnes produits ──────────────────────────────────────────────────────
 
@@ -296,7 +296,7 @@ export default function Boutique() {
   const TABS = [
     { id: 'catalogue' as Tab, label: 'Catalogue', icon: Package, count: produitsList.length },
     { id: 'commandes' as Tab, label: 'Commandes web', icon: ShoppingBag, count: commandes.length },
-    { id: 'devis' as Tab, label: 'Demandes devis', icon: FileText, count: devisList.filter(d => d.statut === 'nouvelle').length },
+    { id: 'devis' as Tab, label: 'Demandes devis', icon: FileText, count: devisList.filter((d: DevisWeb) => d.statut === 'nouvelle').length },
   ]
 
   return (

@@ -1,5 +1,7 @@
 import { headers } from 'next/headers'
 import type { Metadata } from 'next'
+
+export const dynamic = 'force-dynamic'
 import { createServiceClient } from '@/lib/supabase'
 import { DashboardClient } from './DashboardClient'
 

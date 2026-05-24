@@ -8,7 +8,7 @@ export interface Column<T> {
   sortable?: boolean
 }
 
-export interface DataTableProps<T extends Record<string, unknown>> {
+export interface DataTableProps<T extends object> {
   columns: Column<T>[]
   data: T[]
   onRowClick?: (row: T) => void
@@ -21,11 +21,11 @@ type SortDir = 'asc' | 'desc' | null
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50] as const
 
-function getCellValue<T extends Record<string, unknown>>(row: T, accessor: Column<T>['accessor']): unknown {
-  return typeof accessor === 'function' ? accessor(row) : row[accessor]
+function getCellValue<T extends object>(row: T, accessor: Column<T>['accessor']): unknown {
+  return typeof accessor === 'function' ? accessor(row) : (row as Record<PropertyKey, unknown>)[accessor as PropertyKey]
 }
 
-function exportCsv<T extends Record<string, unknown>>(columns: Column<T>[], data: T[]) {
+function exportCsv<T extends object>(columns: Column<T>[], data: T[]) {
   const headers = columns.map((c) => c.header).join(',')
   const rows = data.map((row) =>
     columns.map((c) => {
@@ -57,7 +57,7 @@ function SkeletonRow({ cols }: { cols: number }) {
   )
 }
 
-export function DataTable<T extends Record<string, unknown>>({
+export function DataTable<T extends object>({
   columns,
   data,
   onRowClick,

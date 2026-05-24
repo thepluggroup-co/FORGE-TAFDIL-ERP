@@ -12,6 +12,11 @@
 import { supabase } from './supabase-client'
 import type { ForgeTable } from './supabase-client'
 
+// Browser globals — absent in Node.js / Edge runtimes, guard before use.
+declare const localStorage: { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void } | undefined
+declare const navigator:    { onLine: boolean } | undefined
+declare const window:       { addEventListener(e: string, cb: () => void): void; removeEventListener(e: string, cb: () => void): void } | undefined
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export interface SyncRecord {

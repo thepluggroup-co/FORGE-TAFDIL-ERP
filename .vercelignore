@@ -1,0 +1,26 @@
+# Dépendances — gérées par Vercel au moment du build
+node_modules
+**/node_modules
+
+# Build outputs locaux
+dist
+**/dist
+.next
+**/.next
+out
+**/out
+
+# Desktop app — non déployée sur Vercel
+apps/desktop
+
+# Cache et artefacts locaux
+.turbo
+**/.turbo
+*.db
+*.db-journal
+*.sqlite
+apps/api/coverage
+apps/api/logs
+
+# Vercel local build output (déjà géré par --prebuilt)
+**/.vercel/output

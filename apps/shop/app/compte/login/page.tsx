@@ -1,6 +1,8 @@
 import type { Metadata } from 'next'
 import { LoginClient } from './LoginClient'
 
+export const dynamic = 'force-static'
+
 export const metadata: Metadata = {
   title: 'Connexion | FORGE TAFDIL Shop',
   robots: { index: false, follow: false },
