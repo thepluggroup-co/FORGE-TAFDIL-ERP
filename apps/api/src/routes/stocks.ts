@@ -45,7 +45,8 @@ const mouvementSchema = z.object({
   type:      z.enum(['entree', 'sortie', 'ajustement', 'transfert']),
   quantite:  z.number().positive(),
   reference: z.string().optional(),
-  notes:     z.string().optional(),
+  motif:     z.string().optional(),  // frontend field
+  notes:     z.string().optional(),  // legacy alias
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -274,7 +275,7 @@ router.post(
       p_type:       body.type,
       p_quantite:   body.quantite,
       p_reference:  body.reference ?? null,
-      p_notes:      body.notes ?? null,
+      p_notes:      body.motif ?? body.notes ?? null,
       p_user_id:    user.id,
     })
 
@@ -310,7 +311,7 @@ router.post(
           type:       body.type,
           quantite:   body.quantite,
           reference:  body.reference ?? null,
-          notes:      body.notes ?? null,
+          notes:      body.motif ?? body.notes ?? null,
           created_by: user.id,
         }).select().single(),
         db.from('produits').update({

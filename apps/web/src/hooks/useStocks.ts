@@ -10,7 +10,7 @@ export interface StockProduit {
   stock_actuel: number
   stock_min: number
   stock_critique: number
-  stock_max: number
+  stock_max?: number
   unite: string
   prix_unitaire_xaf: number
   statut: 'normal' | 'alerte' | 'critique' | 'rupture'

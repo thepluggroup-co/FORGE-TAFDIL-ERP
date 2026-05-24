@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "turbo dev --continue",
+    "dev:web": "turbo dev --filter=@forge/api --filter=@forge/web --continue",
     "build": "turbo build",
     "test": "turbo test",
     "lint": "turbo lint",

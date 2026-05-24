@@ -107,7 +107,8 @@ function createWindow() {
   // Chargement : localhost en dev, fichier local en prod
   if (isDev) {
     win.loadURL('http://localhost:5175')
-    win.webContents.openDevTools({ mode: 'detach' })
+    // DevTools can be opened manually via the Affichage menu or F12
+    // win.webContents.openDevTools({ mode: 'detach' })
   } else {
     const rendererPath = join(process.resourcesPath, 'renderer', 'index.html')
     win.loadFile(rendererPath)

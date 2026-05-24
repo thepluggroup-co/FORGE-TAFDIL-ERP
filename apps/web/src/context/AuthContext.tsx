@@ -31,31 +31,58 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    // Safety timeout — fires if fetchRole (or any other async step) hangs.
+    // IMPORTANT: do NOT clear this timer until setLoading(false) actually runs,
+    // otherwise a slow/hanging fetchRole leaves the app stuck on the spinner forever.
+    const safetyTimer = setTimeout(() => {
+      console.warn('[AuthContext] Safety timeout fired — forcing loading=false')
+      setLoading(false)
+    }, 5000)
+
+    const done = () => {
+      clearTimeout(safetyTimer)
+      setLoading(false)
+    }
+
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session)
       setUser(session?.user ?? null)
       if (session?.user) {
-        const r = await fetchRole(session.user.id)
-        setRole(r)
-        console.log('AuthContext getSession parsed role:', r)
+        try {
+          const r = await fetchRole(session.user.id)
+          setRole(r)
+          console.log('[AuthContext] getSession role:', r)
+        } catch (e) {
+          console.error('[AuthContext] fetchRole error (getSession):', e)
+        }
       }
-      setLoading(false)
+      done()
+    }).catch((err) => {
+      console.error('[AuthContext] getSession error:', err)
+      done()
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session)
       setUser(session?.user ?? null)
       if (session?.user) {
-        const r = await fetchRole(session.user.id)
-        setRole(r)
-        console.log('AuthContext onAuthStateChange parsed role:', r)
+        try {
+          const r = await fetchRole(session.user.id)
+          setRole(r)
+          console.log('[AuthContext] onAuthStateChange role:', r)
+        } catch (e) {
+          console.error('[AuthContext] fetchRole error (onAuthStateChange):', e)
+        }
       } else {
         setRole(null)
       }
-      setLoading(false)
+      done()
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      clearTimeout(safetyTimer)
+      subscription.unsubscribe()
+    }
   }, [])
 
   async function signIn(email: string, password: string) {
