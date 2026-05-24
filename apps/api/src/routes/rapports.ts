@@ -1,5 +1,7 @@
 import { Hono } from 'hono'
-import { supabase } from '@forge/db/supabase'
+import { supabaseAdmin } from '@forge/db'
+
+const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import { planComptable } from '../services/comptabilite.service'
 import type { HonoVariables } from '../types'
@@ -45,7 +47,7 @@ router.get('/grand-livre', requireRole(['directeur', 'admin']), async (c) => {
   const dateDebut = debut ?? (exercice ? exercicePlage(exercice).debut : `${new Date().getFullYear()}-01-01`)
   const dateFin   = fin   ?? (exercice ? exercicePlage(exercice).fin   : `${new Date().getFullYear()}-12-31`)
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('ecritures_comptables')
     .select('date, libelle, compte_syscohada, compte_label, debit_xaf, credit_xaf, reference_doc')
     .eq('compte_syscohada', compte)
@@ -97,7 +99,7 @@ router.get('/balance', requireRole(['directeur', 'admin']), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
   const { debut, fin } = exercicePlage(exercice)
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('ecritures_comptables')
     .select('compte_syscohada, compte_label, debit_xaf, credit_xaf')
     .gte('date', debut)
@@ -165,7 +167,7 @@ router.get('/declarations/tva', requireRole(['directeur', 'admin']), async (c) =
   const mois = c.req.query('mois') ?? new Date().toISOString().slice(0, 7)
   const { debut, fin } = moisPlage(mois)
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('ecritures_comptables')
     .select('compte_syscohada, debit_xaf, credit_xaf, date, libelle, reference_doc')
     .in('compte_syscohada', ['4431', '4432', '4433', '4434', '4441', '4446'])

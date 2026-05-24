@@ -1,7 +1,9 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { supabase } from '@forge/db/supabase'
+import { supabaseAdmin } from '@forge/db'
+
+const db = supabaseAdmin!
 import type { HonoVariables } from '../types'
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
@@ -70,7 +72,8 @@ export const shopRouter = new Hono()
 shopRouter.get('/catalogue', async (c) => {
   const { categorie, q } = c.req.query()
 
-  let query = supabase
+  const client = db
+  let query = client
     .from('produits_shop')
     .select(`
       product_id,
@@ -97,7 +100,8 @@ shopRouter.get('/catalogue', async (c) => {
   const { data, error } = await query
 
   if (error) {
-    return c.json({ error: 'Erreur catalogue', code: 'DB_ERROR' }, 500)
+    console.error('[shop/catalogue] DB error:', JSON.stringify(error))
+    return c.json({ error: 'Erreur catalogue', code: 'DB_ERROR', details: error.message }, 500)
   }
 
   const catalogue = (data ?? []).map((row: any) => {
@@ -132,7 +136,7 @@ shopRouter.get('/catalogue', async (c) => {
 shopRouter.get('/catalogue/:id', async (c) => {
   const id = c.req.param('id')
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('produits_shop')
     .select(`
       product_id,
@@ -182,7 +186,7 @@ shopRouter.get('/catalogue/:id', async (c) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 shopRouter.get('/categories', async (c) => {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('produits_shop')
     .select('produits!inner(categorie)')
     .eq('visible_shop', true)
@@ -207,7 +211,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
 
   // 1. Vérifier disponibilité stock pour chaque ligne
   for (const ligne of body.lignes) {
-    const { data: produit } = await supabase
+    const { data: produit } = await db
       .from('produits')
       .select('id, designation, stock_actuel, unite')
       .eq('id', ligne.product_id)
@@ -253,7 +257,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   }))
 
   // 5. Insérer commande_shop
-  const { data: commandeShop, error: errShop } = await supabase
+  const { data: commandeShop, error: errShop } = await db
     .from('commandes_shop')
     .insert({
       ref,
@@ -282,7 +286,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
 
   // 6. Créer la commande ERP en miroir (source web)
   const today = new Date().toISOString().split('T')[0]
-  const { data: erpCommande } = await supabase
+  const { data: erpCommande } = await db
     .from('commandes')
     .insert({
       numero:              ref,
@@ -299,7 +303,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
 
   // 7. Lier commande_shop → commande ERP
   if (erpCommande?.id) {
-    await supabase
+    await db
       .from('commandes_shop')
       .update({ erp_commande_id: erpCommande.id })
       .eq('id', commandeShop.id)
@@ -314,11 +318,11 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
       total_ht_xaf:         Math.round(l.quantite * l.prix_unitaire),
       ordre:                i,
     }))
-    await supabase.from('commandes_lignes').insert(lignesErp)
+    await db.from('commandes_lignes').insert(lignesErp)
   }
 
   // 8. Notifier ERP via Realtime (broadcast sur canal dédié)
-  await supabase.channel('commandes_web_nouvelles').send({
+  await db.channel('commandes_web_nouvelles').send({
     type:    'broadcast',
     event:   'nouvelle_commande_web',
     payload: { ref, montant_ttc, client: body.client_nom },
@@ -335,7 +339,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
 shopRouter.get('/commandes/:ref', async (c) => {
   const ref = c.req.param('ref')
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('commandes_shop')
     .select('ref, statut_commande, statut_paiement, mode_paiement, payment_reference, lignes, montant_ttc, frais_livraison, created_at, updated_at, client_ville, photos_livraison')
     .eq('ref', ref)
@@ -356,7 +360,7 @@ shopRouter.get('/commandes/:ref', async (c) => {
 shopRouter.post('/devis', zValidator('json', devisWebSchema), async (c) => {
   const body = c.req.valid('json')
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('demandes_devis_web')
     .insert({
       nom:         body.nom,
@@ -374,7 +378,7 @@ shopRouter.post('/devis', zValidator('json', devisWebSchema), async (c) => {
   }
 
   // Notifier l'ERP
-  await supabase.channel('commandes_web_nouvelles').send({
+  await db.channel('commandes_web_nouvelles').send({
     type:    'broadcast',
     event:   'nouvelle_demande_devis',
     payload: { id: data.id, nom: body.nom, telephone: body.telephone },
@@ -396,7 +400,7 @@ shopRouter.post('/devis', zValidator('json', devisWebSchema), async (c) => {
 shopRouter.get('/realisations', async (c) => {
   const limit = Math.min(30, Math.max(1, parseInt(c.req.query('limit') ?? '10')))
 
-  const { data, error } = await supabase.storage
+  const { data, error } = await db.storage
     .from('realisations')
     .list('', { limit, sortBy: { column: 'created_at', order: 'desc' } })
 
@@ -447,7 +451,7 @@ async function genererNumeroDevis(): Promise<string> {
   const today     = new Date()
   const yyyymmdd  = today.toISOString().slice(0, 10).replace(/-/g, '')
   const startOfDay = `${today.toISOString().slice(0, 10)}T00:00:00.000Z`
-  const { count } = await supabase
+  const { count } = await db
     .from('devis')
     .select('*', { count: 'exact', head: true })
     .gte('created_at', startOfDay)
@@ -464,10 +468,10 @@ shopErpRouter.get('/analytics', async (c) => {
   const debutMois = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
 
   const [todayRes, monthRes] = await Promise.all([
-    supabase.from('commandes_shop').select('montant_ttc, statut_commande')
+    db.from('commandes_shop').select('montant_ttc, statut_commande')
       .gte('created_at', `${today}T00:00:00.000Z`)
       .neq('statut_commande', 'annulee'),
-    supabase.from('commandes_shop').select('montant_ttc, statut_commande')
+    db.from('commandes_shop').select('montant_ttc, statut_commande')
       .gte('created_at', debutMois)
       .neq('statut_commande', 'annulee'),
   ])
@@ -503,10 +507,10 @@ shopErpRouter.get('/analytics', async (c) => {
     const dateFin   = fin.split('T')[0]
 
     const [shopMonth, erpMonth] = await Promise.all([
-      supabase.from('commandes_shop').select('montant_ttc')
+      db.from('commandes_shop').select('montant_ttc')
         .gte('created_at', debut).lte('created_at', fin)
         .neq('statut_commande', 'annulee'),
-      supabase.from('commandes').select('total_ttc_xaf')
+      db.from('commandes').select('total_ttc_xaf')
         .gte('date_commande', dateDebut).lte('date_commande', dateFin)
         .neq('statut', 'cancelled'),
     ])
@@ -532,7 +536,7 @@ shopErpRouter.get('/analytics', async (c) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 shopErpRouter.get('/produits', async (c) => {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('produits_shop')
     .select(`
       product_id,
@@ -577,7 +581,7 @@ shopErpRouter.put('/produits/:id/visibilite',
     const id      = c.req.param('id')
     const { visible } = c.req.valid('json')
 
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('produits_shop')
       .update({ visible_shop: visible, updated_at: new Date().toISOString() })
       .eq('product_id', id)
@@ -601,7 +605,7 @@ shopErpRouter.put('/produits/:id/prix',
     const id    = c.req.param('id')
     const { prix } = c.req.valid('json')
 
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('produits_shop')
       .update({ prix_public: prix, updated_at: new Date().toISOString() })
       .eq('product_id', id)
@@ -622,7 +626,7 @@ shopErpRouter.put('/produits/:id/prix',
 shopErpRouter.get('/devis-web', async (c) => {
   const { statut } = c.req.query()
 
-  let query = supabase
+  let query = db
     .from('demandes_devis_web')
     .select('*')
     .order('created_at', { ascending: false })
@@ -647,7 +651,7 @@ shopErpRouter.get('/devis-web', async (c) => {
 shopErpRouter.post('/devis/:id/creer-erp', async (c) => {
   const id = c.req.param('id')
 
-  const { data: devisWeb, error: errFetch } = await supabase
+  const { data: devisWeb, error: errFetch } = await db
     .from('demandes_devis_web')
     .select('*')
     .eq('id', id)
@@ -665,7 +669,7 @@ shopErpRouter.post('/devis/:id/creer-erp', async (c) => {
   const today   = new Date().toISOString().split('T')[0]
   const validite = new Date(Date.now() + 30 * 86_400_000).toISOString().split('T')[0]
 
-  const { data: erpDevis, error: errCreate } = await supabase
+  const { data: erpDevis, error: errCreate } = await db
     .from('devis')
     .insert({
       numero,
@@ -689,7 +693,7 @@ shopErpRouter.post('/devis/:id/creer-erp', async (c) => {
     return c.json({ error: 'Erreur création devis ERP', code: 'DB_ERROR' }, 500)
   }
 
-  await supabase
+  await db
     .from('demandes_devis_web')
     .update({ statut: 'traitee', erp_devis_id: erpDevis.id })
     .eq('id', id)

@@ -2,7 +2,9 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import PDFDocument from 'pdfkit'
-import { supabase, supabaseAdmin } from '@forge/db/supabase'
+import { supabaseAdmin } from '@forge/db'
+
+const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import type { HonoVariables } from '../types'
 
@@ -271,7 +273,7 @@ router.get('/rh/employes', async (c) => {
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
   const from    = (page - 1) * perPage
 
-  let q = supabase.from('employes').select('*', { count: 'exact' })
+  let q = db.from('employes').select('*', { count: 'exact' })
   if (statut)      q = q.eq('statut', statut)
   if (departement) q = q.eq('departement', departement)
   if (search)      q = q.ilike('nom', `%${search}%`)
@@ -284,7 +286,7 @@ router.get('/rh/employes', async (c) => {
 
 router.get('/rh/employes/:id', async (c) => {
   const { id } = c.req.param()
-  const { data, error } = await supabase.from('employes').select('*').eq('id', id).single()
+  const { data, error } = await db.from('employes').select('*').eq('id', id).single()
   if (error || !data) return c.json({ error: 'Employé introuvable', code: 'NOT_FOUND' }, 404)
   return c.json(data)
 })
@@ -292,7 +294,7 @@ router.get('/rh/employes/:id', async (c) => {
 router.post('/rh/employes', requireRole(['directeur', 'admin']), zValidator('json', employeSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('employes')
     .insert({ ...body, created_by: user.id, sync_status: 'synced' })
     .select().single()
@@ -303,7 +305,7 @@ router.post('/rh/employes', requireRole(['directeur', 'admin']), zValidator('jso
 router.put('/rh/employes/:id', requireRole(['directeur', 'admin']), zValidator('json', employeSchema.partial()), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
-  const { data, error } = await supabase.from('employes')
+  const { data, error } = await db.from('employes')
     .update({ ...body, updated_at: new Date().toISOString() }).eq('id', id).select().single()
   if (error) return c.json({ error: error.message }, 400)
   if (!data)  return c.json({ error: 'Employé introuvable', code: 'NOT_FOUND' }, 404)
@@ -312,7 +314,7 @@ router.put('/rh/employes/:id', requireRole(['directeur', 'admin']), zValidator('
 
 router.delete('/rh/employes/:id', requireRole(['directeur']), async (c) => {
   const { id } = c.req.param()
-  const { error } = await supabase.from('employes').update({ statut: 'inactif', updated_at: new Date().toISOString() }).eq('id', id)
+  const { error } = await db.from('employes').update({ statut: 'inactif', updated_at: new Date().toISOString() }).eq('id', id)
   if (error) return c.json({ error: error.message }, 400)
   return c.body(null, 204)
 })
@@ -327,7 +329,7 @@ router.get('/rh/presences', async (c) => {
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '30'))
   const from    = (page - 1) * perPage
 
-  let q = supabase.from('presences').select('*, employes(nom, poste)', { count: 'exact' })
+  let q = db.from('presences').select('*, employes(nom, poste)', { count: 'exact' })
   if (employe_id) q = q.eq('employe_id', employe_id)
   if (date)       q = q.eq('date', date)
   if (statut)     q = q.eq('statut', statut)
@@ -350,7 +352,7 @@ router.post('/rh/presences', requireRole(['directeur', 'admin', 'operateur']), z
     heures = Math.max(0, (dh * 60 + dm - ah * 60 - am) / 60)
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('presences')
     .insert({ ...body, heures: Math.round(heures * 100) / 100, created_by: user.id, sync_status: 'synced' })
     .select().single()
@@ -362,7 +364,7 @@ router.post('/rh/presences', requireRole(['directeur', 'admin', 'operateur']), z
 router.put('/rh/presences/:id', requireRole(['directeur', 'admin']), zValidator('json', presenceSchema.partial()), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
-  const { data, error } = await supabase.from('presences').update(body).eq('id', id).select().single()
+  const { data, error } = await db.from('presences').update(body).eq('id', id).select().single()
   if (error) return c.json({ error: error.message }, 400)
   if (!data)  return c.json({ error: 'Présence introuvable', code: 'NOT_FOUND' }, 404)
   return c.json(data)
@@ -378,7 +380,7 @@ router.get('/rh/apprenants', async (c) => {
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
   const from    = (page - 1) * perPage
 
-  let q = supabase.from('apprenants').select('*', { count: 'exact' })
+  let q = db.from('apprenants').select('*', { count: 'exact' })
   if (statut)     q = q.eq('statut', statut)
   if (specialite) q = q.eq('specialite', specialite)
 
@@ -391,7 +393,7 @@ router.get('/rh/apprenants', async (c) => {
 router.post('/rh/apprenants', requireRole(['directeur', 'admin']), zValidator('json', apprenantSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('apprenants')
     .insert({ ...body, created_by: user.id, sync_status: 'synced' })
     .select().single()
@@ -404,7 +406,7 @@ router.post('/rh/apprenants/:id/progression', requireRole(['directeur']), zValid
   const user    = c.get('user')
   const body    = c.req.valid('json')
 
-  const { data: apprenant } = await supabase.from('apprenants').select('niveau, duree_mois, statut').eq('id', id).single()
+  const { data: apprenant } = await db.from('apprenants').select('niveau, duree_mois, statut').eq('id', id).single()
   if (!apprenant) return c.json({ error: 'Apprenant introuvable', code: 'NOT_FOUND' }, 404)
 
   const a = apprenant as { niveau: number; duree_mois: number; statut: string }
@@ -414,7 +416,7 @@ router.post('/rh/apprenants/:id/progression', requireRole(['directeur']), zValid
   const nouveauNiveau = a.niveau + 1
 
   // Enregistrer la validation dans la table dédiée
-  await supabase.from('validations_niveau').insert({
+  await db.from('validations_niveau').insert({
     apprenant_id:    id,
     niveau:          nouveauNiveau,
     valide_by:       user.id,
@@ -422,7 +424,7 @@ router.post('/rh/apprenants/:id/progression', requireRole(['directeur']), zValid
     commentaire:     body.commentaire ?? null,
   })
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('apprenants')
     .update({ niveau: nouveauNiveau, updated_at: new Date().toISOString() })
     .eq('id', id)
@@ -437,7 +439,7 @@ router.post('/rh/apprenants/:id/recruter', requireRole(['directeur']), zValidato
   const user    = c.get('user')
   const body    = c.req.valid('json')
 
-  const { data: apprenant } = await supabase.from('apprenants').select('*').eq('id', id).single()
+  const { data: apprenant } = await db.from('apprenants').select('*').eq('id', id).single()
   if (!apprenant) return c.json({ error: 'Apprenant introuvable', code: 'NOT_FOUND' }, 404)
 
   const a = apprenant as { id: string; nom: string; niveau: number; duree_mois: number; statut: string; specialite: string }
@@ -447,7 +449,7 @@ router.post('/rh/apprenants/:id/recruter', requireRole(['directeur']), zValidato
   if (a.duree_mois < 6)       return c.json({ error: `Durée insuffisante : ${a.duree_mois} mois (6 mois minimum)`, code: 'DURATION_TOO_SHORT' }, 422)
 
   // Créer l'employé
-  const { data: employe, error: empErr } = await supabase
+  const { data: employe, error: empErr } = await db
     .from('employes')
     .insert({
       nom:             a.nom,
@@ -467,7 +469,7 @@ router.post('/rh/apprenants/:id/recruter', requireRole(['directeur']), zValidato
   const empId = (employe as { id: string }).id
 
   // Mettre à jour l'apprenant
-  await supabase.from('apprenants').update({
+  await db.from('apprenants').update({
     statut:     'recrute',
     employe_id: empId,
     updated_at: new Date().toISOString(),
@@ -486,7 +488,7 @@ router.get('/rh/paie/:annee/:mois', requireRole(['directeur', 'admin']), async (
   const moisStr         = `${annee}-${mois.padStart(2, '0')}`
 
   // Vérifier si les bulletins existent déjà
-  const { data: existants } = await supabase
+  const { data: existants } = await db
     .from('bulletins_paie')
     .select('*, employes(nom, poste, departement, type_contrat, cnps)')
     .eq('mois', moisStr)
@@ -501,7 +503,7 @@ router.get('/rh/paie/:annee/:mois', requireRole(['directeur', 'admin']), async (
   }
 
   // Récupérer tous les employés actifs
-  const { data: employes, error } = await supabase
+  const { data: employes, error } = await db
     .from('employes')
     .select('id, nom, poste, departement, type_contrat, cnps, salaire_base_xaf')
     .eq('statut', 'actif')
@@ -514,7 +516,7 @@ router.get('/rh/paie/:annee/:mois', requireRole(['directeur', 'admin']), async (
 
   for (const emp of (employes ?? []) as Array<{ id: string; nom: string; poste: string; departement: string; type_contrat: string; cnps: string | null; salaire_base_xaf: number }>) {
     // Récupérer les heures sup du mois depuis les présences
-    const { data: presences } = await supabase
+    const { data: presences } = await db
       .from('presences')
       .select('heures')
       .eq('employe_id', emp.id)
@@ -532,7 +534,7 @@ router.get('/rh/paie/:annee/:mois', requireRole(['directeur', 'admin']), async (
     bulletins.push(bulletin)
 
     // Upsert le bulletin en DB
-    await supabase.from('bulletins_paie').upsert({
+    await db.from('bulletins_paie').upsert({
       employe_id:          emp.id,
       mois:                moisStr,
       salaire_base_xaf:    emp.salaire_base_xaf,
@@ -550,8 +552,8 @@ router.get('/rh/paie/:annee/:mois', requireRole(['directeur', 'admin']), async (
       try {
         const buf = await genererBulletinPdf(bulletin)
         const path = `bulletins/${moisStr}/${emp.id}.pdf`
-        await (supabaseAdmin ?? supabase).storage.from('paie').upload(path, buf, { contentType: 'application/pdf', upsert: true })
-        const { data: { publicUrl } } = supabase.storage.from('paie').getPublicUrl(path)
+        await db.storage.from('paie').upload(path, buf, { contentType: 'application/pdf', upsert: true })
+        const { data: { publicUrl } } = db.storage.from('paie').getPublicUrl(path)
         pdfs.push({ employe_nom: emp.nom, pdf_url: publicUrl })
       } catch {
         pdfs.push({ employe_nom: emp.nom, pdf_url: null })

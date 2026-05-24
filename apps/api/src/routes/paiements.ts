@@ -1,6 +1,8 @@
 import { Hono } from 'hono'
 import { createHmac } from 'crypto'
-import { supabase } from '@forge/db/supabase'
+import { supabaseAdmin } from '@forge/db'
+
+const db = supabaseAdmin!
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -90,7 +92,7 @@ paiementsRouter.post('/initier', async (c) => {
   }
 
   // Vérifier que la commande existe et est en attente de paiement
-  const { data: commande, error: errCommande } = await supabase
+  const { data: commande, error: errCommande } = await db
     .from('commandes_shop')
     .select('id, ref, montant_ttc, statut_paiement')
     .eq('ref', commande_ref)
@@ -143,7 +145,7 @@ paiementsRouter.post('/initier', async (c) => {
   }
 
   // Sauvegarder la référence dans la commande
-  await supabase
+  await db
     .from('commandes_shop')
     .update({ payment_reference: paymentRef, updated_at: new Date().toISOString() })
     .eq('ref', commande_ref)
@@ -226,7 +228,7 @@ paiementsRouter.post('/webhook', async (c) => {
     const amount    = Number(data.amount ?? 0)
 
     // Récupérer la commande
-    const { data: commande, error: errFetch } = await supabase
+    const { data: commande, error: errFetch } = await db
       .from('commandes_shop')
       .select('id, ref, montant_ttc, client_nom, client_telephone, client_adresse, lignes, erp_commande_id')
       .eq('payment_reference', reference)
@@ -244,7 +246,7 @@ paiementsRouter.post('/webhook', async (c) => {
     }
 
     // Mise à jour statut paiement + commande
-    const { error: errUpdate } = await supabase
+    const { error: errUpdate } = await db
       .from('commandes_shop')
       .update({
         statut_paiement: 'paye',
@@ -260,7 +262,7 @@ paiementsRouter.post('/webhook', async (c) => {
 
     // Mise à jour commande ERP liée
     if (commande.erp_commande_id) {
-      const { error: errERP } = await supabase
+      const { error: errERP } = await db
         .from('commandes')
         .update({ statut: 'paye', updated_at: new Date().toISOString() })
         .eq('id', commande.erp_commande_id)
@@ -276,7 +278,7 @@ paiementsRouter.post('/webhook', async (c) => {
 
     for (const ligne of lignes) {
       if (!ligne.product_id) continue
-      const { data: produit } = await supabase
+      const { data: produit } = await db
         .from('produits')
         .select('stock_actuel')
         .eq('id', ligne.product_id)
@@ -284,13 +286,13 @@ paiementsRouter.post('/webhook', async (c) => {
 
       if (produit) {
         const newStock = Math.max(0, Number(produit.stock_actuel) - Number(ligne.quantite))
-        await supabase
+        await db
           .from('produits')
           .update({ stock_actuel: newStock })
           .eq('id', ligne.product_id)
 
         // Mouvement de stock (table optionnelle — ignorer si absente)
-        await supabase.from('mouvements_stock').insert({
+        await db.from('mouvements_stock').insert({
           produit_id:     ligne.product_id,
           type:           'sortie',
           quantite:       ligne.quantite,
@@ -303,7 +305,7 @@ paiementsRouter.post('/webhook', async (c) => {
     }
 
     // Notifier l'ERP via Supabase Realtime
-    await supabase.channel('erp-notifications').send({
+    await db.channel('erp-notifications').send({
       type:    'broadcast',
       event:   'commande_web_payee',
       payload: {
@@ -349,14 +351,14 @@ paiementsRouter.post('/webhook', async (c) => {
   if (event === 'payment.failed' || event === 'payment.cancelled') {
     const reference = data.reference as string
 
-    const { data: commande } = await supabase
+    const { data: commande } = await db
       .from('commandes_shop')
       .select('ref, client_nom, client_telephone')
       .eq('payment_reference', reference)
       .single()
 
     if (commande) {
-      await supabase
+      await db
         .from('commandes_shop')
         .update({ statut_paiement: 'echec', updated_at: new Date().toISOString() })
         .eq('payment_reference', reference)

@@ -1,5 +1,7 @@
 import PDFDocument from 'pdfkit'
-import { supabase } from '@forge/db/supabase'
+import { supabaseAdmin } from '@forge/db'
+
+const db = supabaseAdmin!
 
 // ── Company info ───────────────────────────────────────────────────────────────
 const CO = {
@@ -516,8 +518,7 @@ export async function uploadPDF(
   filename: string,
 ): Promise<string> {
   // supabaseAdmin has storage.createSignedUrl privileges; fall back to anon client
-  const { supabaseAdmin } = await import('@forge/db').catch(() => ({ supabaseAdmin: null }))
-  const client = (supabaseAdmin ?? supabase) as typeof supabase
+  const client = db
 
   const { error: upErr } = await client.storage
     .from(bucket)
@@ -526,12 +527,12 @@ export async function uploadPDF(
   if (upErr) {
     console.error(`[pdf] storage upload error (${bucket}/${filename}):`, upErr.message)
     // Return public URL as fallback (works if bucket is public)
-    return supabase.storage.from(bucket).getPublicUrl(filename).data.publicUrl
+    return db.storage.from(bucket).getPublicUrl(filename).data.publicUrl
   }
 
   const { data } = await client.storage
     .from(bucket)
     .createSignedUrl(filename, SIGNED_URL_TTL)
 
-  return data?.signedUrl ?? supabase.storage.from(bucket).getPublicUrl(filename).data.publicUrl
+  return data?.signedUrl ?? db.storage.from(bucket).getPublicUrl(filename).data.publicUrl
 }

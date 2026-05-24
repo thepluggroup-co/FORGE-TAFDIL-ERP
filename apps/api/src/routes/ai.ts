@@ -2,7 +2,9 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import cron from 'node-cron'
-import { supabase } from '@forge/db/supabase'
+import { supabaseAdmin } from '@forge/db'
+
+const db = supabaseAdmin!
 import { anthropic, FORGE_MODEL } from '@forge/ai'
 import { requireRole } from '../middleware/rbac'
 import type { HonoVariables } from '../types'
@@ -27,13 +29,13 @@ async function fetchForgeContext(): Promise<ForgeContext> {
   const finMoisPrec   = new Date(today.getFullYear(), today.getMonth(), 0).toISOString().slice(0, 10)
 
   const [critiqueRes, creditsRes, commandesRes, caMoisRes, caPrecRes] = await Promise.allSettled([
-    supabase.from('produits').select('ref, designation, stock_actuel, stock_critique, stock_min, statut, categorie')
+    db.from('produits').select('ref, designation, stock_actuel, stock_critique, stock_min, statut, categorie')
       .in('statut', ['critique', 'rupture']).order('stock_actuel').limit(5),
-    supabase.from('credits').select('numero, client_nom, montant_xaf, solde_restant_xaf, echeance, statut')
+    db.from('credits').select('numero, client_nom, montant_xaf, solde_restant_xaf, echeance, statut')
       .or(`statut.eq.echu,and(statut.eq.en_cours,echeance.lt.${today.toISOString().slice(0, 10)})`),
-    supabase.from('commandes').select('id, total_ttc_xaf').in('statut', ['confirmed', 'in_production', 'pret']),
-    supabase.from('factures').select('total_ttc_xaf').eq('statut', 'paye').gte('date_emission', debutMois),
-    supabase.from('factures').select('total_ttc_xaf').eq('statut', 'paye').gte('date_emission', debutMoisPrec).lte('date_emission', finMoisPrec),
+    db.from('commandes').select('id, total_ttc_xaf').in('statut', ['confirmed', 'in_production', 'pret']),
+    db.from('factures').select('total_ttc_xaf').eq('statut', 'paye').gte('date_emission', debutMois),
+    db.from('factures').select('total_ttc_xaf').eq('statut', 'paye').gte('date_emission', debutMoisPrec).lte('date_emission', finMoisPrec),
   ])
 
   const critiques = critiqueRes.status === 'fulfilled' ? (critiqueRes.value.data ?? []) : []
@@ -106,10 +108,10 @@ async function genererRapportHebdo(): Promise<string> {
   const lundiStr = lundi.toISOString().slice(0, 10)
 
   const [commandesSemRes, facturesSemRes, bonsSemRes, mouvSemRes] = await Promise.allSettled([
-    supabase.from('commandes').select('id, total_ttc_xaf, statut').gte('created_at', lundiStr),
-    supabase.from('factures').select('id, total_ttc_xaf').eq('statut', 'paye').gte('date_emission', lundiStr),
-    supabase.from('bons_sortie').select('id, statut').gte('created_at', lundiStr),
-    supabase.from('mouvements_stock').select('id, type').gte('created_at', lundiStr),
+    db.from('commandes').select('id, total_ttc_xaf, statut').gte('created_at', lundiStr),
+    db.from('factures').select('id, total_ttc_xaf').eq('statut', 'paye').gte('date_emission', lundiStr),
+    db.from('bons_sortie').select('id, statut').gte('created_at', lundiStr),
+    db.from('mouvements_stock').select('id, type').gte('created_at', lundiStr),
   ])
 
   const commandesSem = commandesSemRes.status === 'fulfilled' ? (commandesSemRes.value.data ?? []) : []
@@ -221,8 +223,8 @@ router.get('/ai/recommandations/stock', requireRole(['directeur', 'admin']), asy
   const since90j = new Date(Date.now() - 90 * 86400000).toISOString()
 
   const [produitsRes, mouvRes] = await Promise.all([
-    supabase.from('produits').select('id, ref, designation, categorie, stock_actuel, stock_min, stock_critique, prix_unitaire_xaf, statut'),
-    supabase.from('mouvements_stock').select('produit_id, type, quantite, created_at').gte('created_at', since90j),
+    db.from('produits').select('id, ref, designation, categorie, stock_actuel, stock_min, stock_critique, prix_unitaire_xaf, statut'),
+    db.from('mouvements_stock').select('produit_id, type, quantite, created_at').gte('created_at', since90j),
   ])
 
   if (produitsRes.error) return c.json({ error: produitsRes.error.message }, 500)
@@ -316,11 +318,11 @@ router.get('/ai/alertes', async (c) => {
   const in30j  = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)
 
   const [stocksRes, creditsRes, commandesRes, machinesRes, capteursRes] = await Promise.allSettled([
-    supabase.from('produits').select('id, ref, designation, stock_actuel, stock_critique, statut').in('statut', ['critique', 'rupture', 'alerte']),
-    supabase.from('credits').select('id, numero, client_nom, solde_restant_xaf, echeance, statut').or(`statut.eq.echu,and(statut.eq.en_cours,echeance.lte.${in7j})`),
-    supabase.from('commandes').select('id, numero, client_nom, statut, date_livraison_prevue').in('statut', ['confirmed', 'in_production', 'pret']).lte('date_livraison_prevue', in7j).not('date_livraison_prevue', 'is', null),
-    supabase.from('machines').select('id, nom, statut, prochaine_maintenance').in('statut', ['maintenance', 'panne']),
-    supabase.from('capteurs_iot').select('id, nom, zone, statut, batterie_pct').or('statut.eq.alerte,statut.eq.hors_ligne,batterie_pct.lte.20'),
+    db.from('produits').select('id, ref, designation, stock_actuel, stock_critique, statut').in('statut', ['critique', 'rupture', 'alerte']),
+    db.from('credits').select('id, numero, client_nom, solde_restant_xaf, echeance, statut').or(`statut.eq.echu,and(statut.eq.en_cours,echeance.lte.${in7j})`),
+    db.from('commandes').select('id, numero, client_nom, statut, date_livraison_prevue').in('statut', ['confirmed', 'in_production', 'pret']).lte('date_livraison_prevue', in7j).not('date_livraison_prevue', 'is', null),
+    db.from('machines').select('id, nom, statut, prochaine_maintenance').in('statut', ['maintenance', 'panne']),
+    db.from('capteurs_iot').select('id, nom, zone, statut, batterie_pct').or('statut.eq.alerte,statut.eq.hors_ligne,batterie_pct.lte.20'),
   ])
 
   type Alerte = {

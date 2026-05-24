@@ -67,6 +67,21 @@ app.get('/health', (c) =>
   }),
 )
 
+// Diagnostic endpoint — tests DB + auth without requiring a session
+app.get('/health/db', async (c) => {
+  const { supabaseAdmin } = await import('@forge/db')
+  if (!supabaseAdmin) {
+    return c.json({ ok: false, error: 'supabaseAdmin is null — SERVICE_ROLE_KEY missing' }, 503)
+  }
+  try {
+    const { data, error } = await supabaseAdmin.from('produits' as never).select('id').limit(1)
+    if (error) return c.json({ ok: false, step: 'db_query', error: error.message, code: error.code, hint: (error as { hint?: string }).hint }, 500)
+    return c.json({ ok: true, db: 'connected', rows_sampled: (data as unknown[]).length })
+  } catch (err) {
+    return c.json({ ok: false, step: 'db_query_threw', error: String(err) }, 500)
+  }
+})
+
 const api = new Hono<{ Variables: HonoVariables }>()
 
 api.use('*', authMiddleware)

@@ -1,7 +1,9 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { supabase } from '@forge/db/supabase'
+import { supabaseAdmin } from '@forge/db'
+
+const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import type { HonoVariables } from '../types'
 
@@ -44,7 +46,7 @@ async function genererNumeroBon(): Promise<string> {
   const yyyymmdd = today.toISOString().slice(0, 10).replace(/-/g, '')
   const startOfDay = `${today.toISOString().slice(0, 10)}T00:00:00.000Z`
 
-  const { count } = await supabase
+  const { count } = await db
     .from('bons_sortie')
     .select('*', { count: 'exact', head: true })
     .gte('created_at', startOfDay)
@@ -56,9 +58,9 @@ async function genererNumeroBon(): Promise<string> {
 /** Notifie via Supabase Realtime Broadcast */
 async function broadcastBon(event: string, payload: Record<string, unknown>): Promise<void> {
   try {
-    const channel = supabase.channel('forge-bons')
+    const channel = db.channel('forge-bons')
     await channel.send({ type: 'broadcast', event, payload })
-    supabase.removeChannel(channel)
+    db.removeChannel(channel)
   } catch {
     // Realtime non critique — ne pas bloquer la réponse
   }
@@ -80,7 +82,7 @@ router.get('/', async (c) => {
   const dateDebut = c.req.query('date_debut')
   const dateFin   = c.req.query('date_fin')
 
-  let query = supabase
+  let query = db
     .from('bons_sortie')
     .select('*, bons_sortie_lignes(*)', { count: 'exact' })
 
@@ -117,7 +119,7 @@ router.post(
     const numero = await genererNumeroBon()
 
     // Insérer le bon
-    const { data: bon, error: bonErr } = await supabase
+    const { data: bon, error: bonErr } = await db
       .from('bons_sortie')
       .insert({
         numero,
@@ -145,14 +147,14 @@ router.post(
       quantite_servie:   0,
     }))
 
-    const { data: lignesData, error: lignesErr } = await supabase
+    const { data: lignesData, error: lignesErr } = await db
       .from('bons_sortie_lignes')
       .insert(lignes)
       .select()
 
     if (lignesErr) {
       // Nettoyer le bon si les lignes échouent
-      await supabase.from('bons_sortie').delete().eq('id', (bon as { id: string }).id)
+      await db.from('bons_sortie').delete().eq('id', (bon as { id: string }).id)
       return c.json({ error: lignesErr.message }, 400)
     }
 
@@ -173,7 +175,7 @@ router.post(
 router.get('/:id', async (c) => {
   const { id } = c.req.param()
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('bons_sortie')
     .select(`
       *,
@@ -203,7 +205,7 @@ router.put(
     const body   = c.req.valid('json')
 
     // Vérifier que le bon est bien en statut 'soumis'
-    const { data: existing } = await supabase
+    const { data: existing } = await db
       .from('bons_sortie')
       .select('statut, demandeur, numero, created_by')
       .eq('id', id)
@@ -217,7 +219,7 @@ router.put(
       }, 422)
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('bons_sortie')
       .update({
         statut:       body.decision,
@@ -255,7 +257,7 @@ router.put(
     const body   = c.req.valid('json')
 
     // Récupérer le bon avec ses lignes
-    const { data: bon, error: fetchErr } = await supabase
+    const { data: bon, error: fetchErr } = await db
       .from('bons_sortie')
       .select('*, bons_sortie_lignes(*)')
       .eq('id', id)
@@ -285,7 +287,7 @@ router.put(
     }
 
     // Essayer la fonction PostgreSQL atomique
-    const { data: rpcData, error: rpcError } = await (supabase as never as {
+    const { data: rpcData, error: rpcError } = await (db as never as {
       rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { code: string; message: string } | null }>
     }).rpc('fn_executer_bon', {
       p_bon_id:  id,

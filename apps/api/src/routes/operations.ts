@@ -1,7 +1,9 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { supabase } from '@forge/db/supabase'
+import { supabaseAdmin } from '@forge/db'
+
+const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import type { HonoVariables } from '../types'
 
@@ -33,7 +35,7 @@ router.get('/production/jobs', async (c) => {
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
   const from    = (page - 1) * perPage
 
-  let q = supabase.from('jobs_production').select('*', { count: 'exact' })
+  let q = db.from('jobs_production').select('*', { count: 'exact' })
   if (statut) q = q.eq('statut', statut)
   if (search) q = q.ilike('produit_designation', `%${search}%`)
 
@@ -48,12 +50,12 @@ router.post('/production/jobs', requireRole(['directeur', 'admin', 'operateur'])
   const body = c.req.valid('json')
 
   // Generate sequential job number
-  const { count } = await supabase.from('jobs_production').select('*', { count: 'exact', head: true })
+  const { count } = await db.from('jobs_production').select('*', { count: 'exact', head: true })
   const year = new Date().getFullYear()
   const num  = String((count ?? 0) + 1).padStart(3, '0')
   const numero = `JOB-${year}-${num}`
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('jobs_production')
     .insert({ ...body, numero, created_by: user.id, sync_status: 'synced' })
     .select().single()
@@ -65,7 +67,7 @@ router.post('/production/jobs', requireRole(['directeur', 'admin', 'operateur'])
 router.patch('/production/jobs/:id/statut', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', jobStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('jobs_production')
     .update({ ...body, updated_at: new Date().toISOString() })
     .eq('id', id).select().single()
@@ -100,7 +102,7 @@ router.get('/projets', async (c) => {
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
   const from    = (page - 1) * perPage
 
-  let q = supabase.from('projets').select('*', { count: 'exact' })
+  let q = db.from('projets').select('*', { count: 'exact' })
   if (statut) q = q.eq('statut', statut)
   if (search) q = q.ilike('nom', `%${search}%`)
 
@@ -113,7 +115,7 @@ router.get('/projets', async (c) => {
 router.post('/projets', requireRole(['directeur', 'admin']), zValidator('json', projetSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('projets')
     .insert({ ...body, created_by: user.id, sync_status: 'synced' })
     .select().single()
@@ -124,7 +126,7 @@ router.post('/projets', requireRole(['directeur', 'admin']), zValidator('json', 
 router.patch('/projets/:id/statut', requireRole(['directeur', 'admin']), zValidator('json', projetStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('projets')
     .update({ ...body, updated_at: new Date().toISOString() })
     .eq('id', id).select().single()
@@ -158,7 +160,7 @@ router.get('/logistique/livraisons', async (c) => {
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
   const from    = (page - 1) * perPage
 
-  let q = supabase.from('livraisons').select('*', { count: 'exact' })
+  let q = db.from('livraisons').select('*', { count: 'exact' })
   if (statut) q = q.eq('statut', statut)
   if (search) q = q.ilike('client_nom', `%${search}%`)
 
@@ -172,12 +174,12 @@ router.post('/logistique/livraisons', requireRole(['directeur', 'admin', 'operat
   const user = c.get('user')
   const body = c.req.valid('json')
 
-  const { count } = await supabase.from('livraisons').select('*', { count: 'exact', head: true })
+  const { count } = await db.from('livraisons').select('*', { count: 'exact', head: true })
   const year = new Date().getFullYear()
   const num  = String((count ?? 0) + 1).padStart(3, '0')
   const numero = `LIV-${year}-${num}`
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('livraisons')
     .insert({ ...body, numero, created_by: user.id, sync_status: 'synced' })
     .select().single()
@@ -189,7 +191,7 @@ router.post('/logistique/livraisons', requireRole(['directeur', 'admin', 'operat
 router.patch('/logistique/livraisons/:id/statut', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', livraisonStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('livraisons')
     .update({ ...body, updated_at: new Date().toISOString() })
     .eq('id', id).select().single()
@@ -224,7 +226,7 @@ router.get('/marketing/campagnes', async (c) => {
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
   const from    = (page - 1) * perPage
 
-  let q = supabase.from('campagnes_marketing').select('*', { count: 'exact' })
+  let q = db.from('campagnes_marketing').select('*', { count: 'exact' })
   if (statut) q = q.eq('statut', statut)
   if (search) q = q.ilike('nom', `%${search}%`)
 
@@ -237,7 +239,7 @@ router.get('/marketing/campagnes', async (c) => {
 router.post('/marketing/campagnes', requireRole(['directeur', 'admin']), zValidator('json', campagneSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('campagnes_marketing')
     .insert({ ...body, created_by: user.id, sync_status: 'synced' })
     .select().single()
@@ -248,7 +250,7 @@ router.post('/marketing/campagnes', requireRole(['directeur', 'admin']), zValida
 router.patch('/marketing/campagnes/:id/statut', requireRole(['directeur', 'admin']), zValidator('json', campagneStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('campagnes_marketing')
     .update({ ...body, updated_at: new Date().toISOString() })
     .eq('id', id).select().single()
@@ -281,7 +283,7 @@ router.get('/securite/incidents', async (c) => {
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
   const from    = (page - 1) * perPage
 
-  let q = supabase.from('incidents_securite').select('*', { count: 'exact' })
+  let q = db.from('incidents_securite').select('*', { count: 'exact' })
   if (statut) q = q.eq('statut', statut)
   if (search) q = q.ilike('description', `%${search}%`)
 
@@ -294,7 +296,7 @@ router.get('/securite/incidents', async (c) => {
 router.post('/securite/incidents', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', incidentSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('incidents_securite')
     .insert({ ...body, created_by: user.id, sync_status: 'synced' })
     .select().single()
@@ -305,7 +307,7 @@ router.post('/securite/incidents', requireRole(['directeur', 'admin', 'operateur
 router.patch('/securite/incidents/:id/statut', requireRole(['directeur', 'admin']), zValidator('json', incidentStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('incidents_securite')
     .update({ ...body, updated_at: new Date().toISOString() })
     .eq('id', id).select().single()
