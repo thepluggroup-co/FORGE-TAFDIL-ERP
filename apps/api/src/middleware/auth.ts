@@ -13,15 +13,19 @@ export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = a
   const authHeader = c.req.header('Authorization')
 
   if (!authHeader?.startsWith('Bearer ')) {
+    console.warn('[auth] ❌ No Bearer token — missing Authorization header')
     return c.json({ error: 'Token manquant', code: 'MISSING_TOKEN' }, 401)
   }
 
   if (!supabaseAdmin) {
-    console.error('[auth] supabaseAdmin is null — SUPABASE_SERVICE_ROLE_KEY missing in .env')
+    console.error('[auth] ❌ supabaseAdmin is null — SUPABASE_SERVICE_ROLE_KEY missing in .env')
+    console.error('[auth] SUPABASE_URL =', process.env.SUPABASE_URL ?? '(not set)')
+    console.error('[auth] SERVICE_KEY  =', process.env.SUPABASE_SERVICE_ROLE_KEY ? '(set)' : '(NOT SET)')
     return c.json({ error: 'Configuration serveur invalide', code: 'SERVER_ERROR' }, 500)
   }
 
   const token = authHeader.slice(7)
+  console.log('[auth] Validating token, first 20 chars:', token.substring(0, 20), '...')
 
   // Race the Supabase getUser call against a timeout so it never hangs.
   let userData: Awaited<ReturnType<typeof supabaseAdmin.auth.getUser>>
@@ -43,8 +47,10 @@ export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = a
 
   const { data, error } = userData
   if (error || !data.user) {
+    console.error('[auth] ❌ getUser returned invalid — error:', error?.message ?? 'none', '| user:', data?.user ? 'present' : 'null')
     return c.json({ error: 'Token invalide', code: 'INVALID_TOKEN' }, 401)
   }
+  console.log('[auth] ✅ User validated:', data.user.email)
 
   const user = data.user
   const role =

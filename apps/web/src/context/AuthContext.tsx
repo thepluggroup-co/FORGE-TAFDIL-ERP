@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import type { User, Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
+import { setApiToken } from '@/lib/api-client'
 
 export type AppRole = 'admin' | 'directeur' | 'operateur' | 'viewer'
 
@@ -47,6 +48,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session)
       setUser(session?.user ?? null)
+      setApiToken(session?.access_token ?? null)
       if (session?.user) {
         try {
           const r = await fetchRole(session.user.id)
@@ -65,6 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session)
       setUser(session?.user ?? null)
+      setApiToken(session?.access_token ?? null)
       if (session?.user) {
         try {
           const r = await fetchRole(session.user.id)
@@ -75,6 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       } else {
         setRole(null)
+        setApiToken(null)
       }
       done()
     })
@@ -91,6 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
+    setApiToken(null)
     await supabase.auth.signOut()
   }
 

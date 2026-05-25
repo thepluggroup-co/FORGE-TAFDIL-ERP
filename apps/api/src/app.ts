@@ -82,6 +82,17 @@ app.get('/health/db', async (c) => {
   }
 })
 
+// Diagnostic endpoint — shows which env vars are loaded
+app.get('/health/env', (c) =>
+  c.json({
+    supabase_url:       process.env.SUPABASE_URL ?? '(not set)',
+    service_key_set:    Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+    jwt_secret_set:     Boolean(process.env.SUPABASE_JWT_SECRET),
+    node_env:           process.env.NODE_ENV ?? '(not set)',
+    supabaseAdmin_null: supabaseAdmin === null,
+  }),
+)
+
 const api = new Hono<{ Variables: HonoVariables }>()
 
 api.use('*', authMiddleware)

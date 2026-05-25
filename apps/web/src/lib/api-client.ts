@@ -1,19 +1,28 @@
-import { supabase } from './supabase'
 import { toast } from 'sonner'
+import { supabase } from './supabase'
 
 const _raw = import.meta.env.VITE_API_URL as string | undefined
 export const API_BASE = _raw?.startsWith('http') ? _raw : 'http://localhost:3001'
 
 const REQUEST_TIMEOUT_MS = 15_000
 
+// ── Token cache ────────────────────────────────────────────────────────────────
+// AuthContext calls setApiToken() whenever the session changes.
+// This avoids calling supabase.auth.getSession() on every request
+// (which can race against session initialization and return null).
+let _cachedToken: string | null = null
+
+export function setApiToken(token: string | null) {
+  _cachedToken = token
+}
+
 // ── Deduplicated 401 handler ───────────────────────────────────────────────
-// Prevents 10 simultaneous requests all firing the same "session expirée" toast.
 let _redirecting = false
 function handleSessionExpired() {
   if (_redirecting) return
   _redirecting = true
+  _cachedToken = null
   toast.error('Session expirée — reconnexion…')
-  // Give the toast 800 ms to appear before the page changes
   setTimeout(() => {
     supabase.auth.signOut().finally(() => {
       _redirecting = false
@@ -25,6 +34,14 @@ function handleSessionExpired() {
 // ── Auth headers ───────────────────────────────────────────────────────────
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+
+  // 1. Use cached token if available (set by AuthContext)
+  if (_cachedToken) {
+    headers['Authorization'] = `Bearer ${_cachedToken}`
+    return headers
+  }
+
+  // 2. Fallback: try getSession() in case the cache hasn't been primed yet
   try {
     const result = await Promise.race([
       supabase.auth.getSession(),
@@ -34,7 +51,10 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
     ]) as Awaited<ReturnType<typeof supabase.auth.getSession>>
 
     const token = result?.data?.session?.access_token
-    if (token) headers['Authorization'] = `Bearer ${token}`
+    if (token) {
+      _cachedToken = token
+      headers['Authorization'] = `Bearer ${token}`
+    }
   } catch {
     // No token — API will return 401 and handleSessionExpired will fire
   }

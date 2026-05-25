@@ -20,6 +20,7 @@ export default function Login() {
     const { error } = await signIn(email.trim(), password)
 
     if (error) {
+      console.error('[Login] Supabase error:', error)
       setError('Email ou mot de passe incorrect')
       setLoading(false)
     } else {
