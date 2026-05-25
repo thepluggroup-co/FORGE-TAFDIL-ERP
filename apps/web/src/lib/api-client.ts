@@ -24,7 +24,9 @@ function handleSessionExpired() {
   _cachedToken = null
   toast.error('Session expirée — reconnexion…')
   setTimeout(() => {
-    supabase.auth.signOut().finally(() => {
+    // scope:'local' clears localStorage only — does NOT revoke the session
+    // server-side, which would cause "Auth session missing" on the next login.
+    supabase.auth.signOut({ scope: 'local' }).finally(() => {
       _redirecting = false
       window.location.href = '/login'
     })
@@ -35,13 +37,17 @@ function handleSessionExpired() {
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
 
-  // 1. Use cached token if available (set by AuthContext)
+  // 1. Use cached token if available (set by AuthContext via setApiToken).
+  //    This token comes from supabase.auth.getSession() which auto-refreshes
+  //    expired tokens — so _cachedToken is always fresh.
   if (_cachedToken) {
     headers['Authorization'] = `Bearer ${_cachedToken}`
     return headers
   }
 
-  // 2. Fallback: try getSession() in case the cache hasn't been primed yet
+  // 2. Fallback: call getSession() directly. Supabase auto-refreshes the token
+  //    if expired (using the refresh token). Never read localStorage directly
+  //    because it may hold an expired access_token.
   try {
     const result = await Promise.race([
       supabase.auth.getSession(),
