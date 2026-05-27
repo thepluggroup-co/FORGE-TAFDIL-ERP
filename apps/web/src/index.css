@@ -37,3 +37,40 @@ pre,
 kbd {
   font-family: var(--font-forge-mono);
 }
+
+/* ── Sidebar nav — seamless dark scrollbar ───────────────────────────────────
+   Default: invisible thumb (no visual noise while idle)
+   On hover: 3 px semi-transparent white pill fades in
+   Thumb hover: slightly brighter
+   Firefox: always-on thin scrollbar, same palette
+   ────────────────────────────────────────────────────────────────────────── */
+.sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar {
+  width: 3px;
+}
+
+.sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 10px;
+  transition: background 0.25s ease;
+}
+
+.sidebar-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28) !important;
+}
+
+.sidebar-scroll::-webkit-scrollbar-button {
+  display: none;
+}

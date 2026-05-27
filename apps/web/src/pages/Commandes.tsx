@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react'
-import { motion, AnimatePresence, useDragControls } from 'framer-motion'
+import React, { useState, useRef, useMemo } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { LayoutGrid, Table2, Plus, GripVertical, Globe } from 'lucide-react'
 import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
@@ -73,7 +73,7 @@ function KanbanCard({ order, containerRef, columnRefs, onDrop, onClick }: Kanban
         <span className="text-xs font-mono text-gray-400">{order.reference}</span>
         <GripVertical className="h-3.5 w-3.5 text-gray-300 shrink-0" />
       </div>
-      <p className="text-sm font-semibold text-[#212121] mb-1">{order.client.nom}</p>
+      <p className="text-sm font-semibold text-[#212121] mb-1">{order.client?.nom ?? '—'}</p>
       <p className="text-base font-bold text-[#212121]">{formatXAF(order.montant_ttc_xaf)}</p>
       <div className="flex items-center justify-between mt-2.5">
         <span className="text-xs text-gray-400">{formatDate(order.date_commande)}</span>
@@ -134,11 +134,29 @@ function KanbanColumn({ col, orders, containerRef, columnRefs, onDrop, onCardCli
 // ── Table columns ─────────────────────────────────────────────────────────────
 
 const TABLE_COLS: Column<CommandeRecord>[] = [
-  { id: 'reference',       header: 'Référence',   accessor: 'reference',           render: (v) => <span className="font-mono text-xs">{v as string}</span> },
-  { id: 'client',          header: 'Client',       accessor: (r) => r.client.nom,   render: (v) => <span className="font-medium text-sm">{v as string}</span> },
-  { id: 'montant_ttc_xaf', header: 'Montant TTC', accessor: 'montant_ttc_xaf',     render: (v) => <span className="font-semibold">{formatXAF(v as number)}</span> },
-  { id: 'date_commande',   header: 'Date',         accessor: 'date_commande',       render: (v) => <span className="text-xs text-gray-500">{formatDate(v as string)}</span> },
-  { id: 'statut',          header: 'Statut',       accessor: 'statut',              render: (v) => <StatusBadge status={v as string} /> },
+  {
+    id: 'reference', header: 'Référence', accessor: 'reference',
+    render: (v) => <span className="font-mono text-xs">{v as string}</span>,
+  },
+  {
+    id: 'client', header: 'Client',
+    accessor: (r) => r.client?.nom ?? '—',
+    csvValue: (r) => r.client?.nom ?? '—',
+    render: (v) => <span className="font-medium text-sm">{v as string}</span>,
+  },
+  {
+    id: 'montant_ttc_xaf', header: 'Montant TTC', accessor: 'montant_ttc_xaf',
+    csvValue: (r) => String(r.montant_ttc_xaf ?? 0),
+    render: (v) => <span className="font-semibold">{formatXAF(v as number)}</span>,
+  },
+  {
+    id: 'date_commande', header: 'Date', accessor: 'date_commande',
+    render: (v) => <span className="text-xs text-gray-500">{formatDate(v as string)}</span>,
+  },
+  {
+    id: 'statut', header: 'Statut', accessor: 'statut',
+    render: (v) => <StatusBadge status={v as string} />,
+  },
 ]
 
 // ── OrderDetail (ERP) ──────────────────────────────────────────────────────────
@@ -153,8 +171,8 @@ function OrderDetail({ order, onClose }: { order: CommandeRecord; onClose: () =>
       <div className="space-y-6">
         <div>
           <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">Client</h3>
-          <p className="text-sm font-semibold text-[#212121]">{order.client.nom}</p>
-          <p className="text-sm text-gray-500">{order.client.telephone}</p>
+          <p className="text-sm font-semibold text-[#212121]">{order.client?.nom ?? '—'}</p>
+          <p className="text-sm text-gray-500">{order.client?.telephone ?? ''}</p>
         </div>
 
         <div>

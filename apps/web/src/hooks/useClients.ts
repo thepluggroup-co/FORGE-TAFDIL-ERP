@@ -9,11 +9,27 @@ export interface Client {
   telephone: string
   email: string
   adresse: string
+  ville?: string
+  pays?: string
+  notes?: string
   commandes_count: number
   encours_credit_xaf: number
   total_ca_xaf: number
   score_fiabilite: number
   statut: 'actif' | 'inactif' | 'bloque'
+}
+
+export interface CreateClientPayload {
+  nom: string
+  type: 'entreprise' | 'particulier' | 'institution'
+  telephone?: string
+  email?: string
+  adresse?: string
+  ville?: string
+  pays?: string
+  notes?: string
+  statut?: 'actif' | 'inactif' | 'bloque'
+  score_fiabilite?: number
 }
 
 interface ClientsResponse { data: Client[]; total: number }
@@ -43,7 +59,7 @@ export function useClients(params?: { search?: string; statut?: string }) {
 export function useCreateClient() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (payload: Omit<Client, 'id' | 'commandes_count' | 'encours_credit_xaf' | 'total_ca_xaf' | 'score_fiabilite'>) =>
+    mutationFn: (payload: CreateClientPayload) =>
       apiClient.post<Client>('/api/clients', payload),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['clients'] })

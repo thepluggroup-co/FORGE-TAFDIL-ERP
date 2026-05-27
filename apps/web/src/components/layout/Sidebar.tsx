@@ -5,7 +5,7 @@ import { TafdilIcon } from '@/components/ui/Logo'
 import {
   LayoutDashboard, Wrench, Package, ShoppingCart, FileText, DollarSign, Users,
   GraduationCap, Kanban, Truck, Megaphone, Shield, Brain, Wifi,
-  Store, LogOut, ChevronLeft, ChevronRight,
+  Store, LogOut, ChevronLeft, ChevronRight, Settings, Crown,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
@@ -18,22 +18,24 @@ interface NavItem {
   dynamicBadge?: boolean
 }
 
+// ── Static nav items — no arbitrary badge numbers ──────────────────────────────
 const NAV_ITEMS_BASE: NavItem[] = [
-  { path: '/dashboard',    label: 'Dashboard',      icon: LayoutDashboard },
-  { path: '/boutique',     label: 'Boutique',       icon: Store,          dynamicBadge: true },
-  { path: '/production',   label: 'Production',     icon: Wrench,         badge: 2 },
-  { path: '/stocks',       label: 'Stocks',         icon: Package,        badge: 5 },
-  { path: '/commandes',    label: 'Commandes',      icon: ShoppingCart },
-  { path: '/devis',        label: 'Devis',          icon: FileText },
-  { path: '/finance',      label: 'Finance',        icon: DollarSign,     badge: 1 },
-  { path: '/rh',           label: 'RH',             icon: Users },
-  { path: '/formation',    label: 'Formation',      icon: GraduationCap },
-  { path: '/projets',      label: 'Projets',        icon: Kanban },
-  { path: '/logistique',   label: 'Logistique',     icon: Truck },
-  { path: '/marketing',    label: 'Marketing',      icon: Megaphone },
-  { path: '/securite',     label: 'Sécurité',       icon: Shield,         badge: 1 },
-  { path: '/intelligence', label: 'Intelligence',   icon: Brain },
-  { path: '/iot',          label: 'IoT',            icon: Wifi },
+  { path: '/dashboard',    label: 'Dashboard',    icon: LayoutDashboard },
+  { path: '/boutique',     label: 'Boutique',     icon: Store,          dynamicBadge: true },
+  { path: '/production',   label: 'Production',   icon: Wrench },
+  { path: '/stocks',       label: 'Stocks',       icon: Package },
+  { path: '/commandes',    label: 'Commandes',    icon: ShoppingCart },
+  { path: '/devis',        label: 'Devis',        icon: FileText },
+  { path: '/clients',      label: 'Clients',      icon: Users },
+  { path: '/finance',      label: 'Finance',      icon: DollarSign },
+  { path: '/rh',           label: 'RH',           icon: Users },
+  { path: '/formation',    label: 'Formation',    icon: GraduationCap },
+  { path: '/projets',      label: 'Projets',      icon: Kanban },
+  { path: '/logistique',   label: 'Logistique',   icon: Truck },
+  { path: '/marketing',    label: 'Marketing',    icon: Megaphone },
+  { path: '/securite',     label: 'Sécurité',     icon: Shield },
+  { path: '/intelligence', label: 'Intelligence', icon: Brain },
+  { path: '/iot',          label: 'IoT',          icon: Wifi },
 ]
 
 interface SidebarProps {
@@ -45,15 +47,19 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { user, role: appRole, signOut } = useAuth()
   const navigate = useNavigate()
 
+  // Dynamic badge: new web orders today
   const { data: shopData } = useCommandesShop()
   const webBadge = shopData?.stats?.nouvelles_ce_jour ?? 0
 
-  const NAV_ITEMS = NAV_ITEMS_BASE.map((item) =>
+  // Build nav — inject admin item for admin role
+  const baseItems: NavItem[] = appRole === 'admin'
+    ? [...NAV_ITEMS_BASE, { path: '/admin', label: 'Administration', icon: Crown }]
+    : NAV_ITEMS_BASE
+
+  const NAV_ITEMS = baseItems.map((item) =>
     item.dynamicBadge && item.path === '/boutique'
       ? { ...item, badge: webBadge > 0 ? webBadge : undefined }
-      : item.dynamicBadge
-      ? { ...item, badge: undefined }
-      : item
+      : { ...item, badge: item.dynamicBadge ? undefined : item.badge }
   )
 
   const handleSignOut = async () => {
@@ -61,35 +67,25 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     navigate('/login')
   }
 
-  const email = user?.email ?? ''
+  const email   = user?.email ?? ''
   const initial = email.charAt(0).toUpperCase()
+
   const roleLabels: Record<string, string> = {
-    admin:      'Administrateur',
-    directeur:  'Directeur',
-    operateur:  'Opérateur',
-    viewer:     'Lecteur',
+    admin:     'Administrateur',
+    directeur: 'Directeur',
+    operateur: 'Opérateur',
+    viewer:    'Lecteur',
   }
-  const role = roleLabels[appRole ?? ''] ?? 'Opérateur'
+  const roleLabel = roleLabels[appRole ?? ''] ?? (appRole ?? 'Utilisateur')
 
   return (
     <motion.aside
       animate={{ width: collapsed ? 64 : 240 }}
       transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
-      className="relative flex flex-col h-full shrink-0 overflow-hidden"
-      style={{ backgroundColor: '#212121' }}
+      className="relative flex flex-col shrink-0 overflow-hidden"
+      style={{ backgroundColor: '#212121', height: '100%' }}
     >
-      {/* Toggle button */}
-      <button
-        onClick={onToggle}
-        className="absolute -right-3 top-20 z-10 flex items-center justify-center
-          w-6 h-6 rounded-full bg-[#C62828] text-white shadow-md
-          hover:bg-[#B71C1C] transition-colors"
-        aria-label={collapsed ? 'Déplier la sidebar' : 'Réduire la sidebar'}
-      >
-        {collapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronLeft className="h-3 w-3" />}
-      </button>
-
-      {/* Header */}
+      {/* ── Header ── */}
       <div className="flex items-center gap-3 px-4 py-5 border-b border-white/10 shrink-0">
         <TafdilIcon size={36} variant="white" className="shrink-0" />
         {!collapsed && (
@@ -107,31 +103,36 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         )}
       </div>
 
-      {/* User info */}
-      {!collapsed && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.12 }}
-          className="flex items-center gap-2.5 px-4 py-3 border-b border-white/10 shrink-0"
+      {/* ── User info — clickable → /account ── */}
+      <button
+        onClick={() => navigate('/account')}
+        title={collapsed ? `${email} — ${roleLabel}` : undefined}
+        className="flex items-center gap-2.5 px-4 py-3 border-b border-white/10 shrink-0
+          hover:bg-white/5 transition-colors text-left w-full"
+      >
+        <div
+          className="flex items-center justify-center rounded-full shrink-0 text-white text-sm font-semibold"
+          style={{ width: 32, height: 32, backgroundColor: '#C62828' }}
         >
-          <div
-            className="flex items-center justify-center rounded-full shrink-0 text-white text-sm font-semibold"
-            style={{ width: 32, height: 32, backgroundColor: '#C62828' }}
+          {initial}
+        </div>
+        {!collapsed && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.12 }}
+            className="min-w-0 flex-1"
           >
-            {initial}
-          </div>
-          <div className="min-w-0 flex-1">
             <div className="text-white text-xs font-medium truncate">{email}</div>
             <span className="inline-block mt-0.5 px-1.5 py-px text-xs rounded-full bg-[#C62828]/30 text-[#EF9A9A]">
-              {role}
+              {roleLabel}
             </span>
-          </div>
-        </motion.div>
-      )}
+          </motion.div>
+        )}
+      </button>
 
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2 scrollbar-thin">
+      {/* ── Navigation — flex-1 + min-h-0 ensures it scrolls instead of overflowing ── */}
+      <nav className="sidebar-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden py-2">
         {NAV_ITEMS.map((item) => (
           <NavLink key={item.path} to={item.path} title={collapsed ? item.label : undefined}>
             {({ isActive }) => (
@@ -143,25 +144,24 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   backgroundColor: isActive ? '#C62828' : 'transparent',
                   color: isActive ? '#fff' : 'rgba(255,255,255,0.7)',
                 }}
-                onMouseEnter={(e) => {
-                  if (!isActive) e.currentTarget.style.backgroundColor = 'rgba(198,40,40,0.2)'
-                }}
-                onMouseLeave={(e) => {
-                  if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'
-                }}
+                onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'rgba(198,40,40,0.2)' }}
+                onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent' }}
               >
-                <item.icon className="h-4.5 w-4.5 shrink-0" style={{ width: 18, height: 18 }} />
+                <item.icon className="shrink-0" style={{ width: 18, height: 18 }} />
                 {!collapsed && (
                   <span className="text-sm font-medium truncate flex-1">{item.label}</span>
                 )}
-                {item.badge && (
+                {item.badge !== undefined && item.badge > 0 && (
                   <span
                     className={`flex items-center justify-center rounded-full text-white text-xs font-bold shrink-0 ${
                       collapsed ? 'absolute -top-1 -right-1 w-4 h-4 text-[10px]' : 'w-5 h-5'
                     }`}
-                    style={{ backgroundColor: isActive ? 'rgba(255,255,255,0.3)' : '#C62828', minWidth: collapsed ? 16 : 20 }}
+                    style={{
+                      backgroundColor: isActive ? 'rgba(255,255,255,0.3)' : '#C62828',
+                      minWidth: collapsed ? 16 : 20,
+                    }}
                   >
-                    {item.badge}
+                    {item.badge > 99 ? '99+' : item.badge}
                   </span>
                 )}
               </motion.div>
@@ -170,11 +170,24 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         ))}
       </nav>
 
-      {/* Footer */}
-      <div className="border-t border-white/10 shrink-0 py-3 px-3">
+      {/* ── Footer ── */}
+      <div className="border-t border-white/10 shrink-0 py-3 px-3 space-y-1">
         {!collapsed && (
-          <div className="text-white/30 text-xs px-2 mb-2">FORGE v1.0.0</div>
+          <div className="text-white/30 text-xs px-2 mb-1">FORGE v1.0.0</div>
         )}
+
+        {/* Account / settings shortcut */}
+        <button
+          onClick={() => navigate('/account')}
+          title={collapsed ? 'Paramètres du compte' : undefined}
+          className="flex items-center gap-3 w-full px-2 py-2 rounded-lg
+            text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+        >
+          <Settings className="shrink-0" style={{ width: 18, height: 18 }} />
+          {!collapsed && <span className="text-sm">Paramètres</span>}
+        </button>
+
+        {/* Sign-out */}
         <button
           onClick={handleSignOut}
           title={collapsed ? 'Déconnexion' : undefined}

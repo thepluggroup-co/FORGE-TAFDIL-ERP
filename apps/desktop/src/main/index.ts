@@ -117,6 +117,24 @@ function createWindow() {
   win.once('ready-to-show', () => win?.show())
   win.on('closed', () => { win = null })
 
+  // ── Block DevTools in production ─────────────────────────────────────────────
+  if (!isDev) {
+    // 1. Close immediately if opened via any mechanism (extensions, right-click, etc.)
+    win.webContents.on('devtools-opened', () => {
+      win?.webContents.closeDevTools()
+      log.warn('[security] DevTools blocked in production')
+    })
+
+    // 2. Intercept F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C before they reach the renderer
+    win.webContents.on('before-input-event', (_e, input) => {
+      const devToolsKeys = (
+        input.key === 'F12' ||
+        (input.control && input.shift && ['I', 'J', 'C'].includes(input.key.toUpperCase()))
+      )
+      if (devToolsKeys) _e.preventDefault()
+    })
+  }
+
   buildMenu(win)
   return win
 }

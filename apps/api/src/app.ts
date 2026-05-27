@@ -16,6 +16,7 @@ import { rapportsRouter } from './routes/rapports'
 import { shopRouter, shopErpRouter } from './routes/shop'
 import { paiementsRouter } from './routes/paiements'
 import { operationsRouter } from './routes/operations'
+import { adminRouter } from './routes/admin'
 
 const app = new Hono<{ Variables: HonoVariables }>()
 
@@ -107,6 +108,7 @@ api.route('/',         aiRouter)
 api.route('/rapports', rapportsRouter)
 api.route('/shop-erp', shopErpRouter)
 api.route('/',         operationsRouter)
+api.route('/admin',    adminRouter)
 
 app.route('/api', api)
 

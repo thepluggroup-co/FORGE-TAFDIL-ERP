@@ -24,7 +24,7 @@ export default function Login() {
       setError('Email ou mot de passe incorrect')
       setLoading(false)
     } else {
-      navigate('/production', { replace: true })
+      navigate('/dashboard', { replace: true })
     }
   }
 

@@ -26,6 +26,8 @@ const IoT          = lazy(() => import('@/pages/IoT'))
 const Formation    = lazy(() => import('@/pages/Formation'))
 const Boutique     = lazy(() => import('@/pages/Boutique'))
 const ModulePage   = lazy(() => import('@/pages/ModulePage'))
+const Account       = lazy(() => import('@/pages/Account'))
+const AdminSettings = lazy(() => import('@/pages/AdminSettings'))
 
 function PageLoader() {
   return (
@@ -45,7 +47,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
   if (loading) return <PageLoader />
-  if (user) return <Navigate to="/production" replace />
+  if (user) return <Navigate to="/dashboard" replace />
   return <>{children}</>
 }
 
@@ -99,6 +101,10 @@ function AppRoutes() {
           <Route path="/iot" element={<Shell><IoT /></Shell>} />
           <Route path="/formation" element={<Shell><Formation /></Shell>} />
           <Route path="/boutique" element={<Shell><Boutique /></Shell>} />
+
+          {/* Account / settings */}
+          <Route path="/account" element={<Shell><Account /></Shell>} />
+          <Route path="/admin"   element={<Shell><AdminSettings /></Shell>} />
 
           {/* Autres modules (placeholder) */}
           {PLACEHOLDER_MODULES.map((mod) => (

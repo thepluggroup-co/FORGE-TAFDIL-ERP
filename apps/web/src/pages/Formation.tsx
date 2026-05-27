@@ -7,7 +7,7 @@ import {
 import { PageHeader, KpiCard, SlideOver, Button, Modal } from '@forge/ui'
 import { toast } from 'sonner'
 import {
-  useApprenants, useProgressionApprenant, useRecruterApprenant,
+  useApprenants, useProgressionApprenant, useRecruterApprenant, useCreateApprenant,
 } from '@/hooks/useRH'
 import type { Apprenant, RecruterPayload } from '@/hooks/useRH'
 
@@ -205,6 +205,7 @@ export default function Formation() {
 
   const { data: appData, isLoading }  = useApprenants()
   const progressionApprenant          = useProgressionApprenant()
+  const createApprenant               = useCreateApprenant()
   const apprenants                    = appData?.data ?? []
   const isDirecteur                   = true
 
@@ -218,13 +219,18 @@ export default function Formation() {
   const handleAddApprenant = () => {
     if (!newNom.trim() || !newSpec.trim()) return
     setNewSaving(true)
-    setTimeout(() => {
-      setAddSlide(false)
-      setNewNom('')
-      setNewSpec('')
-      setNewSaving(false)
-      toast.success(`Apprenant ${newNom} ajouté au programme`)
-    }, 500)
+    createApprenant.mutate(
+      { nom: newNom.trim(), specialite: newSpec.trim(), niveau: 1, duree_mois: 0 },
+      {
+        onSuccess: () => {
+          setAddSlide(false)
+          setNewNom('')
+          setNewSpec('')
+          setNewSaving(false)
+        },
+        onError: () => setNewSaving(false),
+      },
+    )
   }
 
   return (

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
 
@@ -33,8 +34,21 @@ export function AppShell({ children }: AppShellProps) {
   return (
     <div className="flex h-screen overflow-hidden bg-[#F5F5F5]">
       {/* ── Desktop sidebar ── */}
-      <div className="hidden md:flex h-full">
+      <div className="hidden md:flex h-full relative">
         <Sidebar collapsed={collapsed} onToggle={toggleCollapsed} />
+        {/* Toggle button lives here — outside motion.aside — so overflow-hidden never clips it */}
+        <button
+          onClick={toggleCollapsed}
+          className="absolute right-0 top-20 z-20 translate-x-1/2 flex items-center justify-center
+            w-6 h-6 rounded-full bg-[#C62828] text-white shadow-md
+            hover:bg-[#B71C1C] transition-colors"
+          aria-label={collapsed ? 'Déplier la sidebar' : 'Réduire la sidebar'}
+          title={collapsed ? 'Déplier la sidebar' : 'Réduire la sidebar'}
+        >
+          {collapsed
+            ? <ChevronRight className="h-3 w-3" />
+            : <ChevronLeft  className="h-3 w-3" />}
+        </button>
       </div>
 
       {/* ── Mobile sidebar drawer ── */}
@@ -68,14 +82,15 @@ export function AppShell({ children }: AppShellProps) {
 
       {/* ── Main area ── */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        <TopBar onMobileMenuToggle={() => setMobileOpen((v) => !v)} />
+        <TopBar
+          onMobileMenuToggle={() => setMobileOpen((v) => !v)}
+          sidebarCollapsed={collapsed}
+          onSidebarToggle={toggleCollapsed}
+        />
 
-        {/* Page content — offset for fixed TopBar (64px) */}
-        <main
-          className="flex-1 overflow-y-auto"
-          style={{ paddingTop: 64 }}
-        >
-          <div className="p-4 md:p-6 h-full">
+        {/* Page content — TopBar is sticky so no offset needed */}
+        <main className="flex-1 overflow-y-auto">
+          <div className="p-4 md:p-6">
             {children}
           </div>
         </main>

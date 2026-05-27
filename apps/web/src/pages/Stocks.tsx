@@ -40,6 +40,7 @@ const buildColumns = (onEntree: (p: Product) => void, onSortie: (p: Product) => 
     id: 'designation',
     header: 'Produit',
     accessor: 'designation',
+    csvValue: (row) => `${row.designation} (${row.categorie})`,
     render: (v, row) => (
       <div>
         <div className="text-sm font-medium text-[#212121]">{v as string}</div>
@@ -52,6 +53,7 @@ const buildColumns = (onEntree: (p: Product) => void, onSortie: (p: Product) => 
     header: 'Niveau stock',
     accessor: 'stock_actuel',
     sortable: false,
+    csvSkip: true,  // bar chart visual — skip in CSV; stock qty column is enough
     render: (_, row) => (
       <div className="w-36">
         <StockLevel
@@ -68,6 +70,7 @@ const buildColumns = (onEntree: (p: Product) => void, onSortie: (p: Product) => 
     id: 'stock',
     header: 'Qté',
     accessor: 'stock_actuel',
+    csvValue: (row) => `${row.stock_actuel} ${row.unite}`,
     render: (v, row) => (
       <span className="text-sm font-semibold">
         {(v as number).toLocaleString('fr-CM')} <span className="text-xs text-gray-400 font-normal">{row.unite as string}</span>
@@ -78,6 +81,7 @@ const buildColumns = (onEntree: (p: Product) => void, onSortie: (p: Product) => 
     id: 'valeur',
     header: 'Valeur FCFA',
     accessor: 'prix_unitaire_xaf',
+    csvValue: (row) => String((row.stock_actuel as number) * (row.prix_unitaire_xaf as number)),
     render: (_, row) => <span className="text-sm font-medium">{formatXAF((row.stock_actuel as number) * (row.prix_unitaire_xaf as number))}</span>,
   },
   {
@@ -91,23 +95,30 @@ const buildColumns = (onEntree: (p: Product) => void, onSortie: (p: Product) => 
     header: 'Actions',
     accessor: 'id',
     sortable: false,
+    csvSkip: true,   // action buttons make no sense in CSV
     render: (_, row) => (
-      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+        {/* Entrée — green, clearly labelled */}
         <button
           onClick={() => onEntree(row)}
           title="Entrée stock"
-          className="flex items-center justify-center w-7 h-7 rounded-lg bg-green-50 text-green-700
-            hover:bg-green-100 transition-colors text-xs font-bold"
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg
+            bg-green-600 text-white hover:bg-green-700
+            transition-colors text-xs font-semibold shadow-sm"
         >
-          +
+          <Plus className="h-3.5 w-3.5" />
+          Entrée
         </button>
+        {/* Sortie — red, clearly labelled */}
         <button
           onClick={() => onSortie(row)}
           title="Sortie stock"
-          className="flex items-center justify-center w-7 h-7 rounded-lg bg-red-50 text-[#C62828]
-            hover:bg-red-100 transition-colors text-xs font-bold"
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg
+            bg-[#C62828] text-white hover:bg-[#B71C1C]
+            transition-colors text-xs font-semibold shadow-sm"
         >
-          −
+          <Minus className="h-3.5 w-3.5" />
+          Sortie
         </button>
       </div>
     ),

@@ -6,6 +6,10 @@ export interface Column<T> {
   accessor: keyof T | ((row: T) => React.ReactNode)
   render?: (value: unknown, row: T) => React.ReactNode
   sortable?: boolean
+  /** Set to true to exclude this column from CSV exports (e.g. action columns) */
+  csvSkip?: boolean
+  /** Optional override to get a clean string for CSV (avoids exporting JSX/IDs) */
+  csvValue?: (row: T) => string
 }
 
 export interface DataTableProps<T extends object> {
@@ -25,21 +29,40 @@ function getCellValue<T extends object>(row: T, accessor: Column<T>['accessor'])
   return typeof accessor === 'function' ? accessor(row) : (row as Record<PropertyKey, unknown>)[accessor as PropertyKey]
 }
 
-function exportCsv<T extends object>(columns: Column<T>[], data: T[]) {
-  const headers = columns.map((c) => c.header).join(',')
+/** Returns a clean plain-text string for CSV, sanitising quotes and newlines. */
+function toCsvCell(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  const s = String(value).replace(/\r?\n/g, ' ').trim()
+  // Wrap in quotes if the value contains a comma, quote, or semicolon
+  return s.includes(',') || s.includes('"') || s.includes(';')
+    ? `"${s.replace(/"/g, '""')}"`
+    : s
+}
+
+function exportCsv<T extends object>(columns: Column<T>[], data: T[], filename = `export-${Date.now()}.csv`) {
+  // Filter out columns that should not appear in the CSV
+  const exportCols = columns.filter((c) => !c.csvSkip)
+
+  const headers = exportCols.map((c) => toCsvCell(c.header)).join(',')
   const rows = data.map((row) =>
-    columns.map((c) => {
-      const v = getCellValue(row, c.accessor)
-      const str = String(v ?? '')
-      return str.includes(',') ? `"${str}"` : str
-    }).join(','),
+    exportCols.map((c) => {
+      // Prefer explicit csvValue override (cleanest)
+      if (c.csvValue) return toCsvCell(c.csvValue(row))
+      const raw = getCellValue(row, c.accessor)
+      // If the raw value is a React element (JSX), fall back to empty string —
+      // this happens when accessor is a render function returning JSX.
+      if (raw !== null && typeof raw === 'object' && '$$typeof' in (raw as object)) return ''
+      return toCsvCell(raw)
+    }).join(',')
   )
-  const csv = [headers, ...rows].join('\n')
+
+  // Add BOM so Excel opens UTF-8 correctly
+  const csv = '﻿' + [headers, ...rows].join('\r\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
   a.href = url
-  a.download = `export-${Date.now()}.csv`
+  a.download = filename
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -50,7 +73,7 @@ function SkeletonRow({ cols }: { cols: number }) {
       <td className="px-4 py-3"><div className="h-4 w-4 bg-gray-200 rounded animate-pulse" /></td>
       {Array.from({ length: cols }).map((_, i) => (
         <td key={i} className="px-4 py-3">
-          <div className="h-4 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + Math.random() * 30}%` }} />
+          <div className="h-4 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * 13) % 30}%` }} />
         </td>
       ))}
     </tr>
@@ -65,10 +88,10 @@ export function DataTable<T extends object>({
   keyField,
   emptyMessage = 'Aucun résultat',
 }: DataTableProps<T>) {
-  const [search, setSearch] = useState('')
+  const [search, setSearch]   = useState('')
   const [sortCol, setSortCol] = useState<string | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>(null)
-  const [page, setPage] = useState(1)
+  const [page, setPage]       = useState(1)
   const [pageSize, setPageSize] = useState<10 | 25 | 50>(10)
   const [selected, setSelected] = useState<Set<number>>(new Set())
 
@@ -96,7 +119,7 @@ export function DataTable<T extends object>({
   }, [filtered, sortCol, sortDir, columns])
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
-  const paginated = sorted.slice((page - 1) * pageSize, page * pageSize)
+  const paginated  = sorted.slice((page - 1) * pageSize, page * pageSize)
 
   const toggleSort = useCallback((colId: string) => {
     setSortCol((prev) => {
@@ -109,7 +132,9 @@ export function DataTable<T extends object>({
 
   const toggleSelectAll = () => {
     setSelected((prev) =>
-      prev.size === paginated.length ? new Set() : new Set(paginated.map((_, i) => (page - 1) * pageSize + i)),
+      prev.size === paginated.length
+        ? new Set()
+        : new Set(paginated.map((_, i) => (page - 1) * pageSize + i)),
     )
   }
 
@@ -120,6 +145,11 @@ export function DataTable<T extends object>({
       return next
     })
   }
+
+  // Rows to export: selected subset, or all filtered+sorted rows (not just current page)
+  const exportRows = selected.size > 0
+    ? [...selected].map((i) => sorted[i]).filter(Boolean) as T[]
+    : sorted
 
   return (
     <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
@@ -143,14 +173,15 @@ export function DataTable<T extends object>({
             <span className="text-xs text-[#C62828] font-medium">{selected.size} sélectionné(s)</span>
           )}
           <button
-            onClick={() => exportCsv(columns, selected.size > 0 ? [...selected].map((i) => sorted[i]).filter(Boolean) : sorted)}
+            onClick={() => exportCsv(columns, exportRows)}
+            title={`Exporter ${exportRows.length} ligne(s) en CSV`}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg
               border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
           >
             <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-            Exporter CSV
+            Exporter CSV {selected.size > 0 ? `(${selected.size})` : `(${sorted.length})`}
           </button>
         </div>
       </div>
@@ -245,30 +276,18 @@ export function DataTable<T extends object>({
           >
             {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
-          <span>{sorted.length} résultat{sorted.length > 1 ? 's' : ''}</span>
+          <span>{sorted.length} résultat{sorted.length !== 1 ? 's' : ''}</span>
         </div>
         <div className="flex items-center gap-1">
-          <button
-            onClick={() => setPage(1)}
-            disabled={page === 1}
-            className="px-2 py-1 rounded-md hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
-          >«</button>
-          <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page === 1}
-            className="px-2 py-1 rounded-md hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
-          >‹</button>
+          <button onClick={() => setPage(1)} disabled={page === 1}
+            className="px-2 py-1 rounded-md hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed">«</button>
+          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}
+            className="px-2 py-1 rounded-md hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed">‹</button>
           <span className="px-3 font-medium text-[#212121]">{page} / {totalPages}</span>
-          <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages}
-            className="px-2 py-1 rounded-md hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
-          >›</button>
-          <button
-            onClick={() => setPage(totalPages)}
-            disabled={page === totalPages}
-            className="px-2 py-1 rounded-md hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
-          >»</button>
+          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages}
+            className="px-2 py-1 rounded-md hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed">›</button>
+          <button onClick={() => setPage(totalPages)} disabled={page === totalPages}
+            className="px-2 py-1 rounded-md hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed">»</button>
         </div>
       </div>
     </div>
