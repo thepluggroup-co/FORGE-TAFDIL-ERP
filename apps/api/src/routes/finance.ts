@@ -101,6 +101,21 @@ router.post('/factures', requireRole(['directeur', 'admin']), zValidator('json',
   const user = c.get('user')
   const body = c.req.valid('json')
 
+  // ── Garde-fou : une seule facture par commande ─────────────────────────────
+  if (body.commande_id) {
+    const { count: existing } = await db
+      .from('factures')
+      .select('*', { count: 'exact', head: true })
+      .eq('commande_id', body.commande_id)
+      .neq('statut', 'annule')   // les factures annulées ne bloquent pas
+    if ((existing ?? 0) > 0) {
+      return c.json({
+        error: 'Une facture existe déjà pour cette commande',
+        code:  'ALREADY_INVOICED',
+      }, 422)
+    }
+  }
+
   const year = new Date().getFullYear()
   const { count } = await db.from('factures').select('*', { count: 'exact', head: true })
     .gte('created_at', `${year}-01-01T00:00:00.000Z`)

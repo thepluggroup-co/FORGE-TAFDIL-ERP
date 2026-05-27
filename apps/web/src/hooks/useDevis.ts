@@ -19,8 +19,28 @@ export interface Devis {
   acompte_pct: number
   conditions_paiement: string
   montant_ttc_xaf: number
-  client: { id: string; nom: string }
+  pdf_url: string | null
+  client: { id: string; nom: string; telephone?: string | null; email?: string | null }
   lignes: DevisLigne[]
+}
+
+export interface CreateDevisPayload {
+  client_id?: string
+  client_nom: string
+  date_emission: string
+  date_validite: string
+  validite_jours: 15 | 30 | 45
+  acompte_pct: number
+  conditions_paiement: string
+  notes?: string
+  lignes: Array<{
+    designation: string
+    categorie: 'materiaux' | 'main_oeuvre' | 'equipement'
+    unite: string
+    quantite: number
+    prix_unitaire_ht_xaf: number
+    ordre: number
+  }>
 }
 
 interface DevisResponse { data: Devis[]; total: number }
@@ -35,6 +55,19 @@ export function useDevis(params?: { statut?: string; search?: string }) {
     queryKey: ['devis', params],
     queryFn:  () => apiClient.get<DevisResponse>(`/api/devis${q ? `?${q}` : ''}`),
     staleTime: 30_000,
+  })
+}
+
+export function useCreateDevis() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateDevisPayload) =>
+      apiClient.post<Devis & { pdf_url?: string | null }>('/api/devis', payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['devis'] })
+      toast.success('Devis créé avec succès !')
+    },
+    onError: (err: Error) => toast.error(err.message),
   })
 }
 

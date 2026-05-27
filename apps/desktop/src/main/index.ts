@@ -17,6 +17,11 @@ const APP_V  = app.getVersion()
 let win: BrowserWindow | null = null
 let syncMgr: SyncManager | null = null
 
+// Set to true only when the developer deliberately clicks the menu item.
+// Devtools opened by ANY other means (F12, Ctrl+Shift+I, extensions, auto-open)
+// will be closed immediately.
+let devToolsIntentional = false
+
 // ── Menu ───────────────────────────────────────────────────────────────────────
 function buildMenu(window: BrowserWindow) {
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -40,7 +45,15 @@ function buildMenu(window: BrowserWindow) {
         { label: 'Plein écran', accelerator: 'F11', role: 'togglefullscreen' },
         ...( isDev ? [
           { type: 'separator' as const },
-          { label: 'Outils de développement', accelerator: 'F12', role: 'toggleDevTools' as const },
+          {
+            // No 'role: toggleDevTools' — that would register F12 globally.
+            // No accelerator — forces intentional click only.
+            label: 'Outils de développement',
+            click: () => {
+              devToolsIntentional = true
+              win?.webContents.toggleDevTools()
+            },
+          },
         ] : []),
       ],
     },
@@ -117,23 +130,32 @@ function createWindow() {
   win.once('ready-to-show', () => win?.show())
   win.on('closed', () => { win = null })
 
-  // ── Block DevTools in production ─────────────────────────────────────────────
-  if (!isDev) {
-    // 1. Close immediately if opened via any mechanism (extensions, right-click, etc.)
-    win.webContents.on('devtools-opened', () => {
-      win?.webContents.closeDevTools()
-      log.warn('[security] DevTools blocked in production')
-    })
+  // ── DevTools guard — applies in BOTH dev and production ──────────────────────
+  //
+  // Why: Electron registers Ctrl+Shift+I as a built-in devtools shortcut in dev
+  // mode regardless of the app menu. The menu item above uses a plain click handler
+  // (no 'role', no accelerator) so it doesn't register any keyboard shortcut.
+  //
+  // Rule: devtools are ONLY allowed when devToolsIntentional === true,
+  //       i.e. the developer explicitly clicked the menu item.
 
-    // 2. Intercept F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C before they reach the renderer
-    win.webContents.on('before-input-event', (_e, input) => {
-      const devToolsKeys = (
-        input.key === 'F12' ||
-        (input.control && input.shift && ['I', 'J', 'C'].includes(input.key.toUpperCase()))
-      )
-      if (devToolsKeys) _e.preventDefault()
-    })
-  }
+  // 1. If devtools open from any unexpected source, close them immediately.
+  win.webContents.on('devtools-opened', () => {
+    if (!devToolsIntentional) {
+      win?.webContents.closeDevTools()
+      log.warn('[security] DevTools auto-closed — use Affichage → Outils de développement')
+    }
+    devToolsIntentional = false   // reset after each intentional open
+  })
+
+  // 2. Swallow every keyboard shortcut that would open devtools before it fires.
+  win.webContents.on('before-input-event', (_e, input) => {
+    const isDevToolsShortcut = (
+      input.key === 'F12' ||
+      (input.control && input.shift && ['I', 'J', 'C'].includes(input.key.toUpperCase()))
+    )
+    if (isDevToolsShortcut) _e.preventDefault()
+  })
 
   buildMenu(win)
   return win

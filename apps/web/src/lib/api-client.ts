@@ -107,9 +107,19 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
     // ── Other non-OK ───────────────────────────────────────────────────────
     if (!res.ok) {
-      const data = await res.json().catch(() => ({})) as { error?: string }
-      throw new Error(data.error ?? `Erreur ${res.status}`)
+      const data = await res.json().catch(() => ({})) as { error?: unknown; message?: string }
+      // data.error can be a Zod error object (from @hono/zod-validator) — serialize safely
+      const errMsg =
+        typeof data.error === 'string'
+          ? data.error
+          : typeof data.message === 'string'
+            ? data.message
+            : `Erreur ${res.status}`
+      throw new Error(errMsg)
     }
+
+    // 204 No Content — pas de corps JSON
+    if (res.status === 204) return undefined as unknown as T
 
     return res.json() as Promise<T>
 

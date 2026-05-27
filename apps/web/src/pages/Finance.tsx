@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  FileText, CreditCard, ReceiptText,
+  FileText, ReceiptText,
   Plus, Download, MessageCircle, Printer,
   AlertCircle, CheckCircle, ChevronLeft, ChevronRight, X,
 } from 'lucide-react'
@@ -13,6 +13,7 @@ import {
 } from '@/hooks/useFinance'
 import type { Facture as FactureApi, Credit as CreditApi, FactureLigne } from '@/hooks/useFinance'
 import { useClients } from '@/hooks/useClients'
+import { useCommandes } from '@/hooks/useCommandes'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -191,29 +192,69 @@ function InvoicePreview({ facture }: { facture: PreviewableFacture }) {
 
 // ── Nouvelle Facture Slide-over ────────────────────────────────────────────────
 
-function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const [step, setStep]           = useState(1)
+type FactureMode = 'commande' | 'libre' | null
+
+function NouvelleFactureSlideOver({
+  isOpen,
+  onClose,
+  factureeCommandeIds,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  factureeCommandeIds: Set<string>
+}) {
+  const [step, setStep]                         = useState(1)
+  const [mode, setMode]                         = useState<FactureMode>(null)
   const [selectedClientId, setSelectedClientId] = useState('')
-  const [dateEmission]            = useState(new Date().toISOString().split('T')[0])
-  const [dateEcheance, setDateEcheance] = useState('')
-  const [lignes, setLignes]       = useState<FormLigne[]>([{ designation: '', quantite: 1, prix_unitaire_ht_xaf: 0 }])
+  const [clientNom, setClientNom]               = useState('')
+  const [selectedCommandeId, setSelectedCommandeId] = useState('')
+  const [dateEmission]                          = useState(new Date().toISOString().split('T')[0])
+  const [dateEcheance, setDateEcheance]         = useState('')
+  const [lignes, setLignes]                     = useState<FormLigne[]>([{ designation: '', quantite: 1, prix_unitaire_ht_xaf: 0 }])
 
-  const { data: clientsData } = useClients()
-  const clients = clientsData?.data ?? []
-  const selectedClientNom = clients.find((c) => c.id === selectedClientId)?.nom ?? ''
+  const { data: clientsData }   = useClients({ enabled: isOpen })
+  const { data: commandesData } = useCommandes({ statut: 'delivered', enabled: isOpen })
+  const clients          = clientsData?.data  ?? []
+  const commandesLivrees = (commandesData?.data ?? []).filter((c) => !factureeCommandeIds.has(c.id))
+
   const creerFacture = useCreerFacture()
-
   const { ht, tva, ttc } = totalsFromLignes(lignes)
 
-  const previewFacture: PreviewableFacture = {
-    numero: 'FACT-2026-NEW',
-    client: { nom: selectedClientNom },
-    date_emission: dateEmission,
-    date_echeance: dateEcheance,
-    lignes,
-    montant_ht_xaf:  ht,
-    montant_tva_xaf: tva,
-    montant_ttc_xaf: ttc,
+  // Réinitialiser le formulaire à chaque ouverture/fermeture
+  useEffect(() => {
+    if (!isOpen) {
+      setStep(1)
+      setMode(null)
+      setSelectedClientId('')
+      setClientNom('')
+      setSelectedCommandeId('')
+      setDateEcheance('')
+      setLignes([{ designation: '', quantite: 1, prix_unitaire_ht_xaf: 0 }])
+    }
+  }, [isOpen])
+
+  const handleModeSelect = (m: FactureMode) => {
+    setMode(m)
+    setStep(2)
+  }
+
+  const handleCommandeSelect = (cmdId: string) => {
+    setSelectedCommandeId(cmdId)
+    const cmd = commandesLivrees.find((c) => c.id === cmdId)
+    if (cmd) {
+      setSelectedClientId(cmd.client.id)
+      setClientNom(cmd.client.nom)
+      setLignes(cmd.lignes.map((l) => ({
+        designation:          l.designation,
+        quantite:             l.quantite,
+        prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
+      })))
+    }
+  }
+
+  const handleClientSelect = (id: string) => {
+    setSelectedClientId(id)
+    setClientNom(clients.find((c) => c.id === id)?.nom ?? '')
   }
 
   const updateLigne = (i: number, field: keyof FormLigne, val: string | number) => {
@@ -222,11 +263,37 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
     setLignes(next)
   }
 
-  const STEPS = ['Client & Dates', 'Lignes', 'Aperçu']
+  const previewFacture: PreviewableFacture = {
+    numero: 'FACT-2026-NEW',
+    client: { nom: clientNom },
+    date_emission: dateEmission,
+    date_echeance: dateEcheance,
+    lignes,
+    montant_ht_xaf:  ht,
+    montant_tva_xaf: tva,
+    montant_ttc_xaf: ttc,
+  }
+
+  const handleValider = () => {
+    creerFacture.mutate(
+      {
+        client_id:   selectedClientId || undefined,
+        client_nom:  clientNom,
+        commande_id: mode === 'commande' ? selectedCommandeId : undefined,
+        date_emission: dateEmission,
+        date_echeance: dateEcheance,
+        lignes,
+      },
+      { onSuccess: onClose },
+    )
+  }
+
+  const STEPS = ['Mode', 'Sélection', 'Lignes', 'Aperçu']
 
   return (
     <SlideOver isOpen={isOpen} onClose={onClose} title="Nouvelle facture" width="xl">
-      {/* Progress */}
+
+      {/* ── Barre de progression ── */}
       <div className="flex items-center gap-1 mb-6">
         {STEPS.map((s, i) => (
           <React.Fragment key={i}>
@@ -242,18 +309,129 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
               </div>
               <span className="text-xs font-medium whitespace-nowrap" style={{ color: step === i + 1 ? '#C62828' : '#9ca3af' }}>{s}</span>
             </div>
-            {i < 2 && <div className="flex-1 h-px bg-gray-200" />}
+            {i < 3 && <div className="flex-1 h-px bg-gray-200" />}
           </React.Fragment>
         ))}
       </div>
 
-      {/* Step 1 */}
+      {/* ── Étape 1 : Choix du mode ── */}
       {step === 1 && (
+        <div className="space-y-3">
+          <p className="text-sm text-gray-500 mb-4">Comment voulez-vous créer cette facture ?</p>
+
+          <button
+            onClick={() => handleModeSelect('commande')}
+            className="w-full flex items-start gap-4 p-4 border-2 border-gray-200 rounded-xl hover:border-[#C62828] hover:bg-red-50/30 transition-colors text-left group"
+          >
+            <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-[#C62828]/10 shrink-0 mt-0.5 group-hover:bg-[#C62828]/20 transition-colors">
+              <FileText className="h-5 w-5 text-[#C62828]" />
+            </div>
+            <div>
+              <div className="font-semibold text-sm text-gray-800">Depuis une commande</div>
+              <div className="text-xs text-gray-500 mt-0.5">
+                Sélectionnez une commande livrée — client et lignes pré-remplis automatiquement
+                {commandesLivrees.length > 0 && (
+                  <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#C62828]/10 text-[#C62828]">
+                    {commandesLivrees.length} disponible{commandesLivrees.length > 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+            </div>
+          </button>
+
+          <button
+            onClick={() => handleModeSelect('libre')}
+            className="w-full flex items-start gap-4 p-4 border-2 border-gray-200 rounded-xl hover:border-gray-400 hover:bg-gray-50 transition-colors text-left group"
+          >
+            <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-gray-100 shrink-0 mt-0.5 group-hover:bg-gray-200 transition-colors">
+              <Plus className="h-5 w-5 text-gray-500" />
+            </div>
+            <div>
+              <div className="font-semibold text-sm text-gray-800">Saisie manuelle</div>
+              <div className="text-xs text-gray-500 mt-0.5">Prestation ponctuelle, avoir, correction — saisissez les lignes librement</div>
+            </div>
+          </button>
+        </div>
+      )}
+
+      {/* ── Étape 2 (mode commande) : Choisir une commande livrée ── */}
+      {step === 2 && mode === 'commande' && (
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">
+              Commandes livrées sans facture
+            </label>
+            {commandesLivrees.length === 0 ? (
+              <div className="border border-dashed border-gray-200 rounded-xl p-8 text-center">
+                <FileText className="h-8 w-8 text-gray-300 mx-auto mb-2" />
+                <p className="text-sm text-gray-400">Aucune commande livrée disponible</p>
+                <p className="text-xs text-gray-300 mt-0.5">Toutes les commandes ont déjà été facturées</p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                {commandesLivrees.map((cmd) => (
+                  <button
+                    key={cmd.id}
+                    onClick={() => handleCommandeSelect(cmd.id)}
+                    className={`w-full flex items-center justify-between p-3 border-2 rounded-xl text-left transition-colors ${
+                      selectedCommandeId === cmd.id
+                        ? 'border-[#C62828] bg-red-50'
+                        : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div>
+                      <div className="font-mono text-xs font-bold text-gray-600">{cmd.reference}</div>
+                      <div className="text-sm font-semibold text-gray-800 mt-0.5">{cmd.client.nom}</div>
+                      <div className="text-xs text-gray-400 mt-0.5">{formatDate(cmd.date_commande)}</div>
+                    </div>
+                    <div className="text-right shrink-0 ml-4">
+                      <div className="text-sm font-bold text-gray-800">{formatXAF(cmd.montant_ttc_xaf)}</div>
+                      <div className="text-xs text-gray-400 mt-0.5">
+                        {cmd.lignes.length} ligne{cmd.lignes.length !== 1 ? 's' : ''}
+                      </div>
+                      {selectedCommandeId === cmd.id && (
+                        <CheckCircle className="h-4 w-4 text-[#C62828] ml-auto mt-1" />
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {selectedCommandeId && (
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Date d'échéance</label>
+              <input
+                type="date"
+                value={dateEcheance}
+                onChange={(e) => setDateEcheance(e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30"
+              />
+            </div>
+          )}
+
+          <div className="flex justify-between pt-4">
+            <Button variant="ghost" onClick={() => { setStep(1); setSelectedCommandeId('') }}>
+              <ChevronLeft className="h-3.5 w-3.5" /> Retour
+            </Button>
+            <Button onClick={() => setStep(3)} disabled={!selectedCommandeId || !dateEcheance}>
+              Suivant <ChevronRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Étape 2 (mode libre) : Client + Dates ── */}
+      {step === 2 && mode === 'libre' && (
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Client</label>
-            <select value={selectedClientId} onChange={(e) => setSelectedClientId(e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30 bg-white">
+            <select
+              value={selectedClientId}
+              onChange={(e) => handleClientSelect(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30 bg-white"
+            >
               <option value="">— Sélectionner —</option>
               {clients.map((c) => (
                 <option key={c.id} value={c.id}>{c.nom}</option>
@@ -272,17 +450,26 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
             </div>
           </div>
-          <div className="flex justify-end pt-4">
-            <Button onClick={() => setStep(2)} disabled={!selectedClientId || !dateEcheance}>
+          <div className="flex justify-between pt-4">
+            <Button variant="ghost" onClick={() => setStep(1)}>
+              <ChevronLeft className="h-3.5 w-3.5" /> Retour
+            </Button>
+            <Button onClick={() => setStep(3)} disabled={!selectedClientId || !dateEcheance}>
               Suivant <ChevronRight className="h-3.5 w-3.5" />
             </Button>
           </div>
         </div>
       )}
 
-      {/* Step 2 */}
-      {step === 2 && (
+      {/* ── Étape 3 : Lignes (pré-remplies ou manuelles) ── */}
+      {step === 3 && (
         <div className="space-y-4">
+          {mode === 'commande' && (
+            <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+              <CheckCircle className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+              <p className="text-xs text-blue-700">Lignes pré-remplies depuis la commande · Modifiables si besoin</p>
+            </div>
+          )}
           {lignes.map((l, i) => (
             <div key={i} className="flex gap-2 items-start">
               <div className="flex-1">
@@ -315,32 +502,27 @@ function NouvelleFactureSlideOver({ isOpen, onClose }: { isOpen: boolean; onClos
             </div>
           </div>
           <div className="flex justify-between pt-4">
-            <Button variant="ghost" onClick={() => setStep(1)}><ChevronLeft className="h-3.5 w-3.5" /> Retour</Button>
-            <Button onClick={() => setStep(3)} disabled={lignes.every((l) => !l.designation)}>
+            <Button variant="ghost" onClick={() => setStep(2)}><ChevronLeft className="h-3.5 w-3.5" /> Retour</Button>
+            <Button onClick={() => setStep(4)} disabled={lignes.every((l) => !l.designation)}>
               Aperçu <ChevronRight className="h-3.5 w-3.5" />
             </Button>
           </div>
         </div>
       )}
 
-      {/* Step 3 */}
-      {step === 3 && (
+      {/* ── Étape 4 : Aperçu + Validation ── */}
+      {step === 4 && (
         <div className="space-y-4">
           <InvoicePreview facture={previewFacture} />
           <div className="flex gap-2 justify-between pt-2">
-            <Button variant="ghost" onClick={() => setStep(2)}><ChevronLeft className="h-3.5 w-3.5" /> Retour</Button>
+            <Button variant="ghost" onClick={() => setStep(3)}><ChevronLeft className="h-3.5 w-3.5" /> Retour</Button>
             <div className="flex gap-2">
               <Button variant="ghost" size="sm" onClick={() => window.print()}>
                 <Printer className="h-3.5 w-3.5" /> Imprimer
               </Button>
-              <Button
-                onClick={() => creerFacture.mutate(
-                  { client_id: selectedClientId, date_emission: dateEmission, date_echeance: dateEcheance, lignes },
-                  { onSuccess: onClose },
-                )}
-                disabled={creerFacture.isPending}
-              >
-                <CheckCircle className="h-3.5 w-3.5" /> {creerFacture.isPending ? 'Enregistrement…' : 'Valider'}
+              <Button onClick={handleValider} disabled={creerFacture.isPending}>
+                <CheckCircle className="h-3.5 w-3.5" />
+                {creerFacture.isPending ? 'Enregistrement…' : 'Valider'}
               </Button>
             </div>
           </div>
@@ -439,6 +621,12 @@ export default function Finance() {
   const factures  = (facturesData?.data  ?? []) as FactureRecord[]
   const credits   = (creditsData?.data   ?? []) as CreditRecord[]
   const ecritures = ecrituresData?.data  ?? []
+
+  // IDs des commandes déjà facturées (pour filtrer le picker du slide-over)
+  const factureeCommandeIds = useMemo(
+    () => new Set(factures.map((f) => f.commande_id as string).filter(Boolean)),
+    [factures],
+  )
 
   const echusCount = credits.filter((c) => c.statut === 'echu').length
   const totalEchus = credits.filter((c) => c.statut === 'echu').reduce((s, c) => s + (c.solde_restant_xaf as number), 0)
@@ -680,7 +868,11 @@ export default function Finance() {
         </AnimatePresence>
       </div>
 
-      <NouvelleFactureSlideOver isOpen={showNewFacture} onClose={() => setShowNewFacture(false)} />
+      <NouvelleFactureSlideOver
+        isOpen={showNewFacture}
+        onClose={() => setShowNewFacture(false)}
+        factureeCommandeIds={factureeCommandeIds}
+      />
       <RemboursementModal isOpen={!!remboursementCredit} onClose={() => setRemboursementCredit(null)} credit={remboursementCredit} />
     </motion.div>
   )

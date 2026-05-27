@@ -102,6 +102,73 @@ function calculerTotaux(lignes: Array<{ quantite: number; prix_unitaire_ht_xaf: 
   return { total_ht_xaf: Math.round(total_ht_xaf), tva_xaf, total_ttc_xaf }
 }
 
+/** Mappe un devis brut Supabase vers le format attendu par le frontend */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapDevis(row: any) {
+  const cli = row.clients as { id?: string; nom?: string; telephone?: string; email?: string } | null
+  return {
+    id:                  row.id,
+    reference:           row.numero,
+    statut:              row.statut,
+    date_creation:       row.date_emission ?? row.created_at,
+    validite_jours:      row.validite_jours,
+    acompte_pct:         row.acompte_pct,
+    conditions_paiement: row.conditions_paiement,
+    montant_ttc_xaf:     row.total_ttc_xaf ?? 0,
+    pdf_url:             row.pdf_url ?? null,
+    client: {
+      id:        row.client_id ?? cli?.id ?? '',
+      nom:       cli?.nom ?? row.client_nom ?? '',
+      telephone: cli?.telephone ?? null,
+      email:     cli?.email ?? null,
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    lignes: (row.devis_lignes ?? []).map((l: any) => ({
+      id:                   l.id,
+      designation:          l.designation,
+      categorie:            (l.categorie as string).replace('_', '-'),
+      quantite:             l.quantite,
+      prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
+    })),
+  }
+}
+
+/** Mappe une ligne brute Supabase vers le format attendu par le frontend */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapCommande(row: any) {
+  const cli = row.clients as { id?: string; nom?: string; telephone?: string } | null
+  return {
+    id:                    row.id,
+    reference:             row.numero,
+    statut:                row.statut,
+    date_commande:         row.date_commande,
+    date_livraison_prevue: row.date_livraison_prevue ?? null,
+    montant_ttc_xaf:       row.total_ttc_xaf ?? 0,
+    acompte_recu_xaf:      row.acompte_recu_xaf ?? 0,
+    notes:                 row.notes ?? null,
+    client: {
+      id:        row.client_id ?? '',
+      nom:       cli?.nom ?? row.client_nom ?? '',
+      telephone: cli?.telephone ?? '',
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    lignes: (row.commandes_lignes ?? []).map((l: any) => ({
+      designation:          l.designation,
+      quantite:             l.quantite,
+      prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
+      unite:                l.unite ?? 'unité',
+    })),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    historique: (row.historique_commandes ?? []).map((h: any) => ({
+      statut:      h.nouveau_statut,
+      created_at:  h.changed_at ?? h.created_at,
+      commentaire: h.commentaire ?? null,
+    })).sort((a: { created_at: string }, b: { created_at: string }) =>
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    ),
+  }
+}
+
 /** Génère un numéro séquentiel : prefix-YYYYMMDD-XXXX */
 async function genererNumero(table: string, prefix: string): Promise<string> {
   const today = new Date()
@@ -224,7 +291,7 @@ router.get('/devis', async (c) => {
   const from    = (page - 1) * perPage
   const to      = from + perPage - 1
 
-  let query = db.from('devis').select('*, devis_lignes(*)', { count: 'exact' })
+  let query = db.from('devis').select('*, devis_lignes(*), clients(id, nom, telephone, email)', { count: 'exact' })
 
   if (statut)    query = query.eq('statut', statut)
   if (client_id) query = query.eq('client_id', client_id)
@@ -237,7 +304,7 @@ router.get('/devis', async (c) => {
   if (error) return c.json({ error: error.message }, 500)
 
   return c.json({
-    data,
+    data: (data ?? []).map(mapDevis),
     total: count ?? 0,
     page,
     per_page: perPage,
@@ -250,12 +317,12 @@ router.get('/devis/:id', async (c) => {
 
   const { data, error } = await db
     .from('devis')
-    .select('*, devis_lignes(*), clients(nom, telephone, email, adresse)')
+    .select('*, devis_lignes(*), clients(id, nom, telephone, email, adresse)')
     .eq('id', id)
     .single()
 
   if (error || !data) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
-  return c.json(data)
+  return c.json(mapDevis(data))
 })
 
 router.post('/devis', requireRole(['directeur', 'admin']), zValidator('json', devisSchema), async (c) => {
@@ -375,6 +442,23 @@ router.put('/devis/:id', requireRole(['directeur', 'admin']), zValidator('json',
   return c.json(data)
 })
 
+router.patch('/devis/:id/statut', requireRole(['directeur', 'admin']), zValidator('json', z.object({
+  statut: z.enum(['brouillon', 'envoye', 'accepte', 'refuse', 'expire']),
+})), async (c) => {
+  const { id }    = c.req.param()
+  const { statut } = c.req.valid('json')
+
+  const { data, error } = await db
+    .from('devis')
+    .update({ statut, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select('*, devis_lignes(*), clients(id, nom, telephone, email)')
+    .single()
+
+  if (error || !data) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
+  return c.json(mapDevis(data))
+})
+
 router.delete('/devis/:id', requireRole(['directeur', 'admin']), async (c) => {
   const { id } = c.req.param()
 
@@ -490,7 +574,10 @@ router.get('/commandes', async (c) => {
   const from    = (page - 1) * perPage
   const to      = from + perPage - 1
 
-  let query = db.from('commandes').select('*, commandes_lignes(*)', { count: 'exact' })
+  let query = db.from('commandes').select(
+    '*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone)',
+    { count: 'exact' },
+  )
 
   if (statut)    query = query.eq('statut', statut)
   if (client_id) query = query.eq('client_id', client_id)
@@ -503,10 +590,10 @@ router.get('/commandes', async (c) => {
   if (error) return c.json({ error: error.message }, 500)
 
   return c.json({
-    data,
-    total: count ?? 0,
+    data:        (data ?? []).map(mapCommande),
+    total:       count ?? 0,
     page,
-    per_page: perPage,
+    per_page:    perPage,
     total_pages: Math.ceil((count ?? 0) / perPage),
   })
 })
@@ -585,11 +672,19 @@ router.post('/commandes', requireRole(['directeur', 'admin']), zValidator('json'
     changed_by:     user.id,
   })
 
-  return c.json(commande, 201)
+  // Retourner la commande complète (avec lignes + client) pour affichage immédiat
+  const { data: full, error: fullErr } = await db
+    .from('commandes')
+    .select('*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone)')
+    .eq('id', cmd.id)
+    .single()
+
+  if (fullErr || !full) return c.json(commande, 201)
+  return c.json(mapCommande(full), 201)
 })
 
 /** Changer le statut avec validation des transitions */
-router.put(
+router.patch(
   '/commandes/:id/statut',
   requireRole(['directeur', 'admin', 'operateur']),
   zValidator('json', statutCommandeSchema),
@@ -617,14 +712,12 @@ router.put(
       }, 422)
     }
 
-    const { data, error } = await db
+    const { error: updateErr } = await db
       .from('commandes')
       .update({ statut: body.statut, updated_at: new Date().toISOString() })
       .eq('id', id)
-      .select()
-      .single()
 
-    if (error) return c.json({ error: error.message }, 400)
+    if (updateErr) return c.json({ error: updateErr.message }, 400)
 
     // Enregistrer dans l'historique
     await db.from('historique_commandes').insert({
@@ -635,7 +728,14 @@ router.put(
       changed_by:     user.id,
     })
 
-    return c.json(data)
+    // Retourner la commande complète mappée
+    const { data: full } = await db
+      .from('commandes')
+      .select('*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone)')
+      .eq('id', id)
+      .single()
+
+    return c.json(full ? mapCommande(full) : { id, statut: body.statut })
   },
 )
 

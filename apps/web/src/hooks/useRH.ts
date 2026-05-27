@@ -9,34 +9,43 @@ export interface Employe {
   nom: string
   poste: string
   departement: string
-  type_contrat: 'CDI' | 'CDD' | 'Apprenti'
+  type_contrat: 'CDI' | 'CDD' | 'stage' | 'freelance'
   date_entree: string
-  salaire_brut_xaf: number
-  statut: 'actif' | 'inactif' | 'conge'
+  /** Salaire mensuel brut de base (XAF) — champ réel en base */
+  salaire_base_xaf: number
+  statut: 'actif' | 'inactif' | 'conge' | 'essai'
+  telephone?: string | null
+  email?: string | null
+  cin?: string | null
+  cnps?: string | null
 }
 
 export interface Presence {
   id: string
   employe_id: string
   employe_nom: string
+  poste: string
   date: string
-  heure_arrivee: string
-  heure_depart: string
+  heure_arrivee: string | null
+  heure_depart: string | null
   heures_travaillees: number
-  statut: 'present' | 'absent' | 'retard' | 'conge'
+  statut: 'present' | 'absent' | 'retard' | 'conge' | 'maladie'
+  notes?: string | null
 }
 
 export interface BulletinPaie {
   id: string
   employe_id: string
   employe_nom: string
+  poste: string
+  departement: string
   mois: string
   salaire_brut_xaf: number
   cnps_salarie_xaf: number
   irpp_xaf: number
   salaire_net_xaf: number
   cout_employeur_xaf: number
-  statut: 'brouillon' | 'valide' | 'paye'
+  statut: 'en_attente' | 'brouillon' | 'valide' | 'paye'
 }
 
 export interface Apprenant {
@@ -45,13 +54,20 @@ export interface Apprenant {
   specialite: string
   niveau: number
   duree_mois: number
-  statut: 'en_formation' | 'certifie' | 'recrute'
+  statut: 'actif' | 'suspendu' | 'diplome' | 'recrute'
+  notes?: string | null
 }
 
-interface EmployesResponse  { data: Employe[];     total: number }
-interface PresencesResponse { data: Presence[];    total: number }
-interface BulletinsResponse { data: BulletinPaie[]; total: number }
-interface ApprenantsResponse { data: Apprenant[];  total: number }
+interface EmployesResponse   { data: Employe[];      total: number }
+interface PresencesResponse  { data: Presence[];     total: number }
+interface BulletinsResponse  {
+  data: BulletinPaie[]
+  total: number
+  mois: string
+  masse_salariale_nette_xaf?: number
+  deja_genere?: boolean
+}
+interface ApprenantsResponse { data: Apprenant[];    total: number }
 
 export interface CreateEmployePayload {
   nom: string
@@ -123,15 +139,17 @@ export function useBulletinsPaie(params?: { mois?: string }) {
     queryKey: ['bulletins', params],
     queryFn:  () => apiClient.get<BulletinsResponse>(`/api/rh/paie${q}`),
     staleTime: 60_000,
+    enabled:  !!params?.mois,  // ne charge pas sans mois
   })
 }
 
 export function useGenererPaie() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (mois: string) =>
-      apiClient.post<{ bulletins: BulletinPaie[] }>('/api/rh/paie', { mois }),
-    onSuccess: () => {
+    mutationFn: ({ mois, forcer = false }: { mois: string; forcer?: boolean }) =>
+      apiClient.post<BulletinsResponse>('/api/rh/paie', { mois, forcer }),
+    onSuccess: (_, { mois }) => {
+      void qc.invalidateQueries({ queryKey: ['bulletins', { mois }] })
       void qc.invalidateQueries({ queryKey: ['bulletins'] })
       toast.success('Bulletins de paie générés')
     },
@@ -184,6 +202,168 @@ export interface RecruterPayload {
   date_entree: string
   salaire_base_xaf: number
   commentaire?: string
+}
+
+// ── Formation sessions ─────────────────────────────────────────────────────────
+
+export interface FormationSession {
+  id:           string
+  module:       string
+  niveau:       number
+  statut:       'planifiee' | 'en_cours' | 'terminee' | 'annulee'
+  date_debut:   string | null
+  date_fin:     string | null
+  formateur:    string | null
+  lieu:         string | null
+  capacite_max: number
+  horaires:     string[]
+  description:  string | null
+  nb_inscrits:  number
+}
+
+export interface FormationInscription {
+  id:               string
+  apprenant_id:     string
+  session_id:       string
+  date_inscription: string
+  disponibilites:   string[]
+  nb_seances:       number
+  evaluation:       number | null
+  statut:           'inscrit' | 'en_cours' | 'termine' | 'abandonne'
+  notes:            string | null
+  formation_sessions?: Pick<FormationSession, 'module' | 'niveau' | 'date_debut' | 'date_fin' | 'formateur' | 'lieu'>
+}
+
+export interface ValidationNiveau {
+  id:               string
+  apprenant_id:     string
+  niveau:           number
+  date_validation:  string | null
+  commentaire:      string | null
+}
+
+export interface ApprenantHistorique {
+  apprenant:    Apprenant
+  validations:  ValidationNiveau[]
+  inscriptions: FormationInscription[]
+}
+
+export interface CreateFormationSessionPayload {
+  module:       string
+  niveau:       number
+  statut?:      'planifiee' | 'en_cours' | 'terminee' | 'annulee'
+  date_debut?:  string
+  date_fin?:    string
+  formateur?:   string
+  lieu?:        string
+  capacite_max?: number
+  horaires?:    string[]
+  description?: string
+}
+
+export interface InscrirePayload {
+  id:             string
+  session_id:     string
+  disponibilites?: string[]
+  notes?:         string
+}
+
+export interface UpdateInscriptionPayload {
+  id:             string
+  statut?:        'inscrit' | 'en_cours' | 'termine' | 'abandonne'
+  nb_seances?:    number
+  evaluation?:    number
+  notes?:         string
+  disponibilites?: string[]
+}
+
+interface FormationSessionsResponse { data: FormationSession[]; total: number }
+
+export function useFormationSessions(params?: { statut?: string; niveau?: number }) {
+  const qs = new URLSearchParams()
+  if (params?.statut) qs.set('statut', params.statut)
+  if (params?.niveau) qs.set('niveau', String(params.niveau))
+  const q = qs.toString()
+  return useQuery({
+    queryKey: ['formation-sessions', params],
+    queryFn:  () => apiClient.get<FormationSessionsResponse>(`/api/rh/formation/sessions${q ? `?${q}` : ''}`),
+    staleTime: 60_000,
+  })
+}
+
+export function useCreateFormationSession() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateFormationSessionPayload) =>
+      apiClient.post<FormationSession>('/api/rh/formation/sessions', payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['formation-sessions'] })
+      toast.success('Session de formation créée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateFormationSession() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...body }: Partial<CreateFormationSessionPayload> & { id: string }) =>
+      apiClient.put<FormationSession>(`/api/rh/formation/sessions/${id}`, body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['formation-sessions'] })
+      toast.success('Session mise à jour')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useDeleteFormationSession() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => apiClient.delete(`/api/rh/formation/sessions/${id}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['formation-sessions'] })
+      toast.success('Session supprimée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useInscrireApprenant() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...body }: InscrirePayload) =>
+      apiClient.post<FormationInscription>(`/api/rh/apprenants/${id}/inscrire`, body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['formation-sessions'] })
+      void qc.invalidateQueries({ queryKey: ['apprenants'] })
+      toast.success('Inscrit à la session de formation')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateInscription() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...body }: UpdateInscriptionPayload) =>
+      apiClient.put<FormationInscription>(`/api/rh/formation/inscriptions/${id}`, body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['formation-sessions'] })
+      void qc.invalidateQueries({ queryKey: ['apprenant-historique'] })
+      toast.success('Inscription mise à jour')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useApprenantHistorique(id: string | null) {
+  return useQuery({
+    queryKey: ['apprenant-historique', id],
+    queryFn:  () => apiClient.get<ApprenantHistorique>(`/api/rh/apprenants/${id}/historique`),
+    enabled:  !!id,
+    staleTime: 30_000,
+  })
 }
 
 export function useRecruterApprenant() {

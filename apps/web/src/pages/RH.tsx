@@ -113,7 +113,7 @@ export default function RH() {
       ),
     },
     { id: 'entree', header: 'Ancienneté', accessor: 'date_entree', render: (v) => <span className="text-sm text-gray-500">{anciennete(v as string)}</span> },
-    { id: 'salaire', header: 'Salaire', accessor: 'salaire_base_xaf', render: (v) => <span className="text-sm font-semibold">{formatXAF(v as number)}</span> },
+    { id: 'salaire', header: 'Salaire brut', accessor: 'salaire_base_xaf', render: (v) => <span className="text-sm font-semibold">{formatXAF(v as number)}</span> },
     { id: 'statut', header: 'Statut', accessor: 'statut', render: (v) => <StatusBadge status={v as string} /> },
     {
       id: 'actions', header: '', accessor: 'id', sortable: false,
@@ -153,7 +153,7 @@ export default function RH() {
           activeTab === 'Employés' ? (
             <Button size="sm" onClick={() => { setEmpForm(DEFAULT_EMP); setEmpSlide(true) }}><Plus className="h-3.5 w-3.5" /> Nouvel employé</Button>
           ) : activeTab === 'Paie' ? (
-            <Button size="sm" disabled={genererPaie.isPending} onClick={() => genererPaie.mutate(moisPaie)}>
+            <Button size="sm" disabled={genererPaie.isPending} onClick={() => genererPaie.mutate({ mois: moisPaie })}>
               <FileText className="h-3.5 w-3.5" /> {genererPaie.isPending ? 'Génération…' : 'Générer les bulletins'}
             </Button>
           ) : undefined

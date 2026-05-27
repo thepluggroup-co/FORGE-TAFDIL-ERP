@@ -76,7 +76,9 @@ export function useEnvoyerFacture() {
 // ── Créer facture ────────────────────────────────────────────────────────────
 
 interface CreerFacturePayload {
-  client_id: string
+  client_id?:   string   // optionnel (non requis par l'API)
+  client_nom:   string
+  commande_id?: string   // lier la facture à une commande ERP existante
   date_emission: string
   date_echeance: string
   lignes: FactureLigne[]

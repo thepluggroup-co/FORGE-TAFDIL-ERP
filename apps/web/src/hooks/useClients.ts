@@ -43,16 +43,17 @@ export function useClient(id: string) {
   })
 }
 
-export function useClients(params?: { search?: string; statut?: string }) {
+export function useClients(params?: { search?: string; statut?: string; enabled?: boolean }) {
   const qs = new URLSearchParams()
   if (params?.search) qs.set('search', params.search)
   if (params?.statut) qs.set('statut', params.statut)
   const q = qs.toString()
 
   return useQuery({
-    queryKey: ['clients', params],
+    queryKey: ['clients', { search: params?.search, statut: params?.statut }],
     queryFn:  () => apiClient.get<ClientsResponse>(`/api/clients${q ? `?${q}` : ''}`),
     staleTime: 60_000,
+    enabled:   params?.enabled !== false,   // désactivable via enabled: false
   })
 }
 
