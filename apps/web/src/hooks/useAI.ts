@@ -16,11 +16,12 @@ export interface StockReco {
 
 export interface AlerteIA {
   id: string
+  module: string
+  severite: 'critique' | 'alerte' | 'info'
   titre: string
   description: string
-  severite: 'critique' | 'alerte' | 'info'
-  icone: 'alert' | 'warning' | 'info' | 'zap'
   ts: string
+  lien?: string
 }
 
 export function useAiChat() {

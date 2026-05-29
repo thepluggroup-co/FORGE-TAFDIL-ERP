@@ -326,25 +326,28 @@ router.get('/ai/alertes', async (c) => {
   ])
 
   type Alerte = {
-    id:       string
-    module:   string
-    urgence:  'critique' | 'important' | 'info'
-    titre:    string
-    message:  string
-    lien?:    string
+    id:          string
+    module:      string
+    severite:    'critique' | 'alerte' | 'info'
+    titre:       string
+    description: string
+    ts:          string
+    lien?:       string
   }
 
+  const now = new Date().toISOString()
   const alertes: Alerte[] = []
 
   // Stocks
   for (const p of (stocksRes.status === 'fulfilled' ? stocksRes.value.data ?? [] : []) as Array<{ id: string; ref: string; designation: string; stock_actuel: number; statut: string }>) {
     alertes.push({
-      id:      `stock-${p.id}`,
-      module:  'stocks',
-      urgence: p.statut === 'rupture' ? 'critique' : p.statut === 'critique' ? 'important' : 'info',
-      titre:   `Stock ${p.statut} — ${p.ref}`,
-      message: `${p.designation} : ${p.stock_actuel} unité(s) restante(s)`,
-      lien:    `/stocks/${p.id}`,
+      id:          `stock-${p.id}`,
+      module:      'stocks',
+      severite:    p.statut === 'rupture' ? 'critique' : p.statut === 'critique' ? 'alerte' : 'info',
+      titre:       `Stock ${p.statut} — ${p.ref}`,
+      description: `${p.designation} : ${p.stock_actuel} unité(s) restante(s)`,
+      ts:          now,
+      lien:        `/stocks/${p.id}`,
     })
   }
 
@@ -352,58 +355,62 @@ router.get('/ai/alertes', async (c) => {
   for (const cr of (creditsRes.status === 'fulfilled' ? creditsRes.value.data ?? [] : []) as Array<{ id: string; numero: string; client_nom: string; solde_restant_xaf: number; echeance: string; statut: string }>) {
     const echu = cr.statut === 'echu' || cr.echeance < today
     alertes.push({
-      id:      `credit-${cr.id}`,
-      module:  'finance',
-      urgence: echu ? 'critique' : 'important',
-      titre:   echu ? `Crédit échu — ${cr.numero}` : `Crédit expire bientôt — ${cr.numero}`,
-      message: `${cr.client_nom} : ${cr.solde_restant_xaf.toLocaleString('fr-FR')} XAF — échéance ${cr.echeance}`,
-      lien:    `/credits/${cr.id}`,
+      id:          `credit-${cr.id}`,
+      module:      'finance',
+      severite:    echu ? 'critique' : 'alerte',
+      titre:       echu ? `Crédit échu — ${cr.numero}` : `Crédit expire bientôt — ${cr.numero}`,
+      description: `${cr.client_nom} : ${cr.solde_restant_xaf.toLocaleString('fr-FR')} XAF — échéance ${cr.echeance}`,
+      ts:          now,
+      lien:        `/credits/${cr.id}`,
     })
   }
 
   // Commandes
   for (const cmd of (commandesRes.status === 'fulfilled' ? commandesRes.value.data ?? [] : []) as Array<{ id: string; numero: string; client_nom: string; statut: string; date_livraison_prevue: string }>) {
     alertes.push({
-      id:      `commande-${cmd.id}`,
-      module:  'commerce',
-      urgence: cmd.date_livraison_prevue <= today ? 'critique' : 'important',
-      titre:   `Livraison imminente — ${cmd.numero}`,
-      message: `${cmd.client_nom} — statut : ${cmd.statut} — prévue le ${cmd.date_livraison_prevue}`,
-      lien:    `/commandes/${cmd.id}`,
+      id:          `commande-${cmd.id}`,
+      module:      'commerce',
+      severite:    cmd.date_livraison_prevue <= today ? 'critique' : 'alerte',
+      titre:       `Livraison imminente — ${cmd.numero}`,
+      description: `${cmd.client_nom} — statut : ${cmd.statut} — prévue le ${cmd.date_livraison_prevue}`,
+      ts:          now,
+      lien:        `/commandes/${cmd.id}`,
     })
   }
 
   // Machines
   for (const m of (machinesRes.status === 'fulfilled' ? machinesRes.value.data ?? [] : []) as Array<{ id: string; nom: string; statut: string; prochaine_maintenance: string | null }>) {
     alertes.push({
-      id:      `machine-${m.id}`,
-      module:  'production',
-      urgence: m.statut === 'panne' ? 'critique' : 'important',
-      titre:   `Machine ${m.statut} — ${m.nom}`,
-      message: m.prochaine_maintenance ? `Prochaine maintenance : ${m.prochaine_maintenance}` : 'Aucune maintenance planifiée',
+      id:          `machine-${m.id}`,
+      module:      'production',
+      severite:    m.statut === 'panne' ? 'critique' : 'alerte',
+      titre:       `Machine ${m.statut} — ${m.nom}`,
+      description: m.prochaine_maintenance ? `Prochaine maintenance : ${m.prochaine_maintenance}` : 'Aucune maintenance planifiée',
+      ts:          now,
     })
   }
 
   // Capteurs IoT
   for (const cap of (capteursRes.status === 'fulfilled' ? capteursRes.value.data ?? [] : []) as Array<{ id: string; nom: string; zone: string; statut: string; batterie_pct: number }>) {
     alertes.push({
-      id:      `iot-${cap.id}`,
-      module:  'iot',
-      urgence: cap.statut === 'hors_ligne' ? 'critique' : 'important',
-      titre:   `Capteur ${cap.statut} — ${cap.nom}`,
-      message: `Zone : ${cap.zone} — Batterie : ${cap.batterie_pct}%`,
+      id:          `iot-${cap.id}`,
+      module:      'iot',
+      severite:    cap.statut === 'hors_ligne' ? 'critique' : 'alerte',
+      titre:       `Capteur ${cap.statut} — ${cap.nom}`,
+      description: `Zone : ${cap.zone} — Batterie : ${cap.batterie_pct}%`,
+      ts:          now,
     })
   }
 
-  // Trier par urgence
-  const SCORE: Record<string, number> = { critique: 3, important: 2, info: 1 }
-  alertes.sort((a, b) => (SCORE[b.urgence] ?? 0) - (SCORE[a.urgence] ?? 0))
+  // Trier par sévérité
+  const SCORE: Record<string, number> = { critique: 3, alerte: 2, info: 1 }
+  alertes.sort((a, b) => (SCORE[b.severite] ?? 0) - (SCORE[a.severite] ?? 0))
 
   return c.json({
     alertes,
     total:     alertes.length,
-    critiques: alertes.filter(a => a.urgence === 'critique').length,
-    importants: alertes.filter(a => a.urgence === 'important').length,
+    critiques: alertes.filter(a => a.severite === 'critique').length,
+    alertes_count: alertes.filter(a => a.severite === 'alerte').length,
     par_module: Object.fromEntries(
       ['stocks', 'finance', 'commerce', 'production', 'iot'].map(m => [m, alertes.filter(a => a.module === m).length])
     ),

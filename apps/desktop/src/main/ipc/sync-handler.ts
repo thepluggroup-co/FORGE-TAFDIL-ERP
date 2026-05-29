@@ -15,9 +15,18 @@ const SYNC_TABLES: Array<{
   columns:  string
   orderBy:  string
 }> = [
-  { table: 'produits',  columns: 'id,ref,designation,categorie,unite,stock_actuel,stock_min,prix_unitaire_xaf,statut,updated_at', orderBy: 'updated_at' },
-  { table: 'clients',   columns: 'id,nom,type,telephone,email,adresse,score_fiabilite,updated_at',                                orderBy: 'updated_at' },
-  { table: 'commandes', columns: 'id,numero,client_id,client_nom,statut,total_ttc_xaf,date_livraison_prevue,updated_at',          orderBy: 'updated_at' },
+  { table: 'produits',           columns: 'id,ref,designation,categorie,unite,stock_actuel,stock_min,prix_unitaire_xaf,statut,updated_at',                                            orderBy: 'updated_at' },
+  { table: 'clients',            columns: 'id,nom,type,telephone,email,adresse,score_fiabilite,statut,updated_at',                                                                    orderBy: 'updated_at' },
+  { table: 'commandes',          columns: 'id,numero,client_id,client_nom,statut,total_ttc_xaf,date_livraison_prevue,updated_at',                                                     orderBy: 'updated_at' },
+  { table: 'devis',              columns: 'id,numero,client_id,client_nom,statut,total_ttc_xaf,date_emission,date_validite,updated_at',                                               orderBy: 'updated_at' },
+  { table: 'factures',           columns: 'id,numero,client_id,client_nom,commande_id,statut,date_emission,date_echeance,total_ttc_xaf,updated_at',                                  orderBy: 'updated_at' },
+  { table: 'bons_sortie',        columns: 'id,numero,statut,demandeur,motif,notes,created_at,updated_at',                                                                             orderBy: 'updated_at' },
+  { table: 'employes',           columns: 'id,nom,poste,departement,type_contrat,date_entree,salaire_base_xaf,statut,telephone,email,updated_at',                                    orderBy: 'updated_at' },
+  { table: 'apprenants',         columns: 'id,nom,specialite,niveau,duree_mois,statut,notes,updated_at',                                                                             orderBy: 'updated_at' },
+  { table: 'jobs_production',    columns: 'id,numero,commande_id,produit_designation,machine_nom,technicien_nom,avancement_pct,statut,date_debut,date_fin_prevue,updated_at',        orderBy: 'updated_at' },
+  { table: 'projets',            columns: 'id,nom,client_nom,chef_projet_nom,budget_xaf,depense_xaf,avancement_pct,statut,date_debut,deadline,updated_at',                          orderBy: 'updated_at' },
+  { table: 'livraisons',         columns: 'id,numero,client_id,client_nom,destination,transporteur,statut,date_depart,date_livraison_prevue,updated_at',                             orderBy: 'updated_at' },
+  { table: 'campagnes_marketing',columns: 'id,nom,canal,budget_xaf,reach,leads_count,conversions_count,statut,date_debut,date_fin,updated_at',                                      orderBy: 'updated_at' },
 ]
 
 // ── Types ─────────────────────────────────────────────────────────────────────

@@ -307,7 +307,7 @@ export default function Intelligence() {
               <p className="text-sm text-gray-400 text-center py-6">Aucune alerte active.</p>
             )}
             {alertesList.map((a, i) => {
-              const cfg = SEVERITE_CONFIG[a.severite]
+              const cfg = SEVERITE_CONFIG[a.severite] ?? SEVERITE_CONFIG.info
               const Icon = cfg.icon
               return (
                 <motion.div

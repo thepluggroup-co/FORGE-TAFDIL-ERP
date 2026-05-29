@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { ShoppingCart, Menu, X, Phone } from 'lucide-react'
+import { ShoppingCart, Menu, X, Phone, UserCircle } from 'lucide-react'
 import { useState } from 'react'
 import { useCartStore, computeTotal } from '@/lib/cart'
 import { MetalForgeHeaderLogo } from '@/components/ui/BrandLogo'
@@ -52,6 +52,16 @@ export function Header() {
               WhatsApp
             </a>
 
+            {/* Bouton Mon compte → /compte/dashboard (middleware redirige vers login si non connecté) */}
+            <Link
+              href="/compte/dashboard"
+              className="flex h-9 w-9 items-center justify-center rounded-md border border-forge-steel-light transition-colors hover:bg-forge-steel-light"
+              aria-label="Mon compte"
+              title="Mon compte / Déconnexion"
+            >
+              <UserCircle size={18} className="text-forge-steel" />
+            </Link>
+
             {/* Bouton panier → ouvre le CartDrawer */}
             <button
               onClick={openDrawer}
@@ -92,6 +102,16 @@ export function Header() {
                 </Link>
               </li>
             ))}
+            <li className="border-t border-forge-steel-light pt-3">
+              <Link
+                href="/compte/dashboard"
+                onClick={() => setMobileOpen(false)}
+                className="flex items-center gap-2 py-1 text-sm font-medium text-forge-steel hover:text-forge-red"
+              >
+                <UserCircle size={15} />
+                Mon compte / Déconnexion
+              </Link>
+            </li>
           </ul>
         </nav>
       )}

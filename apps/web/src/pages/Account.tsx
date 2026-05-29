@@ -13,10 +13,10 @@ import { useNavigate } from 'react-router-dom'
 // ── Role display config ────────────────────────────────────────────────────────
 const ROLE_CONFIG: Record<string, { label: string; color: string; bg: string; description: string }> = {
   admin: {
-    label:       'Administrateur',
+    label:       'Directeur / Administrateur Principal',
     color:       '#C62828',
     bg:          '#FFEBEE',
-    description: 'Accès complet à tous les modules et paramètres du système.',
+    description: 'Direction générale — Accès complet à tous les modules, paramètres système et gestion des utilisateurs.',
   },
   directeur: {
     label:       'Directeur',

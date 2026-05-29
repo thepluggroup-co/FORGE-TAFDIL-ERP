@@ -98,7 +98,7 @@ function NotificationsPanel({ onClose }: { onClose: () => void }) {
           </div>
         )}
         {!isLoading && items.map((n) => {
-          const { color, bg, Icon } = SEVERITE_STYLES[n.severite]
+          const { color, bg, Icon } = SEVERITE_STYLES[n.severite] ?? SEVERITE_STYLES.info
           return (
             <div key={n.id} className="flex items-start gap-3 px-4 py-3 border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
               <div className="flex items-center justify-center w-7 h-7 rounded-full shrink-0 mt-0.5" style={{ backgroundColor: bg }}>
@@ -130,12 +130,21 @@ function NotificationsPanel({ onClose }: { onClose: () => void }) {
 
 // ── User dropdown ──────────────────────────────────────────────────────────────
 
+const ROLE_LABELS: Record<string, string> = {
+  admin:     'Directeur / Admin. Principal',
+  directeur: 'Directeur',
+  operateur: 'Opérateur',
+  viewer:    'Lecteur',
+}
+
 function UserDropdown({ email, initial, onClose }: { email: string; initial: string; onClose: () => void }) {
   const navigate  = useNavigate()
-  const { signOut } = useAuth()
+  const { signOut, role } = useAuth()
 
   const go = (path: string) => { navigate(path); onClose() }
   const handleSignOut = async () => { onClose(); await signOut(); navigate('/login') }
+
+  const roleLabel = ROLE_LABELS[role ?? ''] ?? (role ?? 'Utilisateur')
 
   return (
     <div
@@ -144,6 +153,12 @@ function UserDropdown({ email, initial, onClose }: { email: string; initial: str
     >
       <div className="px-4 py-3 border-b border-gray-100">
         <p className="text-xs font-semibold text-[#212121] truncate">{email}</p>
+        <span
+          className="inline-block mt-1 px-2 py-0.5 text-[10px] font-bold rounded-full"
+          style={{ color: '#C62828', backgroundColor: '#FFEBEE' }}
+        >
+          {roleLabel}
+        </span>
       </div>
       <div className="py-1">
         <button onClick={() => go('/account')}
@@ -170,7 +185,7 @@ interface TopBarProps {
 }
 
 export function TopBar({ onMobileMenuToggle, sidebarCollapsed, onSidebarToggle }: TopBarProps) {
-  const { user } = useAuth()
+  const { user, role } = useAuth()
   const location = useLocation()
   const [isOnline, setIsOnline] = useState(navigator.onLine)
   const [showNotifs, setShowNotifs] = useState(false)
@@ -324,7 +339,7 @@ export function TopBar({ onMobileMenuToggle, sidebarCollapsed, onSidebarToggle }
               onClick={() => { setShowUser((v) => !v); setShowNotifs(false) }}
               className="flex items-center justify-center w-8 h-8 rounded-full text-white text-sm font-semibold shrink-0"
               style={{ backgroundColor: '#C62828' }}
-              title={email}
+              title={`${email}${role ? ` — ${ROLE_LABELS[role] ?? role}` : ''}`}
               aria-label="Menu utilisateur"
             >
               {initial}

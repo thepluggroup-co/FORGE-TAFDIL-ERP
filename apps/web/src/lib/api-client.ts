@@ -33,6 +33,24 @@ function handleSessionExpired() {
   }, 800)
 }
 
+// ── Silent token refresh (deduplicated) ────────────────────────────────────
+// Shared promise so concurrent requests don't each trigger their own refresh.
+let _refreshPromise: Promise<boolean> | null = null
+
+async function tryRefreshToken(): Promise<boolean> {
+  if (_refreshPromise) return _refreshPromise
+  _refreshPromise = supabase.auth.refreshSession().then(({ data, error }) => {
+    _refreshPromise = null
+    if (error || !data.session?.access_token) return false
+    _cachedToken = data.session.access_token
+    return true
+  }).catch(() => {
+    _refreshPromise = null
+    return false
+  })
+  return _refreshPromise
+}
+
 // ── Auth headers ───────────────────────────────────────────────────────────
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -68,7 +86,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 }
 
 // ── Core request ───────────────────────────────────────────────────────────
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, _retried = false): Promise<T> {
   const url = `${API_BASE}${path}`
 
   const controller = new AbortController()
@@ -86,6 +104,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
     // ── Auth errors ────────────────────────────────────────────────────────
     if (res.status === 401) {
+      if (!_retried) {
+        // Token may have just expired — try a silent refresh once before giving up
+        clearTimeout(timer)
+        const refreshed = await tryRefreshToken()
+        if (refreshed) return request<T>(method, path, body, true)
+      }
       handleSessionExpired()
       throw new Error('Session expirée')
     }

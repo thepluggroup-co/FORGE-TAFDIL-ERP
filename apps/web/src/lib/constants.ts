@@ -2,7 +2,7 @@ import type { OrderStatus, UserRole } from '@forge/shared'
 
 // --- Roles utilisateurs ---
 export const USER_ROLE_LABELS: Record<UserRole, string> = {
-  admin: 'Administrateur',
+  admin: 'Directeur / Administrateur Principal',
   operator: 'Opérateur',
   viewer: 'Lecteur',
 }
