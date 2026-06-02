@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { ChevronRight } from 'lucide-react'
 import { ProductDetailClient } from './ProductDetailClient'
 import { ProductCard } from '../ProductCard'
-import { createServiceClient } from '@/lib/supabase'
+import { createPublicClient } from '@/lib/supabase'
 import type { Produit, Disponibilite } from '@/lib/types'
 
 export const revalidate = 30
@@ -17,7 +17,7 @@ function disponibilite(stock: number, seuil: number): Disponibilite {
 
 async function fetchProduit(id: string): Promise<Produit | null> {
   try {
-    const db = createServiceClient()
+    const db = createPublicClient()
     const { data, error } = await db
       .from('produits_shop')
       .select(`
@@ -62,7 +62,7 @@ async function fetchProduit(id: string): Promise<Produit | null> {
 
 async function fetchSimilaires(categorie: string, excludeId: string): Promise<Produit[]> {
   try {
-    const db = createServiceClient()
+    const db = createPublicClient()
     const { data } = await db
       .from('produits_shop')
       .select(`
@@ -92,7 +92,7 @@ async function fetchSimilaires(categorie: string, excludeId: string): Promise<Pr
 
 export async function generateStaticParams() {
   try {
-    const db = createServiceClient()
+    const db = createPublicClient()
     const { data } = await db
       .from('produits_shop')
       .select('product_id')

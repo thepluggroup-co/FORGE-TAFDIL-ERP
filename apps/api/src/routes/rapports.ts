@@ -37,7 +37,7 @@ function moisPlage(mois: string) {
 // GET /api/rapports/grand-livre?compte=411&debut=2026-01-01&fin=2026-12-31
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/grand-livre', requireRole(['directeur', 'admin']), async (c) => {
+router.get('/grand-livre', requireRole(['admin', 'superviseur']), async (c) => {
   const { compte, debut, fin, exercice } = c.req.query()
 
   if (!compte) {
@@ -95,7 +95,7 @@ router.get('/grand-livre', requireRole(['directeur', 'admin']), async (c) => {
 // GET /api/rapports/balance?exercice=2026
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/balance', requireRole(['directeur', 'admin']), async (c) => {
+router.get('/balance', requireRole(['admin', 'superviseur']), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
   const { debut, fin } = exercicePlage(exercice)
 
@@ -163,7 +163,7 @@ router.get('/balance', requireRole(['directeur', 'admin']), async (c) => {
 // GET /api/rapports/declarations/tva?mois=2026-05
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/declarations/tva', requireRole(['directeur', 'admin']), async (c) => {
+router.get('/declarations/tva', requireRole(['admin', 'superviseur']), async (c) => {
   const mois = c.req.query('mois') ?? new Date().toISOString().slice(0, 7)
   const { debut, fin } = moisPlage(mois)
 

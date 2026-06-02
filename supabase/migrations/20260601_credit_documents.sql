@@ -17,9 +17,9 @@ ALTER TABLE credit_documents ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "credit_documents_select" ON credit_documents
   FOR SELECT USING (
     EXISTS (
-      SELECT 1 FROM user_roles ur
-      WHERE ur.user_id = auth.uid()
-        AND ur.role IN ('directeur', 'admin')
+      SELECT 1 FROM profiles
+      WHERE id = auth.uid()
+        AND role IN ('directeur', 'admin')
     )
   );
 
@@ -27,9 +27,9 @@ CREATE POLICY "credit_documents_select" ON credit_documents
 CREATE POLICY "credit_documents_insert" ON credit_documents
   FOR INSERT WITH CHECK (
     EXISTS (
-      SELECT 1 FROM user_roles ur
-      WHERE ur.user_id = auth.uid()
-        AND ur.role IN ('directeur', 'admin')
+      SELECT 1 FROM profiles
+      WHERE id = auth.uid()
+        AND role IN ('directeur', 'admin')
     )
   );
 
@@ -37,14 +37,11 @@ CREATE POLICY "credit_documents_insert" ON credit_documents
 CREATE POLICY "credit_documents_delete" ON credit_documents
   FOR DELETE USING (
     EXISTS (
-      SELECT 1 FROM user_roles ur
-      WHERE ur.user_id = auth.uid()
-        AND ur.role = 'directeur'
+      SELECT 1 FROM profiles
+      WHERE id = auth.uid()
+        AND role = 'directeur'
     )
   );
 
 -- Index pour accès par crédit
 CREATE INDEX IF NOT EXISTS idx_credit_documents_credit_id ON credit_documents(credit_id);
-
--- Note : créer le bucket Storage "credit-documents" (public=false) dans le Dashboard Supabase
--- et ajouter la policy : directeur/admin peuvent upload/download

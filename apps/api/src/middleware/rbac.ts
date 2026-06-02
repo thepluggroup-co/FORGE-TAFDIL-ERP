@@ -8,7 +8,7 @@ type ForgeRole = HonoVariables['user']['role']
  * À utiliser après authMiddleware.
  *
  * @example
- * app.post('/api/produits', authMiddleware, requireRole(['directeur', 'admin']), handler)
+ * app.post('/api/produits', authMiddleware, requireRole(['admin', 'superviseur']), handler)
  */
 export function requireRole(roles: ForgeRole[]): MiddlewareHandler<{ Variables: HonoVariables }> {
   return async (c, next) => {

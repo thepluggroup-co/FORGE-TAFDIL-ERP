@@ -10,15 +10,33 @@ import { describe, it, expect, vi } from 'vitest'
 import jwt from 'jsonwebtoken'
 import { TEST_JWT_SECRET } from './helpers'
 
-vi.mock('@forge/db/supabase', () => ({
-  supabase: {
-    from:          vi.fn(),
-    rpc:           vi.fn(),
+vi.mock('@forge/db/supabase', () => {
+  // Chaîne sûre par défaut — ne crashe jamais, retourne data=[] sans erreur
+  const safeChain = () => {
+    const c: Record<string, unknown> = {}
+    for (const m of ['select','insert','update','delete','upsert','eq','neq','in',
+      'or','gte','lte','lt','gt','not','ilike','like','order','range','limit','head','filter'])
+      c[m] = vi.fn().mockReturnValue(c)
+    c['single']      = vi.fn().mockResolvedValue({ data: null, error: null })
+    c['maybeSingle'] = vi.fn().mockResolvedValue({ data: null, error: null })
+    c['then']        = (res: (v: unknown) => unknown) =>
+      Promise.resolve({ data: [], count: 0, error: null }).then(res)
+    return c
+  }
+  const mockClient = {
+    from:          vi.fn().mockImplementation(safeChain),
+    rpc:           vi.fn().mockResolvedValue({ data: null, error: null }),
     channel:       vi.fn(() => ({ send: vi.fn().mockResolvedValue('ok') })),
     removeChannel: vi.fn(),
-  },
-  supabaseAdmin: null,
-}))
+    storage: { from: vi.fn().mockReturnValue({
+      upload:          vi.fn().mockResolvedValue({ error: null }),
+      download:        vi.fn().mockResolvedValue({ data: null, error: { message: 'not found' } }),
+      getPublicUrl:    vi.fn().mockReturnValue({ data: { publicUrl: 'https://test.supabase.co/test.pdf' } }),
+      createSignedUrl: vi.fn().mockResolvedValue({ data: { signedUrl: 'https://test.supabase.co/signed.pdf' } }),
+    }) },
+  }
+  return { supabase: mockClient, supabaseAdmin: mockClient }
+})
 
 import app from '../app'
 
@@ -155,7 +173,7 @@ describe('Test 11 — Rôle insuffisant → 403 FORBIDDEN', () => {
       {
         sub:          'viewer-user',
         email:        'viewer@tafdil.cm',
-        app_metadata: { role: 'viewer' },
+        app_metadata: { role: 'apprenant' },
         aud:          'authenticated',
       },
       TEST_JWT_SECRET,

@@ -3,8 +3,32 @@ import jwt from 'jsonwebtoken'
 
 export const TEST_JWT_SECRET = 'forge-test-jwt-secret-x0x0x0x0x0x0x0x0x0x0'
 
+/**
+ * Crée un mock complet d'un client Supabase.
+ * À utiliser pour BOTH supabase ET supabaseAdmin dans les mocks de test —
+ * les routes utilisent `const db = supabaseAdmin!` donc supabaseAdmin
+ * ne doit jamais être null dans les mocks.
+ */
+export function mkClient() {
+  const storageChain = {
+    upload:        vi.fn().mockResolvedValue({ error: null }),
+    download:      vi.fn().mockResolvedValue({ data: null, error: { message: 'not found' } }),
+    getPublicUrl:  vi.fn().mockReturnValue({ data: { publicUrl: 'https://test.supabase.co/storage/test.pdf' } }),
+    createSignedUrl: vi.fn().mockResolvedValue({ data: { signedUrl: 'https://test.supabase.co/storage/signed.pdf' } }),
+  }
+  const client = {
+    from:          vi.fn(),
+    rpc:           vi.fn(),
+    channel:       vi.fn(() => ({ send: vi.fn().mockResolvedValue('ok') })),
+    removeChannel: vi.fn(),
+    storage:       { from: vi.fn().mockReturnValue(storageChain) },
+    auth:          { getSession: vi.fn().mockResolvedValue({ data: { session: null }, error: null }) },
+  }
+  return client
+}
+
 export function makeToken(
-  role: 'directeur' | 'admin' | 'operateur' | 'viewer' = 'admin',
+  role: 'admin' | 'superviseur' | 'operateur' | 'apprenant' = 'admin',
   userId = 'test-user-uid-001',
 ): string {
   return jwt.sign(

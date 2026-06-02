@@ -179,7 +179,7 @@ router.get('/factures', async (c) => {
   })
 })
 
-router.post('/factures', requireRole(['directeur', 'admin']), zValidator('json', factureSchema), async (c) => {
+router.post('/factures', requireRole(['admin']), zValidator('json', factureSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -193,7 +193,7 @@ router.post('/factures', requireRole(['directeur', 'admin']), zValidator('json',
           .select('*', { count: 'exact', head: true })
           .eq('commande_id', body.commande_id).neq('statut', 'annule')
         if ((existing ?? 0) > 0)
-          throw Object.assign(new Error('Une facture existe déjà pour cette commande'), { code: 'ALREADY_INVOICED' })
+          throw Object.assign(new Error('Une facture existe déjà pour cette commande'), { code: 'ALREADY_INVOICED', httpStatus: 422 })
       }
 
       const year = new Date().getFullYear()
@@ -309,7 +309,7 @@ router.get('/factures/:id/pdf', async (c) => {
  */
 router.patch(
   '/factures/:id/statut',
-  requireRole(['directeur', 'admin']),
+  requireRole(['admin']),
   zValidator('json', z.object({
     statut: z.enum(['brouillon', 'valide', 'envoye', 'paye', 'annule']),
     montant_paye_xaf: z.number().min(0).optional(),
@@ -365,7 +365,7 @@ router.patch(
  */
 router.post(
   '/factures/:id/paiement',
-  requireRole(['directeur', 'admin']),
+  requireRole(['admin']),
   zValidator('json', z.object({
     montant_xaf:   z.number().positive(),
     date_paiement: z.string(),
@@ -435,7 +435,7 @@ router.post(
   }
 )
 
-router.post('/factures/:id/whatsapp', requireRole(['directeur', 'admin']), zValidator('json', whatsappSchema), async (c) => {
+router.post('/factures/:id/whatsapp', requireRole(['admin']), zValidator('json', whatsappSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
@@ -524,7 +524,7 @@ router.get('/credits', async (c) => {
   return c.json({ data, total: count ?? 0, page, per_page: perPage, total_pages: Math.ceil((count ?? 0) / perPage) })
 })
 
-router.post('/credits', requireRole(['directeur', 'admin']), zValidator('json', creditSchema), async (c) => {
+router.post('/credits', requireRole(['admin']), zValidator('json', creditSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -587,7 +587,7 @@ router.get('/credits/:id', async (c) => {
   return c.json(data)
 })
 
-router.put('/credits/:id', requireRole(['directeur', 'admin']), zValidator('json', creditSchema.partial()), async (c) => {
+router.put('/credits/:id', requireRole(['admin']), zValidator('json', creditSchema.partial()), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
@@ -605,7 +605,7 @@ router.put('/credits/:id', requireRole(['directeur', 'admin']), zValidator('json
   return c.json(data)
 })
 
-router.post('/credits/:id/rembourser', requireRole(['directeur', 'admin']), zValidator('json', rembourserSchema), async (c) => {
+router.post('/credits/:id/rembourser', requireRole(['admin']), zValidator('json', rembourserSchema), async (c) => {
   const { id } = c.req.param()
   const user   = c.get('user')
   const body   = c.req.valid('json')
@@ -618,11 +618,11 @@ router.post('/credits/:id/rembourser', requireRole(['directeur', 'admin']), zVal
       const { data: credit } = await db.from('credits')
         .select('solde_restant_xaf, statut, client_nom, client_id, numero').eq('id', id).single()
 
-      if (!credit) throw Object.assign(new Error('Crédit introuvable'), { code: 'NOT_FOUND' })
+      if (!credit) throw Object.assign(new Error('Crédit introuvable'), { code: 'NOT_FOUND', httpStatus: 404 })
       const cr = credit as { solde_restant_xaf: number; statut: string; client_nom: string; client_id: string | null; numero: string }
-      if (cr.statut === 'rembourse') throw Object.assign(new Error('Crédit déjà remboursé'), { code: 'ALREADY_DONE' })
+      if (cr.statut === 'rembourse') throw Object.assign(new Error('Crédit déjà remboursé'), { code: 'ALREADY_DONE', httpStatus: 422 })
       if (body.montant_xaf > cr.solde_restant_xaf)
-        throw Object.assign(new Error(`Montant dépasse le solde restant (${xaf(cr.solde_restant_xaf)})`), { code: 'AMOUNT_EXCEEDED' })
+        throw Object.assign(new Error(`Montant dépasse le solde restant (${xaf(cr.solde_restant_xaf)})`), { code: 'AMOUNT_EXCEEDED', httpStatus: 422 })
 
       const { data: remb, error: rembErr } = await db.from('remboursements_credit')
         .insert({ credit_id: id, montant_xaf: body.montant_xaf, date_paiement: body.date_paiement,
@@ -761,7 +761,7 @@ router.get('/credits/:id/documents', async (c) => {
   return c.json({ data: enriched })
 })
 
-router.post('/credits/:id/documents', requireRole(['directeur', 'admin']), async (c) => {
+router.post('/credits/:id/documents', requireRole(['admin']), async (c) => {
   const { id } = c.req.param()
   const user   = c.get('user')
 
@@ -801,7 +801,7 @@ router.post('/credits/:id/documents', requireRole(['directeur', 'admin']), async
 // ÉCRITURES SYSCOHADA (saisie manuelle)
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.post('/ecritures', requireRole(['directeur', 'admin']), zValidator('json', ecritureSchema), async (c) => {
+router.post('/ecritures', requireRole(['admin']), zValidator('json', ecritureSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -825,7 +825,7 @@ router.post('/ecritures', requireRole(['directeur', 'admin']), zValidator('json'
 // RAPPORTS SYSCOHADA
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/rapports/bilan', requireRole(['directeur', 'admin']), async (c) => {
+router.get('/rapports/bilan', requireRole(['admin', 'superviseur']), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
 
   const { data: ecritures, error } = await db
@@ -867,7 +867,7 @@ router.get('/rapports/bilan', requireRole(['directeur', 'admin']), async (c) => 
   })
 })
 
-router.get('/rapports/resultat', requireRole(['directeur', 'admin']), async (c) => {
+router.get('/rapports/resultat', requireRole(['admin', 'superviseur']), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
 
   const { data: ecritures, error } = await db
@@ -915,7 +915,7 @@ router.get('/rapports/resultat', requireRole(['directeur', 'admin']), async (c) 
 
 // ── Dashboard KPIs ────────────────────────────────────────────────────────────
 
-router.get('/rapports/dashboard', requireRole(['directeur', 'admin', 'operateur', 'viewer']), async (c) => {
+router.get('/rapports/dashboard', requireRole(['admin', 'superviseur', 'operateur', 'apprenant']), async (c) => {
   const maintenant = new Date()
 
   const debut6Mois = new Date(maintenant)

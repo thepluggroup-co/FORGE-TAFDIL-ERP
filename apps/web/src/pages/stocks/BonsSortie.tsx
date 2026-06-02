@@ -103,7 +103,7 @@ export default function BonsSortie() {
       accessor: 'lignes',
       sortable: false,
       render: (v) => {
-        const lignes = v as BonLigne[]
+        const lignes = (v as BonLigne[] | null | undefined) ?? []
         return (
           <div>
             <span className="text-sm font-medium">{lignes.length} article{lignes.length > 1 ? 's' : ''}</span>

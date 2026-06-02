@@ -5,7 +5,7 @@
 export interface ForgeUser {
   id: string
   email: string
-  role: 'directeur' | 'admin' | 'operateur' | 'viewer'
+  role: 'admin' | 'superviseur' | 'operateur' | 'apprenant'
 }
 
 /** Variables injectées dans le contexte Hono par les middlewares. */

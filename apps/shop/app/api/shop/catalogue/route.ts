@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServiceClient } from '@/lib/supabase'
+import { createPublicClient } from '@/lib/supabase'
 
 const TVA_RATE = 0.1925
 
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   const q         = searchParams.get('q')
 
   try {
-    const db = createServiceClient()
+    const db = createPublicClient()
 
     let query = db
       .from('produits_shop')

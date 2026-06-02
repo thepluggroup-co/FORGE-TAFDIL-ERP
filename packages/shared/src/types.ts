@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 // --- Core domain types for FORGE ERP ---
 
-export const UserRoleSchema = z.enum(['admin', 'operator', 'viewer'])
+export const UserRoleSchema = z.enum(['admin', 'superviseur', 'operateur', 'apprenant'])
 export type UserRole = z.infer<typeof UserRoleSchema>
 
 export const UserSchema = z.object({

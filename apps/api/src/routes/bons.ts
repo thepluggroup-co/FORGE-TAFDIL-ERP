@@ -117,7 +117,7 @@ router.get('/', async (c) => {
 /** Créer un bon de sortie — avec fallback SQLite offline */
 router.post(
   '/',
-  requireRole(['directeur', 'admin', 'operateur']),
+  requireRole(['admin', 'superviseur', 'operateur']),
   zValidator('json', createBonSchema),
   async (c) => {
     const user = c.get('user')
@@ -207,7 +207,7 @@ router.get('/:id', async (c) => {
 /** Valider ou refuser un bon (secrétaire / directeur) — avec fallback SQLite offline */
 router.put(
   '/:id/valider',
-  requireRole(['directeur', 'admin']),
+  requireRole(['admin', 'superviseur']),
   zValidator('json', validerBonSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -222,11 +222,11 @@ router.put(
         const { data: existing } = await db
           .from('bons_sortie').select('statut, demandeur, numero, created_by').eq('id', id).single()
 
-        if (!existing) throw Object.assign(new Error('Bon introuvable'), { code: 'NOT_FOUND' })
+        if (!existing) throw Object.assign(new Error('Bon introuvable'), { code: 'NOT_FOUND', httpStatus: 404 })
         if ((existing as { statut: string }).statut !== 'soumis')
           throw Object.assign(
             new Error(`Impossible de valider un bon en statut "${(existing as { statut: string }).statut}"`),
-            { code: 'INVALID_TRANSITION' },
+            { code: 'INVALID_TRANSITION', httpStatus: 422 },
           )
 
         const { data, error } = await db.from('bons_sortie')
@@ -266,7 +266,7 @@ router.put(
 /** Exécuter un bon (magasin) — transaction atomique ALL-or-NOTHING */
 router.put(
   '/:id/executer',
-  requireRole(['directeur', 'admin', 'operateur']),
+  requireRole(['admin', 'superviseur', 'operateur']),
   zValidator('json', executerBonSchema),
   async (c) => {
     const { id } = c.req.param()

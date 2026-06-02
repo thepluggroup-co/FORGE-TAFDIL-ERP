@@ -80,7 +80,7 @@ router.get('/alertes', async (c) => {
 })
 
 /** Rapport d'inventaire journalier complet */
-router.get('/inventaire/journalier', requireRole(['directeur', 'admin']), async (c) => {
+router.get('/inventaire/journalier', requireRole(['admin', 'superviseur']), async (c) => {
   const today = new Date().toISOString().slice(0, 10)
   const startOfDay = `${today}T00:00:00.000Z`
 
@@ -172,7 +172,7 @@ router.get('/', async (c) => {
 /** Créer un produit */
 router.post(
   '/',
-  requireRole(['directeur', 'admin']),
+  requireRole(['admin', 'superviseur']),
   zValidator('json', createProduitSchema),
   async (c) => {
     const user = c.get('user')
@@ -227,7 +227,7 @@ router.get('/:id', async (c) => {
 /** Modifier un produit */
 router.put(
   '/:id',
-  requireRole(['directeur', 'admin']),
+  requireRole(['admin', 'superviseur']),
   zValidator('json', updateProduitSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -265,7 +265,7 @@ router.put(
 /** Mouvement de stock — appelle fn_mouvement_stock (atomique PostgreSQL) avec fallback SQLite */
 router.post(
   '/:id/mouvement',
-  requireRole(['directeur', 'admin', 'operateur']),
+  requireRole(['admin', 'superviseur', 'operateur']),
   zValidator('json', mouvementSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -300,7 +300,7 @@ router.post(
           else if (body.type === 'entree')    nouvelleQte = p.stock_actuel + body.quantite
           else {
             if (p.stock_actuel < body.quantite)
-              throw Object.assign(new Error(`Stock insuffisant : ${p.stock_actuel} disponible`), { code: 'INSUFFICIENT_STOCK' })
+              throw Object.assign(new Error(`Stock insuffisant : ${p.stock_actuel} disponible`), { code: 'INSUFFICIENT_STOCK', httpStatus: 422 })
             nouvelleQte = p.stock_actuel - body.quantite
           }
           const statut = calcStatut(nouvelleQte, p.stock_min, p.stock_critique)

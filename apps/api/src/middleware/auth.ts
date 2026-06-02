@@ -121,7 +121,7 @@ export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = a
 
   const email = (payload['email'] as string | undefined) ?? ''
   const appMeta = (payload['app_metadata'] as { role?: string } | undefined) ?? {}
-  const role = (appMeta.role as HonoVariables['user']['role']) ?? 'viewer'
+  const role = (appMeta.role as HonoVariables['user']['role']) ?? 'apprenant'
 
   console.log('[auth] ✅', email, '| role:', role, '| alg:', alg)
 

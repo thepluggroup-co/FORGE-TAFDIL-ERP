@@ -5,10 +5,10 @@ import { requireRole } from '../middleware/rbac'
 
 export const adminRouter = new Hono<{ Variables: HonoVariables }>()
 
-// ── All admin routes require 'admin' role ─────────────────────────────────────
+// ── Gestion utilisateurs réservée au Patron (admin) ──────────────────────────
 adminRouter.use('*', requireRole(['admin']))
 
-const VALID_ROLES = ['admin', 'directeur', 'operateur', 'viewer'] as const
+const VALID_ROLES = ['admin', 'superviseur', 'operateur', 'apprenant'] as const
 type ForgeRole = typeof VALID_ROLES[number]
 
 // ── GET /api/admin/users ──────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ adminRouter.patch('/users/:id', async (c) => {
 
   // Prevent the caller from revoking their own admin role
   const caller = c.get('user')
-  if (caller.id === id && body.role && body.role !== 'admin') {
+  if (caller.id === id && body.role && body.role !== 'admin') { // empêche l'admin de se rétrograder
     return c.json({ error: 'Vous ne pouvez pas changer votre propre rôle' }, 400)
   }
 

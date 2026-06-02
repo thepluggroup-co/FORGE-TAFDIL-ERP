@@ -26,8 +26,19 @@ export interface AlerteIA {
 
 export function useAiChat() {
   return useMutation({
-    mutationFn: (messages: AiMessage[]) =>
-      apiClient.post<{ response: string }>('/api/ai/chat', { messages }),
+    mutationFn: async (messages: AiMessage[]) => {
+      // Le backend attend { message: string, history: AiMessage[] }
+      // On sépare le dernier message utilisateur de l'historique
+      const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')
+      const history     = messages.filter(m => m !== lastUserMsg)
+
+      const data = await apiClient.post<{ reply: string; response?: string }>(
+        '/api/ai/chat',
+        { message: lastUserMsg?.content ?? '', history },
+      )
+      // Normalise : backend retourne "reply", page consomme "response"
+      return { response: data.reply ?? data.response ?? '' }
+    },
     onError: (err: Error) => toast.error(err.message || 'Erreur IA'),
   })
 }

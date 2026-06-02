@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServiceClient } from '@/lib/supabase'
+import { createPublicClient } from '@/lib/supabase'
 
 function disponibilite(stock: number, seuil: number): 'disponible' | 'stock_faible' | 'indisponible' {
   if (stock <= 0)     return 'indisponible'
@@ -9,7 +9,7 @@ function disponibilite(stock: number, seuil: number): 'disponible' | 'stock_faib
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const db = createServiceClient()
+    const db = createPublicClient()
 
     const { data, error } = await db
       .from('produits_shop')

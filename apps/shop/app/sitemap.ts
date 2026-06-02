@@ -1,5 +1,5 @@
 import type { MetadataRoute } from 'next'
-import { createServiceClient } from '@/lib/supabase'
+import { createPublicClient } from '@/lib/supabase'
 
 const SITE_URL = 'https://shop.tafdil.cm'
 
@@ -14,7 +14,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   ]
 
   try {
-    const db = createServiceClient()
+    const db = createPublicClient()
     const { data } = await db
       .from('produits_shop')
       .select('product_id, updated_at')

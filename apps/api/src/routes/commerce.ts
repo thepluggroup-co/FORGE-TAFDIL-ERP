@@ -7,6 +7,8 @@ import { randomUUID } from 'node:crypto'
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import { generateDevisPDF, uploadPDF } from '../services/pdf.service'
+import { localCreateDevis, localCreateCommande, getClientsLocal, getCommandesLocal } from '../services/db-local'
+import { withOfflineFallback } from '../services/offline-fallback'
 import { notifyStatutChange } from '../services/notifications'
 import { enqueueEmail, notifyWhatsApp } from '../services/email-queue.service'
 import type { HonoVariables } from '../types'
@@ -337,7 +339,12 @@ router.get('/clients', async (c) => {
     .order('nom')
     .range(from, to)
 
-  if (error) return c.json({ error: error.message }, 500)
+  if (error) {
+    console.warn('[commerce] GET /clients Supabase error — fallback SQLite:', error.message)
+    const local = getClientsLocal({ search })
+    if (local.data.length > 0) return c.json(local)
+    return c.json({ error: error.message }, 500)
+  }
 
   return c.json({
     data,
@@ -361,7 +368,7 @@ router.get('/clients/:id', async (c) => {
   return c.json(data)
 })
 
-router.post('/clients', requireRole(['directeur', 'admin']), zValidator('json', clientSchema), async (c) => {
+router.post('/clients', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', clientSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -375,7 +382,7 @@ router.post('/clients', requireRole(['directeur', 'admin']), zValidator('json', 
   return c.json(data, 201)
 })
 
-router.put('/clients/:id', requireRole(['directeur', 'admin']), zValidator('json', clientSchema.partial()), async (c) => {
+router.put('/clients/:id', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', clientSchema.partial()), async (c) => {
   const { id }  = c.req.param()
   const body    = c.req.valid('json')
 
@@ -391,7 +398,7 @@ router.put('/clients/:id', requireRole(['directeur', 'admin']), zValidator('json
   return c.json(data)
 })
 
-router.delete('/clients/:id', requireRole(['directeur']), async (c) => {
+router.delete('/clients/:id', requireRole(['admin']), async (c) => {
   const { id } = c.req.param()
 
   const { count } = await db
@@ -498,79 +505,71 @@ router.get('/devis/:id', async (c) => {
   return c.json(mapDevis(data))
 })
 
-router.post('/devis', requireRole(['directeur', 'admin']), zValidator('json', devisSchema), async (c) => {
+router.post('/devis', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', devisSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
-  const numero   = await genererNumero('devis', 'DEV')
-  const totaux   = calculerTotaux(body.lignes)
+  const result = await withOfflineFallback(
+    'POST /devis',
 
-  const { data: devis, error: devisErr } = await db
-    .from('devis')
-    .insert({
-      numero,
-      client_id:           body.client_id ?? null,
-      client_nom:          body.client_nom,
-      statut:              'brouillon',
-      date_emission:       body.date_emission,
-      date_validite:       body.date_validite,
-      validite_jours:      body.validite_jours,
-      acompte_pct:         body.acompte_pct,
-      conditions_paiement: body.conditions_paiement,
-      notes:               body.notes ?? null,
-      created_by:          user.id,
-      sync_status:         'synced',
-      ...totaux,
-    })
-    .select()
-    .single()
+    // ── Online : Supabase ──────────────────────────────────────────────────────
+    async () => {
+      const numero = await genererNumero('devis', 'DEV')
+      const totaux = calculerTotaux(body.lignes)
 
-  if (devisErr || !devis) return c.json({ error: devisErr?.message, code: devisErr?.code }, 400)
+      const { data: devis, error: devisErr } = await db.from('devis')
+        .insert({ numero, client_id: body.client_id ?? null, client_nom: body.client_nom,
+          statut: 'brouillon', date_emission: body.date_emission, date_validite: body.date_validite,
+          validite_jours: body.validite_jours, acompte_pct: body.acompte_pct,
+          conditions_paiement: body.conditions_paiement, notes: body.notes ?? null,
+          created_by: user.id, sync_status: 'synced', ...totaux })
+        .select().single()
 
-  const lignes = body.lignes.map((l, i) => ({
-    devis_id:             (devis as { id: string }).id,
-    designation:          l.designation,
-    description:          l.description ?? null,
-    categorie:            l.categorie,
-    unite:                l.unite,
-    quantite:             l.quantite,
-    prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
-    total_ht_xaf:         Math.round(l.quantite * l.prix_unitaire_ht_xaf),
-    ordre:                l.ordre !== 0 ? l.ordre : i,
-  }))
+      if (devisErr || !devis) throw new Error(devisErr?.message ?? 'Erreur création devis')
 
-  const { data: lignesData, error: lignesErr } = await db
-    .from('devis_lignes')
-    .insert(lignes)
-    .select()
+      const devisId = (devis as { id: string }).id
+      const lignes = body.lignes.map((l, i) => ({
+        devis_id: devisId, designation: l.designation, description: l.description ?? null,
+        categorie: l.categorie, unite: l.unite, quantite: l.quantite,
+        prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
+        total_ht_xaf: Math.round(l.quantite * l.prix_unitaire_ht_xaf),
+        ordre: l.ordre !== 0 ? l.ordre : i,
+      }))
 
-  if (lignesErr) {
-    await db.from('devis').delete().eq('id', (devis as { id: string }).id)
-    return c.json({ error: lignesErr.message }, 400)
-  }
+      const { data: lignesData, error: lignesErr } = await db.from('devis_lignes').insert(lignes).select()
+      if (lignesErr) { await db.from('devis').delete().eq('id', devisId); throw new Error(lignesErr.message) }
 
-  // Générer et uploader le PDF devis
-  let pdf_url: string | null = null
-  try {
-    const dv = devis as { total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number }
-    const pdfBuf = await generateDevisPDF(
-      { numero, date_emission: body.date_emission, date_validite: body.date_validite, validite_jours: body.validite_jours, total_ht_xaf: dv.total_ht_xaf, tva_xaf: dv.tva_xaf, total_ttc_xaf: dv.total_ttc_xaf },
-      { nom: body.client_nom },
-      (lignesData ?? []) as { designation: string; unite: string; quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number }[],
-    )
-    pdf_url = await uploadPDF(pdfBuf, 'devis', `${numero}.pdf`)
-    // Stocker l'URL PDF dans le devis
-    if (pdf_url) {
-      await db.from('devis').update({ pdf_url }).eq('id', (devis as { id: string }).id)
-    }
-  } catch (e) {
-    console.error('[commerce] devis PDF error:', e)
-  }
+      let pdf_url: string | null = null
+      try {
+        const dv = devis as { total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number }
+        const pdfBuf = await generateDevisPDF(
+          { numero, date_emission: body.date_emission, date_validite: body.date_validite,
+            validite_jours: body.validite_jours, total_ht_xaf: dv.total_ht_xaf,
+            tva_xaf: dv.tva_xaf, total_ttc_xaf: dv.total_ttc_xaf },
+          { nom: body.client_nom },
+          (lignesData ?? []) as { designation: string; unite: string; quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number }[],
+        )
+        pdf_url = await uploadPDF(pdfBuf, 'devis', `${numero}.pdf`)
+        if (pdf_url) await db.from('devis').update({ pdf_url }).eq('id', devisId)
+      } catch (e) { console.error('[commerce] devis PDF error:', e) }
 
-  return c.json({ ...devis, lignes: lignesData, pdf_url }, 201)
+      return { ...devis, lignes: lignesData, pdf_url }
+    },
+
+    // ── Offline : SQLite local ─────────────────────────────────────────────────
+    () => localCreateDevis({
+      client_nom: body.client_nom, client_id: body.client_id,
+      date_emission: body.date_emission, date_validite: body.date_validite,
+      validite_jours: body.validite_jours, acompte_pct: body.acompte_pct,
+      conditions_paiement: body.conditions_paiement, notes: body.notes,
+      lignes: body.lignes, user_id: user.id,
+    }),
+  )
+
+  return c.json(result, 201)
 })
 
-router.put('/devis/:id', requireRole(['directeur', 'admin']), zValidator('json', devisSchema.partial()), async (c) => {
+router.put('/devis/:id', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', devisSchema.partial()), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
@@ -638,7 +637,7 @@ router.put('/devis/:id', requireRole(['directeur', 'admin']), zValidator('json',
   return c.json(data)
 })
 
-router.patch('/devis/:id/statut', requireRole(['directeur', 'admin']), zValidator('json', z.object({
+router.patch('/devis/:id/statut', requireRole(['admin', 'superviseur']), zValidator('json', z.object({
   statut: z.enum(['brouillon', 'envoye', 'accepte', 'refuse', 'expire']),
 })), async (c) => {
   const { id }     = c.req.param()
@@ -669,7 +668,7 @@ router.patch('/devis/:id/statut', requireRole(['directeur', 'admin']), zValidato
   return c.json(mapDevis(data))
 })
 
-router.delete('/devis/:id', requireRole(['directeur', 'admin']), async (c) => {
+router.delete('/devis/:id', requireRole(['admin', 'superviseur']), async (c) => {
   const { id } = c.req.param()
 
   const { data: existing } = await db.from('devis').select('statut').eq('id', id).single()
@@ -688,7 +687,7 @@ router.delete('/devis/:id', requireRole(['directeur', 'admin']), async (c) => {
  * POST /devis/:id/envoyer-approbation
  * Génère un token d'approbation, envoie par email (queue) + WhatsApp immédiat.
  */
-router.post('/devis/:id/envoyer-approbation', requireRole(['directeur', 'admin']), async (c) => {
+router.post('/devis/:id/envoyer-approbation', requireRole(['admin', 'superviseur', 'operateur']), async (c) => {
   const { id } = c.req.param()
 
   const { data: devis } = await db
@@ -830,7 +829,7 @@ publicDevisRouter.post('/devis/approuver/:token', async (c) => {
 })
 
 /** Transformer un devis en commande + réserver le stock */
-router.post('/devis/:id/transformer-commande', requireRole(['directeur', 'admin']), async (c) => {
+router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseur', 'operateur']), async (c) => {
   const { id }   = c.req.param()
   const user     = c.get('user')
 
@@ -981,81 +980,72 @@ router.get('/commandes/:id', async (c) => {
   return c.json(mapCommande(data))
 })
 
-router.post('/commandes', requireRole(['directeur', 'admin']), zValidator('json', commandeSchema), async (c) => {
+router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', commandeSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
-  // ── Vérifier blocage client (crédit échu ou statut bloqué) ────────────────
-  const blocageMsg = await verifierBlocageClient(body.client_id)
-  if (blocageMsg) {
-    return c.json({ error: blocageMsg, code: 'CLIENT_BLOQUE' }, 422)
-  }
+  const result = await withOfflineFallback(
+    'POST /commandes',
 
-  const numero = await genererNumero('commandes', 'CMD')
-  const totaux = calculerTotaux(body.lignes)
+    // ── Online : Supabase ──────────────────────────────────────────────────────
+    async () => {
+      const blocageMsg = await verifierBlocageClient(body.client_id)
+      if (blocageMsg) throw Object.assign(new Error(blocageMsg), { code: 'CLIENT_BLOQUE', httpStatus: 422 })
 
-  const { data: commande, error: cmdErr } = await db
-    .from('commandes')
-    .insert({
-      numero,
-      client_id:             body.client_id ?? null,
-      client_nom:            body.client_nom,
-      devis_id:              body.devis_id ?? null,
-      statut:                'confirmed',
-      date_commande:         body.date_commande,
-      date_livraison_prevue: body.date_livraison_prevue ?? null,
-      acompte_recu_xaf:      body.acompte_recu_xaf,
-      notes:                 body.notes ?? null,
-      created_by:            user.id,
-      sync_status:           'synced',
-      ...totaux,
-    })
-    .select()
-    .single()
+      const numero = await genererNumero('commandes', 'CMD')
+      const totaux = calculerTotaux(body.lignes)
 
-  if (cmdErr || !commande) return c.json({ error: cmdErr?.message, code: cmdErr?.code }, 400)
+      const { data: commande, error: cmdErr } = await db.from('commandes')
+        .insert({ numero, client_id: body.client_id ?? null, client_nom: body.client_nom,
+          devis_id: body.devis_id ?? null, statut: 'confirmed',
+          date_commande: body.date_commande, date_livraison_prevue: body.date_livraison_prevue ?? null,
+          acompte_recu_xaf: body.acompte_recu_xaf, notes: body.notes ?? null,
+          created_by: user.id, sync_status: 'synced', ...totaux })
+        .select().single()
 
-  const cmd = commande as { id: string }
+      if (cmdErr || !commande) throw new Error(cmdErr?.message ?? 'Erreur création commande')
+      const cmd = commande as { id: string }
 
-  const lignes = body.lignes.map((l, i) => ({
-    commande_id:          cmd.id,
-    produit_id:           l.produit_id ?? null,
-    designation:          l.designation,
-    unite:                l.unite,
-    quantite:             l.quantite,
-    prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
-    total_ht_xaf:         Math.round(l.quantite * l.prix_unitaire_ht_xaf),
-    ordre:                l.ordre !== 0 ? l.ordre : i,
-  }))
+      const lignes = body.lignes.map((l, i) => ({
+        commande_id: cmd.id, produit_id: l.produit_id ?? null,
+        designation: l.designation, unite: l.unite, quantite: l.quantite,
+        prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
+        total_ht_xaf: Math.round(l.quantite * l.prix_unitaire_ht_xaf),
+        ordre: l.ordre !== 0 ? l.ordre : i,
+      }))
 
-  const { error: lignesErr } = await db.from('commandes_lignes').insert(lignes)
-  if (lignesErr) {
-    await db.from('commandes').delete().eq('id', cmd.id)
-    return c.json({ error: lignesErr.message }, 400)
-  }
+      const { error: lignesErr } = await db.from('commandes_lignes').insert(lignes)
+      if (lignesErr) { await db.from('commandes').delete().eq('id', cmd.id); throw new Error(lignesErr.message) }
 
-  await db.from('historique_commandes').insert({
-    commande_id:    cmd.id,
-    ancien_statut:  null,
-    nouveau_statut: 'confirmed',
-    commentaire:    'Commande créée',
-    changed_by:     user.id,
-  })
+      await db.from('historique_commandes').insert({
+        commande_id: cmd.id, ancien_statut: null,
+        nouveau_statut: 'confirmed', commentaire: 'Commande créée', changed_by: user.id,
+      })
 
-  const { data: full, error: fullErr } = await db
-    .from('commandes')
-    .select('*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone)')
-    .eq('id', cmd.id)
-    .single()
+      const { data: full, error: fullErr } = await db.from('commandes')
+        .select('*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone)')
+        .eq('id', cmd.id).single()
 
-  if (fullErr || !full) return c.json(commande, 201)
-  return c.json(mapCommande(full), 201)
+      return fullErr || !full ? commande : mapCommande(full)
+    },
+
+    // ── Offline : SQLite local ─────────────────────────────────────────────────
+    () => localCreateCommande({
+      client_nom: body.client_nom, client_id: body.client_id,
+      devis_id: body.devis_id, date_commande: body.date_commande,
+      date_livraison_prevue: body.date_livraison_prevue,
+      acompte_recu_xaf: body.acompte_recu_xaf, notes: body.notes,
+      lignes: body.lignes, user_id: user.id,
+    }),
+  )
+
+  return c.json(result, 201)
 })
 
 /** Changer le statut avec validation des transitions */
 router.patch(
   '/commandes/:id/statut',
-  requireRole(['directeur', 'admin', 'operateur']),
+  requireRole(['admin', 'superviseur', 'operateur']),
   zValidator('json', statutCommandeSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -1121,7 +1111,7 @@ router.patch(
   },
 )
 
-router.delete('/commandes/:id', requireRole(['directeur']), async (c) => {
+router.delete('/commandes/:id', requireRole(['admin']), async (c) => {
   const { id } = c.req.param()
 
   const { data: existing } = await db.from('commandes').select('statut').eq('id', id).single()
@@ -1165,7 +1155,7 @@ router.get('/commandes/:id/paiements', async (c) => {
 
 router.post(
   '/commandes/:id/paiements',
-  requireRole(['directeur', 'admin', 'operateur']),
+  requireRole(['admin', 'superviseur', 'operateur']),
   zValidator('json', paiementCommandeSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -1293,7 +1283,7 @@ const statutCommandeWebSchema = z.object({
 
 router.patch(
   '/commandes/web/:id/statut',
-  requireRole(['directeur', 'admin', 'operateur']),
+  requireRole(['admin', 'superviseur', 'operateur']),
   zValidator('json', statutCommandeWebSchema),
   async (c) => {
     const { id } = c.req.param()

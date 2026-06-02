@@ -18,6 +18,8 @@ import { paiementsRouter } from './routes/paiements'
 import { operationsRouter } from './routes/operations'
 import { adminRouter } from './routes/admin'
 import { equipementsRouter } from './routes/equipements'
+import { demarrerCronRelances } from './services/relances-cron.service'
+import { HTTPException } from 'hono/http-exception'
 
 const app = new Hono<{ Variables: HonoVariables }>()
 
@@ -116,6 +118,17 @@ api.route('/admin',    adminRouter)
 app.route('/api', api)
 
 app.onError((err, c) => {
+  // HTTPException : erreurs métier intentionnelles (422, 404, etc.)
+  if (err instanceof HTTPException) {
+    return err.getResponse()
+  }
+
+  // Erreurs avec code métier attaché (throw Object.assign(new Error(...), { code, httpStatus }))
+  const e = err as Error & { code?: string; httpStatus?: number }
+  if (e.httpStatus && e.httpStatus >= 400 && e.httpStatus < 500) {
+    return c.json({ error: e.message, code: e.code ?? 'CLIENT_ERROR' }, e.httpStatus as 400)
+  }
+
   console.error(`[error] ${c.req.method} ${c.req.url}`, err)
   return c.json(
     {
@@ -130,5 +143,9 @@ app.onError((err, c) => {
 app.notFound((c) =>
   c.json({ error: `Route ${c.req.method} ${c.req.path} introuvable`, code: 'NOT_FOUND' }, 404),
 )
+
+// ── Cron relances automatiques WhatsApp (MOD-04 CDC) ──────────────────────────
+// Démarre en arrière-plan — n'attend pas, ne bloque pas le démarrage de l'API
+demarrerCronRelances()
 
 export default app

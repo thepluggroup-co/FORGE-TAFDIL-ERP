@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 import { SuiviClient, type CommandeSuivi } from './SuiviClient'
-import { createServiceClient } from '@/lib/supabase'
+import { createPublicClient } from '@/lib/supabase'
 
 export async function generateMetadata({ params }: { params: { ref: string } }): Promise<Metadata> {
   return {
@@ -14,7 +14,7 @@ export default async function SuiviRefPage({ params }: { params: { ref: string }
   const commandeRef = params.ref.toUpperCase()
 
   try {
-    const db = createServiceClient()
+    const db = createPublicClient()
     const { data, error } = await db
       .from('commandes_shop')
       .select('ref, statut_commande, statut_paiement, mode_paiement, payment_reference, lignes, montant_ttc, frais_livraison, created_at, updated_at, client_ville, photos_livraison')

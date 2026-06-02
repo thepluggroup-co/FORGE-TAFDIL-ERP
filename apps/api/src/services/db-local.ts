@@ -491,3 +491,132 @@ export function localRembourser(opts: {
     offline:           true,
   }
 }
+
+/** Crée un devis offline. */
+export function localCreateDevis(opts: {
+  client_nom:          string
+  client_id?:          string
+  date_emission:       string
+  date_validite:       string
+  validite_jours?:     number
+  acompte_pct?:        number
+  conditions_paiement?: string
+  notes?:              string
+  lignes: Array<{ designation: string; description?: string; categorie?: string; unite?: string; quantite: number; prix_unitaire_ht_xaf: number }>
+  user_id?: string
+}): Record<string, unknown> {
+  const TVA = 0.1925
+  const ht  = Math.round(opts.lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire_ht_xaf, 0))
+  const tva = Math.round(ht * TVA)
+  const ttc = ht + tva
+  const now    = NOW()
+  const id     = randomUUID()
+  const numero = offlineNumero('DEV')
+
+  const devis = {
+    id, numero,
+    client_id:           opts.client_id ?? null,
+    client_nom:          opts.client_nom,
+    statut:              'brouillon',
+    date_emission:       opts.date_emission,
+    date_validite:       opts.date_validite,
+    validite_jours:      opts.validite_jours ?? 30,
+    acompte_pct:         opts.acompte_pct ?? 0,
+    conditions_paiement: opts.conditions_paiement ?? 'Virement bancaire',
+    notes:               opts.notes ?? null,
+    total_ht_xaf:        ht,
+    tva_xaf:             tva,
+    total_ttc_xaf:       ttc,
+    created_by:          opts.user_id ?? null,
+    created_at:          now,
+    updated_at:          now,
+    sync_status:         'pending',
+  }
+  localInsert('devis', devis)
+  enqueueSync('devis', 'INSERT', id, devis)
+
+  const lignes = opts.lignes.map((l, i) => {
+    const lid = randomUUID()
+    const ligne = {
+      id: lid, devis_id: id,
+      designation:          l.designation,
+      description:          l.description ?? null,
+      categorie:            l.categorie ?? 'materiaux',
+      unite:                l.unite ?? 'unité',
+      quantite:             l.quantite,
+      prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
+      total_ht_xaf:         Math.round(l.quantite * l.prix_unitaire_ht_xaf),
+      ordre:                i,
+    }
+    enqueueSync('devis_lignes', 'INSERT', lid, ligne)
+    return ligne
+  })
+
+  return { ...devis, lignes, offline: true }
+}
+
+/** Crée une commande offline. */
+export function localCreateCommande(opts: {
+  client_nom:             string
+  client_id?:             string
+  devis_id?:              string
+  date_commande:          string
+  date_livraison_prevue?: string
+  acompte_recu_xaf?:      number
+  notes?:                 string
+  lignes: Array<{ produit_id?: string; designation: string; unite?: string; quantite: number; prix_unitaire_ht_xaf: number }>
+  user_id?: string
+}): Record<string, unknown> {
+  const TVA = 0.1925
+  const ht  = Math.round(opts.lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire_ht_xaf, 0))
+  const tva = Math.round(ht * TVA)
+  const ttc = ht + tva
+  const now    = NOW()
+  const id     = randomUUID()
+  const numero = offlineNumero('CMD')
+
+  const commande = {
+    id, numero,
+    client_id:             opts.client_id ?? null,
+    client_nom:            opts.client_nom,
+    devis_id:              opts.devis_id ?? null,
+    statut:                'confirmed',
+    date_commande:         opts.date_commande,
+    date_livraison_prevue: opts.date_livraison_prevue ?? null,
+    acompte_recu_xaf:      opts.acompte_recu_xaf ?? 0,
+    notes:                 opts.notes ?? null,
+    total_ht_xaf:          ht,
+    tva_xaf:               tva,
+    total_ttc_xaf:         ttc,
+    created_by:            opts.user_id ?? null,
+    created_at:            now,
+    updated_at:            now,
+    sync_status:           'pending',
+  }
+  localInsert('commandes', commande)
+  enqueueSync('commandes', 'INSERT', id, commande)
+
+  const lignes = opts.lignes.map((l, i) => {
+    const lid = randomUUID()
+    const ligne = {
+      id: lid, commande_id: id,
+      produit_id:           l.produit_id ?? null,
+      designation:          l.designation,
+      unite:                l.unite ?? 'unité',
+      quantite:             l.quantite,
+      prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
+      total_ht_xaf:         Math.round(l.quantite * l.prix_unitaire_ht_xaf),
+      ordre:                i,
+    }
+    enqueueSync('commandes_lignes', 'INSERT', lid, ligne)
+    return ligne
+  })
+
+  return {
+    ...commande,
+    reference: numero,
+    client: { id: opts.client_id ?? '', nom: opts.client_nom, telephone: '' },
+    lignes,
+    offline: true,
+  }
+}

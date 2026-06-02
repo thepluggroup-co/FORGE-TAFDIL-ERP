@@ -10,15 +10,33 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mkChain, authHeaders } from './helpers'
 
-vi.mock('@forge/db/supabase', () => ({
-  supabase: {
-    from:          vi.fn(),
-    rpc:           vi.fn(),
+vi.mock('@forge/db/supabase', () => {
+  // Chaîne sûre par défaut — ne crashe jamais, retourne data=[] sans erreur
+  const safeChain = () => {
+    const c: Record<string, unknown> = {}
+    for (const m of ['select','insert','update','delete','upsert','eq','neq','in',
+      'or','gte','lte','lt','gt','not','ilike','like','order','range','limit','head','filter'])
+      c[m] = vi.fn().mockReturnValue(c)
+    c['single']      = vi.fn().mockResolvedValue({ data: null, error: null })
+    c['maybeSingle'] = vi.fn().mockResolvedValue({ data: null, error: null })
+    c['then']        = (res: (v: unknown) => unknown) =>
+      Promise.resolve({ data: [], count: 0, error: null }).then(res)
+    return c
+  }
+  const mockClient = {
+    from:          vi.fn().mockImplementation(safeChain),
+    rpc:           vi.fn().mockResolvedValue({ data: null, error: null }),
     channel:       vi.fn(() => ({ send: vi.fn().mockResolvedValue('ok') })),
     removeChannel: vi.fn(),
-  },
-  supabaseAdmin: null,
-}))
+    storage: { from: vi.fn().mockReturnValue({
+      upload:          vi.fn().mockResolvedValue({ error: null }),
+      download:        vi.fn().mockResolvedValue({ data: null, error: { message: 'not found' } }),
+      getPublicUrl:    vi.fn().mockReturnValue({ data: { publicUrl: 'https://test.supabase.co/test.pdf' } }),
+      createSignedUrl: vi.fn().mockResolvedValue({ data: { signedUrl: 'https://test.supabase.co/signed.pdf' } }),
+    }) },
+  }
+  return { supabase: mockClient, supabaseAdmin: mockClient }
+})
 
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
@@ -135,7 +153,7 @@ describe('Test 6 — PUT /api/bons/:id/valider change statut en valide', () => {
 
     const res = await app.request(`/api/bons/${BON_ID}/valider`, {
       method:  'PUT',
-      headers: new Headers(authHeaders('directeur')),
+      headers: new Headers(authHeaders('admin')),
       body:    JSON.stringify({ decision: 'valide', commentaire: 'Approuvé' }),
     })
 
@@ -155,7 +173,7 @@ describe('Test 6 — PUT /api/bons/:id/valider change statut en valide', () => {
 
     const res = await app.request(`/api/bons/${BON_ID}/valider`, {
       method:  'PUT',
-      headers: new Headers(authHeaders('directeur')),
+      headers: new Headers(authHeaders('admin')),
       body:    JSON.stringify({ decision: 'valide' }),
     })
 

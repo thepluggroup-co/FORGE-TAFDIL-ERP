@@ -219,7 +219,7 @@ router.post('/ai/chat', zValidator('json', chatSchema), async (c) => {
 // GET /ai/recommandations/stock
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/ai/recommandations/stock', requireRole(['directeur', 'admin']), async (c) => {
+router.get('/ai/recommandations/stock', requireRole(['admin', 'superviseur']), async (c) => { // superviseur : voir rapports IA
   const since90j = new Date(Date.now() - 90 * 86400000).toISOString()
 
   const [produitsRes, mouvRes] = await Promise.all([
@@ -294,7 +294,7 @@ Inclure seulement les produits qui nécessitent une action. Maximum 10 recommand
 // GET /ai/rapport-hebdo — Déclenchement manuel
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/ai/rapport-hebdo', requireRole(['directeur']), async (c) => {
+router.get('/ai/rapport-hebdo', requireRole(['admin']), async (c) => {
   const rapport       = await genererRapportHebdo()
   const envoiWhatsApp = c.req.query('whatsapp') === 'true'
 

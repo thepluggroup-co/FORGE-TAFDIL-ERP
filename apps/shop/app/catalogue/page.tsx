@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { CatalogueClient } from './CatalogueClient'
-import { createServiceClient } from '@/lib/supabase'
+import { createPublicClient } from '@/lib/supabase'
 import type { Produit, Disponibilite } from '@/lib/types'
 
 export const revalidate = 60
@@ -22,7 +22,7 @@ function disponibilite(stock: number, seuil: number): Disponibilite {
 
 async function fetchProduits(): Promise<Produit[]> {
   try {
-    const db = createServiceClient()
+    const db = createPublicClient()
     const { data, error } = await db
       .from('produits_shop')
       .select(`

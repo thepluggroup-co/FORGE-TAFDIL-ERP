@@ -134,7 +134,7 @@ router.get('/equipements/:id', async (c) => {
   })
 })
 
-router.post('/equipements', requireRole(['directeur', 'admin']), zValidator('json', equipementSchema), async (c) => {
+router.post('/equipements', requireRole(['admin', 'superviseur']), zValidator('json', equipementSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -156,7 +156,7 @@ router.post('/equipements', requireRole(['directeur', 'admin']), zValidator('jso
   return c.json(data, 201)
 })
 
-router.put('/equipements/:id', requireRole(['directeur', 'admin']), zValidator('json', equipementSchema.partial()), async (c) => {
+router.put('/equipements/:id', requireRole(['admin', 'superviseur']), zValidator('json', equipementSchema.partial()), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
@@ -171,7 +171,7 @@ router.put('/equipements/:id', requireRole(['directeur', 'admin']), zValidator('
   return c.json(data)
 })
 
-router.patch('/equipements/:id/statut', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', equipementStatutSchema), async (c) => {
+router.patch('/equipements/:id/statut', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', equipementStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
@@ -209,7 +209,7 @@ router.get('/equipements/:id/maintenances', async (c) => {
   return c.json({ data: data ?? [], total: (data ?? []).length })
 })
 
-router.post('/equipements/:id/maintenances', requireRole(['directeur', 'admin']), zValidator('json', maintenanceSchema), async (c) => {
+router.post('/equipements/:id/maintenances', requireRole(['admin', 'superviseur']), zValidator('json', maintenanceSchema), async (c) => {
   const { id } = c.req.param()
   const user   = c.get('user')
   const body   = c.req.valid('json')
@@ -237,7 +237,7 @@ router.post('/equipements/:id/maintenances', requireRole(['directeur', 'admin'])
   return c.json(data, 201)
 })
 
-router.patch('/equipements/:equipId/maintenances/:maintId/statut', requireRole(['directeur', 'admin', 'operateur']), async (c) => {
+router.patch('/equipements/:equipId/maintenances/:maintId/statut', requireRole(['admin', 'superviseur', 'operateur']), async (c) => {
   const { equipId, maintId } = c.req.param()
   const body = await c.req.json<{ statut: string; prochaine_date?: string }>()
 

@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
-import { createServiceClient } from '@/lib/supabase'
+import { createPublicClient } from '@/lib/supabase'
 
 export async function GET() {
   try {
-    const db = createServiceClient()
+    const db = createPublicClient()
 
     const { data, error } = await db
       .from('produits_shop')

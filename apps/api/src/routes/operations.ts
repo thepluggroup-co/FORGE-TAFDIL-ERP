@@ -108,7 +108,7 @@ router.get('/production/jobs/:id', async (c) => {
   })
 })
 
-router.post('/production/jobs', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', jobSchema), async (c) => {
+router.post('/production/jobs', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', jobSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -160,7 +160,7 @@ router.post('/production/jobs', requireRole(['directeur', 'admin', 'operateur'])
  */
 router.patch(
   '/production/jobs/:id/statut',
-  requireRole(['directeur', 'admin', 'operateur']),
+  requireRole(['admin', 'superviseur', 'operateur']),
   zValidator('json', jobStatutSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -265,7 +265,7 @@ router.patch(
  */
 router.patch(
   '/production/jobs/:id/avancement',
-  requireRole(['directeur', 'admin', 'operateur']),
+  requireRole(['admin', 'superviseur', 'operateur']),
   zValidator('json', jobAvancementSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -476,7 +476,7 @@ router.get('/projets/:id', async (c) => {
   })
 })
 
-router.post('/projets', requireRole(['directeur', 'admin']), zValidator('json', projetSchema), async (c) => {
+router.post('/projets', requireRole(['admin', 'superviseur']), zValidator('json', projetSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -518,7 +518,7 @@ router.post('/projets', requireRole(['directeur', 'admin']), zValidator('json', 
   return c.json(data, 201)
 })
 
-router.patch('/projets/:id/statut', requireRole(['directeur', 'admin']), zValidator('json', projetStatutSchema), async (c) => {
+router.patch('/projets/:id/statut', requireRole(['admin', 'superviseur']), zValidator('json', projetStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
@@ -574,7 +574,7 @@ router.get('/projets/:id/taches', async (c) => {
   return c.json({ data: sorted, total: sorted.length })
 })
 
-router.post('/projets/:id/taches', requireRole(['directeur', 'admin']), zValidator('json', tacheSchema), async (c) => {
+router.post('/projets/:id/taches', requireRole(['admin', 'superviseur']), zValidator('json', tacheSchema), async (c) => {
   const { id }  = c.req.param()
   const body    = c.req.valid('json')
 
@@ -599,7 +599,7 @@ router.post('/projets/:id/taches', requireRole(['directeur', 'admin']), zValidat
   return c.json(data, 201)
 })
 
-router.patch('/projets/:projetId/taches/:tacheId/statut', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', tacheStatutSchema), async (c) => {
+router.patch('/projets/:projetId/taches/:tacheId/statut', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', tacheStatutSchema), async (c) => {
   const { projetId, tacheId } = c.req.param()
   const body = c.req.valid('json')
 
@@ -671,7 +671,7 @@ router.get('/projets/:id/membres', async (c) => {
   return c.json({ data: data ?? [], total: (data ?? []).length })
 })
 
-router.post('/projets/:id/membres', requireRole(['directeur', 'admin']), zValidator('json', membreSchema), async (c) => {
+router.post('/projets/:id/membres', requireRole(['admin', 'superviseur']), zValidator('json', membreSchema), async (c) => {
   const { id }  = c.req.param()
   const user    = c.get('user')
   const body    = c.req.valid('json')
@@ -715,7 +715,7 @@ router.post('/projets/:id/membres', requireRole(['directeur', 'admin']), zValida
   return c.json(data, 201)
 })
 
-router.delete('/projets/:id/membres/:employe_id', requireRole(['directeur', 'admin']), async (c) => {
+router.delete('/projets/:id/membres/:employe_id', requireRole(['admin', 'superviseur']), async (c) => {
   const { id, employe_id } = c.req.param()
 
   const { error } = await db
@@ -728,7 +728,7 @@ router.delete('/projets/:id/membres/:employe_id', requireRole(['directeur', 'adm
   return c.body(null, 204)
 })
 
-router.patch('/projets/:id/membres/:employe_id/heures', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', membreHeuresSchema), async (c) => {
+router.patch('/projets/:id/membres/:employe_id/heures', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', membreHeuresSchema), async (c) => {
   const { id, employe_id } = c.req.param()
   const body = c.req.valid('json')
 
@@ -783,7 +783,7 @@ router.get('/logistique/livraisons', async (c) => {
   return c.json({ data, total: count ?? 0, page, per_page: perPage })
 })
 
-router.post('/logistique/livraisons', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', livraisonSchema), async (c) => {
+router.post('/logistique/livraisons', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', livraisonSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -822,7 +822,7 @@ router.post('/logistique/livraisons', requireRole(['directeur', 'admin', 'operat
   return c.json(data, 201)
 })
 
-router.patch('/logistique/livraisons/:id/statut', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', livraisonStatutSchema), async (c) => {
+router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', livraisonStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
@@ -921,7 +921,7 @@ router.get('/marketing/campagnes', async (c) => {
   return c.json({ data, total: count ?? 0, page, per_page: perPage })
 })
 
-router.post('/marketing/campagnes', requireRole(['directeur', 'admin']), zValidator('json', campagneSchema), async (c) => {
+router.post('/marketing/campagnes', requireRole(['admin', 'superviseur']), zValidator('json', campagneSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
   const { data, error } = await db
@@ -932,7 +932,7 @@ router.post('/marketing/campagnes', requireRole(['directeur', 'admin']), zValida
   return c.json(data, 201)
 })
 
-router.patch('/marketing/campagnes/:id/statut', requireRole(['directeur', 'admin']), zValidator('json', campagneStatutSchema), async (c) => {
+router.patch('/marketing/campagnes/:id/statut', requireRole(['admin', 'superviseur']), zValidator('json', campagneStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
   const { data, error } = await db
@@ -987,7 +987,7 @@ router.get('/securite/incidents', async (c) => {
   return c.json({ data, total: count ?? 0, page, per_page: perPage })
 })
 
-router.post('/securite/incidents', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', incidentSchema), async (c) => {
+router.post('/securite/incidents', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', incidentSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
   const { data, error } = await db
@@ -998,7 +998,7 @@ router.post('/securite/incidents', requireRole(['directeur', 'admin', 'operateur
   return c.json(data, 201)
 })
 
-router.patch('/securite/incidents/:id/statut', requireRole(['directeur', 'admin']), zValidator('json', incidentStatutSchema), async (c) => {
+router.patch('/securite/incidents/:id/statut', requireRole(['admin', 'superviseur']), zValidator('json', incidentStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
@@ -1053,7 +1053,7 @@ router.get('/securite/epi', async (c) => {
   return c.json({ data: data ?? [], total: (data ?? []).length })
 })
 
-router.post('/securite/epi', requireRole(['directeur', 'admin']), zValidator('json', epiSchema), async (c) => {
+router.post('/securite/epi', requireRole(['admin', 'superviseur']), zValidator('json', epiSchema), async (c) => {
   const body = c.req.valid('json')
 
   if (body.conformes > body.total) {
@@ -1068,7 +1068,7 @@ router.post('/securite/epi', requireRole(['directeur', 'admin']), zValidator('js
   return c.json(data, 201)
 })
 
-router.put('/securite/epi/:id', requireRole(['directeur', 'admin']), zValidator('json', epiSchema.partial()), async (c) => {
+router.put('/securite/epi/:id', requireRole(['admin', 'superviseur']), zValidator('json', epiSchema.partial()), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
@@ -1143,7 +1143,7 @@ router.get('/projets/:id/ressources', async (c) => {
   return c.json({ data: ressources, total: ressources.length, total_cout_xaf: Math.round(totalCout) })
 })
 
-router.post('/projets/:id/ressources', requireRole(['directeur', 'admin']), zValidator('json', ressourceSchema), async (c) => {
+router.post('/projets/:id/ressources', requireRole(['admin', 'superviseur']), zValidator('json', ressourceSchema), async (c) => {
   const { id }  = c.req.param()
   const user    = c.get('user')
   const body    = c.req.valid('json')
@@ -1221,7 +1221,7 @@ router.post('/projets/:id/ressources', requireRole(['directeur', 'admin']), zVal
   return c.json(data, 201)
 })
 
-router.patch('/projets/:id/ressources/:rid/statut', requireRole(['directeur', 'admin', 'operateur']), async (c) => {
+router.patch('/projets/:id/ressources/:rid/statut', requireRole(['admin', 'superviseur', 'operateur']), async (c) => {
   const { id, rid } = c.req.param()
   const body = await c.req.json<{ statut: string; notes?: string }>()
 
@@ -1261,7 +1261,7 @@ router.patch('/projets/:id/ressources/:rid/statut', requireRole(['directeur', 'a
   return c.json(data)
 })
 
-router.delete('/projets/:id/ressources/:rid', requireRole(['directeur', 'admin']), async (c) => {
+router.delete('/projets/:id/ressources/:rid', requireRole(['admin', 'superviseur']), async (c) => {
   const { id, rid } = c.req.param()
   const { error } = await db
     .from('projets_ressources')
