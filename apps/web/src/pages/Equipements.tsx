@@ -106,7 +106,7 @@ const DEFAULT_FORM = {
 
 export default function Equipements() {
   const { role } = useAuth()
-  const canEdit  = role === 'admin' || role === 'directeur'
+  const canEdit  = role === 'admin' || role === 'superviseur'
 
   const [search,     setSearch]     = useState('')
   const [filtreStatut, setFiltreStatut] = useState('')

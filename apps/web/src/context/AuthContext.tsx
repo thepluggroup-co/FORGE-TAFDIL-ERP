@@ -3,9 +3,9 @@ import type { User, Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import { setApiToken } from '@/lib/api-client'
 
-export type AppRole = 'admin' | 'directeur' | 'operateur' | 'viewer'
+export type AppRole = 'admin' | 'superviseur' | 'operateur' | 'apprenant'
 
-const VALID_ROLES: AppRole[] = ['admin', 'directeur', 'operateur', 'viewer']
+const VALID_ROLES: AppRole[] = ['admin', 'superviseur', 'operateur', 'apprenant']
 
 interface AuthContextValue {
   user: User | null

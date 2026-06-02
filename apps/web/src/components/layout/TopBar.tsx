@@ -131,10 +131,10 @@ function NotificationsPanel({ onClose }: { onClose: () => void }) {
 // ── User dropdown ──────────────────────────────────────────────────────────────
 
 const ROLE_LABELS: Record<string, string> = {
-  admin:     'Directeur / Admin. Principal',
-  directeur: 'Directeur',
-  operateur: 'Opérateur',
-  viewer:    'Lecteur',
+  admin:       'Admin (Patron)',
+  superviseur: 'Superviseur',
+  operateur:   'Opérateur',
+  apprenant:   'Apprenant',
 }
 
 function UserDropdown({ email, initial, onClose }: { email: string; initial: string; onClose: () => void }) {

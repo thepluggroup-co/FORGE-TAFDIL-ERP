@@ -14,10 +14,10 @@ import { Navigate } from 'react-router-dom'
 // ── Role config ────────────────────────────────────────────────────────────────
 
 const ROLES: { value: ForgeRole; label: string; color: string; bg: string; desc: string }[] = [
-  { value: 'admin',     label: 'Administrateur', color: '#C62828', bg: '#FFEBEE', desc: 'Accès complet + gestion utilisateurs' },
-  { value: 'directeur', label: 'Directeur',      color: '#1d4ed8', bg: '#dbeafe', desc: 'Finance, RH, rapports, validation' },
-  { value: 'operateur', label: 'Opérateur',      color: '#15803d', bg: '#dcfce7', desc: 'Stocks, commandes, production' },
-  { value: 'viewer',    label: 'Lecteur',         color: '#6b7280', bg: '#f3f4f6', desc: 'Lecture seule sur tous les modules' },
+  { value: 'admin',       label: 'Admin (Patron)',  color: '#C62828', bg: '#FFEBEE', desc: 'Accès complet + gestion utilisateurs' },
+  { value: 'superviseur', label: 'Superviseur',     color: '#1d4ed8', bg: '#dbeafe', desc: 'Validation, stocks, rapports, formation' },
+  { value: 'operateur',   label: 'Opérateur',       color: '#15803d', bg: '#dcfce7', desc: 'Stocks, commandes, bons, production' },
+  { value: 'apprenant',   label: 'Apprenant',       color: '#6b7280', bg: '#f3f4f6', desc: 'Lecture tâches, stock et formation' },
 ]
 
 function RoleBadge({ role }: { role: ForgeRole }) {
@@ -314,12 +314,12 @@ export default function AdminSettings() {
     : users
 
   const counts = {
-    total:     users.length,
-    admin:     users.filter((u) => u.role === 'admin').length,
-    directeur: users.filter((u) => u.role === 'directeur').length,
-    operateur: users.filter((u) => u.role === 'operateur').length,
-    viewer:    users.filter((u) => u.role === 'viewer').length,
-    inactif:   users.filter((u) => !u.actif).length,
+    total:       users.length,
+    admin:       users.filter((u) => u.role === 'admin').length,
+    superviseur: users.filter((u) => u.role === 'superviseur').length,
+    operateur:   users.filter((u) => u.role === 'operateur').length,
+    apprenant:   users.filter((u) => u.role === 'apprenant').length,
+    inactif:     users.filter((u) => !u.actif).length,
   }
 
   return (
@@ -347,12 +347,12 @@ export default function AdminSettings() {
       {/* ── Stats ── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
-          { label: 'Total',        value: counts.total,     color: '#212121', bg: '#f5f5f5' },
-          { label: 'Admins',       value: counts.admin,     color: '#C62828', bg: '#FFEBEE' },
-          { label: 'Directeurs',   value: counts.directeur, color: '#1d4ed8', bg: '#dbeafe' },
-          { label: 'Opérateurs',   value: counts.operateur, color: '#15803d', bg: '#dcfce7' },
-          { label: 'Lecteurs',     value: counts.viewer,    color: '#6b7280', bg: '#f3f4f6' },
-          { label: 'Inactifs',     value: counts.inactif,   color: '#9ca3af', bg: '#f9fafb' },
+          { label: 'Total',         value: counts.total,       color: '#212121', bg: '#f5f5f5' },
+          { label: 'Admins',        value: counts.admin,       color: '#C62828', bg: '#FFEBEE' },
+          { label: 'Superviseurs',  value: counts.superviseur, color: '#1d4ed8', bg: '#dbeafe' },
+          { label: 'Opérateurs',    value: counts.operateur,   color: '#15803d', bg: '#dcfce7' },
+          { label: 'Apprenants',    value: counts.apprenant,   color: '#6b7280', bg: '#f3f4f6' },
+          { label: 'Inactifs',      value: counts.inactif,     color: '#9ca3af', bg: '#f9fafb' },
         ].map(({ label, value, color, bg }) => (
           <div
             key={label}
@@ -445,22 +445,24 @@ export default function AdminSettings() {
             </thead>
             <tbody>
               {[
-                { module: 'Dashboard',          admin: true,  directeur: true,  operateur: true,  viewer: true  },
-                { module: 'Stocks & Production', admin: true,  directeur: true,  operateur: true,  viewer: true  },
-                { module: 'Commandes & Devis',   admin: true,  directeur: true,  operateur: true,  viewer: true  },
-                { module: 'Clients',             admin: true,  directeur: true,  operateur: true,  viewer: true  },
-                { module: 'Finance',             admin: true,  directeur: true,  operateur: false, viewer: false },
-                { module: 'RH',                  admin: true,  directeur: true,  operateur: false, viewer: false },
-                { module: 'Intelligence IA',     admin: true,  directeur: true,  operateur: false, viewer: false },
-                { module: 'Formation',           admin: true,  directeur: true,  operateur: true,  viewer: true  },
-                { module: 'Projets',             admin: true,  directeur: true,  operateur: true,  viewer: true  },
-                { module: 'Rapports & Exports',  admin: true,  directeur: true,  operateur: true,  viewer: false },
-                { module: 'Paramètres système',  admin: true,  directeur: false, operateur: false, viewer: false },
-                { module: 'Gestion utilisateurs',admin: true,  directeur: false, operateur: false, viewer: false },
+                { module: 'Dashboard',           admin: true,  superviseur: true,  operateur: true,  apprenant: true  },
+                { module: 'Stocks & Production',  admin: true,  superviseur: true,  operateur: true,  apprenant: true  },
+                { module: 'Commandes & Devis',    admin: true,  superviseur: true,  operateur: true,  apprenant: false },
+                { module: 'Clients',              admin: true,  superviseur: true,  operateur: true,  apprenant: false },
+                { module: 'Finance (lecture)',     admin: true,  superviseur: true,  operateur: false, apprenant: false },
+                { module: 'Finance (écriture)',    admin: true,  superviseur: false, operateur: false, apprenant: false },
+                { module: 'RH (lecture)',          admin: true,  superviseur: true,  operateur: false, apprenant: false },
+                { module: 'RH (paie/employes)',    admin: true,  superviseur: false, operateur: false, apprenant: false },
+                { module: 'Intelligence IA',       admin: true,  superviseur: true,  operateur: false, apprenant: false },
+                { module: 'Formation',             admin: true,  superviseur: true,  operateur: false, apprenant: true  },
+                { module: 'Projets & Tâches',      admin: true,  superviseur: true,  operateur: true,  apprenant: true  },
+                { module: 'Rapports & Exports',    admin: true,  superviseur: true,  operateur: false, apprenant: false },
+                { module: 'Paramètres système',    admin: true,  superviseur: false, operateur: false, apprenant: false },
+                { module: 'Gestion utilisateurs',  admin: true,  superviseur: false, operateur: false, apprenant: false },
               ].map((row) => (
                 <tr key={row.module} className="border-b border-gray-50 hover:bg-gray-50/50">
                   <td className="px-4 py-2.5 text-sm text-[#212121] font-medium">{row.module}</td>
-                  {(['admin', 'directeur', 'operateur', 'viewer'] as const).map((role) => (
+                  {(['admin', 'superviseur', 'operateur', 'apprenant'] as const).map((role) => (
                     <td key={role} className="px-4 py-2.5 text-center">
                       {row[role]
                         ? <CheckCircle className="h-4 w-4 text-green-500 mx-auto" />

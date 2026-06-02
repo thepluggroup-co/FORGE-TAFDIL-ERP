@@ -590,7 +590,7 @@ function ProjetDetailPanel({
 }) {
   const [activeTab, setActiveTab] = useState<'infos' | 'equipe' | 'ressources' | 'taches'>('infos')
   const updateStatut = useUpdateProjetStatut()
-  const canEdit = role === 'admin' || role === 'directeur'
+  const canEdit = role === 'admin' || role === 'superviseur'
   const sc = STATUT_MAP[projet.statut as string] ?? STATUT_MAP.planifie
 
   // Charger le détail du projet (avec tâches à jour)
@@ -818,7 +818,7 @@ function NouveauProjetForm({ onClose }: { onClose: () => void }) {
 
 export default function Projets() {
   const { role } = useAuth()
-  const canAdmin = role === 'admin' || role === 'directeur'
+  const canAdmin = role === 'admin' || role === 'superviseur'
 
   const [formOpen,      setFormOpen]      = useState(false)
   const [selectedProjet,setSelectedProjet]= useState<ProjetRecord | null>(null)

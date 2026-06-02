@@ -72,10 +72,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const initial = email.charAt(0).toUpperCase()
 
   const roleLabels: Record<string, string> = {
-    admin:     'Directeur · Admin. Principal',
-    directeur: 'Directeur',
-    operateur: 'Opérateur',
-    viewer:    'Lecteur',
+    admin:       'Admin (Patron)',
+    superviseur: 'Superviseur',
+    operateur:   'Opérateur',
+    apprenant:   'Apprenant',
   }
   const roleLabel = roleLabels[appRole ?? ''] ?? (appRole ?? 'Utilisateur')
 

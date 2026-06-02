@@ -13,28 +13,28 @@ import { useNavigate } from 'react-router-dom'
 // ── Role display config ────────────────────────────────────────────────────────
 const ROLE_CONFIG: Record<string, { label: string; color: string; bg: string; description: string }> = {
   admin: {
-    label:       'Directeur / Administrateur Principal',
+    label:       'Admin (Patron)',
     color:       '#C62828',
     bg:          '#FFEBEE',
-    description: 'Direction générale — Accès complet à tous les modules, paramètres système et gestion des utilisateurs.',
+    description: 'Accès complet — paramètres système, gestion utilisateurs, finance et RH.',
   },
-  directeur: {
-    label:       'Directeur',
+  superviseur: {
+    label:       'Superviseur',
     color:       '#1d4ed8',
     bg:          '#dbeafe',
-    description: 'Accès aux rapports, RH, finance et validation des opérations.',
+    description: 'Validation des bons, supervision stocks & production, lecture RH et rapports.',
   },
   operateur: {
     label:       'Opérateur',
     color:       '#15803d',
     bg:          '#dcfce7',
-    description: 'Gestion des stocks, commandes et production.',
+    description: 'Création bons, stocks, commandes, devis et livraisons.',
   },
-  viewer: {
-    label:       'Lecteur',
+  apprenant: {
+    label:       'Apprenant',
     color:       '#6b7280',
     bg:          '#f3f4f6',
-    description: 'Accès en lecture seule à tous les modules.',
+    description: 'Lecture tâches, suivi formation et consultation stock.',
   },
 }
 
@@ -195,7 +195,7 @@ export default function Account() {
   const email   = user?.email ?? ''
   const initial = email.charAt(0).toUpperCase()
 
-  const roleConfig = ROLE_CONFIG[appRole ?? ''] ?? ROLE_CONFIG['viewer']
+  const roleConfig = ROLE_CONFIG[appRole ?? ''] ?? ROLE_CONFIG['apprenant']
 
   const handleSignOut = async () => {
     await signOut()
@@ -259,12 +259,12 @@ export default function Account() {
       <Section title="Permissions" icon={<Lock className="h-4 w-4" />}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
           {[
-            { label: 'Stocks & Inventaire',   ok: ['admin', 'directeur', 'operateur'].includes(appRole ?? '') },
-            { label: 'Commandes & Devis',      ok: ['admin', 'directeur', 'operateur'].includes(appRole ?? '') },
-            { label: 'Finance & Comptabilité', ok: ['admin', 'directeur'].includes(appRole ?? '') },
-            { label: 'Ressources Humaines',    ok: ['admin', 'directeur'].includes(appRole ?? '') },
-            { label: 'Intelligence IA',        ok: ['admin', 'directeur'].includes(appRole ?? '') },
-            { label: 'Rapports & Exports',     ok: ['admin', 'directeur', 'operateur'].includes(appRole ?? '') },
+            { label: 'Stocks & Inventaire',   ok: ['admin', 'superviseur', 'operateur'].includes(appRole ?? '') },
+            { label: 'Commandes & Devis',      ok: ['admin', 'superviseur', 'operateur'].includes(appRole ?? '') },
+            { label: 'Finance & Comptabilité', ok: ['admin', 'superviseur'].includes(appRole ?? '') },
+            { label: 'Ressources Humaines',    ok: ['admin', 'superviseur'].includes(appRole ?? '') },
+            { label: 'Intelligence IA',        ok: ['admin', 'superviseur'].includes(appRole ?? '') },
+            { label: 'Rapports & Exports',     ok: ['admin', 'superviseur'].includes(appRole ?? '') },
             { label: 'Paramètres système',     ok: appRole === 'admin' },
             { label: 'Gestion utilisateurs',   ok: appRole === 'admin' },
           ].map(({ label, ok }) => (

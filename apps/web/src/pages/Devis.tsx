@@ -128,7 +128,7 @@ function DevisDetailPanel({
   const lignes         = devis.lignes as DevisLigne[]
   const client         = devis.client as DevisApi['client']
   const joursRestants  = devis.jours_restants as number | null
-  const canAdmin       = role === 'admin' || role === 'directeur'
+  const canAdmin       = role === 'admin' || role === 'superviseur'
   const canEdit        = canAdmin && ['brouillon', 'envoye', 'refuse', 'accepte'].includes(statut)
   const canDelete      = canAdmin && ['brouillon', 'refuse'].includes(statut)
   const canEnvoyerAppr = canAdmin && ['brouillon', 'envoye'].includes(statut)
@@ -705,7 +705,7 @@ function DevisFormPanel({
 
 export default function Devis() {
   const { role } = useAuth()
-  const canAdmin = role === 'admin' || role === 'directeur'
+  const canAdmin = role === 'admin' || role === 'superviseur'
 
   const [formOpen,      setFormOpen]      = useState(false)
   const [selectedDevis, setSelectedDevis] = useState<DevisRecord | null>(null)

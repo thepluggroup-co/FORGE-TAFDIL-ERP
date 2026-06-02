@@ -40,7 +40,7 @@ export default function ClientDetail() {
   const { data: client, isLoading } = useClient(id ?? '')
   const updateStatut = useUpdateClientStatut()
 
-  const canChangeStatut = role === 'admin' || role === 'directeur'
+  const canChangeStatut = role === 'admin' || role === 'superviseur'
 
   const handleStatutChange = (newStatut: Client['statut']) => {
     if (!client || client.statut === newStatut) return

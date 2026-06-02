@@ -3,7 +3,7 @@ import { apiClient } from '@/lib/api-client'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export type ForgeRole = 'admin' | 'directeur' | 'operateur' | 'viewer'
+export type ForgeRole = 'admin' | 'superviseur' | 'operateur' | 'apprenant'
 
 export interface UserProfile {
   id:          string
