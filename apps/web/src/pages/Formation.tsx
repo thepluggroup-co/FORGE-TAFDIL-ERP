@@ -4,10 +4,11 @@ import {
   GraduationCap, Star, Clock, Award, UserPlus,
   CheckCircle, Plus, TrendingUp, BookOpen, Users, Search, X,
   Calendar, MapPin, UserCheck, ChevronDown, ChevronUp, Trash2,
-  ClipboardList, BarChart2, AlertCircle,
+  ClipboardList, BarChart2, AlertCircle, Download,
 } from 'lucide-react'
 import { PageHeader, KpiCard, SlideOver, Button, Modal } from '@forge/ui'
 import { toast } from 'sonner'
+import { apiClient } from '@/lib/api-client'
 import {
   useApprenants, useProgressionApprenant, useRecruterApprenant, useCreateApprenant,
   useEmployes, useFormationSessions, useCreateFormationSession, useDeleteFormationSession,
@@ -73,6 +74,9 @@ function ApprenantCard({
   onRecruter: (a: Apprenant) => void
   onHistorique: (a: Apprenant) => void
 }) {
+  const handleAttestation = () => {
+    window.open(`/api/rh/apprenants/${apprenant.id}/attestation`, '_blank')
+  }
   const progress              = (apprenant.niveau / 5) * 100
   const isCandidatRecrutement = apprenant.niveau === 5 && apprenant.duree_mois >= 6
   const progressColor         = progress >= 80 ? '#15803d' : progress >= 60 ? '#d97706' : '#C62828'
@@ -128,6 +132,9 @@ function ApprenantCard({
       <div className="flex gap-2 pt-1 mt-auto flex-wrap">
         <Button variant="secondary" size="sm" onClick={() => onHistorique(apprenant)}>
           <BarChart2 className="h-3.5 w-3.5" /> Historique
+        </Button>
+        <Button variant="secondary" size="sm" onClick={handleAttestation} title="Télécharger l'attestation PDF">
+          <Download className="h-3.5 w-3.5" /> Attestation
         </Button>
         {isDirecteur && apprenant.niveau < 5 && (
           <Button variant="secondary" size="sm" onClick={() => onNiveauSuivant(apprenant)}>

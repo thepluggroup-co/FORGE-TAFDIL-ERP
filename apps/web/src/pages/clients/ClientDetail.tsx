@@ -1,10 +1,12 @@
 import React, { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Phone, Mail, MapPin, Building2, User, Landmark, TrendingUp, CreditCard, FileText, Clock } from 'lucide-react'
-import { PageHeader, StatusBadge, Button } from '@forge/ui'
-import { formatXAF, formatDate } from '@/lib/utils'
-import { useClient } from '@/hooks/useClients'
+import { ArrowLeft, Phone, Mail, MapPin, Building2, User, Landmark, TrendingUp, CreditCard, FileText, Clock, OctagonX, ShieldCheck } from 'lucide-react'
+import { PageHeader, StatusBadge, Button, Modal } from '@forge/ui'
+import { formatXAF } from '@/lib/utils'
+import { useClient, useUpdateClientStatut } from '@/hooks/useClients'
+import type { Client } from '@/hooks/useClients'
+import { useAuth } from '@/context/AuthContext'
 import { ScoreFiabilite } from '../Clients'
 import type { ClientType } from '../Clients'
 
@@ -17,14 +19,34 @@ const TYPE_ICONS: Record<ClientType, React.ElementType> = {
   entreprise: Building2, particulier: User, institution: Landmark,
 }
 
+// ── Statut change segmented control ───────────────────────────────────────────
+
+const STATUT_OPTIONS: { value: Client['statut']; label: string; color: string; bg: string }[] = [
+  { value: 'actif',   label: 'Actif',   color: '#15803d', bg: '#dcfce7' },
+  { value: 'inactif', label: 'Inactif', color: '#d97706', bg: '#fef3c7' },
+  { value: 'bloque',  label: 'Bloqué',  color: '#dc2626', bg: '#fee2e2' },
+]
+
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function ClientDetail() {
   const { id }   = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const [activeTab, setActiveTab] = useState<Tab>('Infos')
+  const { role } = useAuth()
+
+  const [activeTab, setActiveTab]           = useState<Tab>('Infos')
+  const [showBlockConfirm, setShowBlockConfirm] = useState(false)
 
   const { data: client, isLoading } = useClient(id ?? '')
+  const updateStatut = useUpdateClientStatut()
+
+  const canChangeStatut = role === 'admin' || role === 'directeur'
+
+  const handleStatutChange = (newStatut: Client['statut']) => {
+    if (!client || client.statut === newStatut) return
+    if (newStatut === 'bloque') { setShowBlockConfirm(true); return }
+    updateStatut.mutate({ id: client.id, statut: newStatut })
+  }
 
   if (isLoading) {
     return (
@@ -52,7 +74,7 @@ export default function ClientDetail() {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.3 }}
-      className="space-y-6"
+      className="space-y-4"
     >
       <PageHeader
         title={client.nom}
@@ -69,6 +91,33 @@ export default function ClientDetail() {
         }
       />
 
+      {/* ── Alerte blocage ── */}
+      {client.statut === 'bloque' && (
+        <motion.div
+          initial={{ opacity: 0, y: -6 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-center gap-3 px-4 py-3.5 bg-red-50 border border-red-300 rounded-xl"
+        >
+          <OctagonX className="h-5 w-5 text-red-600 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-red-700">Client bloqué</p>
+            <p className="text-xs text-red-500 mt-0.5">
+              Toute nouvelle commande pour ce client est refusée automatiquement.
+            </p>
+          </div>
+          {canChangeStatut && (
+            <button
+              onClick={() => updateStatut.mutate({ id: client.id, statut: 'actif' })}
+              disabled={updateStatut.isPending}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg
+                bg-white border border-red-300 text-red-700 hover:bg-red-100 transition-colors shrink-0"
+            >
+              <ShieldCheck className="h-3.5 w-3.5" /> Débloquer
+            </button>
+          )}
+        </motion.div>
+      )}
+
       {/* Header card */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
         <div className="flex items-start gap-4">
@@ -77,9 +126,49 @@ export default function ClientDetail() {
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-3">
-              <div>
+              <div className="space-y-2">
                 <h2 className="text-lg font-bold text-[#212121]">{client.nom}</h2>
                 <StatusBadge status={client.statut} />
+
+                {/* Statut change buttons — admin/directeur only */}
+                {canChangeStatut && (
+                  <div className="flex items-center gap-1.5 pt-1">
+                    <span className="text-xs text-gray-400 mr-1">Modifier :</span>
+                    {STATUT_OPTIONS.map((opt) => {
+                      const isActive = client.statut === opt.value
+                      return (
+                        <button
+                          key={opt.value}
+                          onClick={() => handleStatutChange(opt.value)}
+                          disabled={isActive || updateStatut.isPending}
+                          className="px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all disabled:cursor-default"
+                          style={{
+                            borderColor: isActive ? opt.color : '#e5e7eb',
+                            backgroundColor: isActive ? opt.bg : 'transparent',
+                            color: isActive ? opt.color : '#9ca3af',
+                            opacity: isActive ? 1 : 0.7,
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!isActive) {
+                              e.currentTarget.style.borderColor = opt.color
+                              e.currentTarget.style.color = opt.color
+                              e.currentTarget.style.opacity = '1'
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!isActive) {
+                              e.currentTarget.style.borderColor = '#e5e7eb'
+                              e.currentTarget.style.color = '#9ca3af'
+                              e.currentTarget.style.opacity = '0.7'
+                            }
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
               <div className="flex flex-col items-end gap-1">
                 <span className="text-xs text-gray-400 font-medium">Score fiabilité</span>
@@ -191,6 +280,44 @@ export default function ClientDetail() {
           </motion.div>
         </AnimatePresence>
       </div>
+
+      {/* ── Confirmation blocage ── */}
+      <Modal
+        isOpen={showBlockConfirm}
+        onClose={() => setShowBlockConfirm(false)}
+        title="Bloquer ce client ?"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-red-50 rounded-lg border border-red-100">
+            <OctagonX className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-red-700">{client.nom}</p>
+              <p className="text-xs text-red-500 mt-1">
+                Le blocage empêche toute nouvelle commande pour ce client. Les commandes en cours ne sont pas affectées.
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <Button variant="ghost" className="flex-1" onClick={() => setShowBlockConfirm(false)}>
+              Annuler
+            </Button>
+            <button
+              onClick={() => {
+                updateStatut.mutate(
+                  { id: client.id, statut: 'bloque' },
+                  { onSuccess: () => setShowBlockConfirm(false) },
+                )
+              }}
+              disabled={updateStatut.isPending}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold
+                rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50"
+            >
+              <OctagonX className="h-4 w-4" />
+              {updateStatut.isPending ? 'Blocage…' : 'Confirmer le blocage'}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </motion.div>
   )
 }

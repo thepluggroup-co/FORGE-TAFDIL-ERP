@@ -1,4 +1,6 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'https://forge-tafdil-erp-the-forge.up.railway.app'
+// URL de base pour les appels client-side (composants browser).
+// Vide = URLs relatives — le navigateur résout automatiquement vers l'origine du shop.
+export const API_URL = ''
 
 type ApiResult<T> = { data: T; error: null } | { data: null; error: string }
 

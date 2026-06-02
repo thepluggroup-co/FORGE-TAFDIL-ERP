@@ -8,9 +8,8 @@ import { MetalForgeHeaderLogo } from '@/components/ui/BrandLogo'
 
 const NAV_LINKS = [
   { href: '/catalogue', label: 'Catalogue' },
-  { href: '/categories', label: 'Catégories' },
-  { href: '/promotions', label: 'Promotions' },
-  { href: '/contact', label: 'Contact' },
+  { href: '/devis',     label: 'Devis & Projets' },
+  { href: '/contact',  label: 'Contact' },
 ]
 
 export function Header() {

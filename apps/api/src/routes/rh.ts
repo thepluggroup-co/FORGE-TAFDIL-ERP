@@ -6,6 +6,7 @@ import { supabaseAdmin } from '@forge/db'
 
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
+import { generateAttestationPDF } from '../services/pdf.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
@@ -573,11 +574,12 @@ async function genererBulletinsMois(
   pdfs?:         Array<{ employe_nom: string; pdf_url: string | null }>
   recapitulatif: { masse_salariale_nette_xaf: number; cout_total_employeur_xaf: number; total_irpp_xaf: number; total_cnps_xaf: number }
 }> {
-  // Employés actifs entrés avant la fin du mois
+  // Employés actifs (ou en congé) entrés avant la fin du mois
+  // Les employés 'inactif' sont exclus de la paie
   const { data: employes, error } = await db
     .from('employes')
-    .select('id, nom, poste, departement, type_contrat, cnps, salaire_base_xaf')
-    .eq('statut', 'actif')
+    .select('id, nom, poste, departement, type_contrat, cnps, salaire_base_xaf, statut')
+    .in('statut', ['actif', 'conge', 'essai'])
     .lte('date_entree', `${moisStr}-31`)
 
   if (error) throw new Error(error.message)
@@ -585,26 +587,53 @@ async function genererBulletinsMois(
   const bulletinsCalc: BulletinCalc[] = []
   const pdfs: Array<{ employe_nom: string; pdf_url: string | null }> = []
 
-  for (const emp of (employes ?? []) as Array<{ id: string; nom: string; poste: string; departement: string; type_contrat: string; cnps: string | null; salaire_base_xaf: number }>) {
-    // Heures supplémentaires depuis les présences du mois
+  for (const emp of (employes ?? []) as Array<{ id: string; nom: string; poste: string; departement: string; type_contrat: string; cnps: string | null; salaire_base_xaf: number; statut: string }>) {
+    // Charger toutes les présences du mois (tous statuts) pour le calcul d'impact
     const { data: presences } = await db
       .from('presences')
-      .select('heures')
+      .select('heures, statut')
       .eq('employe_id', emp.id)
       .gte('date', `${moisStr}-01`)
       .lte('date', `${moisStr}-31`)
-      .eq('statut', 'present')
 
-    const totalHeures    = (presences ?? []).reduce((s: number, p: { heures: number }) => s + p.heures, 0)
-    const heuresBase     = 173.33 // 40 h/semaine × 52 / 12
-    const heuresSup      = Math.max(0, totalHeures - heuresBase)
+    type PresenceRow = { heures: number; statut: string }
+    const rows = (presences ?? []) as PresenceRow[]
+
+    // Heures effectives = présents + retards seulement (pas absents/congé/maladie)
+    const heuresEffectives = rows
+      .filter(p => p.statut === 'present' || p.statut === 'retard')
+      .reduce((s, p) => s + p.heures, 0)
+
+    const heuresBase     = 173.33  // 40 h/semaine × 52 / 12
+    const heuresSup      = Math.max(0, heuresEffectives - heuresBase)
     const txHeureSup     = (emp.salaire_base_xaf / heuresBase) * 1.5
     const heures_sup_xaf = Math.round(heuresSup * txHeureSup)
 
-    const bulletin = calculerBulletin(emp, moisStr, heures_sup_xaf)
+    // Déduction pour absences maladie non justifiées :
+    // chaque jour maladie = 50% du salaire journalier déduit
+    // (congé normal = maintien de salaire intégral → pas de déduction)
+    const joursMaladie = rows.filter(p => p.statut === 'maladie').length
+    const salaireJournalier = emp.salaire_base_xaf / 26  // ~26 jours ouvrables/mois
+    const deduction_maladie = Math.round(joursMaladie * salaireJournalier * 0.5)
+
+    const bulletin = calculerBulletin(emp, moisStr, heures_sup_xaf, 0, deduction_maladie)
     bulletinsCalc.push(bulletin)
 
-    // Upsert en DB — inclut irpp + coût employeur pour lecture ultérieure
+    // Upsert en DB — seuls les bulletins en statut 'en_attente' peuvent être recalculés.
+    // Les bulletins 'valide' ou 'vire' sont immuables.
+    const { data: existant } = await db
+      .from('bulletins_paie')
+      .select('statut')
+      .eq('employe_id', emp.id)
+      .eq('mois', moisStr)
+      .single()
+
+    const existantStatut = (existant as { statut: string } | null)?.statut
+    if (existantStatut && ['valide', 'vire'].includes(existantStatut)) {
+      // Bulletin validé → immuable : on le lit sans écraser
+      continue
+    }
+
     await db.from('bulletins_paie').upsert({
       employe_id:          emp.id,
       mois:                moisStr,
@@ -731,6 +760,51 @@ router.post('/rh/paie', requireRole(['directeur', 'admin']), zValidator('json', 
   } catch (err) {
     return c.json({ error: (err as Error).message }, 500)
   }
+})
+
+// ── PATCH /rh/paie/:id/statut  — valider ou marquer comme viré ────────────────
+// Un bulletin validé est IMMUABLE — il ne peut pas être recalculé.
+// Transitions : en_attente → valide → vire
+
+router.patch('/rh/paie/:id/statut', requireRole(['directeur', 'admin']), zValidator('json', z.object({
+  statut: z.enum(['valide', 'vire']),
+})), async (c) => {
+  const { id }  = c.req.param()
+  const { statut } = c.req.valid('json')
+
+  const { data: existing } = await db
+    .from('bulletins_paie')
+    .select('statut')
+    .eq('id', id)
+    .single()
+
+  if (!existing) return c.json({ error: 'Bulletin introuvable', code: 'NOT_FOUND' }, 404)
+
+  const ex = existing as { statut: string }
+
+  const TRANSITIONS_BULLETIN: Record<string, string[]> = {
+    en_attente: ['valide'],
+    valide:     ['vire'],
+    vire:       [],
+  }
+
+  const allowed = TRANSITIONS_BULLETIN[ex.statut] ?? []
+  if (!allowed.includes(statut)) {
+    return c.json({
+      error: `Transition "${ex.statut}" → "${statut}" non autorisée`,
+      code:  'INVALID_TRANSITION',
+      transitions_autorisees: allowed,
+    }, 422)
+  }
+
+  const { data, error } = await db
+    .from('bulletins_paie')
+    .update({ statut, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select().single()
+
+  if (error) return c.json({ error: error.message }, 400)
+  return c.json(data)
 })
 
 // ── GET /rh/paie/:annee/:mois  — rétrocompatibilité (génère si besoin) ─────────
@@ -962,4 +1036,265 @@ router.get('/rh/apprenants/:id/historique', async (c) => {
   })
 })
 
+// ══════════════════════════════════════════════════════════════════════════════
+// CONGÉS & ABSENCES (RH02)
+// ══════════════════════════════════════════════════════════════════════════════
+
+const congeSchema = z.object({
+  employe_id:  z.string(),
+  type:        z.enum(['conge_paye', 'sans_solde', 'maladie', 'maternite', 'paternite', 'evenement_familial']).default('conge_paye'),
+  date_debut:  z.string(),
+  date_fin:    z.string(),
+  jours_ouvres: z.number().int().min(1),
+  motif:       z.string().optional(),
+})
+
+const congeStatutSchema = z.object({
+  statut:         z.enum(['approuve', 'refuse', 'annule']),
+  commentaire_rh: z.string().optional(),
+})
+
+router.get('/rh/conges', async (c) => {
+  const { employe_id, statut, mois } = c.req.query()
+  const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
+  const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '50'))
+  const from    = (page - 1) * perPage
+
+  let q = db.from('conges').select('*, employes(nom, poste, departement)', { count: 'exact' })
+  if (employe_id) q = q.eq('employe_id', employe_id)
+  if (statut)     q = q.eq('statut', statut)
+  if (mois) {
+    // Filtrer sur le mois de début
+    const debut = `${mois}-01`
+    const fin   = `${mois}-31`
+    q = q.gte('date_debut', debut).lte('date_debut', fin)
+  }
+
+  const { data, count, error } = await q
+    .order('date_debut', { ascending: false })
+    .range(from, from + perPage - 1)
+
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage })
+})
+
+router.get('/rh/conges/soldes', requireRole(['directeur', 'admin']), async (c) => {
+  const { data, error } = await db.from('v_solde_conges').select('*').order('employe_nom')
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data: data ?? [] })
+})
+
+router.post('/rh/conges', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', congeSchema), async (c) => {
+  const user = c.get('user')
+  const body = c.req.valid('json')
+
+  if (body.date_debut > body.date_fin) {
+    return c.json({ error: 'date_debut doit être antérieure à date_fin', code: 'INVALID_DATES' }, 422)
+  }
+
+  const { data, error } = await db
+    .from('conges')
+    .insert({ ...body, statut: 'en_attente', created_by: user.id })
+    .select().single()
+
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+  return c.json(data, 201)
+})
+
+router.patch('/rh/conges/:id/statut', requireRole(['directeur', 'admin']), zValidator('json', congeStatutSchema), async (c) => {
+  const { id }  = c.req.param()
+  const body    = c.req.valid('json')
+  const user    = c.get('user')
+
+  const { data: existing } = await db.from('conges').select('statut, employe_id').eq('id', id).single()
+  if (!existing) return c.json({ error: 'Congé introuvable', code: 'NOT_FOUND' }, 404)
+
+  const ex = existing as { statut: string; employe_id: string }
+  if (!['en_attente'].includes(ex.statut)) {
+    return c.json({ error: `Congé déjà ${ex.statut} — modification impossible`, code: 'ALREADY_PROCESSED' }, 422)
+  }
+
+  const { data, error } = await db
+    .from('conges')
+    .update({
+      statut:         body.statut,
+      approuve_par:   body.statut === 'approuve' ? user.id : null,
+      approuve_at:    body.statut === 'approuve' ? new Date().toISOString() : null,
+      commentaire_rh: body.commentaire_rh ?? null,
+      updated_at:     new Date().toISOString(),
+    })
+    .eq('id', id)
+    .select().single()
+
+  if (error) return c.json({ error: error.message }, 400)
+
+  // Si approuvé → mettre à jour statut employé si c'est un congé payé
+  if (body.statut === 'approuve') {
+    const today = new Date().toISOString().slice(0, 10)
+    const d = data as { date_debut: string; date_fin: string; type: string }
+    if (d.type === 'conge_paye' && d.date_debut <= today && today <= d.date_fin) {
+      await db.from('employes').update({ statut: 'conge', updated_at: new Date().toISOString() }).eq('id', ex.employe_id)
+    }
+  }
+
+  return c.json(data)
+})
+
+router.delete('/rh/conges/:id', requireRole(['directeur', 'admin', 'operateur']), async (c) => {
+  const { id } = c.req.param()
+  const { data } = await db.from('conges').select('statut').eq('id', id).single()
+  if (!data) return c.json({ error: 'Congé introuvable', code: 'NOT_FOUND' }, 404)
+  if ((data as { statut: string }).statut !== 'en_attente') {
+    return c.json({ error: 'Seuls les congés en attente peuvent être supprimés', code: 'CANNOT_DELETE' }, 422)
+  }
+  await db.from('conges').delete().eq('id', id)
+  return c.body(null, 204)
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RÉCAP PRÉSENCES PAR MOIS (RH02)
+// ══════════════════════════════════════════════════════════════════════════════
+
+router.get('/rh/presences/recap', requireRole(['directeur', 'admin']), async (c) => {
+  const { mois, employe_id } = c.req.query()
+  if (!mois) return c.json({ error: 'Paramètre mois requis (YYYY-MM)', code: 'MISSING_MOIS' }, 400)
+
+  const debut = `${mois}-01`
+  const fin   = `${mois}-31`
+
+  let q = db.from('presences')
+    .select('employe_id, statut, heures, employes(nom, poste)')
+    .gte('date', debut)
+    .lte('date', fin)
+
+  if (employe_id) q = q.eq('employe_id', employe_id)
+
+  const { data, error } = await q
+  if (error) return c.json({ error: error.message }, 500)
+
+  // Agréger par employé
+  const byEmploye: Record<string, {
+    employe_id: string; nom: string; poste: string
+    nb_present: number; nb_absent: number; nb_conge: number
+    nb_retard: number; nb_maladie: number; heures_total: number; heures_sup: number
+  }> = {}
+
+  for (const row of data ?? []) {
+    const r = row as {
+      employe_id: string; statut: string; heures: number
+      employes: { nom: string; poste: string } | null
+    }
+    if (!byEmploye[r.employe_id]) {
+      byEmploye[r.employe_id] = {
+        employe_id:  r.employe_id,
+        nom:         r.employes?.nom ?? '',
+        poste:       r.employes?.poste ?? '',
+        nb_present:  0, nb_absent: 0, nb_conge: 0, nb_retard: 0, nb_maladie: 0,
+        heures_total: 0, heures_sup: 0,
+      }
+    }
+    const e = byEmploye[r.employe_id]
+    const h = r.heures ?? 0
+    e.heures_total += h
+    e.heures_sup   += Math.max(0, h - 8)
+
+    if (r.statut === 'present')  e.nb_present++
+    if (r.statut === 'absent')   e.nb_absent++
+    if (r.statut === 'conge')    e.nb_conge++
+    if (r.statut === 'retard')   e.nb_retard++
+    if (r.statut === 'maladie')  e.nb_maladie++
+  }
+
+  return c.json({ mois, data: Object.values(byEmploye) })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RAPPORT CNPS MENSUEL (RH01)
+// ══════════════════════════════════════════════════════════════════════════════
+
+router.get('/rh/cnps/rapport', requireRole(['directeur', 'admin']), async (c) => {
+  const mois = c.req.query('mois')
+  if (!mois || !/^\d{4}-\d{2}$/.test(mois)) {
+    return c.json({ error: 'Paramètre mois requis (YYYY-MM)', code: 'MISSING_MOIS' }, 400)
+  }
+
+  const { data: bulletins, error } = await db
+    .from('bulletins_paie')
+    .select('*, employes(nom, poste, cnps, departement)')
+    .eq('mois', mois)
+    .neq('statut', 'annule')
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  type BulletinRow = {
+    salaire_base_xaf: number; heures_sup_xaf: number; primes: number
+    cotisation_cnps_xaf: number; cnps_employeur_xaf: number
+    employes: { nom: string; poste: string; cnps: string | null; departement: string } | null
+  }
+
+  const lignes = (bulletins ?? []).map((b: BulletinRow) => {
+    const brut      = b.salaire_base_xaf + (b.heures_sup_xaf ?? 0) + (b.primes ?? 0)
+    const baseCnps  = Math.min(brut, CNPS_PLAFOND)
+    return {
+      employe_nom:              b.employes?.nom ?? '',
+      poste:                    b.employes?.poste ?? '',
+      departement:              b.employes?.departement ?? '',
+      numero_cnps:              b.employes?.cnps ?? '',
+      salaire_brut_xaf:         Math.round(brut),
+      base_cotisable_xaf:       Math.round(baseCnps),
+      cotisation_salarie_xaf:   b.cotisation_cnps_xaf ?? Math.round(baseCnps * CNPS_SALARIE),
+      cotisation_employeur_xaf: b.cnps_employeur_xaf  ?? Math.round(baseCnps * CNPS_EMPLOYEUR),
+      total_verser_xaf:         (b.cotisation_cnps_xaf ?? Math.round(baseCnps * CNPS_SALARIE)) +
+                                (b.cnps_employeur_xaf  ?? Math.round(baseCnps * CNPS_EMPLOYEUR)),
+    }
+  })
+
+  const totalSalarie   = lignes.reduce((s, l) => s + l.cotisation_salarie_xaf, 0)
+  const totalEmployeur = lignes.reduce((s, l) => s + l.cotisation_employeur_xaf, 0)
+
+  return c.json({
+    mois,
+    employeur_reference: 'TAFDIL SARL',
+    periode:             mois,
+    lignes,
+    total_salarie_xaf:   Math.round(totalSalarie),
+    total_employeur_xaf: Math.round(totalEmployeur),
+    total_a_verser_xaf:  Math.round(totalSalarie + totalEmployeur),
+  })
+})
+
+// ── Attestation de formation PDF (Gap 4 CDC MOD-05) ──────────────────────────
+
+router.get('/apprenants/:id/attestation', async (c) => {
+  const { id } = c.req.param()
+  const { data: apprenant } = await db
+    .from('apprenants')
+    .select('nom, specialite, niveau, duree_mois, statut')
+    .eq('id', id).single()
+
+  if (!apprenant) return c.json({ error: 'Apprenant introuvable', code: 'NOT_FOUND' }, 404)
+
+  type AP = { nom: string; specialite: string; niveau: number; duree_mois: number }
+  const ap = apprenant as AP
+
+  const date_delivrance = new Date().toLocaleDateString('fr-CM', {
+    day: 'numeric', month: 'long', year: 'numeric',
+  })
+
+  const buf = await generateAttestationPDF({
+    nom:             ap.nom,
+    specialite:      ap.specialite ?? 'Menuiserie métallique',
+    niveau:          ap.niveau,
+    duree_mois:      ap.duree_mois,
+    date_delivrance,
+  })
+
+  c.header('Content-Type', 'application/pdf')
+  c.header('Content-Disposition', `inline; filename="Attestation-${ap.nom.replace(/\s+/g, '-')}.pdf"`)
+  return c.body(buf.buffer as ArrayBuffer)
+})
+
 export { router as rhRouter }
+
+// Export helper pour cron externe
+export { genererBulletinsMois }

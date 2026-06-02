@@ -5,6 +5,8 @@ import { supabaseAdmin } from '@forge/db'
 
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
+import { localCreateBon, localValiderBon, getBonsSortieLocal } from '../services/db-local'
+import { withOfflineFallback } from '../services/offline-fallback'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
@@ -96,7 +98,12 @@ router.get('/', async (c) => {
     .order('created_at', { ascending: false })
     .range(from, to)
 
-  if (error) return c.json({ error: error.message }, 500)
+  if (error) {
+    console.warn('[bons] GET / Supabase error — fallback SQLite:', error.message)
+    const local = getBonsSortieLocal({ statut })
+    if (local.data.length > 0) return c.json(local)
+    return c.json({ error: error.message }, 500)
+  }
 
   return c.json({
     data,
@@ -107,7 +114,7 @@ router.get('/', async (c) => {
   })
 })
 
-/** Créer un bon de sortie */
+/** Créer un bon de sortie — avec fallback SQLite offline */
 router.post(
   '/',
   requireRole(['directeur', 'admin', 'operateur']),
@@ -116,58 +123,61 @@ router.post(
     const user = c.get('user')
     const body = c.req.valid('json')
 
-    const numero = await genererNumeroBon()
+    const result = await withOfflineFallback(
+      'POST /bons',
 
-    // Insérer le bon
-    const { data: bon, error: bonErr } = await db
-      .from('bons_sortie')
-      .insert({
-        numero,
-        statut:     'soumis',
-        demandeur:  body.demandeur,
-        motif:      body.motif,
-        notes:      body.notes ?? null,
-        created_by: user.id,
-        sync_status: 'synced',
-      })
-      .select()
-      .single()
+      // ── Online : Supabase ──────────────────────────────────────────────────
+      async () => {
+        const numero = await genererNumeroBon()
 
-    if (bonErr || !bon) {
-      return c.json({ error: bonErr?.message ?? 'Erreur création bon', code: bonErr?.code }, 400)
-    }
+        const { data: bon, error: bonErr } = await db
+          .from('bons_sortie')
+          .insert({ numero, statut: 'soumis', demandeur: body.demandeur,
+            motif: body.motif, notes: body.notes ?? null,
+            created_by: user.id, sync_status: 'synced' })
+          .select().single()
 
-    // Insérer les lignes
-    const lignes = body.lignes.map((l) => ({
-      bon_id:            (bon as { id: string }).id,
-      produit_id:        l.produit_id ?? null,
-      designation:       l.designation,
-      unite:             l.unite,
-      quantite_demandee: l.quantite_demandee,
-      quantite_servie:   0,
-    }))
+        if (bonErr || !bon) throw new Error(bonErr?.message ?? 'Erreur création bon')
 
-    const { data: lignesData, error: lignesErr } = await db
-      .from('bons_sortie_lignes')
-      .insert(lignes)
-      .select()
+        const bonId = (bon as { id: string }).id
+        const lignes = body.lignes.map((l) => ({
+          bon_id: bonId, produit_id: l.produit_id ?? null,
+          designation: l.designation, unite: l.unite,
+          quantite_demandee: l.quantite_demandee, quantite_servie: 0,
+        }))
 
-    if (lignesErr) {
-      // Nettoyer le bon si les lignes échouent
-      await db.from('bons_sortie').delete().eq('id', (bon as { id: string }).id)
-      return c.json({ error: lignesErr.message }, 400)
-    }
+        const { data: lignesData, error: lignesErr } = await db
+          .from('bons_sortie_lignes').insert(lignes).select()
 
-    // Notifier les secrétaires/admins via Realtime
-    await broadcastBon('nouveau_bon', {
-      bon_id:    (bon as { id: string }).id,
-      numero,
-      demandeur: body.demandeur,
-      motif:     body.motif,
-      nb_lignes: body.lignes.length,
-    })
+        if (lignesErr) {
+          await db.from('bons_sortie').delete().eq('id', bonId)
+          throw new Error(lignesErr.message)
+        }
 
-    return c.json({ ...bon, lignes: lignesData }, 201)
+        await broadcastBon('nouveau_bon', {
+          bon_id: bonId, numero, demandeur: body.demandeur,
+          motif: body.motif, nb_lignes: body.lignes.length,
+        })
+
+        return { ...bon, lignes: lignesData }
+      },
+
+      // ── Offline : SQLite local ─────────────────────────────────────────────
+      () => localCreateBon({
+        demandeur: body.demandeur,
+        motif:     body.motif,
+        notes:     body.notes,
+        lignes:    body.lignes.map((l) => ({
+          produit_id:        l.produit_id,
+          designation:       l.designation,
+          unite:             l.unite,
+          quantite_demandee: l.quantite_demandee,
+        })),
+        user_id: user.id,
+      }),
+    )
+
+    return c.json(result, 201)
   },
 )
 
@@ -194,7 +204,7 @@ router.get('/:id', async (c) => {
   return c.json(data)
 })
 
-/** Valider ou refuser un bon (secrétaire / directeur) */
+/** Valider ou refuser un bon (secrétaire / directeur) — avec fallback SQLite offline */
 router.put(
   '/:id/valider',
   requireRole(['directeur', 'admin']),
@@ -204,45 +214,52 @@ router.put(
     const user   = c.get('user')
     const body   = c.req.valid('json')
 
-    // Vérifier que le bon est bien en statut 'soumis'
-    const { data: existing } = await db
-      .from('bons_sortie')
-      .select('statut, demandeur, numero, created_by')
-      .eq('id', id)
-      .single()
+    const result = await withOfflineFallback(
+      `PUT /bons/${id}/valider`,
 
-    if (!existing) return c.json({ error: 'Bon introuvable', code: 'NOT_FOUND' }, 404)
-    if ((existing as { statut: string }).statut !== 'soumis') {
-      return c.json({
-        error: `Impossible de valider un bon en statut "${(existing as { statut: string }).statut}"`,
-        code: 'INVALID_TRANSITION',
-      }, 422)
-    }
+      // ── Online : Supabase ──────────────────────────────────────────────────
+      async () => {
+        const { data: existing } = await db
+          .from('bons_sortie').select('statut, demandeur, numero, created_by').eq('id', id).single()
 
-    const { data, error } = await db
-      .from('bons_sortie')
-      .update({
-        statut:       body.decision,
-        valide_par_id: user.id,
-        updated_at:   new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single()
+        if (!existing) throw Object.assign(new Error('Bon introuvable'), { code: 'NOT_FOUND' })
+        if ((existing as { statut: string }).statut !== 'soumis')
+          throw Object.assign(
+            new Error(`Impossible de valider un bon en statut "${(existing as { statut: string }).statut}"`),
+            { code: 'INVALID_TRANSITION' },
+          )
 
-    if (error) return c.json({ error: error.message }, 400)
+        const { data, error } = await db.from('bons_sortie')
+          .update({ statut: body.decision, valide_par_id: user.id, updated_at: new Date().toISOString() })
+          .eq('id', id).select().single()
 
-    // Notifier le technicien demandeur
-    await broadcastBon('bon_valide', {
-      bon_id:      id,
-      numero:      (existing as { numero: string }).numero,
-      decision:    body.decision,
-      demandeur:   (existing as { demandeur: string }).demandeur,
-      valide_par:  user.email,
-      commentaire: body.commentaire ?? null,
-    })
+        if (error) throw new Error(error.message)
 
-    return c.json(data)
+        await broadcastBon('bon_valide', {
+          bon_id:      id,
+          numero:      (existing as { numero: string }).numero,
+          decision:    body.decision,
+          demandeur:   (existing as { demandeur: string }).demandeur,
+          valide_par:  user.email,
+          commentaire: body.commentaire ?? null,
+        })
+
+        return data
+      },
+
+      // ── Offline : SQLite local ─────────────────────────────────────────────
+      () => {
+        localValiderBon({
+          bon_id:      id,
+          decision:    body.decision as 'valide' | 'refuse',
+          commentaire: body.commentaire,
+          user_id:     user.id,
+        })
+        return { id, statut: body.decision, offline: true }
+      },
+    )
+
+    return c.json(result)
   },
 )
 

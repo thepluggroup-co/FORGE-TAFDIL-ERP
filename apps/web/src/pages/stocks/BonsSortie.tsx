@@ -67,19 +67,23 @@ export default function BonsSortie() {
     },
     {
       id: 'technicien_nom',
-      header: 'Technicien',
-      accessor: 'technicien_nom',
-      render: (v) => (
-        <div className="flex items-center gap-2">
-          <div
-            className="flex items-center justify-center w-7 h-7 rounded-full text-white text-xs font-semibold shrink-0"
-            style={{ backgroundColor: '#C62828' }}
-          >
-            {(v as string).charAt(0)}
+      header: 'Demandeur',
+      accessor: 'demandeur',
+      render: (v) => {
+        const nom = (v as string | null | undefined) ?? ''
+        if (!nom) return <span className="text-xs text-gray-400 italic">—</span>
+        return (
+          <div className="flex items-center gap-2">
+            <div
+              className="flex items-center justify-center w-7 h-7 rounded-full text-white text-xs font-semibold shrink-0"
+              style={{ backgroundColor: '#C62828' }}
+            >
+              {nom.charAt(0).toUpperCase()}
+            </div>
+            <span className="text-sm">{nom}</span>
           </div>
-          <span className="text-sm">{v as string}</span>
-        </div>
-      ),
+        )
+      },
     },
     {
       id: 'statut_workflow',

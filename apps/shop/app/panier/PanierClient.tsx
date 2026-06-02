@@ -100,7 +100,7 @@ export function PanierClient() {
   const handleCommande = async () => {
     setLoading(true)
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/shop/commandes`, {
+      const res = await fetch(`/api/shop/commandes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

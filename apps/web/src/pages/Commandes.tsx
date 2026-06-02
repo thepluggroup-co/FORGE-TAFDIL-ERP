@@ -4,7 +4,7 @@ import {
   LayoutGrid, Table2, Plus, GripVertical, Globe,
   Truck, Package, CheckCircle, XCircle, Wrench,
   Search, Trash2, BookOpen, CalendarDays, ChevronRight,
-  Info, BadgePercent,
+  Info, BadgePercent, OctagonX,
 } from 'lucide-react'
 import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
@@ -12,6 +12,8 @@ import { formatXAF, formatDate } from '@/lib/utils'
 import { toast } from 'sonner'
 import { useCommandes, useStatutCommande, useCreateCommande } from '@/hooks/useCommandes'
 import type { Commande, CommandeLigne, CommandeHistorique } from '@/hooks/useCommandes'
+import { useClients } from '@/hooks/useClients'
+import type { Client } from '@/hooks/useClients'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
 import { CommandesWebPage } from './commandes/CommandesWebPage'
 import { useProduitsShop } from '@/hooks/useProduitsShop'
@@ -528,11 +530,20 @@ export default function Commandes() {
   const containerRef  = useRef<HTMLDivElement>(null)
   const columnRefs    = useRef<Record<string, HTMLDivElement | null>>({})
 
+  const [selectedClient, setSelectedClient] = useState<Client | null>(null)
+  const [clientDropdownOpen, setClientDropdownOpen] = useState(false)
+
   const { data, isLoading, isError } = useCommandes()
   const statutMutation  = useStatutCommande()
   const createCommande  = useCreateCommande()
+  const { data: clientsData } = useClients()
 
   const { data: shopData } = useCommandesShop()
+
+  const allClients = (clientsData?.data ?? []) as Client[]
+  const filteredClients = cmdForm.client_nom.trim()
+    ? allClients.filter((c) => c.nom.toLowerCase().includes(cmdForm.client_nom.toLowerCase())).slice(0, 8)
+    : allClients.slice(0, 8)
   const webBadge = shopData?.stats?.nouvelles_ce_jour ?? 0
 
   const orders = (data?.data ?? []) as CommandeRecord[]
@@ -578,7 +589,8 @@ export default function Commandes() {
   const canSubmit =
     !!cmdForm.client_nom.trim() &&
     cmdForm.lignes.some((l) => l.designation.trim() && l.quantite > 0) &&
-    !createCommande.isPending
+    !createCommande.isPending &&
+    selectedClient?.statut !== 'bloque'
 
   // ── Kanban ─────────────────────────────────────────────────────────────────
 
@@ -611,6 +623,7 @@ export default function Commandes() {
 
     createCommande.mutate(
       {
+        client_id:             selectedClient?.id,
         client_nom:            cmdForm.client_nom,
         date_commande:         new Date().toISOString().split('T')[0],
         date_livraison_prevue: cmdForm.date_livraison_prevue || undefined,
@@ -630,6 +643,7 @@ export default function Commandes() {
         onSuccess: () => {
           setCmdSlide(false)
           setCmdForm(DEFAULT_CMD)
+          setSelectedClient(null)
         },
       },
     )
@@ -783,12 +797,47 @@ export default function Commandes() {
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2 sm:col-span-1">
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Nom du client *</label>
-              <input
-                value={cmdForm.client_nom}
-                onChange={(e) => setCmdForm((f) => ({ ...f, client_nom: e.target.value }))}
-                placeholder="ex. CAMRAIL SA"
-                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-              />
+              <div className="relative">
+                <input
+                  value={cmdForm.client_nom}
+                  onChange={(e) => {
+                    setCmdForm((f) => ({ ...f, client_nom: e.target.value }))
+                    setSelectedClient(null)
+                    setClientDropdownOpen(true)
+                  }}
+                  onFocus={() => setClientDropdownOpen(true)}
+                  onBlur={() => setTimeout(() => setClientDropdownOpen(false), 150)}
+                  placeholder="ex. CAMRAIL SA"
+                  className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                  style={{ borderColor: selectedClient?.statut === 'bloque' ? '#dc2626' : '#e5e7eb' }}
+                />
+                {clientDropdownOpen && filteredClients.length > 0 && (
+                  <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white rounded-xl border border-gray-200 shadow-xl max-h-52 overflow-y-auto">
+                    {filteredClients.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setSelectedClient(c)
+                          setCmdForm((f) => ({ ...f, client_nom: c.nom }))
+                          setClientDropdownOpen(false)
+                        }}
+                        className="flex items-center justify-between w-full px-3 py-2.5 text-sm hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-0"
+                      >
+                        <span className="font-medium text-[#212121] truncate">{c.nom}</span>
+                        {c.statut === 'bloque' ? (
+                          <span className="flex items-center gap-1 text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-full ml-2 shrink-0">
+                            <OctagonX className="h-2.5 w-2.5" /> Bloqué
+                          </span>
+                        ) : c.statut === 'inactif' ? (
+                          <span className="text-[10px] font-medium text-amber-500 bg-amber-50 px-1.5 py-0.5 rounded-full ml-2 shrink-0">Inactif</span>
+                        ) : null}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Téléphone</label>
@@ -811,6 +860,19 @@ export default function Commandes() {
               />
             </div>
           </div>
+
+          {/* Alerte client bloqué */}
+          {selectedClient?.statut === 'bloque' && (
+            <div className="flex items-start gap-2.5 px-3 py-3 bg-red-50 border border-red-300 rounded-xl">
+              <OctagonX className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs font-bold text-red-700">Client bloqué — commande impossible</p>
+                <p className="text-xs text-red-500 mt-0.5">
+                  Débloquez ce client dans sa fiche avant de pouvoir créer une commande.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Lignes de commande */}
           <div className="border-t border-gray-100 pt-4">
@@ -932,7 +994,7 @@ export default function Commandes() {
 
           {/* Actions */}
           <div className="flex gap-3 pt-2 border-t border-gray-100">
-            <Button variant="ghost" className="flex-1" onClick={() => { setCmdSlide(false); setCmdForm(DEFAULT_CMD) }}>Annuler</Button>
+            <Button variant="ghost" className="flex-1" onClick={() => { setCmdSlide(false); setCmdForm(DEFAULT_CMD); setSelectedClient(null) }}>Annuler</Button>
             <Button className="flex-1" disabled={!canSubmit} onClick={handleCreateCommande}>
               {createCommande.isPending ? 'Création…' : 'Créer la commande'}
             </Button>

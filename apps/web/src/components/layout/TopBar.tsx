@@ -13,7 +13,7 @@ const ROUTE_LABELS: Record<string, string> = {
   projets: 'Projets', logistique: 'Logistique', marketing: 'Marketing',
   securite: 'Sécurité', intelligence: 'Intelligence', iot: 'IoT',
   boutique: 'Boutique', dashboard: 'Dashboard', clients: 'Clients',
-  account: 'Mon compte',
+  account: 'Mon compte', equipements: 'Équipements',
   admin:   'Administration',
 }
 

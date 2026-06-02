@@ -8,7 +8,7 @@ import { auditMiddleware } from './middleware/audit'
 import { rateLimitMiddleware } from './middleware/rateLimit'
 import { stocksRouter } from './routes/stocks'
 import { bonsRouter } from './routes/bons'
-import { commerceRouter, publicCommandesRouter } from './routes/commerce'
+import { commerceRouter, publicCommandesRouter, publicDevisRouter } from './routes/commerce'
 import { financeRouter } from './routes/finance'
 import { rhRouter } from './routes/rh'
 import { aiRouter } from './routes/ai'
@@ -17,6 +17,7 @@ import { shopRouter, shopErpRouter } from './routes/shop'
 import { paiementsRouter } from './routes/paiements'
 import { operationsRouter } from './routes/operations'
 import { adminRouter } from './routes/admin'
+import { equipementsRouter } from './routes/equipements'
 
 const app = new Hono<{ Variables: HonoVariables }>()
 
@@ -56,6 +57,7 @@ app.use('*', cors({
 app.use('*', rateLimitMiddleware)
 
 app.route('/', publicCommandesRouter)
+app.route('/', publicDevisRouter)
 app.route('/api/shop',      shopRouter)
 app.route('/api/paiements', paiementsRouter)
 
@@ -108,6 +110,7 @@ api.route('/',         aiRouter)
 api.route('/rapports', rapportsRouter)
 api.route('/shop-erp', shopErpRouter)
 api.route('/',         operationsRouter)
+api.route('/',         equipementsRouter)
 api.route('/admin',    adminRouter)
 
 app.route('/api', api)

@@ -27,6 +27,8 @@ const SYNC_TABLES: Array<{
   { table: 'projets',            columns: 'id,nom,client_nom,chef_projet_nom,budget_xaf,depense_xaf,avancement_pct,statut,date_debut,deadline,updated_at',                          orderBy: 'updated_at' },
   { table: 'livraisons',         columns: 'id,numero,client_id,client_nom,destination,transporteur,statut,date_depart,date_livraison_prevue,updated_at',                             orderBy: 'updated_at' },
   { table: 'campagnes_marketing',columns: 'id,nom,canal,budget_xaf,reach,leads_count,conversions_count,statut,date_debut,date_fin,updated_at',                                      orderBy: 'updated_at' },
+  { table: 'credits',            columns: 'id,numero,client_id,client_nom,commande_id,montant_xaf,solde_restant_xaf,date_debut,echeance,statut,notes,updated_at',                    orderBy: 'updated_at' },
+  { table: 'remboursements_credit', columns: 'id,credit_id,montant_xaf,date_paiement,type,notes,created_at',                                                                        orderBy: 'created_at' },
 ]
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -149,7 +151,7 @@ export class SyncManager {
         if (!data || data.length === 0) continue
 
         // Upsert dans SQLite
-        const rows = data as Record<string, unknown>[]
+        const rows = data as unknown as Record<string, unknown>[]
         const cols  = Object.keys(rows[0])
         const placeholders = cols.map(() => '?').join(', ')
         const updates = cols.filter(c => c !== 'id').map(c => `${c}=excluded.${c}`).join(', ')

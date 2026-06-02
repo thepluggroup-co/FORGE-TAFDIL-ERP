@@ -96,7 +96,7 @@ export function PaymentWaitClient() {
     if (!paymentRef || stateRef.current !== 'waiting') return
     try {
       const res  = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/paiements/${paymentRef}/statut`,
+        `/api/paiements/${paymentRef}/statut`,
         { cache: 'no-store' }
       )
       if (!res.ok) return

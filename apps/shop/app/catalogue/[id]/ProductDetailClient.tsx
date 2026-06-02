@@ -2,8 +2,9 @@
 
 import { useState } from 'react'
 import Image from 'next/image'
+import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ShoppingCart, MessageCircle, ChevronLeft, ChevronRight, Minus, Plus, Clock, Package, Tag, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react'
+import { ShoppingCart, FileText, ChevronLeft, ChevronRight, Minus, Plus, Clock, Package, Tag, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react'
 import { useCart } from '@/lib/cart'
 import { BadgeDisponibilite } from '../ProductCard'
 import type { Produit } from '@/lib/types'
@@ -41,9 +42,7 @@ export function ProductDetailClient({ produit }: Props) {
     )
   }
 
-  const whatsappUrl = `https://wa.me/${(process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '').replace(/\D/g, '')}?text=${encodeURIComponent(
-    `Bonjour TAFDIL, je souhaite un devis pour :\n*${produit.nom}* (Réf. ${produit.ref})\nQuantité : ${qty} ${produit.unite}`
-  )}`
+  const devisUrl = `/devis?ref=${encodeURIComponent(produit.ref)}&nom=${encodeURIComponent(produit.nom)}`
 
   const stockIcon = {
     disponible:   <CheckCircle2 size={14} className="text-green-600" />,
@@ -251,15 +250,13 @@ export function ProductDetailClient({ produit }: Props) {
             {indisponible ? 'Indisponible' : 'Ajouter au panier'}
           </button>
 
-          <a
-            href={whatsappUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-green-200 bg-green-50 py-3 text-sm font-bold text-green-700 transition-colors hover:bg-green-100"
+          <Link
+            href={devisUrl}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-forge-red/20 bg-forge-red/5 py-3 text-sm font-bold text-forge-red transition-colors hover:bg-forge-red/10"
           >
-            <MessageCircle size={16} />
+            <FileText size={16} />
             Demander un devis
-          </a>
+          </Link>
         </div>
       </div>
     </div>

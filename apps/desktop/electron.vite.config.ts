@@ -7,8 +7,12 @@ function loadEnvFile(path: string): Record<string, string> {
     return Object.fromEntries(
       readFileSync(path, 'utf-8')
         .split('\n')
-        .filter(l => l.trim() && !l.startsWith('#'))
-        .map(l => l.split('=').map(s => s.trim()) as [string, string])
+        .filter(l => l.trim() && !l.startsWith('#') && l.includes('='))
+        // split sur le PREMIER '=' seulement — les JWT/secrets en contiennent dans leur valeur
+        .map(l => {
+          const idx = l.indexOf('=')
+          return [l.slice(0, idx).trim(), l.slice(idx + 1).trim()] as [string, string]
+        })
         .filter(([k]) => k)
     )
   } catch { return {} }
@@ -32,10 +36,12 @@ export default defineConfig({
       ],
     })],
     define: {
-      'process.env.SUPABASE_URL':           JSON.stringify(env.SUPABASE_URL      ?? ''),
-      'process.env.VITE_SUPABASE_URL':      JSON.stringify(env.SUPABASE_URL      ?? ''),
-      'process.env.SUPABASE_ANON_KEY':      JSON.stringify(env.SUPABASE_ANON_KEY ?? ''),
-      'process.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(env.SUPABASE_ANON_KEY ?? ''),
+      'process.env.SUPABASE_URL':              JSON.stringify(env.SUPABASE_URL              ?? ''),
+      'process.env.VITE_SUPABASE_URL':         JSON.stringify(env.SUPABASE_URL              ?? ''),
+      'process.env.SUPABASE_ANON_KEY':         JSON.stringify(env.SUPABASE_ANON_KEY         ?? ''),
+      'process.env.VITE_SUPABASE_ANON_KEY':    JSON.stringify(env.SUPABASE_ANON_KEY         ?? ''),
+      'process.env.SUPABASE_SERVICE_ROLE_KEY': JSON.stringify(env.SUPABASE_SERVICE_ROLE_KEY ?? ''),
+      'process.env.SUPABASE_JWT_SECRET':       JSON.stringify(env.SUPABASE_JWT_SECRET       ?? ''),
     },
     resolve: {
       alias: (() => {

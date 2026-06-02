@@ -5,6 +5,8 @@ import { setApiToken } from '@/lib/api-client'
 
 export type AppRole = 'admin' | 'directeur' | 'operateur' | 'viewer'
 
+const VALID_ROLES: AppRole[] = ['admin', 'directeur', 'operateur', 'viewer']
+
 interface AuthContextValue {
   user: User | null
   session: Session | null
@@ -16,13 +18,28 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-async function fetchRole(userId: string): Promise<AppRole | null> {
+// Read role directly from the JWT app_metadata — no network call, always available from localStorage.
+function roleFromSession(session: Session | null): AppRole | null {
+  const r = session?.user?.app_metadata?.role as string | undefined
+  return r && VALID_ROLES.includes(r as AppRole) ? (r as AppRole) : null
+}
+
+async function fetchRoleFromDB(userId: string): Promise<AppRole | null> {
   const { data } = await supabase
     .from('profiles')
     .select('role')
     .eq('id', userId)
     .single()
   return (data?.role as AppRole) ?? null
+}
+
+async function resolveRole(session: Session): Promise<AppRole | null> {
+  // JWT app_metadata is the fastest and most reliable source on page refresh.
+  const jwtRole = roleFromSession(session)
+  if (jwtRole) return jwtRole
+
+  // Fallback: profiles table (covers older sessions without app_metadata.role).
+  return fetchRoleFromDB(session.user.id)
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -32,9 +49,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // Safety timeout — fires if fetchRole (or any other async step) hangs.
-    // IMPORTANT: do NOT clear this timer until setLoading(false) actually runs,
-    // otherwise a slow/hanging fetchRole leaves the app stuck on the spinner forever.
     const safetyTimer = setTimeout(() => {
       console.warn('[AuthContext] Safety timeout fired — forcing loading=false')
       setLoading(false)
@@ -51,7 +65,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setApiToken(session?.access_token ?? null)
       if (session?.user) {
         try {
-          const r = await fetchRole(session.user.id)
+          const r = await resolveRole(session)
           setRole(r)
           console.log('[AuthContext] getSession role:', r)
         } catch (e) {
@@ -64,19 +78,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       done()
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       setSession(session)
       setUser(session?.user ?? null)
       setApiToken(session?.access_token ?? null)
       if (session?.user) {
         try {
-          const r = await fetchRole(session.user.id)
-          setRole(r)
+          const r = await resolveRole(session)
+          if (r !== null) setRole(r)
           console.log('[AuthContext] onAuthStateChange role:', r)
         } catch (e) {
           console.error('[AuthContext] fetchRole error (onAuthStateChange):', e)
         }
-      } else {
+      } else if (event === 'SIGNED_OUT') {
         setRole(null)
         setApiToken(null)
       }

@@ -508,6 +508,218 @@ export async function generateDevisPDF(
   )
 }
 
+// ── Reçu de paiement / Quittance ──────────────────────────────────────────────
+
+export interface PdfRecu {
+  numero:        string   // ex: REC-2026-0012
+  credit_numero: string   // ex: CRD-2026-0005
+  client_nom:    string
+  date_paiement: string
+  montant_xaf:   number
+  solde_restant_xaf: number
+  type:          'total' | 'partiel'
+  notes?:        string
+}
+
+export async function generateRecuPDF(recu: PdfRecu): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true })
+    const chunks: Buffer[] = []
+    doc.on('data', (c: Buffer) => chunks.push(c))
+    doc.on('end',  () => resolve(Buffer.concat(chunks)))
+    doc.on('error', reject)
+
+    // ── En-tête rouge ──────────────────────────────────────────────────────────
+    doc.rect(0, 0, PW, 100).fill(C.red)
+    doc.rect(ML, 14, 44, 44).fill('rgba(255,255,255,0.15)').stroke()
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('white')
+      .text('FORGE', ML + 3, 28, { width: 44, align: 'center' })
+    doc.font('Helvetica-Bold').fontSize(4.5).fillColor('rgba(255,255,255,0.7)')
+      .text('TAFDIL', ML + 3, 39, { width: 44, align: 'center' })
+
+    doc.font('Helvetica-Bold').fontSize(16).fillColor('white').text(CO.nom, ML + 52, 16)
+    doc.font('Helvetica').fontSize(7.5).fillColor('rgba(255,255,255,0.85)')
+      .text(CO.adresse, ML + 52, 36)
+      .text(`Tél : ${CO.tel}  |  ${CO.email}`, ML + 52, 47)
+
+    doc.font('Helvetica-Bold').fontSize(22).fillColor('white')
+      .text('REÇU DE PAIEMENT', 0, 16, { align: 'right', width: ML + W })
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(C.redMid)
+      .text(recu.numero, 0, 46, { align: 'right', width: ML + W })
+    doc.font('Helvetica').fontSize(7.5).fillColor('rgba(255,255,255,0.85)')
+      .text(`Date : ${recu.date_paiement}`, 0, 64, { align: 'right', width: ML + W })
+
+    // ── Bloc client ────────────────────────────────────────────────────────────
+    let y = 112
+    doc.rect(ML, y, W, 44).fill(C.gray)
+    doc.rect(ML, y, 3, 44).fill(C.red)
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('REÇU DE', ML + 12, y + 8)
+    doc.font('Helvetica-Bold').fontSize(12).fillColor(C.dark).text(recu.client_nom, ML + 12, y + 18)
+    y += 56
+
+    // ── Détail paiement ────────────────────────────────────────────────────────
+    y += 10
+    const lignes = [
+      { label: 'Référence crédit',   val: recu.credit_numero },
+      { label: 'Type de paiement',   val: recu.type === 'total' ? 'Solde total' : 'Paiement partiel' },
+      { label: 'Montant encaissé',   val: xaf(recu.montant_xaf), bold: true },
+      { label: 'Solde restant',      val: recu.solde_restant_xaf > 0 ? xaf(recu.solde_restant_xaf) : 'SOLDÉ ✓' },
+    ]
+    if (recu.notes) lignes.push({ label: 'Notes', val: recu.notes })
+
+    for (const l of lignes) {
+      doc.rect(ML, y, W, 22).fill(C.grayRow)
+      doc.moveTo(ML, y + 22).lineTo(ML + W, y + 22).strokeColor(C.border).lineWidth(0.3).stroke()
+      doc.font('Helvetica').fontSize(9).fillColor(C.muted).text(l.label, ML + 12, y + 7)
+      if ('bold' in l && l.bold) {
+        doc.font('Helvetica-Bold').fontSize(11).fillColor(C.red).text(l.val, ML + 200, y + 5, { width: W - 212, align: 'right' })
+      } else {
+        doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark).text(l.val, ML + 200, y + 7, { width: W - 212, align: 'right' })
+      }
+      y += 22
+    }
+
+    // ── Montant en lettres ─────────────────────────────────────────────────────
+    y += 14
+    const lettres = montantEnLettres(recu.montant_xaf)
+    doc.rect(ML, y, W, 28).fill(C.blue)
+    doc.rect(ML, y, 3, 28).fill(C.blueMid)
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.muted).text('Arrêté à la somme de :', ML + 10, y + 6)
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.blueMid)
+      .text(lettres.toUpperCase(), ML + 10, y + 16, { width: W - 20 })
+    y += 44
+
+    // ── Zone signatures ────────────────────────────────────────────────────────
+    y += 20
+    doc.rect(ML, y, 220, 56).stroke()
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('Signature & Cachet Client', ML + 6, y + 5)
+    doc.rect(ML + W - 220, y, 220, 56).stroke()
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('Signature & Cachet TAFDIL', ML + W - 214, y + 5)
+    doc.font('Helvetica').fontSize(7).fillColor(C.muted).text(CO.nom, ML + W - 214, y + 44)
+
+    // ── Pied de page ───────────────────────────────────────────────────────────
+    drawFooter(doc, 1)
+    doc.end()
+  })
+}
+
+// ── Attestation de formation (Gap 4 CDC MOD-05) ───────────────────────────────
+
+export interface PdfAttestation {
+  nom:          string
+  specialite:   string
+  niveau:       number    // 1-5
+  duree_mois:   number
+  date_delivrance: string
+}
+
+const NIVEAU_LABELS = ['', 'Initiation', 'Bases', 'Intermédiaire', 'Avancé', 'Expert']
+const MODULE_PLANS = [
+  'Sécurité atelier & EPI',
+  'Lecture de plans & métrologie',
+  'Soudure MIG/MAG — Bases',
+  'Découpe plasma & oxycoupage',
+  'Pliage hydraulique',
+  'Soudure TIG Inox & Alu',
+  'CNC & programmation',
+  'Contrôle qualité & finitions',
+  "Management d'équipe & projets",
+]
+
+export async function generateAttestationPDF(attest: PdfAttestation): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true })
+    const chunks: Buffer[] = []
+    doc.on('data', (c: Buffer) => chunks.push(c))
+    doc.on('end',  () => resolve(Buffer.concat(chunks)))
+    doc.on('error', reject)
+
+    // ── Bordure décorative ─────────────────────────────────────────────────────
+    doc.rect(20, 20, PW - 40, 802).stroke(C.red)
+    doc.rect(26, 26, PW - 52, 790).stroke(C.redMid)
+
+    // ── En-tête ────────────────────────────────────────────────────────────────
+    doc.rect(0, 0, PW, 140).fill(C.red)
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('white')
+      .text('FORGE', 60, 28, { width: 44, align: 'center' })
+    doc.font('Helvetica-Bold').fontSize(4.5).fillColor('rgba(255,255,255,0.7)')
+      .text('TAFDIL', 60, 39, { width: 44, align: 'center' })
+    doc.rect(60, 14, 44, 44).fill('rgba(255,255,255,0.15)').stroke()
+
+    doc.font('Helvetica-Bold').fontSize(13).fillColor('white').text(CO.nom, 115, 18)
+    doc.font('Helvetica').fontSize(8).fillColor('rgba(255,255,255,0.85)')
+      .text(CO.activite, 115, 34)
+      .text(`${CO.adresse}  |  ${CO.tel}`, 115, 44)
+      .text(`NIU : ${CO.niu}  |  RCCM : ${CO.rccm}`, 115, 54)
+
+    doc.font('Helvetica-Bold').fontSize(26).fillColor(C.redMid)
+      .text('ATTESTATION', 0, 72, { align: 'center', width: PW })
+    doc.font('Helvetica-Bold').fontSize(14).fillColor('white')
+      .text('DE FORMATION PROFESSIONNELLE', 0, 104, { align: 'center', width: PW })
+
+    // ── Corps ──────────────────────────────────────────────────────────────────
+    let y = 172
+    doc.font('Helvetica').fontSize(11).fillColor(C.mid)
+      .text('Nous soussignés, TAFDIL SARL, certifions que :', ML, y, { align: 'center', width: W })
+
+    y += 36
+    doc.rect(ML, y, W, 52).fill(C.gray)
+    doc.rect(ML, y, 4, 52).fill(C.red)
+    doc.font('Helvetica-Bold').fontSize(20).fillColor(C.dark)
+      .text(attest.nom.toUpperCase(), ML + 16, y + 14, { width: W - 32 })
+    doc.font('Helvetica').fontSize(9).fillColor(C.muted)
+      .text(`Spécialité : ${attest.specialite}`, ML + 16, y + 38)
+
+    y += 68
+    doc.font('Helvetica').fontSize(11).fillColor(C.mid).text(
+      `a suivi et validé avec succès la formation professionnelle en menuiserie métallique dispensée par TAFDIL SARL à Douala, Cameroun.`,
+      ML, y, { align: 'justify', width: W },
+    )
+
+    y += 48
+    const details = [
+      { label: 'Niveau atteint',         val: `Niveau ${attest.niveau} / 5 — ${NIVEAU_LABELS[attest.niveau] ?? ''}` },
+      { label: 'Durée de formation',     val: `${attest.duree_mois} mois` },
+      { label: 'Date de délivrance',     val: attest.date_delivrance },
+      { label: 'Organisme de formation', val: CO.nom },
+    ]
+
+    for (const d of details) {
+      doc.rect(ML, y, W, 24).fill(C.grayRow)
+      doc.moveTo(ML, y + 24).lineTo(ML + W, y + 24).strokeColor(C.border).lineWidth(0.3).stroke()
+      doc.font('Helvetica').fontSize(9).fillColor(C.muted).text(d.label, ML + 12, y + 8)
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark).text(d.val, ML + 220, y + 8, { width: W - 232, align: 'right' })
+      y += 24
+    }
+
+    y += 16
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.muted).text('MODULES VALIDÉS', ML, y)
+    y += 10
+    const modulesValidated = MODULE_PLANS.slice(0, Math.min(attest.niveau * 2, MODULE_PLANS.length))
+    for (const mod of modulesValidated) {
+      doc.font('Helvetica').fontSize(8).fillColor(C.mid)
+        .text(`✓  ${mod}`, ML + 10, y); y += 12
+    }
+
+    // ── Zone signatures ────────────────────────────────────────────────────────
+    y = Math.max(y + 24, 620)
+    doc.rect(ML, y, 200, 60).stroke()
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('Signature du bénéficiaire', ML + 6, y + 5)
+    doc.rect(ML + W - 200, y, 200, 60).stroke()
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('Le Directeur — TAFDIL SARL', ML + W - 194, y + 5)
+    doc.font('Helvetica').fontSize(7).fillColor(C.muted).text(CO.nom, ML + W - 194, y + 48)
+
+    // ── Pied de page ───────────────────────────────────────────────────────────
+    doc.font('Helvetica').fontSize(7).fillColor(C.light)
+      .text(
+        `Document délivré le ${attest.date_delivrance} — ${CO.nom} — ${CO.adresse} — ${CO.tel}`,
+        ML, 770, { align: 'center', width: W },
+      )
+
+    doc.end()
+  })
+}
+
 // ── Supabase Storage upload ────────────────────────────────────────────────────
 
 const SIGNED_URL_TTL = 7 * 24 * 3600  // 7 days in seconds

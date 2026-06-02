@@ -54,10 +54,12 @@ const commandeShopSchema = z.object({
 })
 
 const devisWebSchema = z.object({
-  nom:         z.string().min(2).max(200),
-  telephone:   z.string().min(8).max(20),
-  email:       z.string().email().optional(),
-  description: z.string().min(10).max(2000),
+  nom:          z.string().min(2).max(200),
+  telephone:    z.string().min(8).max(20),
+  email:        z.string().email().optional(),
+  description:  z.string().min(10).max(2000),
+  type_projet:  z.string().max(100).optional(),
+  produit_ref:  z.string().max(50).optional(),
 })
 
 // ── Router ─────────────────────────────────────────────────────────────────────
@@ -363,11 +365,13 @@ shopRouter.post('/devis', zValidator('json', devisWebSchema), async (c) => {
   const { data, error } = await db
     .from('demandes_devis_web')
     .insert({
-      nom:         body.nom,
-      telephone:   body.telephone,
-      email:       body.email ?? null,
-      description: body.description,
-      statut:      'nouvelle',
+      nom:          body.nom,
+      telephone:    body.telephone,
+      email:        body.email ?? null,
+      description:  body.description,
+      type_projet:  body.type_projet ?? null,
+      produit_ref:  body.produit_ref ?? null,
+      statut:       'nouvelle',
     })
     .select('id, created_at')
     .single()

@@ -90,17 +90,20 @@ export default function RH() {
   const employeColumns: Column<EmployeRecord>[] = [
     {
       id: 'nom', header: 'Employé', accessor: 'nom',
-      render: (v, row) => (
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-full bg-[#ECEFF1] flex items-center justify-center text-[#37474F] font-bold text-xs shrink-0">
-            {(v as string).charAt(0)}
+      render: (v, row) => {
+        const nom = (v as string | null | undefined) ?? ''
+        return (
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-full bg-[#ECEFF1] flex items-center justify-center text-[#37474F] font-bold text-xs shrink-0">
+              {nom ? nom.charAt(0).toUpperCase() : '?'}
+            </div>
+            <div>
+              <div className="text-sm font-semibold text-[#212121]">{nom || '—'}</div>
+              <div className="text-xs text-gray-400">{(row.poste as string | null) ?? ''}</div>
+            </div>
           </div>
-          <div>
-            <div className="text-sm font-semibold text-[#212121]">{v as string}</div>
-            <div className="text-xs text-gray-400">{row.poste as string}</div>
-          </div>
-        </div>
-      ),
+        )
+      },
     },
     { id: 'dept', header: 'Département', accessor: 'departement', render: (v) => <span className="text-sm">{v as string}</span> },
     {

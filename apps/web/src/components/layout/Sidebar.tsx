@@ -5,7 +5,7 @@ import { TafdilIcon } from '@/components/ui/Logo'
 import {
   LayoutDashboard, Wrench, Package, ShoppingCart, FileText, DollarSign, Users,
   GraduationCap, Kanban, Truck, Megaphone, Shield, Brain, Wifi,
-  Store, LogOut, ChevronLeft, ChevronRight, Settings, Crown,
+  Store, LogOut, ChevronLeft, ChevronRight, Settings, Crown, Hammer,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
@@ -36,6 +36,7 @@ const NAV_ITEMS_BASE: NavItem[] = [
   { path: '/securite',     label: 'Sécurité',     icon: Shield },
   { path: '/intelligence', label: 'Intelligence', icon: Brain },
   { path: '/iot',          label: 'IoT',          icon: Wifi },
+  { path: '/equipements',  label: 'Équipements',  icon: Hammer },
 ]
 
 interface SidebarProps {

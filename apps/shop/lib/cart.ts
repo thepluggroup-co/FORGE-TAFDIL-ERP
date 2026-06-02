@@ -89,7 +89,7 @@ export const useCartStore = create<CartStore>()(
       closeDrawer: () => set({ isOpen: false }),
 
       addItem: async (payload, quantite = 1) => {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? ''
+        const apiUrl = ''
         let stockActuel = 9999
         let seuilAlerte = 0
 
@@ -168,7 +168,7 @@ export const useCartStore = create<CartStore>()(
       refreshStockStatus: async () => {
         const { items } = get()
         if (items.length === 0) return
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? ''
+        const apiUrl = ''
 
         const updated = await Promise.all(
           items.map(async (item) => {

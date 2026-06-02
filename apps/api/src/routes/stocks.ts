@@ -3,6 +3,8 @@ import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
 import { requireRole } from '../middleware/rbac'
+import { getProduitsLocal, localMouvement } from '../services/db-local'
+import { withOfflineFallback } from '../services/offline-fallback'
 import type { HonoVariables } from '../types'
 
 // auth middleware already rejects requests when supabaseAdmin is null
@@ -152,7 +154,9 @@ router.get('/', async (c) => {
     .range(from, to)
 
   if (error) {
-    console.error('[stocks] GET / error:', error.message, '| code:', error.code, '| details:', error.details)
+    console.warn('[stocks] GET / Supabase error — tentative fallback SQLite:', error.message)
+    const local = getProduitsLocal({ search, statut })
+    if (local.data.length > 0) return c.json(local)
     return c.json({ error: error.message }, 500)
   }
 
@@ -258,7 +262,7 @@ router.put(
   },
 )
 
-/** Mouvement de stock — appelle fn_mouvement_stock (atomique PostgreSQL) */
+/** Mouvement de stock — appelle fn_mouvement_stock (atomique PostgreSQL) avec fallback SQLite */
 router.post(
   '/:id/mouvement',
   requireRole(['directeur', 'admin', 'operateur']),
@@ -268,65 +272,65 @@ router.post(
     const user = c.get('user')
     const body = c.req.valid('json')
 
-    const { data: rpcData, error: rpcError } = await (db as never as {
-      rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { code: string; message: string } | null }>
-    }).rpc('fn_mouvement_stock', {
-      p_produit_id: id,
-      p_type:       body.type,
-      p_quantite:   body.quantite,
-      p_reference:  body.reference ?? null,
-      p_notes:      body.motif ?? body.notes ?? null,
-      p_user_id:    user.id,
-    })
+    const result = await withOfflineFallback(
+      `POST /stocks/${id}/mouvement`,
 
-    // Fallback JS si la fonction PG n'existe pas encore
-    if (rpcError && (rpcError.code === '42883' || rpcError.message.includes('does not exist'))) {
-      const { data: produit, error: fetchErr } = await db
-        .from('produits')
-        .select('stock_actuel, stock_min, stock_critique')
-        .eq('id', id)
-        .single()
+      // ── Chemin online : RPC PostgreSQL ──────────────────────────────────────
+      async () => {
+        const { data: rpcData, error: rpcError } = await (db as never as {
+          rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { code: string; message: string } | null }>
+        }).rpc('fn_mouvement_stock', {
+          p_produit_id: id,
+          p_type:       body.type,
+          p_quantite:   body.quantite,
+          p_reference:  body.reference ?? null,
+          p_notes:      body.motif ?? body.notes ?? null,
+          p_user_id:    user.id,
+        })
 
-      if (fetchErr || !produit) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
+        // Fallback JS si la fonction PG n'existe pas encore
+        if (rpcError && (rpcError.code === '42883' || rpcError.message.includes('does not exist'))) {
+          const { data: produit, error: fetchErr } = await db
+            .from('produits').select('stock_actuel, stock_min, stock_critique').eq('id', id).single()
+          if (fetchErr || !produit) throw new Error('Produit introuvable')
 
-      const p = produit as { stock_actuel: number; stock_min: number; stock_critique: number }
-
-      let nouvelleQte: number
-      if (body.type === 'ajustement') {
-        nouvelleQte = body.quantite
-      } else if (body.type === 'entree') {
-        nouvelleQte = p.stock_actuel + body.quantite
-      } else {
-        if (p.stock_actuel < body.quantite) {
-          return c.json({ error: `Stock insuffisant : ${p.stock_actuel} disponible`, code: 'INSUFFICIENT_STOCK' }, 422)
+          const p = produit as { stock_actuel: number; stock_min: number; stock_critique: number }
+          let nouvelleQte: number
+          if (body.type === 'ajustement')     nouvelleQte = body.quantite
+          else if (body.type === 'entree')    nouvelleQte = p.stock_actuel + body.quantite
+          else {
+            if (p.stock_actuel < body.quantite)
+              throw Object.assign(new Error(`Stock insuffisant : ${p.stock_actuel} disponible`), { code: 'INSUFFICIENT_STOCK' })
+            nouvelleQte = p.stock_actuel - body.quantite
+          }
+          const statut = calcStatut(nouvelleQte, p.stock_min, p.stock_critique)
+          const [mvtRes, updRes] = await Promise.all([
+            db.from('mouvements_stock').insert({ produit_id: id, type: body.type, quantite: body.quantite,
+              reference: body.reference ?? null, notes: body.motif ?? body.notes ?? null, created_by: user.id,
+            }).select().single(),
+            db.from('produits').update({ stock_actuel: nouvelleQte, statut, updated_at: new Date().toISOString() })
+              .eq('id', id).select().single(),
+          ])
+          if (mvtRes.error) throw new Error(mvtRes.error.message)
+          return { mouvement: mvtRes.data, produit: updRes.data }
         }
-        nouvelleQte = p.stock_actuel - body.quantite
-      }
 
-      const statut = calcStatut(nouvelleQte, p.stock_min, p.stock_critique)
+        if (rpcError) throw new Error(rpcError.message)
+        return rpcData ?? { success: true }
+      },
 
-      const [mvtRes, updRes] = await Promise.all([
-        db.from('mouvements_stock').insert({
-          produit_id: id,
-          type:       body.type,
-          quantite:   body.quantite,
-          reference:  body.reference ?? null,
-          notes:      body.motif ?? body.notes ?? null,
-          created_by: user.id,
-        }).select().single(),
-        db.from('produits').update({
-          stock_actuel: nouvelleQte,
-          statut,
-          updated_at: new Date().toISOString(),
-        }).eq('id', id).select().single(),
-      ])
+      // ── Chemin offline : SQLite local ────────────────────────────────────────
+      () => localMouvement({
+        produit_id: id,
+        type:       body.type as 'entree' | 'sortie' | 'ajustement',
+        quantite:   body.quantite,
+        reference:  body.reference,
+        notes:      body.motif ?? body.notes,
+        user_id:    user.id,
+      }),
+    )
 
-      if (mvtRes.error) return c.json({ error: mvtRes.error.message }, 400)
-      return c.json({ mouvement: mvtRes.data, produit: updRes.data }, 201)
-    }
-
-    if (rpcError) return c.json({ error: rpcError.message }, 400)
-    return c.json(rpcData ?? { success: true }, 201)
+    return c.json(result, 201)
   },
 )
 

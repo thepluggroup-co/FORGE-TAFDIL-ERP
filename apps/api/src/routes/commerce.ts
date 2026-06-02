@@ -2,17 +2,19 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
+import { randomUUID } from 'node:crypto'
 
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import { generateDevisPDF, uploadPDF } from '../services/pdf.service'
 import { notifyStatutChange } from '../services/notifications'
+import { enqueueEmail, notifyWhatsApp } from '../services/email-queue.service'
 import type { HonoVariables } from '../types'
 
 // ── TVA Cameroun ────────────────────────────────────────────────────────────────
 const TVA_RATE = 0.1925
 
-// ── Transitions de statut autorisées ───────────────────────────────────────────
+// ── Machines d'état autorisées ──────────────────────────────────────────────────
 const TRANSITIONS_COMMANDE: Record<string, string[]> = {
   confirmed:     ['in_production', 'cancelled'],
   in_production: ['pret', 'cancelled'],
@@ -21,12 +23,17 @@ const TRANSITIONS_COMMANDE: Record<string, string[]> = {
   cancelled:     [],
 }
 
+const TRANSITIONS_DEVIS: Record<string, string[]> = {
+  brouillon: ['envoye', 'refuse', 'expire'],
+  envoye:    ['accepte', 'refuse', 'expire'],
+  accepte:   ['transforme'],
+  refuse:    [],
+  expire:    [],
+  transforme:[],
+}
+
 // ── Routers ────────────────────────────────────────────────────────────────────
-
-/** Routes authentifiées : /api/clients, /api/devis, /api/commandes */
 const router = new Hono<{ Variables: HonoVariables }>()
-
-/** Route publique : /api/commandes/public/:ref (monter sur app AVANT authMiddleware) */
 const publicRouter = new Hono()
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -93,7 +100,7 @@ const statutCommandeSchema = z.object({
   commentaire: z.string().optional(),
 })
 
-// ── Helper : calculer les totaux d'un devis/commande ──────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 function calculerTotaux(lignes: Array<{ quantite: number; prix_unitaire_ht_xaf: number }>) {
   const total_ht_xaf  = lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire_ht_xaf, 0)
@@ -102,20 +109,44 @@ function calculerTotaux(lignes: Array<{ quantite: number; prix_unitaire_ht_xaf: 
   return { total_ht_xaf: Math.round(total_ht_xaf), tva_xaf, total_ttc_xaf }
 }
 
-/** Mappe un devis brut Supabase vers le format attendu par le frontend */
+/** Vérifie si un devis est expiré et le marque automatiquement. */
+async function checkExpireDevis(devisId: string, dateValidite: string, statut: string): Promise<string> {
+  if (['refuse', 'expire', 'transforme'].includes(statut)) return statut
+  const today = new Date().toISOString().slice(0, 10)
+  if (dateValidite < today && statut !== 'expire') {
+    await db.from('devis').update({ statut: 'expire', updated_at: new Date().toISOString() }).eq('id', devisId)
+    return 'expire'
+  }
+  return statut
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapDevis(row: any) {
-  const cli = row.clients as { id?: string; nom?: string; telephone?: string; email?: string } | null
+  const cli   = row.clients as { id?: string; nom?: string; telephone?: string; email?: string } | null
+  const today = new Date().toISOString().slice(0, 10)
+  const jours_restants = row.date_validite
+    ? Math.round((new Date(row.date_validite).getTime() - Date.now()) / 86400000)
+    : null
+
   return {
-    id:                  row.id,
-    reference:           row.numero,
-    statut:              row.statut,
-    date_creation:       row.date_emission ?? row.created_at,
-    validite_jours:      row.validite_jours,
-    acompte_pct:         row.acompte_pct,
-    conditions_paiement: row.conditions_paiement,
-    montant_ttc_xaf:     row.total_ttc_xaf ?? 0,
-    pdf_url:             row.pdf_url ?? null,
+    id:                   row.id,
+    reference:            row.numero,
+    statut:               row.statut,
+    date_creation:        row.date_emission ?? row.created_at,
+    date_validite:        row.date_validite,
+    validite_jours:       row.validite_jours,
+    acompte_pct:          row.acompte_pct,
+    conditions_paiement:  row.conditions_paiement,
+    total_ht_xaf:         row.total_ht_xaf ?? 0,
+    tva_xaf:              row.tva_xaf ?? 0,
+    montant_ttc_xaf:      row.total_ttc_xaf ?? 0,
+    pdf_url:              row.pdf_url ?? null,
+    notes:                row.notes ?? null,
+    expire:               row.date_validite ? row.date_validite < today : false,
+    jours_restants,
+    approuve_par_client:  row.approuve_par_client ?? false,
+    approuve_at:          row.approuve_at ?? null,
+    commentaire_client:   row.commentaire_client ?? null,
     client: {
       id:        row.client_id ?? cli?.id ?? '',
       nom:       cli?.nom ?? row.client_nom ?? '',
@@ -129,22 +160,25 @@ function mapDevis(row: any) {
       categorie:            (l.categorie as string).replace('_', '-'),
       quantite:             l.quantite,
       prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
+      unite:                l.unite ?? 'unité',
     })),
   }
 }
 
-/** Mappe une ligne brute Supabase vers le format attendu par le frontend */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapCommande(row: any) {
   const cli = row.clients as { id?: string; nom?: string; telephone?: string } | null
+  const totalTtc      = row.total_ttc_xaf ?? 0
+  const montantPaye   = row.acompte_recu_xaf ?? 0
   return {
     id:                    row.id,
     reference:             row.numero,
     statut:                row.statut,
     date_commande:         row.date_commande,
     date_livraison_prevue: row.date_livraison_prevue ?? null,
-    montant_ttc_xaf:       row.total_ttc_xaf ?? 0,
-    acompte_recu_xaf:      row.acompte_recu_xaf ?? 0,
+    montant_ttc_xaf:       totalTtc,
+    acompte_recu_xaf:      montantPaye,
+    solde_restant_xaf:     Math.max(0, totalTtc - montantPaye),
     notes:                 row.notes ?? null,
     client: {
       id:        row.client_id ?? '',
@@ -169,7 +203,6 @@ function mapCommande(row: any) {
   }
 }
 
-/** Génère un numéro séquentiel : prefix-YYYYMMDD-XXXX */
 async function genererNumero(table: string, prefix: string): Promise<string> {
   const today = new Date()
   const yyyymmdd = today.toISOString().slice(0, 10).replace(/-/g, '')
@@ -183,9 +216,108 @@ async function genererNumero(table: string, prefix: string): Promise<string> {
   return `${prefix}-${yyyymmdd}-${String((count ?? 0) + 1).padStart(4, '0')}`
 }
 
+/**
+ * Vérifie si un client est bloqué pour de nouvelles commandes :
+ *  - statut = 'bloque'
+ *  - ou crédit en statut 'echu'
+ * Retourne null si OK, ou un message d'erreur.
+ */
+async function verifierBlocageClient(clientId: string | undefined | null): Promise<string | null> {
+  if (!clientId) return null
+
+  const { data: client } = await db
+    .from('clients')
+    .select('statut, nom')
+    .eq('id', clientId)
+    .single()
+
+  if (!client) return null
+
+  const c = client as { statut: string; nom: string }
+  if (c.statut === 'bloque') {
+    return `Client "${c.nom}" est bloqué — impossible de créer une commande`
+  }
+
+  // Vérifier crédits échus
+  const { count: creditsEchus } = await db
+    .from('credits')
+    .select('*', { count: 'exact', head: true })
+    .eq('client_id', clientId)
+    .eq('statut', 'echu')
+
+  if ((creditsEchus ?? 0) > 0) {
+    return `Client "${c.nom}" a ${creditsEchus} crédit(s) échu(s) — commande bloquée jusqu'au remboursement`
+  }
+
+  return null
+}
+
+/**
+ * Met à jour le score_fiabilite du client en fonction de ses paiements.
+ * Score 0-100 : 50 de base, +1 par commande livrée, -5 par crédit échu.
+ */
+async function recalculerScoreFiabilite(clientId: string): Promise<void> {
+  const [commandesRes, creditsRes] = await Promise.all([
+    db.from('commandes')
+      .select('id', { count: 'exact', head: true })
+      .eq('client_id', clientId)
+      .eq('statut', 'delivered'),
+    db.from('credits')
+      .select('statut')
+      .eq('client_id', clientId),
+  ])
+
+  const livrees = commandesRes.count ?? 0
+  type CR = { statut: string }
+  const credits = (creditsRes.data ?? []) as CR[]
+  const echues  = credits.filter(c => c.statut === 'echu').length
+  const payes   = credits.filter(c => c.statut === 'rembourse').length
+
+  const score = Math.max(0, Math.min(100,
+    50 + livrees * 1 + payes * 2 - echues * 5
+  ))
+
+  await db.from('clients').update({ score_fiabilite: score }).eq('id', clientId)
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // CLIENTS
 // ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/clients/recherche?q=...&limit=10
+ * Recherche clients par nom uniquement, résultats classés par pertinence :
+ * exact → préfixe → contient.
+ */
+router.get('/clients/recherche', async (c) => {
+  const q     = (c.req.query('q') ?? '').trim()
+  const limit = Math.min(20, parseInt(c.req.query('limit') ?? '10'))
+
+  if (q.length < 2) return c.json({ data: [] })
+
+  const { data, error } = await db
+    .from('clients')
+    .select('id, nom, telephone, type, statut, score_fiabilite')
+    .ilike('nom', `%${q}%`)
+    .order('nom')
+    .limit(limit * 3)
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  const ql = q.toLowerCase()
+  const ranked = (data ?? [])
+    .map((row: Record<string, unknown>) => ({
+      ...row,
+      _rank: (row.nom as string).toLowerCase() === ql         ? 0   // exact
+           : (row.nom as string).toLowerCase().startsWith(ql) ? 1   // préfixe
+           :                                                     2,  // contient
+    }))
+    .sort((a, b) => a._rank - b._rank || (a.nom as string).localeCompare(b.nom as string))
+    .slice(0, limit)
+    .map(({ _rank: _, ...rest }) => rest)
+
+  return c.json({ data: ranked })
+})
 
 router.get('/clients', async (c) => {
   const { statut, type, search } = c.req.query()
@@ -198,6 +330,7 @@ router.get('/clients', async (c) => {
 
   if (statut) query = query.eq('statut', statut)
   if (type)   query = query.eq('type', type)
+  // Recherche par nom, email ET téléphone
   if (search) query = query.or(`nom.ilike.%${search}%,email.ilike.%${search}%,telephone.ilike.%${search}%`)
 
   const { data, count, error } = await query
@@ -261,7 +394,6 @@ router.put('/clients/:id', requireRole(['directeur', 'admin']), zValidator('json
 router.delete('/clients/:id', requireRole(['directeur']), async (c) => {
   const { id } = c.req.param()
 
-  // Vérifier qu'il n'y a pas de commandes actives
   const { count } = await db
     .from('commandes')
     .select('*', { count: 'exact', head: true })
@@ -303,6 +435,25 @@ router.get('/devis', async (c) => {
 
   if (error) return c.json({ error: error.message }, 500)
 
+  // Auto-expire les devis dont la date de validité est dépassée
+  const today = new Date().toISOString().slice(0, 10)
+  const toExpire = (data ?? []).filter(
+    (d: { id: string; statut: string; date_validite: string }) =>
+      !['expire', 'refuse', 'transforme'].includes(d.statut) && d.date_validite < today
+  )
+  if (toExpire.length > 0) {
+    const ids = toExpire.map((d: { id: string }) => d.id)
+    await db.from('devis')
+      .update({ statut: 'expire', updated_at: new Date().toISOString() })
+      .in('id', ids)
+    // Mettre à jour les objets locaux pour la réponse
+    for (const d of data ?? []) {
+      if (ids.includes((d as { id: string }).id)) {
+        (d as { statut: string }).statut = 'expire'
+      }
+    }
+  }
+
   return c.json({
     data: (data ?? []).map(mapDevis),
     total: count ?? 0,
@@ -322,6 +473,28 @@ router.get('/devis/:id', async (c) => {
     .single()
 
   if (error || !data) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
+
+  // Auto-expire si date dépassée
+  const d = data as { id: string; statut: string; date_validite: string; pdf_url: string | null; numero: string }
+  const newStatut = await checkExpireDevis(d.id, d.date_validite, d.statut)
+  if (newStatut !== d.statut) {
+    (data as { statut: string }).statut = newStatut
+  }
+
+  // Régénérer une signed URL fraîche si le PDF existe (URLs Supabase Storage expirent)
+  if (d.pdf_url) {
+    try {
+      const pathMatch = d.pdf_url.match(/\/object\/(?:public|sign)\/devis\/(.+)/)
+      const storagePath = pathMatch?.[1] ?? `${d.numero}.pdf`
+      const { data: signed } = await db.storage.from('devis').createSignedUrl(storagePath, 3600)
+      if (signed?.signedUrl) {
+        (data as { pdf_url: string }).pdf_url = signed.signedUrl
+      }
+    } catch {
+      // URL originale conservée en cas d'erreur
+    }
+  }
+
   return c.json(mapDevis(data))
 })
 
@@ -386,6 +559,10 @@ router.post('/devis', requireRole(['directeur', 'admin']), zValidator('json', de
       (lignesData ?? []) as { designation: string; unite: string; quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number }[],
     )
     pdf_url = await uploadPDF(pdfBuf, 'devis', `${numero}.pdf`)
+    // Stocker l'URL PDF dans le devis
+    if (pdf_url) {
+      await db.from('devis').update({ pdf_url }).eq('id', (devis as { id: string }).id)
+    }
   } catch (e) {
     console.error('[commerce] devis PDF error:', e)
   }
@@ -399,11 +576,31 @@ router.put('/devis/:id', requireRole(['directeur', 'admin']), zValidator('json',
 
   const { data: existing } = await db.from('devis').select('statut').eq('id', id).single()
   if (!existing) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
-  if (['accepte', 'transforme'].includes((existing as { statut: string }).statut)) {
-    return c.json({ error: 'Impossible de modifier un devis accepté ou transformé', code: 'IMMUTABLE' }, 422)
+
+  const currentStatut = (existing as { statut: string }).statut
+  // Bloquer modification si déjà transformé ou expiré/refusé définitif
+  if (['transforme', 'expire'].includes(currentStatut)) {
+    return c.json({
+      error: `Impossible de modifier un devis en statut "${currentStatut}"`,
+      code: 'IMMUTABLE',
+    }, 422)
   }
 
-  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
+  // Devis envoye ou refuse → remise en brouillon automatique pour correction
+  const revertToBrouillon = ['envoye', 'refuse', 'accepte'].includes(currentStatut)
+
+  const updates: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+    // Invalider approbation précédente si le devis est modifié
+    ...(revertToBrouillon ? {
+      statut:               'brouillon',
+      approuve_par_client:  false,
+      approuve_at:          null,
+      token_approbation:    null,
+      token_expires_at:     null,
+      commentaire_client:   null,
+    } : {}),
+  }
   const { lignes, ...devisFields } = body
   Object.assign(updates, devisFields)
 
@@ -421,7 +618,6 @@ router.put('/devis/:id', requireRole(['directeur', 'admin']), zValidator('json',
 
   if (error) return c.json({ error: error.message }, 400)
 
-  // Remplacer les lignes si fournies
   if (lignes) {
     await db.from('devis_lignes').delete().eq('devis_id', id)
     await db.from('devis_lignes').insert(
@@ -445,8 +641,22 @@ router.put('/devis/:id', requireRole(['directeur', 'admin']), zValidator('json',
 router.patch('/devis/:id/statut', requireRole(['directeur', 'admin']), zValidator('json', z.object({
   statut: z.enum(['brouillon', 'envoye', 'accepte', 'refuse', 'expire']),
 })), async (c) => {
-  const { id }    = c.req.param()
+  const { id }     = c.req.param()
   const { statut } = c.req.valid('json')
+
+  const { data: existing } = await db.from('devis').select('statut, date_validite').eq('id', id).single()
+  if (!existing) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
+
+  const ex = existing as { statut: string; date_validite: string }
+  const allowed = TRANSITIONS_DEVIS[ex.statut] ?? []
+
+  if (!allowed.includes(statut)) {
+    return c.json({
+      error: `Transition "${ex.statut}" → "${statut}" non autorisée`,
+      code:  'INVALID_TRANSITION',
+      transitions_autorisees: allowed,
+    }, 422)
+  }
 
   const { data, error } = await db
     .from('devis')
@@ -474,12 +684,156 @@ router.delete('/devis/:id', requireRole(['directeur', 'admin']), async (c) => {
   return c.body(null, 204)
 })
 
+/**
+ * POST /devis/:id/envoyer-approbation
+ * Génère un token d'approbation, envoie par email (queue) + WhatsApp immédiat.
+ */
+router.post('/devis/:id/envoyer-approbation', requireRole(['directeur', 'admin']), async (c) => {
+  const { id } = c.req.param()
+
+  const { data: devis } = await db
+    .from('devis')
+    .select('statut, numero, client_nom, total_ttc_xaf, client_id')
+    .eq('id', id)
+    .single()
+
+  if (!devis) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
+
+  const d = devis as { statut: string; numero: string; client_nom: string; total_ttc_xaf: number; client_id: string | null }
+
+  if (['transforme', 'expire'].includes(d.statut)) {
+    return c.json({ error: `Devis "${d.statut}" — envoi d'approbation impossible`, code: 'INVALID_STATUS' }, 422)
+  }
+
+  const token     = randomUUID()
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() // 7 jours
+
+  await db.from('devis').update({
+    token_approbation: token,
+    token_expires_at:  expiresAt,
+    statut:            'envoye',
+    updated_at:        new Date().toISOString(),
+  }).eq('id', id)
+
+  const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:5173'
+  const approvalUrl = `${frontendUrl}/devis/approuver/${token}`
+
+  // Récupérer email du client si lié
+  let clientEmail: string | null = null
+  if (d.client_id) {
+    const { data: cli } = await db.from('clients').select('email').eq('id', d.client_id).single()
+    clientEmail = (cli as { email: string | null } | null)?.email ?? null
+  }
+
+  if (clientEmail) {
+    await enqueueEmail({
+      destinataire:   clientEmail,
+      sujet:          `Devis ${d.numero} — Votre approbation est requise`,
+      corps_html:     `
+        <p>Bonjour,</p>
+        <p>Veuillez consulter et approuver le devis <strong>${d.numero}</strong>
+        d'un montant de <strong>${d.total_ttc_xaf.toLocaleString('fr-FR')} XAF TTC</strong>.</p>
+        <p><a href="${approvalUrl}" style="background:#C62828;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;display:inline-block">
+          Consulter et approuver le devis
+        </a></p>
+        <p>Ce lien est valable 7 jours.</p>
+        <p>Cordialement,<br>TAFDIL SARL</p>
+      `,
+      priorite:       'haute',
+      reference_type: 'devis',
+      reference_id:   id,
+    })
+  }
+
+  // WhatsApp immédiat au directeur (notification interne)
+  await notifyWhatsApp(
+    process.env.DIRECTEUR_WHATSAPP_PHONE ?? '',
+    `📋 Devis ${d.numero} envoyé à ${d.client_nom} pour approbation.\nLien : ${approvalUrl}`,
+  )
+
+  return c.json({ token, expires_at: expiresAt, approval_url: approvalUrl })
+})
+
+/**
+ * GET /api/devis/approuver/:token  (PUBLIC — sans authentification)
+ * Retourne les infos du devis pour la page d'approbation client.
+ */
+const publicDevisRouter = new Hono()
+
+publicDevisRouter.get('/devis/approuver/:token', async (c) => {
+  const { token } = c.req.param()
+
+  const { data } = await db
+    .from('devis')
+    .select('id, numero, client_nom, total_ht_xaf, tva_xaf, total_ttc_xaf, date_validite, statut, token_expires_at, approuve_par_client, devis_lignes(designation, quantite, prix_unitaire_ht_xaf, unite)')
+    .eq('token_approbation', token)
+    .single()
+
+  if (!data) return c.json({ error: 'Lien invalide ou expiré', code: 'INVALID_TOKEN' }, 404)
+
+  const d = data as { token_expires_at: string; statut: string }
+  if (new Date(d.token_expires_at) < new Date()) {
+    return c.json({ error: 'Ce lien d\'approbation a expiré', code: 'TOKEN_EXPIRED' }, 410)
+  }
+
+  if (['transforme', 'expire'].includes(d.statut)) {
+    return c.json({ error: 'Ce devis n\'est plus en attente d\'approbation', code: 'INVALID_STATUS' }, 410)
+  }
+
+  return c.json({ token_valide: true, devis: data })
+})
+
+publicDevisRouter.post('/devis/approuver/:token', async (c) => {
+  const { token } = c.req.param()
+  const body = await c.req.json<{ decision: 'accepte' | 'refuse'; commentaire?: string }>()
+
+  if (!['accepte', 'refuse'].includes(body.decision)) {
+    return c.json({ error: 'Décision invalide — accepte ou refuse', code: 'INVALID_DECISION' }, 422)
+  }
+
+  const { data } = await db
+    .from('devis')
+    .select('id, numero, client_nom, statut, token_expires_at')
+    .eq('token_approbation', token)
+    .single()
+
+  if (!data) return c.json({ error: 'Lien invalide', code: 'INVALID_TOKEN' }, 404)
+
+  const d = data as { id: string; numero: string; client_nom: string; statut: string; token_expires_at: string }
+
+  if (new Date(d.token_expires_at) < new Date()) {
+    return c.json({ error: 'Ce lien d\'approbation a expiré', code: 'TOKEN_EXPIRED' }, 410)
+  }
+
+  if (['transforme', 'expire'].includes(d.statut)) {
+    return c.json({ error: 'Ce devis n\'est plus en attente d\'approbation', code: 'INVALID_STATUS' }, 410)
+  }
+
+  await db.from('devis').update({
+    statut:              body.decision,   // 'accepte' ou 'refuse'
+    approuve_par_client: body.decision === 'accepte',
+    approuve_at:         new Date().toISOString(),
+    commentaire_client:  body.commentaire ?? null,
+    token_approbation:   null,    // invalider le token après usage
+    updated_at:          new Date().toISOString(),
+  }).eq('id', d.id)
+
+  // Notifier le directeur
+  await notifyWhatsApp(
+    process.env.DIRECTEUR_WHATSAPP_PHONE ?? '',
+    body.decision === 'accepte'
+      ? `✅ Devis ${d.numero} APPROUVÉ par ${d.client_nom}`
+      : `❌ Devis ${d.numero} REFUSÉ par ${d.client_nom}${body.commentaire ? `\nMotif: ${body.commentaire}` : ''}`,
+  )
+
+  return c.json({ succes: true, decision: body.decision })
+})
+
 /** Transformer un devis en commande + réserver le stock */
 router.post('/devis/:id/transformer-commande', requireRole(['directeur', 'admin']), async (c) => {
   const { id }   = c.req.param()
   const user     = c.get('user')
 
-  // Charger le devis avec ses lignes
   const { data: devis, error: devisErr } = await db
     .from('devis')
     .select('*, devis_lignes(*)')
@@ -490,24 +844,39 @@ router.post('/devis/:id/transformer-commande', requireRole(['directeur', 'admin'
 
   const d = devis as {
     id: string; numero: string; statut: string; client_id: string | null; client_nom: string
-    acompte_pct: number; conditions_paiement: string; notes: string | null
-    total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number
+    date_validite: string; acompte_pct: number; conditions_paiement: string; notes: string | null
+    total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number; approuve_par_client: boolean
     devis_lignes: Array<{
       designation: string; description: string | null; unite: string
       quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number; ordre: number
     }>
   }
 
-  if (!['brouillon', 'envoye', 'accepte'].includes(d.statut)) {
+  // Vérifier le statut — bloquer si expiré ou refusé
+  const currentStatut = await checkExpireDevis(d.id, d.date_validite, d.statut)
+  if (!['brouillon', 'envoye', 'accepte'].includes(currentStatut)) {
     return c.json({
-      error: `Impossible de transformer un devis en statut "${d.statut}"`,
+      error: `Impossible de transformer un devis en statut "${currentStatut}"`,
       code: 'INVALID_STATUS',
     }, 422)
   }
 
+  // CMD01 : vérifier approbation client avant création commande
+  if (!d.approuve_par_client) {
+    return c.json({
+      error: 'Commande impossible — le client n\'a pas encore approuvé ce devis. Envoyez-lui le lien d\'approbation.',
+      code:  'AWAITING_CLIENT_APPROVAL',
+    }, 422)
+  }
+
+  // Bloquer si le client est bloqué
+  const blocageMsg = await verifierBlocageClient(d.client_id)
+  if (blocageMsg) {
+    return c.json({ error: blocageMsg, code: 'CLIENT_BLOQUE' }, 422)
+  }
+
   const numeroCommande = await genererNumero('commandes', 'CMD')
 
-  // Créer la commande
   const { data: commande, error: cmdErr } = await db
     .from('commandes')
     .insert({
@@ -532,7 +901,6 @@ router.post('/devis/:id/transformer-commande', requireRole(['directeur', 'admin'
 
   const cmd = commande as { id: string; numero: string }
 
-  // Créer les lignes commande depuis les lignes devis
   await db.from('commandes_lignes').insert(
     d.devis_lignes.map((l) => ({
       commande_id:          cmd.id,
@@ -545,13 +913,10 @@ router.post('/devis/:id/transformer-commande', requireRole(['directeur', 'admin'
     })),
   )
 
-  // Marquer le devis comme transformé
-  await db
-    .from('devis')
+  await db.from('devis')
     .update({ statut: 'transforme', updated_at: new Date().toISOString() })
     .eq('id', id)
 
-  // Historique de la commande créée
   await db.from('historique_commandes').insert({
     commande_id:    cmd.id,
     ancien_statut:  null,
@@ -613,12 +978,18 @@ router.get('/commandes/:id', async (c) => {
     .single()
 
   if (error || !data) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
-  return c.json(data)
+  return c.json(mapCommande(data))
 })
 
 router.post('/commandes', requireRole(['directeur', 'admin']), zValidator('json', commandeSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
+
+  // ── Vérifier blocage client (crédit échu ou statut bloqué) ────────────────
+  const blocageMsg = await verifierBlocageClient(body.client_id)
+  if (blocageMsg) {
+    return c.json({ error: blocageMsg, code: 'CLIENT_BLOQUE' }, 422)
+  }
 
   const numero = await genererNumero('commandes', 'CMD')
   const totaux = calculerTotaux(body.lignes)
@@ -663,7 +1034,6 @@ router.post('/commandes', requireRole(['directeur', 'admin']), zValidator('json'
     return c.json({ error: lignesErr.message }, 400)
   }
 
-  // Historique initial
   await db.from('historique_commandes').insert({
     commande_id:    cmd.id,
     ancien_statut:  null,
@@ -672,7 +1042,6 @@ router.post('/commandes', requireRole(['directeur', 'admin']), zValidator('json'
     changed_by:     user.id,
   })
 
-  // Retourner la commande complète (avec lignes + client) pour affichage immédiat
   const { data: full, error: fullErr } = await db
     .from('commandes')
     .select('*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone)')
@@ -695,21 +1064,29 @@ router.patch(
 
     const { data: existing } = await db
       .from('commandes')
-      .select('statut, numero')
+      .select('statut, numero, client_id')
       .eq('id', id)
       .single()
 
     if (!existing) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
 
-    const current  = (existing as { statut: string }).statut
-    const allowed  = TRANSITIONS_COMMANDE[current] ?? []
+    const ex = existing as { statut: string; numero: string; client_id: string | null }
+    const allowed  = TRANSITIONS_COMMANDE[ex.statut] ?? []
 
     if (!allowed.includes(body.statut)) {
       return c.json({
-        error: `Transition "${current}" → "${body.statut}" non autorisée`,
+        error: `Transition "${ex.statut}" → "${body.statut}" non autorisée`,
         code:  'INVALID_TRANSITION',
         transitions_autorisees: allowed,
       }, 422)
+    }
+
+    // Bloquer si le client a un crédit échu (sauf annulation)
+    if (body.statut !== 'cancelled' && ex.client_id) {
+      const blocageMsg = await verifierBlocageClient(ex.client_id)
+      if (blocageMsg) {
+        return c.json({ error: blocageMsg, code: 'CLIENT_BLOQUE' }, 422)
+      }
     }
 
     const { error: updateErr } = await db
@@ -719,16 +1096,21 @@ router.patch(
 
     if (updateErr) return c.json({ error: updateErr.message }, 400)
 
-    // Enregistrer dans l'historique
     await db.from('historique_commandes').insert({
       commande_id:    id,
-      ancien_statut:  current,
+      ancien_statut:  ex.statut,
       nouveau_statut: body.statut,
       commentaire:    body.commentaire ?? null,
       changed_by:     user.id,
     })
 
-    // Retourner la commande complète mappée
+    // Recalculer le score fiabilité si livraison complète ou annulation
+    if (ex.client_id && ['delivered', 'cancelled'].includes(body.statut)) {
+      recalculerScoreFiabilite(ex.client_id).catch(e =>
+        console.error('[commerce] score_fiabilite recalcul:', e)
+      )
+    }
+
     const { data: full } = await db
       .from('commandes')
       .select('*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone)')
@@ -759,7 +1141,96 @@ router.delete('/commandes/:id', requireRole(['directeur']), async (c) => {
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ROUTE PUBLIQUE — suivi commande client (monter sur app avant authMiddleware)
+// PAIEMENTS COMMANDE (CMD05)
+// ══════════════════════════════════════════════════════════════════════════════
+
+const paiementCommandeSchema = z.object({
+  montant_xaf:   z.number().positive(),
+  methode:       z.enum(['mobile_money', 'virement', 'especes', 'cheque', 'notchpay']).default('mobile_money'),
+  reference_ext: z.string().optional(),
+  date_paiement: z.string(),
+  notes:         z.string().optional(),
+})
+
+router.get('/commandes/:id/paiements', async (c) => {
+  const { id } = c.req.param()
+  const { data, error } = await db
+    .from('paiements_commande')
+    .select('*')
+    .eq('commande_id', id)
+    .order('date_paiement', { ascending: false })
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data: data ?? [], total: (data ?? []).length })
+})
+
+router.post(
+  '/commandes/:id/paiements',
+  requireRole(['directeur', 'admin', 'operateur']),
+  zValidator('json', paiementCommandeSchema),
+  async (c) => {
+    const { id } = c.req.param()
+    const user   = c.get('user')
+    const body   = c.req.valid('json')
+
+    const { data: commande } = await db
+      .from('commandes')
+      .select('numero, client_id, client_nom, total_ttc_xaf, montant_paye_xaf, statut')
+      .eq('id', id)
+      .single()
+
+    if (!commande) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
+
+    const cmd = commande as {
+      numero: string; client_id: string | null; client_nom: string
+      total_ttc_xaf: number; montant_paye_xaf: number; statut: string
+    }
+
+    const soldeRestant = Math.max(0, cmd.total_ttc_xaf - cmd.montant_paye_xaf)
+    if (body.montant_xaf > soldeRestant + 1) {  // +1 tolérance arrondi
+      return c.json({
+        error: `Montant dépasse le solde restant (${soldeRestant.toLocaleString()} XAF)`,
+        code: 'AMOUNT_EXCEEDED',
+      }, 422)
+    }
+
+    const { data: paiement, error: pErr } = await db
+      .from('paiements_commande')
+      .insert({
+        commande_id:    id,
+        client_id:      cmd.client_id,
+        montant_xaf:    body.montant_xaf,
+        methode:        body.methode,
+        reference_ext:  body.reference_ext ?? null,
+        statut:         'confirme',
+        date_paiement:  body.date_paiement,
+        notes:          body.notes ?? null,
+        enregistre_par: user.id,
+      })
+      .select().single()
+
+    if (pErr) return c.json({ error: pErr.message }, 400)
+
+    const nouveauMontantPaye = Math.min(cmd.total_ttc_xaf, cmd.montant_paye_xaf + body.montant_xaf)
+    await db.from('commandes').update({
+      montant_paye_xaf: nouveauMontantPaye,
+      updated_at:       new Date().toISOString(),
+    }).eq('id', id)
+
+    const soldeApres = Math.max(0, cmd.total_ttc_xaf - nouveauMontantPaye)
+
+    if (soldeApres <= 0) {
+      await notifyWhatsApp(
+        process.env.DIRECTEUR_WHATSAPP_PHONE ?? '',
+        `✅ Commande ${cmd.numero} soldée intégralement par ${cmd.client_nom}`,
+      )
+    }
+
+    return c.json({ paiement, montant_paye_xaf: nouveauMontantPaye, solde_restant_xaf: soldeApres }, 201)
+  },
+)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ROUTE PUBLIQUE — suivi commande client
 // ══════════════════════════════════════════════════════════════════════════════
 
 publicRouter.get('/api/commandes/public/:ref', async (c) => {
@@ -780,7 +1251,6 @@ publicRouter.get('/api/commandes/public/:ref', async (c) => {
     return c.json({ error: 'Référence introuvable', code: 'NOT_FOUND' }, 404)
   }
 
-  // Vue publique : pas d'infos financières sensibles
   const d = data as {
     numero: string; statut: string; client_nom: string
     date_commande: string; date_livraison_prevue: string | null
@@ -798,14 +1268,14 @@ publicRouter.get('/api/commandes/public/:ref', async (c) => {
   }
 
   return c.json({
-    reference:   d.numero,
-    statut:      d.statut,
-    statut_label: STATUT_LABELS[d.statut] ?? d.statut,
-    client:      d.client_nom,
-    date_commande: d.date_commande,
+    reference:             d.numero,
+    statut:                d.statut,
+    statut_label:          STATUT_LABELS[d.statut] ?? d.statut,
+    client:                d.client_nom,
+    date_commande:         d.date_commande,
     date_livraison_prevue: d.date_livraison_prevue,
-    articles:    d.commandes_lignes,
-    historique:  d.historique_commandes.sort(
+    articles:              d.commandes_lignes,
+    historique:            d.historique_commandes.sort(
       (a, b) => new Date(b.changed_at).getTime() - new Date(a.changed_at).getTime(),
     ),
     solde_restant_xaf: Math.max(0, d.total_ttc_xaf - d.acompte_recu_xaf),
@@ -830,7 +1300,6 @@ router.patch(
     const user   = c.get('user')
     const body   = c.req.valid('json')
 
-    // Charger la commande shop avec ses lignes
     const { data: commande, error: loadErr } = await db
       .from('commandes_shop')
       .select('*')
@@ -848,17 +1317,8 @@ router.patch(
       montant_ttc: number; erp_commande_id: string | null
     }
 
-    // ── Workflow : recue/confirmee → en_preparation ─────────────────────────
     if (body.statut_commande === 'en_preparation' &&
         ['recue', 'confirmee'].includes(cmd.statut_commande)) {
-
-      // Vérifier et déduire le stock pour chaque ligne
-      for (const ligne of cmd.lignes) {
-        // On ne peut pas déduire sans product_id — on vérifie dans commandes_lignes ERP
-        // si la commande ERP existe déjà, le stock sera géré là
-      }
-
-      // Créer un job de production si commande ERP liée
       if (cmd.erp_commande_id) {
         const today = new Date().toISOString()
         await db.from('jobs_production').insert({
@@ -872,7 +1332,6 @@ router.patch(
       }
     }
 
-    // ── Workflow : expediee → livree — générer la facture ──────────────────
     if (body.statut_commande === 'livree' && cmd.statut_commande === 'expediee') {
       if (cmd.erp_commande_id) {
         const today     = new Date().toISOString().split('T')[0]
@@ -895,7 +1354,6 @@ router.patch(
       }
     }
 
-    // ── Mise à jour du statut ───────────────────────────────────────────────
     const updates: Record<string, string> = {
       statut_commande: body.statut_commande,
       updated_at:      new Date().toISOString(),
@@ -911,7 +1369,6 @@ router.patch(
 
     if (error) return c.json({ error: error.message }, 400)
 
-    // Notification WhatsApp client si statut significatif
     void notifyStatutChange(
       {
         ref:              cmd.ref,
@@ -924,7 +1381,6 @@ router.patch(
       body.statut_commande,
     )
 
-    // Sync statut ERP si commande liée
     if (cmd.erp_commande_id) {
       const ERP_STATUT: Record<string, string> = {
         en_preparation: 'in_production',
@@ -953,4 +1409,4 @@ router.patch(
   },
 )
 
-export { router as commerceRouter, publicRouter as publicCommandesRouter }
+export { router as commerceRouter, publicRouter as publicCommandesRouter, publicDevisRouter }

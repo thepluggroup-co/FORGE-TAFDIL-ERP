@@ -796,7 +796,7 @@ export function CheckoutClient() {
 
     try {
       // ── 1. Créer la commande ─────────────────────────────────────────────────
-      const orderRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/shop/commandes`, {
+      const orderRes = await fetch(`/api/shop/commandes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -841,7 +841,7 @@ export function CheckoutClient() {
       }
 
       // ── 3. Mobile Money → initialiser le paiement Notchpay ──────────────────
-      const payRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/paiements/initier`, {
+      const payRes = await fetch(`/api/paiements/initier`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

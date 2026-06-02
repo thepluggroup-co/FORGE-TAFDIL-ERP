@@ -159,10 +159,34 @@ async function request<T>(method: string, path: string, body?: unknown, _retried
   }
 }
 
+// ── Upload multipart/form-data ─────────────────────────────────────────────
+async function requestForm<T>(path: string, form: FormData): Promise<T> {
+  const url        = `${API_BASE}${path}`
+  const controller = new AbortController()
+  const timer      = setTimeout(() => controller.abort(), 30_000)
+  try {
+    const token = _cachedToken ?? (await supabase.auth.getSession()).data.session?.access_token
+    const res   = await fetch(url, {
+      method:  'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body:    form,
+      signal:  controller.signal,
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({})) as { error?: string }
+      throw new Error(data.error ?? `Erreur ${res.status}`)
+    }
+    return res.json() as Promise<T>
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export const apiClient = {
-  get:    <T>(path: string)                => request<T>('GET',    path),
-  post:   <T>(path: string, body: unknown) => request<T>('POST',   path, body),
-  put:    <T>(path: string, body: unknown) => request<T>('PUT',    path, body),
-  patch:  <T>(path: string, body: unknown) => request<T>('PATCH',  path, body),
-  delete: <T>(path: string)               => request<T>('DELETE', path),
+  get:      <T>(path: string)                    => request<T>('GET',    path),
+  post:     <T>(path: string, body: unknown)     => request<T>('POST',   path, body),
+  put:      <T>(path: string, body: unknown)     => request<T>('PUT',    path, body),
+  patch:    <T>(path: string, body: unknown)     => request<T>('PATCH',  path, body),
+  delete:   <T>(path: string)                    => request<T>('DELETE', path),
+  postForm: <T>(path: string, form: FormData)    => requestForm<T>(path, form),
 }

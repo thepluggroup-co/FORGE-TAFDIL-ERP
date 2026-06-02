@@ -9,13 +9,41 @@ import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
 
+// ── Machines d'état ────────────────────────────────────────────────────────────
+
+const TRANSITIONS_JOB: Record<string, string[]> = {
+  confirmed:     ['in_production', 'cancelled'],
+  in_production: ['pret', 'cancelled'],
+  pret:          ['delivered', 'cancelled'],
+  delivered:     [],
+  cancelled:     [],
+}
+
+const TRANSITIONS_PROJET: Record<string, string[]> = {
+  planifie:  ['en_cours', 'annule'],
+  en_cours:  ['suspendu', 'livre', 'annule'],
+  suspendu:  ['en_cours', 'annule'],
+  livre:     [],
+  annule:    [],
+}
+
+const TRANSITIONS_LIVRAISON: Record<string, string[]> = {
+  confirmed:     ['pret', 'cancelled'],
+  pret:          ['delivered', 'cancelled'],
+  delivered:     [],
+  cancelled:     [],
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // PRODUCTION — JOBS
 // ══════════════════════════════════════════════════════════════════════════════
 
 const jobSchema = z.object({
+  commande_id:         z.string().optional(),
   produit_designation: z.string().min(1),
+  machine_id:          z.string().optional(),
   machine_nom:         z.string().optional(),
+  technicien_id:       z.string().optional(),
   technicien_nom:      z.string().optional(),
   date_debut:          z.string().optional(),
   date_fin_prevue:     z.string().optional(),
@@ -29,51 +57,346 @@ const jobStatutSchema = z.object({
   notes:           z.string().optional(),
 })
 
+const jobAvancementSchema = z.object({
+  avancement_pct: z.number().int().min(0).max(100),
+  notes:          z.string().optional(),
+})
+
 router.get('/production/jobs', async (c) => {
-  const { statut, search } = c.req.query()
+  const { statut, commande_id, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
   const from    = (page - 1) * perPage
 
   let q = db.from('jobs_production').select('*', { count: 'exact' })
-  if (statut) q = q.eq('statut', statut)
-  if (search) q = q.ilike('produit_designation', `%${search}%`)
+  if (statut)      q = q.eq('statut', statut)
+  if (commande_id) q = q.eq('commande_id', commande_id)
+  if (search)      q = q.ilike('produit_designation', `%${search}%`)
 
-  const { data, count, error } = await q.order('created_at', { ascending: false }).range(from, from + perPage - 1)
+  const { data, count, error } = await q
+    .order('created_at', { ascending: false })
+    .range(from, from + perPage - 1)
+
   if (error) return c.json({ error: error.message }, 500)
 
-  return c.json({ data, total: count ?? 0, page, per_page: perPage })
+  // Signaler les retards : date_fin_prevue dépassée et job pas encore livré
+  const today = new Date().toISOString().slice(0, 10)
+  const enriched = (data ?? []).map((j: Record<string, unknown>) => ({
+    ...j,
+    en_retard: j.date_fin_prevue && (j.date_fin_prevue as string) < today &&
+               !['delivered', 'cancelled'].includes(j.statut as string),
+  }))
+
+  return c.json({ data: enriched, total: count ?? 0, page, per_page: perPage })
+})
+
+router.get('/production/jobs/:id', async (c) => {
+  const { id } = c.req.param()
+  const { data, error } = await db
+    .from('jobs_production')
+    .select('*, commandes(numero, statut, client_nom)')
+    .eq('id', id)
+    .single()
+  if (error || !data) return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
+
+  const today = new Date().toISOString().slice(0, 10)
+  const j = data as Record<string, unknown>
+  return c.json({
+    ...j,
+    en_retard: j.date_fin_prevue && (j.date_fin_prevue as string) < today &&
+               !['delivered', 'cancelled'].includes(j.statut as string),
+  })
 })
 
 router.post('/production/jobs', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', jobSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
-  // Generate sequential job number
+  // ── Bloquer si la machine est en panne ou en maintenance ─────────────────
+  if (body.machine_id) {
+    const { data: machine } = await db
+      .from('machines')
+      .select('nom, statut')
+      .eq('id', body.machine_id)
+      .single()
+
+    if (machine) {
+      const m = machine as { nom: string; statut: string }
+      if (m.statut === 'panne') {
+        return c.json({
+          error: `Machine "${m.nom}" est en panne — assignation impossible`,
+          code:  'MACHINE_PANNE',
+        }, 422)
+      }
+      if (m.statut === 'maintenance') {
+        return c.json({
+          error: `Machine "${m.nom}" est en maintenance — assignation impossible`,
+          code:  'MACHINE_MAINTENANCE',
+        }, 422)
+      }
+    }
+  }
+
+  // Numéro séquentiel : JOB-YYYY-NNN
   const { count } = await db.from('jobs_production').select('*', { count: 'exact', head: true })
-  const year = new Date().getFullYear()
-  const num  = String((count ?? 0) + 1).padStart(3, '0')
-  const numero = `JOB-${year}-${num}`
+  const year      = new Date().getFullYear()
+  const numero    = `JOB-${year}-${String((count ?? 0) + 1).padStart(3, '0')}`
 
   const { data, error } = await db
     .from('jobs_production')
-    .insert({ ...body, numero, created_by: user.id, sync_status: 'synced' })
+    .insert({ ...body, numero, statut: 'confirmed', avancement_pct: 0, created_by: user.id, sync_status: 'synced' })
     .select().single()
 
   if (error) return c.json({ error: error.message, code: error.code }, 400)
   return c.json(data, 201)
 })
 
-router.patch('/production/jobs/:id/statut', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', jobStatutSchema), async (c) => {
-  const { id } = c.req.param()
-  const body   = c.req.valid('json')
+/**
+ * PATCH /production/jobs/:id/statut
+ * Transition validée par machine d'état.
+ * Si avancement_pct = 100 → statut passe à 'pret' automatiquement.
+ * Si statut = 'delivered' → date_fin_reelle capturée.
+ * Si commande liée et statut 'pret' → commande passe à 'pret'.
+ */
+router.patch(
+  '/production/jobs/:id/statut',
+  requireRole(['directeur', 'admin', 'operateur']),
+  zValidator('json', jobStatutSchema),
+  async (c) => {
+    const { id } = c.req.param()
+    const body   = c.req.valid('json')
+
+    const { data: existing } = await db
+      .from('jobs_production')
+      .select('statut, commande_id, numero, avancement_pct')
+      .eq('id', id)
+      .single()
+
+    if (!existing) return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
+
+    const ex       = existing as { statut: string; commande_id: string | null; numero: string; avancement_pct: number }
+    const allowed  = TRANSITIONS_JOB[ex.statut] ?? []
+
+    if (!allowed.includes(body.statut)) {
+      return c.json({
+        error: `Transition "${ex.statut}" → "${body.statut}" non autorisée`,
+        code:  'INVALID_TRANSITION',
+        transitions_autorisees: allowed,
+      }, 422)
+    }
+
+    const updates: Record<string, unknown> = {
+      statut:     body.statut,
+      updated_at: new Date().toISOString(),
+    }
+
+    if (body.avancement_pct !== undefined) updates.avancement_pct = body.avancement_pct
+    if (body.notes !== undefined)          updates.notes          = body.notes
+
+    // Capturer date_fin_reelle quand le job est livré ou prêt
+    if (['delivered', 'pret'].includes(body.statut) && !body.date_fin_reelle) {
+      updates.date_fin_reelle = new Date().toISOString().slice(0, 10)
+    } else if (body.date_fin_reelle) {
+      updates.date_fin_reelle = body.date_fin_reelle
+    }
+
+    // Quand pret → mettre avancement à 100%
+    if (body.statut === 'pret' || body.statut === 'delivered') {
+      updates.avancement_pct = 100
+    }
+
+    const { data, error } = await db
+      .from('jobs_production')
+      .update(updates)
+      .eq('id', id)
+      .select().single()
+
+    if (error) return c.json({ error: error.message }, 400)
+    if (!data)  return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
+
+    // ── Auto-transition commande liée ────────────────────────────────────
+    if (ex.commande_id) {
+      const COMMANDE_STATUT: Record<string, string | null> = {
+        in_production: 'in_production',
+        pret:          'pret',
+        delivered:     'delivered',
+        cancelled:     null,  // on ne ferme pas la commande auto depuis le job
+      }
+      const cStatut = COMMANDE_STATUT[body.statut]
+      if (cStatut) {
+        const { data: commande } = await db
+          .from('commandes')
+          .select('statut')
+          .eq('id', ex.commande_id)
+          .single()
+
+        if (commande) {
+          const TRANSITIONS_COMMANDE: Record<string, string[]> = {
+            confirmed:     ['in_production', 'cancelled'],
+            in_production: ['pret', 'cancelled'],
+            pret:          ['delivered', 'cancelled'],
+            delivered:     [],
+            cancelled:     [],
+          }
+          const cmdStatut  = (commande as { statut: string }).statut
+          const cmdAllowed = TRANSITIONS_COMMANDE[cmdStatut] ?? []
+          if (cmdAllowed.includes(cStatut)) {
+            await db.from('commandes')
+              .update({ statut: cStatut, updated_at: new Date().toISOString() })
+              .eq('id', ex.commande_id)
+            await db.from('historique_commandes').insert({
+              commande_id:    ex.commande_id,
+              ancien_statut:  cmdStatut,
+              nouveau_statut: cStatut,
+              commentaire:    `[Auto] Job ${ex.numero} passé à "${body.statut}"`,
+            })
+          }
+        }
+      }
+    }
+
+    return c.json(data)
+  },
+)
+
+/**
+ * PATCH /production/jobs/:id/avancement
+ * Met à jour l'avancement en %. Si 100% → transition auto vers 'pret'.
+ */
+router.patch(
+  '/production/jobs/:id/avancement',
+  requireRole(['directeur', 'admin', 'operateur']),
+  zValidator('json', jobAvancementSchema),
+  async (c) => {
+    const { id } = c.req.param()
+    const body   = c.req.valid('json')
+
+    const { data: existing } = await db
+      .from('jobs_production')
+      .select('statut, commande_id, numero')
+      .eq('id', id)
+      .single()
+
+    if (!existing) return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
+
+    const ex = existing as { statut: string; commande_id: string | null; numero: string }
+    if (['delivered', 'cancelled'].includes(ex.statut)) {
+      return c.json({
+        error: `Avancement ne peut pas être modifié sur un job en statut "${ex.statut}"`,
+        code: 'INVALID_TRANSITION',
+      }, 422)
+    }
+
+    const updates: Record<string, unknown> = {
+      avancement_pct: body.avancement_pct,
+      updated_at:     new Date().toISOString(),
+    }
+    if (body.notes) updates.notes = body.notes
+
+    // 100% → passer automatiquement à 'pret' si le job est en production
+    let nouveauStatut = ex.statut
+    if (body.avancement_pct === 100 && ex.statut === 'in_production') {
+      updates.statut          = 'pret'
+      updates.date_fin_reelle = new Date().toISOString().slice(0, 10)
+      nouveauStatut           = 'pret'
+    }
+
+    const { data, error } = await db
+      .from('jobs_production')
+      .update(updates)
+      .eq('id', id)
+      .select().single()
+
+    if (error) return c.json({ error: error.message }, 400)
+
+    // Auto-transition commande si job passe à 'pret'
+    if (nouveauStatut === 'pret' && ex.commande_id) {
+      const { data: commande } = await db
+        .from('commandes').select('statut').eq('id', ex.commande_id).single()
+      if (commande && (commande as { statut: string }).statut === 'in_production') {
+        await db.from('commandes')
+          .update({ statut: 'pret', updated_at: new Date().toISOString() })
+          .eq('id', ex.commande_id)
+        await db.from('historique_commandes').insert({
+          commande_id:    ex.commande_id,
+          ancien_statut:  'in_production',
+          nouveau_statut: 'pret',
+          commentaire:    `[Auto] Job ${ex.numero} à 100% — commande prête`,
+        })
+      }
+    }
+
+    return c.json(data)
+  },
+)
+
+// Historique de production enrichi d'une commande
+router.get('/production/historique/:commande_id', async (c) => {
+  const { commande_id } = c.req.param()
+
   const { data, error } = await db
     .from('jobs_production')
-    .update({ ...body, updated_at: new Date().toISOString() })
-    .eq('id', id).select().single()
-  if (error) return c.json({ error: error.message }, 400)
-  if (!data)  return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
-  return c.json(data)
+    .select(`
+      id, numero, produit_designation, statut, avancement_pct,
+      date_debut, date_fin_prevue, date_fin_reelle, notes,
+      created_at, updated_at,
+      machines(id, nom, type, statut),
+      employes(id, nom, poste)
+    `)
+    .eq('commande_id', commande_id)
+    .order('created_at', { ascending: true })
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  const today = new Date()
+
+  const enriched = (data ?? []).map((j: Record<string, unknown>) => {
+    const debut      = j.date_debut      ? new Date(j.date_debut as string)      : null
+    const finPrevue  = j.date_fin_prevue ? new Date(j.date_fin_prevue as string)  : null
+    const finReelle  = j.date_fin_reelle ? new Date(j.date_fin_reelle as string)  : null
+
+    const duree_prevue_h = debut && finPrevue
+      ? Math.round((finPrevue.getTime() - debut.getTime()) / 3600000 * 10) / 10
+      : null
+
+    const duree_reelle_h = debut && finReelle
+      ? Math.round((finReelle.getTime() - debut.getTime()) / 3600000 * 10) / 10
+      : null
+
+    const en_retard = finPrevue && !finReelle &&
+      !['delivered', 'cancelled'].includes(j.statut as string) &&
+      today > finPrevue
+
+    return {
+      ...j,
+      duree_prevue_h,
+      duree_reelle_h,
+      en_retard,
+      ecart_h: duree_prevue_h && duree_reelle_h
+        ? Math.round((duree_reelle_h - duree_prevue_h) * 10) / 10
+        : null,
+    }
+  })
+
+  // Récapitulatif
+  const total          = enriched.length
+  const termines       = enriched.filter(j => j.statut === 'delivered').length
+  const enRetard       = enriched.filter(j => j.en_retard).length
+  const avancementMoyen = total > 0
+    ? Math.round(enriched.reduce((s, j) => s + ((j.avancement_pct as number) ?? 0), 0) / total)
+    : 0
+
+  return c.json({
+    commande_id,
+    jobs:              enriched,
+    total,
+    recapitulatif: {
+      termines,
+      en_cours:         enriched.filter(j => j.statut === 'in_production').length,
+      en_retard:        enRetard,
+      avancement_moyen: avancementMoyen,
+    },
+  })
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -83,7 +406,9 @@ router.patch('/production/jobs/:id/statut', requireRole(['directeur', 'admin', '
 const projetSchema = z.object({
   nom:             z.string().min(1),
   description:     z.string().optional(),
+  client_id:       z.string().optional(),
   client_nom:      z.string().optional(),
+  chef_projet_id:  z.string().optional(),
   chef_projet_nom: z.string().optional(),
   budget_xaf:      z.number().min(0).default(0),
   date_debut:      z.string().optional(),
@@ -96,6 +421,18 @@ const projetStatutSchema = z.object({
   depense_xaf:    z.number().min(0).optional(),
 })
 
+const tacheSchema = z.object({
+  titre:          z.string().min(1),
+  description:    z.string().optional(),
+  responsable_id: z.string().optional(),
+  priorite:       z.enum(['basse', 'normale', 'haute', 'critique']).default('normale'),
+  date_echeance:  z.string().optional(),
+})
+
+const tacheStatutSchema = z.object({
+  statut: z.enum(['todo', 'en_cours', 'done', 'bloque']),
+})
+
 router.get('/projets', async (c) => {
   const { statut, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
@@ -106,19 +443,77 @@ router.get('/projets', async (c) => {
   if (statut) q = q.eq('statut', statut)
   if (search) q = q.ilike('nom', `%${search}%`)
 
-  const { data, count, error } = await q.order('created_at', { ascending: false }).range(from, from + perPage - 1)
+  const { data, count, error } = await q
+    .order('created_at', { ascending: false })
+    .range(from, from + perPage - 1)
+
   if (error) return c.json({ error: error.message }, 500)
 
-  return c.json({ data, total: count ?? 0, page, per_page: perPage })
+  // Enrichir avec alerte budget
+  const enriched = (data ?? []).map((p: Record<string, unknown>) => ({
+    ...p,
+    alerte_budget: (p.depense_xaf as number) > (p.budget_xaf as number) && (p.budget_xaf as number) > 0,
+  }))
+
+  return c.json({ data: enriched, total: count ?? 0, page, per_page: perPage })
+})
+
+router.get('/projets/:id', async (c) => {
+  const { id } = c.req.param()
+
+  const { data, error } = await db
+    .from('projets')
+    .select('*, taches_projet(*)')
+    .eq('id', id)
+    .single()
+
+  if (error || !data) return c.json({ error: 'Projet introuvable', code: 'NOT_FOUND' }, 404)
+
+  const p = data as Record<string, unknown>
+  return c.json({
+    ...p,
+    alerte_budget: (p.depense_xaf as number) > (p.budget_xaf as number) && (p.budget_xaf as number) > 0,
+  })
 })
 
 router.post('/projets', requireRole(['directeur', 'admin']), zValidator('json', projetSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
+
+  // Si client_id fourni, récupérer le nom du client
+  let client_nom = body.client_nom
+  if (body.client_id && !client_nom) {
+    const { data: client } = await db.from('clients').select('nom').eq('id', body.client_id).single()
+    client_nom = (client as { nom: string } | null)?.nom
+  }
+
+  // Si chef_projet_id fourni, récupérer le nom
+  let chef_projet_nom = body.chef_projet_nom
+  if (body.chef_projet_id && !chef_projet_nom) {
+    const { data: emp } = await db.from('employes').select('nom').eq('id', body.chef_projet_id).single()
+    chef_projet_nom = (emp as { nom: string } | null)?.nom
+  }
+
+  // Construire l'objet d'insertion en évitant les colonnes chef_projet_id / assistant_id
+  // qui peuvent ne pas exister si la migration 20260530_projets_equipe n'a pas été jouée.
+  const insertRow: Record<string, unknown> = {
+    nom:             body.nom,
+    description:     body.description ?? null,
+    client_id:       body.client_id   ?? null,
+    client_nom:      client_nom       ?? null,
+    chef_projet_nom: chef_projet_nom  ?? null,
+    budget_xaf:      body.budget_xaf  ?? 0,
+    date_debut:      body.date_debut  ?? null,
+    deadline:        body.deadline    ?? null,
+    created_by:      user.id,
+    sync_status:     'synced',
+  }
+
   const { data, error } = await db
     .from('projets')
-    .insert({ ...body, created_by: user.id, sync_status: 'synced' })
+    .insert(insertRow)
     .select().single()
+
   if (error) return c.json({ error: error.message, code: error.code }, 400)
   return c.json(data, 201)
 })
@@ -126,12 +521,226 @@ router.post('/projets', requireRole(['directeur', 'admin']), zValidator('json', 
 router.patch('/projets/:id/statut', requireRole(['directeur', 'admin']), zValidator('json', projetStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
+
+  const { data: existing } = await db.from('projets').select('statut, budget_xaf, depense_xaf').eq('id', id).single()
+  if (!existing) return c.json({ error: 'Projet introuvable', code: 'NOT_FOUND' }, 404)
+
+  const ex      = existing as { statut: string; budget_xaf: number; depense_xaf: number }
+  const allowed = TRANSITIONS_PROJET[ex.statut] ?? []
+
+  if (!allowed.includes(body.statut)) {
+    return c.json({
+      error: `Transition "${ex.statut}" → "${body.statut}" non autorisée`,
+      code:  'INVALID_TRANSITION',
+      transitions_autorisees: allowed,
+    }, 422)
+  }
+
+  const updates: Record<string, unknown> = { statut: body.statut, updated_at: new Date().toISOString() }
+  if (body.avancement_pct !== undefined) updates.avancement_pct = body.avancement_pct
+  if (body.depense_xaf    !== undefined) updates.depense_xaf    = body.depense_xaf
+
   const { data, error } = await db
-    .from('projets')
-    .update({ ...body, updated_at: new Date().toISOString() })
-    .eq('id', id).select().single()
+    .from('projets').update(updates).eq('id', id).select().single()
+
   if (error) return c.json({ error: error.message }, 400)
   if (!data)  return c.json({ error: 'Projet introuvable', code: 'NOT_FOUND' }, 404)
+
+  const p = data as Record<string, unknown>
+  const alerte_budget = (p.depense_xaf as number) > (p.budget_xaf as number) && (p.budget_xaf as number) > 0
+
+  return c.json({ ...data, alerte_budget })
+})
+
+// ── Tâches de projet ──────────────────────────────────────────────────────────
+
+router.get('/projets/:id/taches', async (c) => {
+  const { id } = c.req.param()
+
+  // Trier par priorité : critique → haute → normale → basse
+  const PRIORITE_ORDER: Record<string, number> = { critique: 0, haute: 1, normale: 2, basse: 3 }
+
+  const { data, error } = await db
+    .from('taches_projet')
+    .select('*')
+    .eq('projet_id', id)
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  const sorted = (data ?? []).sort((a: Record<string, unknown>, b: Record<string, unknown>) =>
+    (PRIORITE_ORDER[a.priorite as string] ?? 99) - (PRIORITE_ORDER[b.priorite as string] ?? 99)
+  )
+
+  return c.json({ data: sorted, total: sorted.length })
+})
+
+router.post('/projets/:id/taches', requireRole(['directeur', 'admin']), zValidator('json', tacheSchema), async (c) => {
+  const { id }  = c.req.param()
+  const body    = c.req.valid('json')
+
+  // Bloquer la création de tâche si le projet est suspendu ou annulé
+  const { data: projet } = await db.from('projets').select('statut').eq('id', id).single()
+  if (!projet) return c.json({ error: 'Projet introuvable', code: 'NOT_FOUND' }, 404)
+
+  const p = projet as { statut: string }
+  if (['suspendu', 'annule'].includes(p.statut)) {
+    return c.json({
+      error: `Projet "${p.statut}" — création de tâche impossible`,
+      code:  'PROJET_BLOQUE',
+    }, 422)
+  }
+
+  const { data, error } = await db
+    .from('taches_projet')
+    .insert({ ...body, projet_id: id, statut: 'todo' })
+    .select().single()
+
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+  return c.json(data, 201)
+})
+
+router.patch('/projets/:projetId/taches/:tacheId/statut', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', tacheStatutSchema), async (c) => {
+  const { projetId, tacheId } = c.req.param()
+  const body = c.req.valid('json')
+
+  // Bloquer les mises à jour si le projet est suspendu
+  const { data: projet } = await db.from('projets').select('statut').eq('id', projetId).single()
+  if (!projet) return c.json({ error: 'Projet introuvable', code: 'NOT_FOUND' }, 404)
+
+  if ((projet as { statut: string }).statut === 'suspendu') {
+    return c.json({
+      error: 'Projet suspendu — mises à jour de tâches bloquées',
+      code:  'PROJET_SUSPENDU',
+    }, 422)
+  }
+
+  const { data, error } = await db
+    .from('taches_projet')
+    .update({ statut: body.statut, updated_at: new Date().toISOString() })
+    .eq('id', tacheId)
+    .eq('projet_id', projetId)
+    .select().single()
+
+  if (error) return c.json({ error: error.message }, 400)
+  if (!data)  return c.json({ error: 'Tâche introuvable', code: 'NOT_FOUND' }, 404)
+
+  // Recalculer avancement du projet : % de tâches done
+  const { data: toutesTouches } = await db
+    .from('taches_projet')
+    .select('statut')
+    .eq('projet_id', projetId)
+
+  if (toutesTouches && toutesTouches.length > 0) {
+    const done  = toutesTouches.filter((t: { statut: string }) => t.statut === 'done').length
+    const total = toutesTouches.length
+    const avancement_pct = Math.round((done / total) * 100)
+    await db.from('projets')
+      .update({ avancement_pct, updated_at: new Date().toISOString() })
+      .eq('id', projetId)
+  }
+
+  return c.json(data)
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PROJETS — MEMBRES D'ÉQUIPE (PRJ03)
+// ══════════════════════════════════════════════════════════════════════════════
+
+const membreSchema = z.object({
+  employe_id:        z.string(),
+  role_projet:       z.enum(['chef_projet', 'assistant', 'technicien', 'stagiaire', 'sous_traitant']).default('technicien'),
+  date_debut:        z.string().optional(),
+  date_fin:          z.string().optional(),
+  heures_planifiees: z.number().min(0).default(0),
+})
+
+const membreHeuresSchema = z.object({
+  heures_reelles: z.number().min(0),
+})
+
+router.get('/projets/:id/membres', async (c) => {
+  const { id } = c.req.param()
+
+  const { data, error } = await db
+    .from('projets_membres')
+    .select('*, employes(id, nom, poste, departement, telephone)')
+    .eq('projet_id', id)
+    .order('role_projet')
+
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data: data ?? [], total: (data ?? []).length })
+})
+
+router.post('/projets/:id/membres', requireRole(['directeur', 'admin']), zValidator('json', membreSchema), async (c) => {
+  const { id }  = c.req.param()
+  const user    = c.get('user')
+  const body    = c.req.valid('json')
+
+  const { data: projet } = await db.from('projets').select('statut').eq('id', id).single()
+  if (!projet) return c.json({ error: 'Projet introuvable', code: 'NOT_FOUND' }, 404)
+
+  if ((projet as { statut: string }).statut === 'annule') {
+    return c.json({ error: 'Projet annulé — ajout de membres impossible', code: 'PROJET_ANNULE' }, 422)
+  }
+
+  // Vérifier que l'employé existe
+  const { data: emp } = await db.from('employes').select('nom').eq('id', body.employe_id).single()
+  if (!emp) return c.json({ error: 'Employé introuvable', code: 'EMP_NOT_FOUND' }, 404)
+
+  const { data, error } = await db
+    .from('projets_membres')
+    .upsert(
+      { ...body, projet_id: id, created_by: user.id },
+      { onConflict: 'projet_id,employe_id' },
+    )
+    .select('*, employes(nom, poste)').single()
+
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+
+  // Si c'est un chef_projet → mettre à jour chef_projet_id sur le projet
+  if (body.role_projet === 'chef_projet') {
+    await db.from('projets').update({
+      chef_projet_id:  body.employe_id,
+      chef_projet_nom: (emp as { nom: string }).nom,
+      updated_at:      new Date().toISOString(),
+    }).eq('id', id)
+  }
+  if (body.role_projet === 'assistant') {
+    await db.from('projets').update({
+      assistant_id: body.employe_id,
+      updated_at:   new Date().toISOString(),
+    }).eq('id', id)
+  }
+
+  return c.json(data, 201)
+})
+
+router.delete('/projets/:id/membres/:employe_id', requireRole(['directeur', 'admin']), async (c) => {
+  const { id, employe_id } = c.req.param()
+
+  const { error } = await db
+    .from('projets_membres')
+    .delete()
+    .eq('projet_id', id)
+    .eq('employe_id', employe_id)
+
+  if (error) return c.json({ error: error.message }, 400)
+  return c.body(null, 204)
+})
+
+router.patch('/projets/:id/membres/:employe_id/heures', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', membreHeuresSchema), async (c) => {
+  const { id, employe_id } = c.req.param()
+  const body = c.req.valid('json')
+
+  const { data, error } = await db
+    .from('projets_membres')
+    .update({ heures_reelles: body.heures_reelles })
+    .eq('projet_id', id)
+    .eq('employe_id', employe_id)
+    .select().single()
+
+  if (error) return c.json({ error: error.message }, 400)
+  if (!data)  return c.json({ error: 'Membre introuvable', code: 'NOT_FOUND' }, 404)
   return c.json(data)
 })
 
@@ -140,6 +749,8 @@ router.patch('/projets/:id/statut', requireRole(['directeur', 'admin']), zValida
 // ══════════════════════════════════════════════════════════════════════════════
 
 const livraisonSchema = z.object({
+  commande_id:             z.string().optional(),
+  client_id:               z.string().optional(),
   client_nom:              z.string().min(1),
   destination:             z.string().min(1),
   transporteur:            z.string().optional(),
@@ -149,7 +760,7 @@ const livraisonSchema = z.object({
 })
 
 const livraisonStatutSchema = z.object({
-  statut:                z.enum(['confirmed', 'in_production', 'pret', 'delivered', 'cancelled']),
+  statut:                z.enum(['confirmed', 'pret', 'delivered', 'cancelled']),
   date_livraison_reelle: z.string().optional(),
   notes:                 z.string().optional(),
 })
@@ -162,11 +773,13 @@ router.get('/logistique/livraisons', async (c) => {
 
   let q = db.from('livraisons').select('*', { count: 'exact' })
   if (statut) q = q.eq('statut', statut)
-  if (search) q = q.ilike('client_nom', `%${search}%`)
+  if (search) q = q.or(`client_nom.ilike.%${search}%,numero.ilike.%${search}%`)
 
-  const { data, count, error } = await q.order('created_at', { ascending: false }).range(from, from + perPage - 1)
+  const { data, count, error } = await q
+    .order('created_at', { ascending: false })
+    .range(from, from + perPage - 1)
+
   if (error) return c.json({ error: error.message }, 500)
-
   return c.json({ data, total: count ?? 0, page, per_page: perPage })
 })
 
@@ -174,14 +787,35 @@ router.post('/logistique/livraisons', requireRole(['directeur', 'admin', 'operat
   const user = c.get('user')
   const body = c.req.valid('json')
 
+  // Si commande_id fourni, copier les données client automatiquement
+  let client_nom = body.client_nom
+  let client_id  = body.client_id
+  if (body.commande_id) {
+    const { data: commande } = await db
+      .from('commandes')
+      .select('client_id, client_nom')
+      .eq('id', body.commande_id)
+      .single()
+    if (commande) {
+      const cmd = commande as { client_id: string | null; client_nom: string }
+      client_id  = client_id  ?? cmd.client_id ?? undefined
+      client_nom = client_nom ?? cmd.client_nom
+    }
+  }
+
+  // Si client_id fourni mais pas de nom, le récupérer
+  if (client_id && !client_nom) {
+    const { data: client } = await db.from('clients').select('nom').eq('id', client_id).single()
+    client_nom = (client as { nom: string } | null)?.nom ?? client_nom
+  }
+
   const { count } = await db.from('livraisons').select('*', { count: 'exact', head: true })
-  const year = new Date().getFullYear()
-  const num  = String((count ?? 0) + 1).padStart(3, '0')
-  const numero = `LIV-${year}-${num}`
+  const year      = new Date().getFullYear()
+  const numero    = `LIV-${year}-${String((count ?? 0) + 1).padStart(3, '0')}`
 
   const { data, error } = await db
     .from('livraisons')
-    .insert({ ...body, numero, created_by: user.id, sync_status: 'synced' })
+    .insert({ ...body, numero, client_id: client_id ?? null, client_nom, created_by: user.id, sync_status: 'synced' })
     .select().single()
 
   if (error) return c.json({ error: error.message, code: error.code }, 400)
@@ -191,12 +825,61 @@ router.post('/logistique/livraisons', requireRole(['directeur', 'admin', 'operat
 router.patch('/logistique/livraisons/:id/statut', requireRole(['directeur', 'admin', 'operateur']), zValidator('json', livraisonStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
-  const { data, error } = await db
+
+  const { data: existing } = await db
     .from('livraisons')
-    .update({ ...body, updated_at: new Date().toISOString() })
-    .eq('id', id).select().single()
+    .select('statut, commande_id')
+    .eq('id', id)
+    .single()
+
+  if (!existing) return c.json({ error: 'Livraison introuvable', code: 'NOT_FOUND' }, 404)
+
+  const ex      = existing as { statut: string; commande_id: string | null }
+  const allowed = TRANSITIONS_LIVRAISON[ex.statut] ?? []
+
+  if (!allowed.includes(body.statut)) {
+    return c.json({
+      error: `Transition "${ex.statut}" → "${body.statut}" non autorisée`,
+      code:  'INVALID_TRANSITION',
+      transitions_autorisees: allowed,
+    }, 422)
+  }
+
+  const updates: Record<string, unknown> = {
+    statut:     body.statut,
+    updated_at: new Date().toISOString(),
+  }
+  if (body.notes) updates.notes = body.notes
+
+  // Capturer la date de livraison réelle automatiquement
+  if (body.statut === 'delivered') {
+    updates.date_livraison_reelle = body.date_livraison_reelle ?? new Date().toISOString().slice(0, 10)
+  }
+
+  const { data, error } = await db
+    .from('livraisons').update(updates).eq('id', id).select().single()
+
   if (error) return c.json({ error: error.message }, 400)
   if (!data)  return c.json({ error: 'Livraison introuvable', code: 'NOT_FOUND' }, 404)
+
+  // Transition auto de la commande liée si livraison delivered
+  // (les livraisons annulées ne ferment PAS automatiquement la commande)
+  if (body.statut === 'delivered' && ex.commande_id) {
+    const { data: commande } = await db
+      .from('commandes').select('statut').eq('id', ex.commande_id).single()
+    if (commande && (commande as { statut: string }).statut === 'pret') {
+      await db.from('commandes')
+        .update({ statut: 'delivered', updated_at: new Date().toISOString() })
+        .eq('id', ex.commande_id)
+      await db.from('historique_commandes').insert({
+        commande_id:    ex.commande_id,
+        ancien_statut:  'pret',
+        nouveau_statut: 'delivered',
+        commentaire:    `[Auto] Livraison ${id} confirmée`,
+      })
+    }
+  }
+
   return c.json(data)
 })
 
@@ -230,9 +913,11 @@ router.get('/marketing/campagnes', async (c) => {
   if (statut) q = q.eq('statut', statut)
   if (search) q = q.ilike('nom', `%${search}%`)
 
-  const { data, count, error } = await q.order('created_at', { ascending: false }).range(from, from + perPage - 1)
-  if (error) return c.json({ error: error.message }, 500)
+  const { data, count, error } = await q
+    .order('created_at', { ascending: false })
+    .range(from, from + perPage - 1)
 
+  if (error) return c.json({ error: error.message }, 500)
   return c.json({ data, total: count ?? 0, page, per_page: perPage })
 })
 
@@ -263,6 +948,13 @@ router.patch('/marketing/campagnes/:id/statut', requireRole(['directeur', 'admin
 // SÉCURITÉ — INCIDENTS
 // ══════════════════════════════════════════════════════════════════════════════
 
+const TRANSITIONS_INCIDENT: Record<string, string[]> = {
+  ouvert:  ['traite'],
+  traite:  ['corrige'],
+  corrige: ['resolu'],
+  resolu:  [],
+}
+
 const incidentSchema = z.object({
   type:           z.string().min(1),
   description:    z.string().min(1),
@@ -274,7 +966,7 @@ const incidentSchema = z.object({
 const incidentStatutSchema = z.object({
   statut:               z.enum(['ouvert', 'traite', 'corrige', 'resolu']),
   date_resolution:      z.string().optional(),
-  actions_correctrices: z.string().optional(),
+  actions_correctives:  z.string().optional(),
 })
 
 router.get('/securite/incidents', async (c) => {
@@ -287,9 +979,11 @@ router.get('/securite/incidents', async (c) => {
   if (statut) q = q.eq('statut', statut)
   if (search) q = q.ilike('description', `%${search}%`)
 
-  const { data, count, error } = await q.order('created_at', { ascending: false }).range(from, from + perPage - 1)
-  if (error) return c.json({ error: error.message }, 500)
+  const { data, count, error } = await q
+    .order('created_at', { ascending: false })
+    .range(from, from + perPage - 1)
 
+  if (error) return c.json({ error: error.message }, 500)
   return c.json({ data, total: count ?? 0, page, per_page: perPage })
 })
 
@@ -298,7 +992,7 @@ router.post('/securite/incidents', requireRole(['directeur', 'admin', 'operateur
   const body = c.req.valid('json')
   const { data, error } = await db
     .from('incidents_securite')
-    .insert({ ...body, created_by: user.id, sync_status: 'synced' })
+    .insert({ ...body, statut: 'ouvert', created_by: user.id, sync_status: 'synced' })
     .select().single()
   if (error) return c.json({ error: error.message, code: error.code }, 400)
   return c.json(data, 201)
@@ -307,13 +1001,275 @@ router.post('/securite/incidents', requireRole(['directeur', 'admin', 'operateur
 router.patch('/securite/incidents/:id/statut', requireRole(['directeur', 'admin']), zValidator('json', incidentStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
+
+  const { data: existing } = await db
+    .from('incidents_securite').select('statut').eq('id', id).single()
+  if (!existing) return c.json({ error: 'Incident introuvable', code: 'NOT_FOUND' }, 404)
+
+  const ex      = existing as { statut: string }
+  const allowed = TRANSITIONS_INCIDENT[ex.statut] ?? []
+
+  if (!allowed.includes(body.statut)) {
+    return c.json({
+      error: `Transition "${ex.statut}" → "${body.statut}" non autorisée`,
+      code:  'INVALID_TRANSITION',
+      transitions_autorisees: allowed,
+    }, 422)
+  }
+
+  const updates: Record<string, unknown> = {
+    statut:     body.statut,
+    updated_at: new Date().toISOString(),
+  }
+  if (body.date_resolution)     updates.date_resolution    = body.date_resolution
+  if (body.actions_correctives) updates.actions_correctives = body.actions_correctives
+
+  // Capturer la date de résolution automatiquement
+  if (body.statut === 'resolu' && !body.date_resolution) {
+    updates.date_resolution = new Date().toISOString().slice(0, 10)
+  }
+
   const { data, error } = await db
-    .from('incidents_securite')
-    .update({ ...body, updated_at: new Date().toISOString() })
-    .eq('id', id).select().single()
+    .from('incidents_securite').update(updates).eq('id', id).select().single()
   if (error) return c.json({ error: error.message }, 400)
   if (!data)  return c.json({ error: 'Incident introuvable', code: 'NOT_FOUND' }, 404)
   return c.json(data)
+})
+
+// ── EPI — contrainte conformes ≤ total ────────────────────────────────────────
+
+const epiSchema = z.object({
+  designation:          z.string().min(1),
+  total:                z.number().int().min(0),
+  conformes:            z.number().int().min(0),
+  derniere_verification: z.string().optional(),
+  notes:                z.string().optional(),
+})
+
+router.get('/securite/epi', async (c) => {
+  const { data, error } = await db
+    .from('epi_items').select('*').order('designation')
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data: data ?? [], total: (data ?? []).length })
+})
+
+router.post('/securite/epi', requireRole(['directeur', 'admin']), zValidator('json', epiSchema), async (c) => {
+  const body = c.req.valid('json')
+
+  if (body.conformes > body.total) {
+    return c.json({
+      error: `conformes (${body.conformes}) ne peut pas dépasser total (${body.total})`,
+      code:  'INVALID_EPI_COUNT',
+    }, 422)
+  }
+
+  const { data, error } = await db.from('epi_items').insert(body).select().single()
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+  return c.json(data, 201)
+})
+
+router.put('/securite/epi/:id', requireRole(['directeur', 'admin']), zValidator('json', epiSchema.partial()), async (c) => {
+  const { id } = c.req.param()
+  const body   = c.req.valid('json')
+
+  if (body.conformes !== undefined && body.total !== undefined && body.conformes > body.total) {
+    return c.json({
+      error: `conformes (${body.conformes}) ne peut pas dépasser total (${body.total})`,
+      code:  'INVALID_EPI_COUNT',
+    }, 422)
+  }
+
+  // Si seulement conformes fourni, vérifier par rapport au total existant
+  if (body.conformes !== undefined && body.total === undefined) {
+    const { data: existing } = await db.from('epi_items').select('total').eq('id', id).single()
+    if (existing && body.conformes > (existing as { total: number }).total) {
+      return c.json({
+        error: `conformes (${body.conformes}) dépasse le total actuel (${(existing as { total: number }).total})`,
+        code:  'INVALID_EPI_COUNT',
+      }, 422)
+    }
+  }
+
+  const { data, error } = await db
+    .from('epi_items')
+    .update({ ...body, updated_at: new Date().toISOString() })
+    .eq('id', id).select().single()
+
+  if (error) return c.json({ error: error.message }, 400)
+  if (!data)  return c.json({ error: 'EPI introuvable', code: 'NOT_FOUND' }, 404)
+  return c.json(data)
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PROJETS — RESSOURCES (main-d'œuvre, intrants, consommables, équipements)
+// ══════════════════════════════════════════════════════════════════════════════
+
+const ressourceSchema = z.object({
+  type:              z.enum(['main_oeuvre', 'intrant', 'consommable', 'equipement', 'sous_traitant']).default('main_oeuvre'),
+  designation:       z.string().min(1),
+  employe_id:        z.string().optional(),
+  produit_id:        z.string().optional(),
+  equipement_id:     z.string().optional(),
+  quantite:          z.number().positive().default(1),
+  unite:             z.string().default('unité'),
+  cout_unitaire_xaf: z.number().min(0).default(0),
+  statut:            z.enum(['planifie', 'disponible', 'en_cours', 'utilise', 'manquant']).default('planifie'),
+  notes:             z.string().optional(),
+})
+
+router.get('/projets/:id/ressources', async (c) => {
+  const { id } = c.req.param()
+  const type   = c.req.query('type')
+
+  let q = db
+    .from('projets_ressources')
+    .select('*, employes(id, nom, poste), produits(id, designation, unite), equipements(id, code, designation)')
+    .eq('projet_id', id)
+
+  if (type) q = q.eq('type', type)
+
+  const { data, error } = await q.order('type').order('created_at')
+  if (error) return c.json({ error: error.message }, 500)
+
+  const ressources = data ?? []
+  // Calcul totaux par type
+  type RessourceRow = {
+    type: string; quantite: number; cout_unitaire_xaf: number
+  }
+  const totalCout = ressources.reduce(
+    (s: number, r: RessourceRow) => s + r.quantite * r.cout_unitaire_xaf, 0
+  )
+
+  return c.json({ data: ressources, total: ressources.length, total_cout_xaf: Math.round(totalCout) })
+})
+
+router.post('/projets/:id/ressources', requireRole(['directeur', 'admin']), zValidator('json', ressourceSchema), async (c) => {
+  const { id }  = c.req.param()
+  const user    = c.get('user')
+  const body    = c.req.valid('json')
+
+  const { data: projet } = await db.from('projets').select('statut').eq('id', id).single()
+  if (!projet) return c.json({ error: 'Projet introuvable', code: 'NOT_FOUND' }, 404)
+  if ((projet as { statut: string }).statut === 'annule') {
+    return c.json({ error: 'Projet annulé — ajout de ressources impossible', code: 'PROJET_ANNULE' }, 422)
+  }
+
+  // Si employe_id fourni sans désignation → utiliser le nom de l'employé
+  let designation = body.designation
+  if (body.type === 'main_oeuvre' && body.employe_id && !designation) {
+    const { data: emp } = await db.from('employes').select('nom, poste').eq('id', body.employe_id).single()
+    if (emp) designation = `${(emp as { nom: string }).nom} — ${(emp as { poste: string }).poste}`
+  }
+
+  // Si produit_id → récupérer désignation et prix unitaire si non fournis
+  let coutUnitaire = body.cout_unitaire_xaf
+  if (body.produit_id && coutUnitaire === 0) {
+    const { data: prod } = await db.from('produits').select('designation, prix_unitaire_xaf').eq('id', body.produit_id).single()
+    if (prod) {
+      if (!designation || designation === body.produit_id) {
+        designation = (prod as { designation: string }).designation
+      }
+      coutUnitaire = (prod as { prix_unitaire_xaf: number }).prix_unitaire_xaf ?? 0
+    }
+  }
+
+  // Si equipement_id → récupérer désignation
+  if (body.equipement_id && (!designation || designation === body.equipement_id)) {
+    const { data: eq } = await db.from('equipements').select('designation, code').eq('id', body.equipement_id).single()
+    if (eq) designation = `${(eq as { code: string }).code} — ${(eq as { designation: string }).designation}`
+  }
+
+  const { data, error } = await db
+    .from('projets_ressources')
+    .insert({
+      projet_id:         id,
+      type:              body.type,
+      designation,
+      employe_id:        body.employe_id    ?? null,
+      produit_id:        body.produit_id    ?? null,
+      equipement_id:     body.equipement_id ?? null,
+      quantite:          body.quantite,
+      unite:             body.unite,
+      cout_unitaire_xaf: coutUnitaire,
+      statut:            body.statut,
+      notes:             body.notes ?? null,
+      created_by:        user.id,
+    })
+    .select('*, employes(nom, poste), produits(designation), equipements(code, designation)')
+    .single()
+
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+
+  // Mise à jour du coût total du projet (dépense_xaf) si ressource utilisée
+  if (body.statut === 'utilise') {
+    const { data: allRes } = await db
+      .from('projets_ressources')
+      .select('quantite, cout_unitaire_xaf, statut')
+      .eq('projet_id', id)
+
+    type RRow = { quantite: number; cout_unitaire_xaf: number; statut: string }
+    const depense = ((allRes ?? []) as RRow[])
+      .filter((r) => r.statut === 'utilise')
+      .reduce((s, r) => s + r.quantite * r.cout_unitaire_xaf, 0)
+
+    await db.from('projets').update({
+      depense_xaf: Math.round(depense),
+      updated_at:  new Date().toISOString(),
+    }).eq('id', id)
+  }
+
+  return c.json(data, 201)
+})
+
+router.patch('/projets/:id/ressources/:rid/statut', requireRole(['directeur', 'admin', 'operateur']), async (c) => {
+  const { id, rid } = c.req.param()
+  const body = await c.req.json<{ statut: string; notes?: string }>()
+
+  const validStatuts = ['planifie', 'disponible', 'en_cours', 'utilise', 'manquant']
+  if (!validStatuts.includes(body.statut)) {
+    return c.json({ error: 'Statut invalide', code: 'INVALID_STATUS' }, 422)
+  }
+
+  const { data, error } = await db
+    .from('projets_ressources')
+    .update({ statut: body.statut, ...(body.notes ? { notes: body.notes } : {}) })
+    .eq('id', rid)
+    .eq('projet_id', id)
+    .select().single()
+
+  if (error) return c.json({ error: error.message }, 400)
+  if (!data)  return c.json({ error: 'Ressource introuvable', code: 'NOT_FOUND' }, 404)
+
+  // Recalculer depense_xaf si statut passe à 'utilise'
+  if (body.statut === 'utilise') {
+    const { data: allRes } = await db
+      .from('projets_ressources')
+      .select('quantite, cout_unitaire_xaf, statut')
+      .eq('projet_id', id)
+
+    type RRow = { quantite: number; cout_unitaire_xaf: number; statut: string }
+    const depense = ((allRes ?? []) as RRow[])
+      .filter((r) => r.statut === 'utilise')
+      .reduce((s, r) => s + r.quantite * r.cout_unitaire_xaf, 0)
+
+    await db.from('projets').update({
+      depense_xaf: Math.round(depense),
+      updated_at:  new Date().toISOString(),
+    }).eq('id', id)
+  }
+
+  return c.json(data)
+})
+
+router.delete('/projets/:id/ressources/:rid', requireRole(['directeur', 'admin']), async (c) => {
+  const { id, rid } = c.req.param()
+  const { error } = await db
+    .from('projets_ressources')
+    .delete()
+    .eq('id', rid)
+    .eq('projet_id', id)
+  if (error) return c.json({ error: error.message }, 400)
+  return c.body(null, 204)
 })
 
 export { router as operationsRouter }

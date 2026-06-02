@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   FileText, ReceiptText,
   Plus, Download, MessageCircle, Printer,
   AlertCircle, CheckCircle, ChevronLeft, ChevronRight, X,
+  Phone, Paperclip, ExternalLink, Loader2, Trash2,
 } from 'lucide-react'
 import { PageHeader, DataTable, StatusBadge, Button, Modal, SlideOver } from '@forge/ui'
 import type { Column } from '@forge/ui'
@@ -14,6 +15,8 @@ import {
 import type { Facture as FactureApi, Credit as CreditApi, FactureLigne } from '@/hooks/useFinance'
 import { useClients } from '@/hooks/useClients'
 import { useCommandes } from '@/hooks/useCommandes'
+import { apiClient } from '@/lib/api-client'
+import { toast } from 'sonner'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -532,6 +535,149 @@ function NouvelleFactureSlideOver({
   )
 }
 
+// ── Relance WhatsApp Modal (Gap 2 CDC MOD-04) ──────────────────────────────────
+
+function RelanceModal({ isOpen, onClose, credit }: { isOpen: boolean; onClose: () => void; credit: CreditRecord | null }) {
+  const [waUrl, setWaUrl]     = useState('')
+  const [message, setMessage] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!isOpen || !credit) return
+    setLoading(true)
+    apiClient.get(`/finance/credits/${credit.id}/relance-url`)
+      .then((res: { url: string; message: string }) => {
+        setWaUrl(res.url)
+        setMessage(res.message)
+      })
+      .catch(() => toast.error('Impossible de générer le lien de relance'))
+      .finally(() => setLoading(false))
+  }, [isOpen, credit?.id])
+
+  if (!credit) return null
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Relancer le client par WhatsApp" size="sm">
+      <div className="space-y-4">
+        <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+          <div className="text-sm font-semibold text-green-800">{credit.client_nom as string}</div>
+          <div className="text-xs text-green-700 mt-0.5">Solde restant : <span className="font-bold">{(credit.solde_restant_xaf as number).toLocaleString('fr-CM')} XAF</span></div>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Message de relance</label>
+          <textarea
+            value={message}
+            onChange={(e) => {
+              const encoded = encodeURIComponent(e.target.value)
+              const base = waUrl.split('?text=')[0]
+              setMessage(e.target.value)
+              setWaUrl(`${base}?text=${encoded}`)
+            }}
+            rows={6}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500/30 resize-none"
+          />
+        </div>
+        <div className="flex gap-2 justify-end pt-2">
+          <Button variant="ghost" onClick={onClose}>Annuler</Button>
+          <Button
+            disabled={loading || !waUrl}
+            onClick={() => { window.open(waUrl, '_blank'); onClose() }}
+            style={{ backgroundColor: '#25D366', borderColor: '#25D366' }}
+          >
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Phone className="h-3.5 w-3.5" />}
+            Ouvrir WhatsApp
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ── Documents justificatifs Modal (Gap 5 CDC MOD-04) ──────────────────────────
+
+interface DocItem { id: string; nom_fichier: string; url: string; taille_bytes: number; created_at: string }
+
+function DocumentsModal({ isOpen, onClose, credit }: { isOpen: boolean; onClose: () => void; credit: CreditRecord | null }) {
+  const [docs, setDocs]         = useState<DocItem[]>([])
+  const [loading, setLoading]   = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const loadDocs = () => {
+    if (!credit) return
+    setLoading(true)
+    apiClient.get(`/finance/credits/${credit.id}/documents`)
+      .then((res: { data: DocItem[] }) => setDocs(res.data ?? []))
+      .catch(() => toast.error('Erreur lors du chargement des documents'))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => { if (isOpen && credit) loadDocs() }, [isOpen, credit?.id])
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !credit) return
+    setUploading(true)
+    const form = new FormData()
+    form.append('file', file)
+    try {
+      await apiClient.postForm(`/finance/credits/${credit.id}/documents`, form)
+      toast.success('Document ajouté')
+      loadDocs()
+    } catch {
+      toast.error('Erreur lors du téléversement')
+    } finally {
+      setUploading(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  if (!credit) return null
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Documents justificatifs" size="sm">
+      <div className="space-y-4">
+        <div className="text-xs text-gray-500">Crédit : <span className="font-semibold text-gray-700">{credit.numero as string}</span> — {credit.client_nom as string}</div>
+
+        {loading ? (
+          <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-gray-400" /></div>
+        ) : docs.length === 0 ? (
+          <div className="border border-dashed border-gray-200 rounded-xl p-6 text-center">
+            <Paperclip className="h-6 w-6 text-gray-300 mx-auto mb-2" />
+            <p className="text-sm text-gray-400">Aucun document joint</p>
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-48 overflow-y-auto">
+            {docs.map((doc) => (
+              <div key={doc.id} className="flex items-center justify-between p-2.5 border border-gray-100 rounded-lg">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Paperclip className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                  <span className="text-sm truncate font-medium">{doc.nom_fichier}</span>
+                  <span className="text-xs text-gray-400 shrink-0">{Math.round(doc.taille_bytes / 1024)} Ko</span>
+                </div>
+                <a href={doc.url} target="_blank" rel="noopener noreferrer"
+                  className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-[#C62828] shrink-0">
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 pt-2">
+          <input ref={fileRef} type="file" className="hidden" onChange={handleUpload}
+            accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" />
+          <Button variant="ghost" onClick={() => fileRef.current?.click()} disabled={uploading}>
+            {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+            Ajouter un document
+          </Button>
+          <Button variant="ghost" onClick={onClose}>Fermer</Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 // ── Remboursement Modal ────────────────────────────────────────────────────────
 
 function RemboursementModal({ isOpen, onClose, credit }: { isOpen: boolean; onClose: () => void; credit: CreditRecord | null }) {
@@ -550,52 +696,83 @@ function RemboursementModal({ isOpen, onClose, credit }: { isOpen: boolean; onCl
 
   if (!credit) return null
 
+  const [success, setSuccess] = useState(false)
+
+  useEffect(() => { if (isOpen) setSuccess(false) }, [isOpen])
+
   const handleSubmit = () => {
     const montantFinal = type === 'total' ? (credit.solde_restant_xaf as number) : Number(montant)
-    rembourser.mutate({ id: credit.id, montant: montantFinal }, { onSuccess: onClose })
+    rembourser.mutate(
+      { id: credit.id, montant: montantFinal, date_paiement: date, type },
+      { onSuccess: () => setSuccess(true) },
+    )
+  }
+
+  const handleRecu = () => {
+    window.open(`/api/finance/credits/${credit.id}/recu`, '_blank')
   }
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Enregistrer un remboursement" size="sm">
-      <div className="space-y-4">
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-          <div className="text-sm font-semibold text-amber-800">{(credit.client as { nom: string }).nom} — {credit.reference as string}</div>
-          <div className="text-xs text-amber-600 mt-0.5">
-            Solde restant : <span className="font-bold">{formatXAF(credit.solde_restant_xaf as number)}</span>
+      {success ? (
+        <div className="space-y-4 text-center py-2">
+          <div className="flex justify-center">
+            <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
+              <CheckCircle className="h-6 w-6 text-green-600" />
+            </div>
           </div>
-        </div>
-        <div>
-          <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">Type de remboursement</label>
-          <div className="flex gap-4">
-            {(['total', 'partiel'] as const).map((t) => (
-              <label key={t} className="flex items-center gap-2 cursor-pointer">
-                <input type="radio" checked={type === t} onChange={() => setType(t)} className="accent-[#C62828]" />
-                <span className="text-sm capitalize">{t === 'total' ? 'Remboursement total' : 'Partiel'}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-        {type === 'partiel' && (
           <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant remboursé (FCFA)</label>
-            <input type="number" value={montant} onChange={(e) => setMontant(e.target.value)}
-              max={credit.solde_restant_xaf as number}
-              placeholder={`Max : ${(credit.solde_restant_xaf as number).toLocaleString('fr-CM')}`}
+            <p className="text-sm font-semibold text-gray-800">Remboursement enregistré</p>
+            <p className="text-xs text-gray-500 mt-1">Le solde du crédit a été mis à jour.</p>
+          </div>
+          <div className="flex gap-2 justify-center pt-2">
+            <Button variant="ghost" onClick={onClose}>Fermer</Button>
+            <Button onClick={handleRecu}>
+              <Download className="h-3.5 w-3.5" /> Générer le reçu PDF
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+            <div className="text-sm font-semibold text-amber-800">{credit.client_nom as string} — {credit.numero as string}</div>
+            <div className="text-xs text-amber-600 mt-0.5">
+              Solde restant : <span className="font-bold">{formatXAF(credit.solde_restant_xaf as number)}</span>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">Type de remboursement</label>
+            <div className="flex gap-4">
+              {(['total', 'partiel'] as const).map((t) => (
+                <label key={t} className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" checked={type === t} onChange={() => setType(t)} className="accent-[#C62828]" />
+                  <span className="text-sm capitalize">{t === 'total' ? 'Remboursement total' : 'Partiel'}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          {type === 'partiel' && (
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant remboursé (FCFA)</label>
+              <input type="number" value={montant} onChange={(e) => setMontant(e.target.value)}
+                max={credit.solde_restant_xaf as number}
+                placeholder={`Max : ${(credit.solde_restant_xaf as number).toLocaleString('fr-CM')}`}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+            </div>
+          )}
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Date de paiement</label>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
           </div>
-        )}
-        <div>
-          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Date de paiement</label>
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+          <div className="flex gap-2 justify-end pt-2">
+            <Button variant="ghost" onClick={onClose}>Annuler</Button>
+            <Button onClick={handleSubmit} disabled={rembourser.isPending || (type === 'partiel' && !montant)}>
+              <CheckCircle className="h-3.5 w-3.5" /> {rembourser.isPending ? 'Enregistrement…' : 'Enregistrer'}
+            </Button>
+          </div>
         </div>
-        <div className="flex gap-2 justify-end pt-2">
-          <Button variant="ghost" onClick={onClose}>Annuler</Button>
-          <Button onClick={handleSubmit} disabled={rembourser.isPending || (type === 'partiel' && !montant)}>
-            <CheckCircle className="h-3.5 w-3.5" /> {rembourser.isPending ? 'Enregistrement…' : 'Enregistrer'}
-          </Button>
-        </div>
-      </div>
+      )}
     </Modal>
   )
 }
@@ -607,6 +784,8 @@ export default function Finance() {
   const [showNewFacture, setShowNewFacture] = useState(false)
   const [selectedFacture, setSelectedFacture] = useState<FactureRecord | null>(null)
   const [remboursementCredit, setRemboursementCredit] = useState<CreditRecord | null>(null)
+  const [relanceCredit, setRelanceCredit] = useState<CreditRecord | null>(null)
+  const [documentsCredit, setDocumentsCredit] = useState<CreditRecord | null>(null)
   const [compteFilter, setCompteFilter]   = useState('')
   const [periodeFilter, setPeriodeFilter] = useState('')
 
@@ -665,21 +844,37 @@ export default function Finance() {
   ], [envoyerFacture.isPending])
 
   const creditColumns = useMemo<Column<CreditRecord>[]>(() => [
-    { id: 'reference', header: 'Référence', accessor: 'reference', render: (v) => <span className="font-mono text-xs font-semibold text-gray-700">{v as string}</span> },
-    { id: 'client', header: 'Client', accessor: (row) => (row.client as { nom: string }).nom, render: (v) => <span className="text-sm font-semibold">{v as string}</span> },
-    { id: 'montant', header: 'Montant initial', accessor: 'montant_initial_xaf', render: (v) => <span className="text-sm font-semibold">{formatXAF(v as number)}</span> },
+    { id: 'numero', header: 'Référence', accessor: 'numero', render: (v) => <span className="font-mono text-xs font-semibold text-gray-700">{v as string}</span> },
+    { id: 'client', header: 'Client', accessor: 'client_nom', render: (v) => <span className="text-sm font-semibold">{v as string}</span> },
+    { id: 'montant', header: 'Montant initial', accessor: 'montant_xaf', render: (v) => <span className="text-sm font-semibold">{formatXAF(v as number)}</span> },
     { id: 'solde', header: 'Solde restant', accessor: 'solde_restant_xaf', render: (v) => <span className="text-sm font-bold" style={{ color: (v as number) > 0 ? '#dc2626' : '#15803d' }}>{formatXAF(v as number)}</span> },
-    { id: 'echeance', header: 'Échéance', accessor: 'date_echeance', render: (v) => <span className="text-sm text-gray-500">{formatDate(v as string)}</span> },
+    { id: 'echeance', header: 'Échéance', accessor: 'echeance', render: (v) => <span className="text-sm text-gray-500">{formatDate(v as string)}</span> },
     { id: 'statut', header: 'Statut', accessor: 'statut', render: (v) => <StatusBadge status={v as string} /> },
     {
       id: 'actions', header: '', accessor: 'id', sortable: false,
-      render: (_, row) => row.statut !== 'rembourse' ? (
-        <button
-          onClick={(e) => { e.stopPropagation(); setRemboursementCredit(row) }}
-          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors">
-          <CheckCircle className="h-3 w-3" /> Rembourser
-        </button>
-      ) : null,
+      render: (_, row) => (
+        <div className="flex items-center gap-1">
+          {row.statut !== 'rembourse' && (
+            <button title="Rembourser"
+              onClick={(e) => { e.stopPropagation(); setRemboursementCredit(row) }}
+              className="flex items-center gap-1 px-2 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors">
+              <CheckCircle className="h-3 w-3" /> Rembourser
+            </button>
+          )}
+          {row.statut !== 'rembourse' && (
+            <button title="Relancer le client par WhatsApp"
+              onClick={(e) => { e.stopPropagation(); setRelanceCredit(row) }}
+              className="p-1.5 rounded hover:bg-green-50 text-gray-400 hover:text-green-600 transition-colors">
+              <Phone className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <button title="Documents justificatifs"
+            onClick={(e) => { e.stopPropagation(); setDocumentsCredit(row) }}
+            className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
+            <Paperclip className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ),
     },
   ], [])
 
@@ -874,6 +1069,8 @@ export default function Finance() {
         factureeCommandeIds={factureeCommandeIds}
       />
       <RemboursementModal isOpen={!!remboursementCredit} onClose={() => setRemboursementCredit(null)} credit={remboursementCredit} />
+      <RelanceModal isOpen={!!relanceCredit} onClose={() => setRelanceCredit(null)} credit={relanceCredit} />
+      <DocumentsModal isOpen={!!documentsCredit} onClose={() => setDocumentsCredit(null)} credit={documentsCredit} />
     </motion.div>
   )
 }
