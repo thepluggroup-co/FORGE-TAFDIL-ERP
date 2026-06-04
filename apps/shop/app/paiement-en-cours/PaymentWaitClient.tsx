@@ -40,7 +40,7 @@ const INSTRUCTIONS: Record<Canal, string[]> = {
   ],
 }
 
-const COMPLETE_STATUSES = new Set(['complete', 'completed', 'success', 'successful'])
+const COMPLETE_STATUSES = new Set(['complete', 'completed', 'success', 'successful', 'paid'])
 const FAILED_STATUSES   = new Set(['failed', 'cancelled', 'canceled', 'expired', 'error'])
 
 // ── Helpers ────────────────────────────────────────────────────────────────────

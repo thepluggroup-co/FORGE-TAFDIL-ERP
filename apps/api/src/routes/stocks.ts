@@ -186,6 +186,16 @@ router.post(
       .single()
 
     if (error) return c.json({ error: error.message, code: error.code }, 400)
+
+    await db
+      .from('produits_shop')
+      .upsert({
+        product_id:    data.id,
+        visible_shop:  false,
+        prix_public:   body.prix_unitaire_xaf || null,
+        min_commande:  1,
+      }, { onConflict: 'product_id' })
+
     return c.json(data, 201)
   },
 )

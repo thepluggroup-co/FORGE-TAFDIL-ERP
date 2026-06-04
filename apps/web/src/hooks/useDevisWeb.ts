@@ -46,3 +46,16 @@ export function useCreerDevisErp() {
     onError: (err: Error) => toast.error(err.message),
   })
 }
+
+export function useChangerStatutDevisWeb() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, statut }: { id: string; statut: StatutDevisWeb }) =>
+      apiClient.patch<{ data: DevisWeb }>(`/api/shop-erp/devis-web/${id}/statut`, { statut }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['devis-web'] })
+      toast.success('Demande de devis mise a jour')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}

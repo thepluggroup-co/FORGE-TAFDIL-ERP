@@ -31,12 +31,26 @@ function setCache(ref: string, data: unknown) {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
+function notchpayApiKey() {
+  return process.env.NOTCHPAY_PUBLIC_KEY ?? process.env.NOTCHPAY_API_KEY ?? process.env.NOTCHPAY_SECRET_KEY ?? ''
+}
+
+function notchpayConfigured() {
+  return Boolean(notchpayApiKey())
+}
+
 function notchpayHeader() {
   return {
-    Authorization: process.env.NOTCHPAY_PUBLIC_KEY ?? '',
+    Authorization: notchpayApiKey(),
     'Content-Type': 'application/json',
     Accept: 'application/json',
   }
+}
+
+function normalizeStatus(status: unknown) {
+  const value = String(status ?? 'pending').toLowerCase()
+  if (value === 'paid') return 'complete'
+  return value
 }
 
 function verifySignature(rawBody: string, header: string): boolean {
@@ -79,22 +93,33 @@ export const paiementsRouter = new Hono()
 // ══════════════════════════════════════════════════════════════════════════════
 
 paiementsRouter.post('/initier', async (c) => {
-  const { commande_ref, montant, telephone, canal, email } = await c.req.json<{
+  const { commande_ref, telephone, canal, email } = await c.req.json<{
     commande_ref: string
-    montant:      number
+    montant?:     number
     telephone?:   string
     canal?:       string
     email?:       string
   }>()
 
-  if (!commande_ref || !montant) {
-    return c.json({ error: 'commande_ref et montant sont requis' }, 400)
+  if (!commande_ref) {
+    return c.json({ error: 'commande_ref est requis' }, 400)
+  }
+  if (!notchpayConfigured()) {
+    return c.json({ error: 'Notchpay non configure', code: 'PAYMENT_NOT_CONFIGURED' }, 503)
+  }
+  if (canal !== 'cm.mtn' && canal !== 'cm.orange') {
+    return c.json({ error: 'Canal Mobile Money invalide' }, 400)
+  }
+
+  const phone = telephone?.replace(/\D/g, '') ?? ''
+  if (phone.length < 9) {
+    return c.json({ error: 'Numero Mobile Money invalide' }, 400)
   }
 
   // Vérifier que la commande existe et est en attente de paiement
   const { data: commande, error: errCommande } = await db
     .from('commandes_shop')
-    .select('id, ref, montant_ttc, statut_paiement')
+    .select('id, ref, montant_ttc, statut_paiement, client_nom, client_email, client_telephone')
     .eq('ref', commande_ref)
     .single()
 
@@ -108,19 +133,33 @@ paiementsRouter.post('/initier', async (c) => {
   // Appel Notchpay
   const siteUrl = process.env.SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? 'https://shop.tafdil.cm'
   const payload: Record<string, unknown> = {
-    email:       email ?? 'client@forge.cm',
-    amount:      Math.round(montant),
+    amount:      Math.round(Number(commande.montant_ttc)),
     currency:    'XAF',
+    email:       email ?? commande.client_email ?? 'client@forge.cm',
     reference:   commande_ref,
     description: `Commande FORGE Shop ${commande_ref}`,
     callback:    `${siteUrl}/paiement-en-cours?commande_ref=${commande_ref}`,
+    channel:     canal,
+    channels:    [canal],
+    locked_currency: 'XAF',
+    locked_country:  'CM',
+    locked_channel:  canal,
+    phone,
+    country:     'CM',
+    customer: {
+      name:  commande.client_nom ?? 'Client FORGE',
+      email: email ?? commande.client_email ?? 'client@forge.cm',
+      phone,
+    },
+    customer_meta: {
+      commande_id:  commande.id,
+      commande_ref: commande.ref,
+    },
   }
-  if (telephone) payload.phone   = telephone.replace(/\D/g, '')
-  if (canal)     payload.channel = canal
 
   let notchJson: Record<string, unknown>
   try {
-    const notchRes = await fetch(`${NOTCHPAY_API}/payments/initialize`, {
+    const notchRes = await fetch(`${NOTCHPAY_API}/payments`, {
       method:  'POST',
       headers: notchpayHeader(),
       body:    JSON.stringify(payload),
@@ -138,13 +177,39 @@ paiementsRouter.post('/initier', async (c) => {
   }
 
   const transaction = notchJson.transaction as Record<string, unknown> | undefined
-  const paymentRef  = (transaction?.reference ?? notchJson.reference) as string | undefined
+  const paymentRef  = (transaction?.reference ?? notchJson.reference ?? commande_ref) as string | undefined
 
   if (!paymentRef) {
     return c.json({ error: 'Référence paiement absente dans la réponse Notchpay' }, 502)
   }
 
-  // Sauvegarder la référence dans la commande
+  // Declencher le prompt Mobile Money sur le telephone du client
+  let promptJson: Record<string, unknown> = {}
+  try {
+    const promptRes = await fetch(`${NOTCHPAY_API}/payments/${encodeURIComponent(paymentRef)}`, {
+      method:  'POST',
+      headers: notchpayHeader(),
+      body:    JSON.stringify({
+        channel: canal,
+        data: {
+          phone,
+          account_number: phone,
+          country: 'CM',
+        },
+      }),
+    })
+
+    promptJson = await promptRes.json().catch(() => ({})) as Record<string, unknown>
+
+    if (!promptRes.ok) {
+      console.error('[notchpay] prompt error:', promptJson)
+      return c.json({ error: 'Prompt Mobile Money non initie', details: promptJson }, 502)
+    }
+  } catch (e) {
+    console.error('[notchpay] prompt network error:', e)
+    return c.json({ error: 'Prompt Mobile Money injoignable' }, 503)
+  }
+
   await db
     .from('commandes_shop')
     .update({ payment_reference: paymentRef, updated_at: new Date().toISOString() })
@@ -154,7 +219,11 @@ paiementsRouter.post('/initier', async (c) => {
     payment_reference: paymentRef,
     checkout_url:      transaction?.checkout_url ?? null,
     expires_at:        transaction?.expires_at   ?? null,
-    status:            transaction?.status       ?? 'pending',
+    status:            normalizeStatus(
+      ((promptJson.transaction as Record<string, unknown> | undefined)?.status) ??
+      transaction?.status ??
+      'pending'
+    ),
   }, 201)
 })
 
@@ -171,6 +240,43 @@ paiementsRouter.get('/:reference/statut', async (c) => {
   const cached = getCached(reference)
   if (cached) return c.json(cached)
 
+  const { data: localCommande } = await db
+    .from('commandes_shop')
+    .select('statut_paiement, updated_at')
+    .eq('payment_reference', reference)
+    .maybeSingle()
+
+  if (localCommande?.statut_paiement === 'paye') {
+    const result = {
+      statut:     'complete',
+      montant:    null,
+      devise:     'XAF',
+      updated_at: localCommande.updated_at ?? new Date().toISOString(),
+    }
+    setCache(reference, result)
+    return c.json(result)
+  }
+
+  if (localCommande?.statut_paiement === 'echec') {
+    const result = {
+      statut:     'failed',
+      montant:    null,
+      devise:     'XAF',
+      updated_at: localCommande.updated_at ?? new Date().toISOString(),
+    }
+    setCache(reference, result)
+    return c.json(result)
+  }
+
+  if (!notchpayConfigured()) {
+    return c.json({
+      statut:     'pending',
+      montant:    null,
+      devise:     'XAF',
+      updated_at: new Date().toISOString(),
+    })
+  }
+
   let notchJson: Record<string, unknown>
   try {
     const notchRes = await fetch(`${NOTCHPAY_API}/payments/${reference}`, {
@@ -186,7 +292,7 @@ paiementsRouter.get('/:reference/statut', async (c) => {
 
   const t = (notchJson.transaction ?? notchJson) as Record<string, unknown>
   const result = {
-    statut:     t.status     ?? 'pending',
+    statut:     normalizeStatus(t.status),
     montant:    t.amount     ?? null,
     devise:     t.currency   ?? 'XAF',
     updated_at: t.updated_at ?? t.created_at ?? new Date().toISOString(),
@@ -218,12 +324,13 @@ paiementsRouter.post('/webhook', async (c) => {
     return c.json({ error: 'Payload invalide' }, 400)
   }
 
-  const { event, data } = payload
+  const { event } = payload
+  const data = (payload.data?.transaction ?? payload.data ?? {}) as Record<string, unknown>
   console.info(`[notchpay-webhook] ${event}`, data?.reference)
 
   // ── payment.complete ────────────────────────────────────────────────────────
 
-  if (event === 'payment.complete' || event === 'payment.completed') {
+  if (['payment.complete', 'payment.completed', 'payment.success', 'payment.paid'].includes(event)) {
     const reference = data.reference as string
     const amount    = Number(data.amount ?? 0)
 
@@ -285,7 +392,16 @@ paiementsRouter.post('/webhook', async (c) => {
         .single()
 
       if (produit) {
-        const newStock = Math.max(0, Number(produit.stock_actuel) - Number(ligne.quantite))
+        const stockActuel = Number(produit.stock_actuel)
+        const quantite = Number(ligne.quantite)
+        if (stockActuel < quantite) {
+          console.error(
+            `[stock] insuffisant apres paiement commande=${commande.ref} produit=${ligne.product_id} stock=${stockActuel} requis=${quantite}`
+          )
+          continue
+        }
+
+        const newStock = stockActuel - quantite
         await db
           .from('produits')
           .update({ stock_actuel: newStock })
@@ -348,7 +464,7 @@ paiementsRouter.post('/webhook', async (c) => {
 
   // ── payment.failed / payment.cancelled ─────────────────────────────────────
 
-  if (event === 'payment.failed' || event === 'payment.cancelled') {
+  if (['payment.failed', 'payment.cancelled', 'payment.canceled', 'payment.expired'].includes(event)) {
     const reference = data.reference as string
 
     const { data: commande } = await db

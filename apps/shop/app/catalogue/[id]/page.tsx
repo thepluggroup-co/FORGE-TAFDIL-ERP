@@ -4,104 +4,23 @@ import Link from 'next/link'
 import { ChevronRight } from 'lucide-react'
 import { ProductDetailClient } from './ProductDetailClient'
 import { ProductCard } from '../ProductCard'
-import { createPublicClient } from '@/lib/supabase'
-import type { Produit, Disponibilite } from '@/lib/types'
+import { fetchCatalogueProduit, fetchCatalogueProduits } from '@/lib/catalogue'
+import type { Produit } from '@/lib/types'
 
 export const revalidate = 30
 
-function disponibilite(stock: number, seuil: number): Disponibilite {
-  if (stock <= 0)     return 'indisponible'
-  if (stock <= seuil) return 'stock_faible'
-  return 'disponible'
-}
-
 async function fetchProduit(id: string): Promise<Produit | null> {
-  try {
-    const db = createPublicClient()
-    const { data, error } = await db
-      .from('produits_shop')
-      .select(`
-        product_id,
-        prix_public,
-        description_longue,
-        images,
-        tags,
-        delai_fabrication_jours,
-        min_commande,
-        produits!inner (
-          ref, designation, description, categorie, stock_actuel, stock_min, stock_critique, unite, statut, fournisseur
-        )
-      `)
-      .eq('product_id', id)
-      .eq('visible_shop', true)
-      .single()
-
-    if (error || !data) return null
-    const p = (data as any).produits
-    return {
-      id:                      data.product_id,
-      ref:                     p.ref,
-      nom:                     p.designation,
-      description:             p.description,
-      categorie:               p.categorie,
-      unite:                   p.unite,
-      stock_actuel:            p.stock_actuel,
-      seuil_alerte:            p.stock_min,
-      prix_public:             data.prix_public,
-      description_longue:      data.description_longue,
-      images:                  data.images ?? [],
-      tags:                    data.tags ?? [],
-      delai_fabrication_jours: data.delai_fabrication_jours,
-      min_commande:            data.min_commande,
-      disponibilite:           disponibilite(p.stock_actuel, p.stock_min),
-    } as Produit
-  } catch {
-    return null
-  }
+  return fetchCatalogueProduit(id)
 }
 
 async function fetchSimilaires(categorie: string, excludeId: string): Promise<Produit[]> {
-  try {
-    const db = createPublicClient()
-    const { data } = await db
-      .from('produits_shop')
-      .select(`
-        product_id, prix_public, description_longue, images, tags, delai_fabrication_jours, min_commande,
-        produits!inner ( ref, designation, categorie, stock_actuel, stock_min, unite, statut )
-      `)
-      .eq('visible_shop', true)
-      .eq('produits.categorie', categorie)
-      .neq('product_id', excludeId)
-      .limit(3)
-
-    return (data ?? []).map((row: any) => {
-      const p = row.produits
-      return {
-        id: row.product_id, ref: p.ref, nom: p.designation, categorie: p.categorie,
-        unite: p.unite, stock_actuel: p.stock_actuel, seuil_alerte: p.stock_min,
-        prix_public: row.prix_public, description_longue: row.description_longue,
-        images: row.images ?? [], tags: row.tags ?? [],
-        delai_fabrication_jours: row.delai_fabrication_jours, min_commande: row.min_commande,
-        disponibilite: disponibilite(p.stock_actuel, p.stock_min),
-      } as Produit
-    })
-  } catch {
-    return []
-  }
+  const produits = await fetchCatalogueProduits({ categorie })
+  return produits.filter((p) => p.id !== excludeId).slice(0, 3)
 }
 
 export async function generateStaticParams() {
-  try {
-    const db = createPublicClient()
-    const { data } = await db
-      .from('produits_shop')
-      .select('product_id')
-      .eq('visible_shop', true)
-      .limit(200)
-    return (data ?? []).map((r: any) => ({ id: r.product_id }))
-  } catch {
-    return []
-  }
+  const produits = await fetchCatalogueProduits()
+  return produits.slice(0, 200).map((p) => ({ id: p.id }))
 }
 
 export async function generateMetadata({ params }: { params: { id: string } }): Promise<Metadata> {

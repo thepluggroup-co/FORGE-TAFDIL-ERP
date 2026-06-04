@@ -10,6 +10,7 @@ import { generateDevisPDF, uploadPDF } from '../services/pdf.service'
 import { localCreateDevis, localCreateCommande, getClientsLocal, getCommandesLocal } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
 import { notifyStatutChange } from '../services/notifications'
+import { notifyCommandeSms } from '../services/sms.service'
 import { enqueueEmail, notifyWhatsApp } from '../services/email-queue.service'
 import type { HonoVariables } from '../types'
 
@@ -1106,6 +1107,28 @@ router.patch(
       .select('*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone)')
       .eq('id', id)
       .single()
+
+    const smsEvent: Record<string, Parameters<typeof notifyCommandeSms>[1]> = {
+      in_production: 'commande_en_production',
+      pret:          'commande_prete',
+      delivered:     'commande_livree',
+      cancelled:     'commande_annulee',
+    }
+    const event = smsEvent[body.statut]
+    if (event && full) {
+      const row = full as {
+        numero: string
+        client_nom: string
+        total_ttc_xaf: number
+        clients?: { telephone?: string | null } | null
+      }
+      void notifyCommandeSms({
+        numero:        row.numero,
+        client_nom:    row.client_nom,
+        telephone:     row.clients?.telephone ?? null,
+        total_ttc_xaf: row.total_ttc_xaf,
+      }, event).catch((e) => console.error('[sms] statut commande ERP:', e))
+    }
 
     return c.json(full ? mapCommande(full) : { id, statut: body.statut })
   },

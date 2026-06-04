@@ -5,9 +5,242 @@ import { supabaseAdmin } from '@forge/db'
 
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
+import { notifyCommandeSms } from '../services/sms.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
+
+function calcStatutStock(stock: number, min: number, critique: number) {
+  if (stock <= 0) return 'rupture'
+  if (stock <= critique) return 'critique'
+  if (stock <= min) return 'alerte'
+  return 'normal'
+}
+
+async function genererNumero(table: string, prefix: string) {
+  const { count } = await db.from(table).select('*', { count: 'exact', head: true })
+  return `${prefix}-${new Date().getFullYear()}-${String((count ?? 0) + 1).padStart(3, '0')}`
+}
+
+async function enregistrerMouvementStock(args: {
+  produit_id: string
+  type: 'entree' | 'sortie'
+  quantite: number
+  reference: string
+  notes: string
+  user_id?: string
+}) {
+  const { data: produit, error: produitError } = await db
+    .from('produits')
+    .select('stock_actuel, stock_min, stock_critique')
+    .eq('id', args.produit_id)
+    .single()
+
+  if (produitError || !produit) throw new Error('Produit introuvable')
+
+  const p = produit as { stock_actuel: number; stock_min: number; stock_critique: number }
+  const nouvelleQte = args.type === 'entree'
+    ? p.stock_actuel + args.quantite
+    : p.stock_actuel - args.quantite
+
+  if (nouvelleQte < 0) {
+    throw Object.assign(new Error(`Stock insuffisant : ${p.stock_actuel} disponible`), {
+      code:       'INSUFFICIENT_STOCK',
+      httpStatus: 422,
+    })
+  }
+
+  const statut = calcStatutStock(nouvelleQte, p.stock_min, p.stock_critique)
+  const [mvtRes, produitRes] = await Promise.all([
+    db.from('mouvements_stock').insert({
+      produit_id:  args.produit_id,
+      type:        args.type,
+      quantite:    args.quantite,
+      reference:   args.reference,
+      notes:       args.notes,
+      created_by:  args.user_id ?? null,
+    }),
+    db.from('produits')
+      .update({ stock_actuel: nouvelleQte, statut, updated_at: new Date().toISOString() })
+      .eq('id', args.produit_id),
+  ])
+
+  if (mvtRes.error) throw new Error(mvtRes.error.message)
+  if (produitRes.error) throw new Error(produitRes.error.message)
+}
+
+async function ensureFactureCommande(commandeId: string, userId?: string) {
+  const { data: existing } = await db
+    .from('factures')
+    .select('id')
+    .eq('commande_id', commandeId)
+    .limit(1)
+    .maybeSingle()
+
+  if (existing) return false
+
+  const { data: commande, error } = await db
+    .from('commandes')
+    .select('id, client_id, client_nom, total_ht_xaf, tva_xaf, total_ttc_xaf, commandes_lignes(*)')
+    .eq('id', commandeId)
+    .single()
+
+  if (error || !commande) return false
+
+  const cmd = commande as {
+    id: string
+    client_id: string | null
+    client_nom: string
+    total_ht_xaf: number
+    tva_xaf: number
+    total_ttc_xaf: number
+    commandes_lignes?: Array<{
+      designation: string
+      unite: string
+      quantite: number
+      prix_unitaire_ht_xaf: number
+      total_ht_xaf: number
+      ordre: number
+    }>
+  }
+
+  const numero = await genererNumero('factures', 'FAC')
+  const dateEmission = new Date().toISOString().slice(0, 10)
+  const dateEcheance = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+
+  const { data: facture, error: factureError } = await db
+    .from('factures')
+    .insert({
+      numero,
+      commande_id:     cmd.id,
+      client_id:       cmd.client_id,
+      client_nom:      cmd.client_nom,
+      statut:          'envoye',
+      date_emission:   dateEmission,
+      date_echeance:   dateEcheance,
+      total_ht_xaf:    cmd.total_ht_xaf,
+      tva_xaf:         cmd.tva_xaf,
+      total_ttc_xaf:   cmd.total_ttc_xaf,
+      created_by:      userId ?? null,
+      sync_status:     'synced',
+    })
+    .select('id')
+    .single()
+
+  if (factureError || !facture) return false
+
+  const lignes = (cmd.commandes_lignes ?? []).map((ligne, index) => ({
+    facture_id:            (facture as { id: string }).id,
+    designation:           ligne.designation,
+    unite:                 ligne.unite,
+    quantite:              ligne.quantite,
+    prix_unitaire_ht_xaf:  ligne.prix_unitaire_ht_xaf,
+    total_ht_xaf:          ligne.total_ht_xaf,
+    ordre:                 ligne.ordre ?? index + 1,
+  }))
+
+  if (lignes.length > 0) await db.from('factures_lignes').insert(lignes)
+  return true
+}
+
+async function getCommandeSmsInfo(commandeId: string) {
+  const { data } = await db
+    .from('commandes')
+    .select('numero, client_nom, total_ttc_xaf, clients(telephone)')
+    .eq('id', commandeId)
+    .single()
+
+  if (!data) return null
+  const row = data as {
+    numero: string
+    client_nom: string
+    total_ttc_xaf: number
+    clients?: { telephone?: string | null } | null
+  }
+
+  return {
+    numero:        row.numero,
+    client_nom:    row.client_nom,
+    total_ttc_xaf: row.total_ttc_xaf,
+    telephone:     row.clients?.telephone ?? null,
+  }
+}
+
+async function notifyCommandeEvent(commandeId: string, event: Parameters<typeof notifyCommandeSms>[1]) {
+  const commande = await getCommandeSmsInfo(commandeId)
+  if (!commande) return
+  void notifyCommandeSms(commande, event).catch((e) => console.error('[sms] notify commande:', e))
+}
+
+async function finaliserProductionStock(job: Record<string, unknown>, userId?: string, quantiteProduite?: number) {
+  if (job.type_job !== 'stock') return null
+  if (Number(job.quantite_produite ?? 0) > 0) return job.produit_id ?? null
+
+  const quantite = quantiteProduite ?? Number(job.quantite_prevue ?? 0)
+  if (!Number.isFinite(quantite) || quantite <= 0) {
+    throw Object.assign(new Error('Quantite produite requise pour entrer le stock'), { httpStatus: 422 })
+  }
+
+  let produitId = (job.produit_id as string | null) ?? null
+  const designation = String(job.produit_designation ?? '').trim()
+
+  if (!produitId) {
+    const stockMin = 5
+    const stockCritique = 2
+    const statut = calcStatutStock(quantite, stockMin, stockCritique)
+    const { data: produit, error } = await db
+      .from('produits')
+      .insert({
+        ref:               job.produit_ref || `PRD-${Date.now().toString().slice(-6)}`,
+        designation,
+        description:       job.description_produit ?? null,
+        categorie:         job.categorie || 'Production',
+        unite:             job.unite || 'unite',
+        stock_actuel:      0,
+        stock_min:         stockMin,
+        stock_critique:    stockCritique,
+        prix_unitaire_xaf: Number(job.prix_unitaire_xaf ?? 0),
+        statut,
+        created_by:        userId ?? null,
+        sync_status:       'synced',
+      })
+      .select('id')
+      .single()
+
+    if (error || !produit) throw new Error(error?.message ?? 'Produit impossible a creer')
+    produitId = (produit as { id: string }).id
+  }
+
+  await enregistrerMouvementStock({
+    produit_id: produitId,
+    type:       'entree',
+    quantite,
+    reference:  String(job.numero ?? 'PRODUCTION'),
+    notes:      `Production stock terminee - ${designation}`,
+    user_id:    userId,
+  })
+
+  const produitUpdates: Record<string, unknown> = { updated_at: new Date().toISOString() }
+  if (Number(job.prix_unitaire_xaf ?? 0) > 0) produitUpdates.prix_unitaire_xaf = Number(job.prix_unitaire_xaf)
+  if (job.description_produit) produitUpdates.description = job.description_produit
+  if (Object.keys(produitUpdates).length > 1) {
+    await db.from('produits').update(produitUpdates).eq('id', produitId)
+  }
+
+  const prixPublic = Number(job.prix_public_xaf ?? job.prix_unitaire_xaf ?? 0)
+  await db.from('produits_shop').upsert({
+    product_id:    produitId,
+    visible_shop:  Boolean(job.publier_shop),
+    prix_public:   prixPublic > 0 ? prixPublic : null,
+    min_commande:  1,
+  }, { onConflict: 'product_id' })
+
+  await db.from('jobs_production')
+    .update({ produit_id: produitId, quantite_produite: quantite, updated_at: new Date().toISOString() })
+    .eq('id', job.id)
+
+  return produitId
+}
 
 // ── Machines d'état ────────────────────────────────────────────────────────────
 
@@ -40,7 +273,17 @@ const TRANSITIONS_LIVRAISON: Record<string, string[]> = {
 
 const jobSchema = z.object({
   commande_id:         z.string().optional(),
+  type_job:            z.enum(['commande', 'stock']).default('commande').optional(),
+  produit_id:          z.string().optional(),
+  produit_ref:         z.string().optional(),
   produit_designation: z.string().min(1),
+  categorie:           z.string().optional(),
+  unite:               z.string().optional(),
+  quantite_prevue:     z.number().positive().optional(),
+  prix_unitaire_xaf:   z.number().min(0).optional(),
+  prix_public_xaf:     z.number().min(0).optional(),
+  publier_shop:        z.boolean().optional(),
+  description_produit: z.string().optional(),
   machine_id:          z.string().optional(),
   machine_nom:         z.string().optional(),
   technicien_id:       z.string().optional(),
@@ -53,6 +296,12 @@ const jobSchema = z.object({
 const jobStatutSchema = z.object({
   statut:          z.enum(['confirmed', 'in_production', 'pret', 'delivered', 'cancelled']),
   avancement_pct:  z.number().int().min(0).max(100).optional(),
+  quantite_produite: z.number().positive().optional(),
+  intrants:        z.array(z.object({
+    produit_id: z.string(),
+    quantite:   z.number().positive(),
+    notes:      z.string().optional(),
+  })).optional(),
   date_fin_reelle: z.string().optional(),
   notes:           z.string().optional(),
 })
@@ -111,6 +360,16 @@ router.get('/production/jobs/:id', async (c) => {
 router.post('/production/jobs', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', jobSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
+  const typeJob = body.type_job ?? (body.commande_id ? 'commande' : 'commande')
+
+  if (typeJob === 'stock') {
+    if (!body.produit_id && !body.produit_designation.trim()) {
+      return c.json({ error: 'Produit requis pour une production stock', code: 'PRODUIT_REQUIRED' }, 422)
+    }
+    if (!body.quantite_prevue || body.quantite_prevue <= 0) {
+      return c.json({ error: 'Quantite prevue requise pour une production stock', code: 'QUANTITE_REQUIRED' }, 422)
+    }
+  }
 
   // ── Bloquer si la machine est en panne ou en maintenance ─────────────────
   if (body.machine_id) {
@@ -144,7 +403,7 @@ router.post('/production/jobs', requireRole(['admin', 'superviseur', 'operateur'
 
   const { data, error } = await db
     .from('jobs_production')
-    .insert({ ...body, numero, statut: 'confirmed', avancement_pct: 0, created_by: user.id, sync_status: 'synced' })
+    .insert({ ...body, type_job: typeJob, numero, statut: 'confirmed', avancement_pct: 0, created_by: user.id, sync_status: 'synced' })
     .select().single()
 
   if (error) return c.json({ error: error.message, code: error.code }, 400)
@@ -168,13 +427,20 @@ router.patch(
 
     const { data: existing } = await db
       .from('jobs_production')
-      .select('statut, commande_id, numero, avancement_pct')
+      .select('*')
       .eq('id', id)
       .single()
 
     if (!existing) return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
 
-    const ex       = existing as { statut: string; commande_id: string | null; numero: string; avancement_pct: number }
+    const ex       = existing as {
+      id: string
+      statut: string
+      commande_id: string | null
+      numero: string
+      avancement_pct: number
+      type_job?: string
+    } & Record<string, unknown>
     const allowed  = TRANSITIONS_JOB[ex.statut] ?? []
 
     if (!allowed.includes(body.statut)) {
@@ -183,6 +449,19 @@ router.patch(
         code:  'INVALID_TRANSITION',
         transitions_autorisees: allowed,
       }, 422)
+    }
+
+    if (body.statut === 'in_production' && body.intrants?.length) {
+      for (const intrant of body.intrants) {
+        await enregistrerMouvementStock({
+          produit_id: intrant.produit_id,
+          type:       'sortie',
+          quantite:   intrant.quantite,
+          reference:  ex.numero,
+          notes:      intrant.notes ?? `Sortie intrant production ${ex.numero}`,
+          user_id:    c.get('user')?.id,
+        })
+      }
     }
 
     const updates: Record<string, unknown> = {
@@ -204,7 +483,6 @@ router.patch(
     if (body.statut === 'pret' || body.statut === 'delivered') {
       updates.avancement_pct = 100
     }
-
     const { data, error } = await db
       .from('jobs_production')
       .update(updates)
@@ -213,6 +491,19 @@ router.patch(
 
     if (error) return c.json({ error: error.message }, 400)
     if (!data)  return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
+
+    if (body.statut === 'pret') {
+      try {
+        await finaliserProductionStock({ ...ex, ...data }, c.get('user')?.id, body.quantite_produite)
+        if (ex.commande_id) {
+          const factureCreee = await ensureFactureCommande(ex.commande_id, c.get('user')?.id)
+          if (factureCreee) await notifyCommandeEvent(ex.commande_id, 'facture_emise')
+        }
+      } catch (err) {
+        const e = err as Error & { httpStatus?: number; code?: string }
+        return c.json({ error: e.message, code: e.code ?? 'PRODUCTION_FINALIZE_ERROR' }, e.httpStatus ?? 400)
+      }
+    }
 
     // ── Auto-transition commande liée ────────────────────────────────────
     if (ex.commande_id) {
@@ -250,6 +541,9 @@ router.patch(
               nouveau_statut: cStatut,
               commentaire:    `[Auto] Job ${ex.numero} passé à "${body.statut}"`,
             })
+            if (cStatut === 'in_production') await notifyCommandeEvent(ex.commande_id, 'commande_en_production')
+            if (cStatut === 'pret') await notifyCommandeEvent(ex.commande_id, 'commande_prete')
+            if (cStatut === 'delivered') await notifyCommandeEvent(ex.commande_id, 'commande_livree')
           }
         }
       }
@@ -323,6 +617,9 @@ router.patch(
           nouveau_statut: 'pret',
           commentaire:    `[Auto] Job ${ex.numero} à 100% — commande prête`,
         })
+        const factureCreee = await ensureFactureCommande(ex.commande_id, c.get('user')?.id)
+        await notifyCommandeEvent(ex.commande_id, 'commande_prete')
+        if (factureCreee) await notifyCommandeEvent(ex.commande_id, 'facture_emise')
       }
     }
 
@@ -877,6 +1174,7 @@ router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'supervi
         nouveau_statut: 'delivered',
         commentaire:    `[Auto] Livraison ${id} confirmée`,
       })
+      await notifyCommandeEvent(ex.commande_id, 'commande_livree')
     }
   }
 

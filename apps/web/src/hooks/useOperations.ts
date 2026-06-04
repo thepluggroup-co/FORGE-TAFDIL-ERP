@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import {
-  dbGetJobs, dbUpdateJobAvancement, dbUpdateStatut,
+  dbUpdateStatut,
   dbGetProjets, dbGetLivraisons, dbGetCampagnes,
   genererNumero,
 } from '@/lib/db'
@@ -15,6 +15,12 @@ import { useAuth } from '@/context/AuthContext'
 
 export interface Job {
   id: string; numero: string; produit_designation: string
+  type_job?: 'commande' | 'stock'
+  produit_id?: string | null; produit_ref?: string | null
+  categorie?: string | null; unite?: string | null
+  quantite_prevue?: number | null; quantite_produite?: number | null
+  prix_unitaire_xaf?: number | null; prix_public_xaf?: number | null
+  publier_shop?: boolean | null; description_produit?: string | null
   machine_nom?: string | null; technicien_nom?: string | null
   avancement_pct: number
   statut: 'confirmed' | 'in_production' | 'pret' | 'delivered' | 'cancelled'
@@ -22,7 +28,17 @@ export interface Job {
   notes?: string | null; created_at: string; en_retard?: boolean
 }
 export interface CreateJobPayload {
+  type_job?: 'commande' | 'stock'
+  commande_id?: string
+  produit_id?: string
+  produit_ref?: string
   produit_designation: string; machine_nom?: string; technicien_nom?: string
+  categorie?: string; unite?: string
+  quantite_prevue?: number
+  prix_unitaire_xaf?: number
+  prix_public_xaf?: number
+  publier_shop?: boolean
+  description_produit?: string
   date_debut?: string; date_fin_prevue?: string; notes?: string
 }
 interface JobsResponse { data: Job[]; total: number }
@@ -30,29 +46,21 @@ interface JobsResponse { data: Job[]; total: number }
 export function useJobs(params?: { statut?: string; search?: string }) {
   return useQuery({
     queryKey:  ['jobs', params],
-    queryFn:   () => dbGetJobs(params) as Promise<JobsResponse>,
+    queryFn:   () => {
+      const query = new URLSearchParams()
+      if (params?.statut) query.set('statut', params.statut)
+      if (params?.search) query.set('search', params.search)
+      const qs = query.toString()
+      return apiClient.get<JobsResponse>(`/api/production/jobs${qs ? `?${qs}` : ''}`)
+    },
     staleTime: 20_000,
   })
 }
 
 export function useCreateJob() {
   const qc   = useQueryClient()
-  const auth = useAuth()
   return useMutation({
-    mutationFn: async (payload: CreateJobPayload) => {
-      if (payload.machine_nom) {
-        const { data: m } = await supabase.from('machines')
-          .select('statut,nom').ilike('nom', payload.machine_nom).single()
-        if (m && (m as { statut: string }).statut === 'panne')
-          throw new Error(`Machine "${payload.machine_nom}" est en panne`)
-      }
-      const numero = await genererNumero('jobs_production', 'JOB')
-      const { data, error } = await supabase.from('jobs_production')
-        .insert({ ...payload, numero, statut: 'confirmed', avancement_pct: 0, created_by: auth.user?.id, sync_status: 'synced' })
-        .select().single()
-      if (error) throw new Error(error.message)
-      return data!
-    },
+    mutationFn: (payload: CreateJobPayload) => apiClient.post<Job>('/api/production/jobs', payload),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['jobs'] }); toast.success('Job créé') },
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -60,22 +68,28 @@ export function useCreateJob() {
 
 export function useUpdateJobStatut() {
   const qc   = useQueryClient()
-  const auth = useAuth()
   return useMutation({
-    mutationFn: ({ id, statut, avancement_pct }: {
-      id: string; statut: Job['statut']; avancement_pct?: number; date_fin_reelle?: string; notes?: string
-    }) => dbUpdateStatut('jobs_production', id, statut, avancement_pct !== undefined ? { avancement_pct } : undefined),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['jobs'] }),
+    mutationFn: ({ id, statut, avancement_pct, quantite_produite, date_fin_reelle, notes }: {
+      id: string; statut: Job['statut']; avancement_pct?: number; quantite_produite?: number; date_fin_reelle?: string; notes?: string
+    }) => apiClient.patch<Job>(`/api/production/jobs/${id}/statut`, {
+      statut, avancement_pct, quantite_produite, date_fin_reelle, notes,
+    }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
+      void qc.invalidateQueries({ queryKey: ['stocks'] })
+      void qc.invalidateQueries({ queryKey: ['produits-shop'] })
+      void qc.invalidateQueries({ queryKey: ['commandes'] })
+      void qc.invalidateQueries({ queryKey: ['factures'] })
+    },
     onError:   (err: Error) => toast.error(err.message),
   })
 }
 
 export function useUpdateJobAvancement() {
   const qc   = useQueryClient()
-  const auth = useAuth()
   return useMutation({
     mutationFn: ({ id, avancement_pct }: { id: string; avancement_pct: number }) =>
-      dbUpdateJobAvancement(id, avancement_pct, auth.user?.id),
+      apiClient.patch<Job>(`/api/production/jobs/${id}/avancement`, { avancement_pct }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['jobs'] })
       void qc.invalidateQueries({ queryKey: ['commandes'] })

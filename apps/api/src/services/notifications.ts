@@ -1,5 +1,7 @@
 // Service de notifications WhatsApp pour les changements de statut commandes web
 
+import { notifyCommandeSms } from './sms.service'
+
 const SITE_URL   = process.env.SITE_URL   ?? 'https://shop.tafdil.cm'
 const TAFDIL_TEL = process.env.WHATSAPP_TAFDIL_NUMBER ?? ''
 
@@ -84,6 +86,22 @@ export async function notifyStatutChange(
 
   if (messageClient && client_telephone) {
     await sendWhatsApp(client_telephone, messageClient)
+  }
+
+  const smsEvent: Record<string, Parameters<typeof notifyCommandeSms>[1]> = {
+    en_preparation: 'commande_en_production',
+    expediee:       'commande_prete',
+    livree:         'commande_livree',
+    annulee:        'commande_annulee',
+  }
+  const event = smsEvent[nouveauStatut]
+  if (event && client_telephone) {
+    void notifyCommandeSms({
+      numero:        ref,
+      client_nom,
+      telephone:     client_telephone,
+      total_ttc_xaf: montant_ttc,
+    }, event).catch((e) => console.error('[sms] statut commande web:', e))
   }
 }
 

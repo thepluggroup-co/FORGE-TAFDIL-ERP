@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import { CatalogueClient } from './CatalogueClient'
-import { createPublicClient } from '@/lib/supabase'
-import type { Produit, Disponibilite } from '@/lib/types'
+import { fetchCatalogueProduits } from '@/lib/catalogue'
 
 export const revalidate = 60
 
@@ -14,60 +13,8 @@ export const metadata: Metadata = {
   },
 }
 
-function disponibilite(stock: number, seuil: number): Disponibilite {
-  if (stock <= 0)     return 'indisponible'
-  if (stock <= seuil) return 'stock_faible'
-  return 'disponible'
-}
-
-async function fetchProduits(): Promise<Produit[]> {
-  try {
-    const db = createPublicClient()
-    const { data, error } = await db
-      .from('produits_shop')
-      .select(`
-        product_id,
-        prix_public,
-        description_longue,
-        images,
-        tags,
-        delai_fabrication_jours,
-        min_commande,
-        produits!inner (
-          ref, designation, categorie, stock_actuel, stock_min, unite, statut
-        )
-      `)
-      .eq('visible_shop', true)
-      .order('updated_at', { ascending: false })
-
-    if (error || !data) return []
-
-    return data.map((row: any) => {
-      const p = row.produits
-      return {
-        id:                      row.product_id,
-        ref:                     p.ref,
-        nom:                     p.designation,
-        categorie:               p.categorie,
-        unite:                   p.unite,
-        stock_actuel:            p.stock_actuel,
-        seuil_alerte:            p.stock_min,
-        prix_public:             row.prix_public,
-        description_longue:      row.description_longue,
-        images:                  row.images ?? [],
-        tags:                    row.tags ?? [],
-        delai_fabrication_jours: row.delai_fabrication_jours,
-        min_commande:            row.min_commande,
-        disponibilite:           disponibilite(p.stock_actuel, p.stock_min),
-      } as Produit
-    })
-  } catch {
-    return []
-  }
-}
-
 export default async function CataloguePage() {
-  const produits = await fetchProduits()
+  const produits = await fetchCatalogueProduits()
 
   return (
     <main>

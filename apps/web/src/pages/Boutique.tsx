@@ -3,17 +3,17 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Store, ShoppingBag, Eye, EyeOff, FileText,
   TrendingUp, Package, Clock, BarChart2,
-  CheckCircle, XCircle, Edit2,
+  CheckCircle, XCircle, Edit2, Image, Upload, Trash2,
 } from 'lucide-react'
 import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import { toast } from 'sonner'
-import { useProduitsShop, useToggleVisibilite, useUpdatePrix } from '@/hooks/useProduitsShop'
+import { useProduitsShop, useToggleVisibilite, useUpdateVitrineProduit, useUploadImagesProduit } from '@/hooks/useProduitsShop'
 import type { ProduitShopErp } from '@/hooks/useProduitsShop'
 import { useCommandesShop, useStatutCommandeShop } from '@/hooks/useCommandesShop'
 import type { CommandeShop } from '@/hooks/useCommandesShop'
-import { useDevisWeb, useCreerDevisErp } from '@/hooks/useDevisWeb'
+import { useDevisWeb, useCreerDevisErp, useChangerStatutDevisWeb } from '@/hooks/useDevisWeb'
 import type { DevisWeb } from '@/hooks/useDevisWeb'
 import { useShopAnalytics } from '@/hooks/useShopAnalytics'
 
@@ -23,47 +23,187 @@ type Tab = 'catalogue' | 'commandes' | 'devis'
 
 // ── Prix edit modal ────────────────────────────────────────────────────────────
 
-function EditPrixModal({
-  isOpen, onClose, produit, onSave,
+function EditVitrineModal({
+  isOpen, onClose, produit,
 }: {
   isOpen: boolean
   onClose: () => void
   produit: ProduitShopErp | null
-  onSave: (id: string, prix: number) => void
 }) {
   const [prix, setPrix] = useState<number>(produit?.prix_public ?? 0)
-  const updatePrix = useUpdatePrix()
+  const [visible, setVisible] = useState<boolean>(produit?.visible_shop ?? false)
+  const [description, setDescription] = useState(produit?.description_longue ?? '')
+  const [images, setImages] = useState((produit?.images ?? []).join('\n'))
+  const [tags, setTags] = useState((produit?.tags ?? []).join(', '))
+  const [delai, setDelai] = useState<number>(produit?.delai_fabrication_jours ?? 7)
+  const [minCommande, setMinCommande] = useState<number>(produit?.min_commande ?? 1)
+  const updateVitrine = useUpdateVitrineProduit()
+  const uploadImages = useUploadImagesProduit()
 
   React.useEffect(() => {
-    if (produit) setPrix(produit.prix_public ?? 0)
+    if (!produit) return
+    setPrix(produit.prix_public ?? 0)
+    setVisible(produit.visible_shop)
+    setDescription(produit.description_longue ?? '')
+    setImages((produit.images ?? []).join('\n'))
+    setTags((produit.tags ?? []).join(', '))
+    setDelai(produit.delai_fabrication_jours ?? 7)
+    setMinCommande(produit.min_commande ?? 1)
   }, [produit])
 
   if (!produit) return null
 
+  const imageList = images.split('\n').map((url) => url.trim()).filter(Boolean)
+  const tagList = tags.split(',').map((tag) => tag.trim()).filter(Boolean)
+
+  const setImageList = (next: string[]) => setImages(next.join('\n'))
+
+  const handleImageUpload = (files: FileList | null) => {
+    if (!produit || !files?.length) return
+    uploadImages.mutate(
+      { id: produit.id, files: Array.from(files) },
+      {
+        onSuccess: (res) => {
+          setImageList([...imageList, ...res.data.urls])
+          toast.success(`${res.data.urls.length} image${res.data.urls.length > 1 ? 's' : ''} ajoutee${res.data.urls.length > 1 ? 's' : ''}`)
+        },
+      },
+    )
+  }
+
+  const handleSave = () => {
+    updateVitrine.mutate({
+      id: produit.id,
+      payload: {
+        visible_shop: visible,
+        prix_public: prix > 0 ? prix : null,
+        description_longue: description.trim() || null,
+        images: imageList,
+        tags: tagList,
+        delai_fabrication_jours: delai,
+        min_commande: minCommande,
+      },
+    }, { onSuccess: onClose })
+  }
+
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Modifier le prix public" size="sm">
-      <div className="space-y-4">
+    <Modal isOpen={isOpen} onClose={onClose} title="Fiche boutique du produit" size="lg">
+      <div className="space-y-5">
         <div>
           <p className="text-sm font-semibold text-[#212121]">{produit.nom}</p>
           <p className="text-xs text-gray-400">{produit.ref} · {produit.categorie}</p>
         </div>
-        <div>
-          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Prix public (FCFA)</label>
+        <label className="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5">
+          <span>
+            <span className="block text-sm font-semibold text-[#212121]">Visible dans le catalogue</span>
+            <span className="block text-xs text-gray-400">Le produit reste pilote par le module Stocks.</span>
+          </span>
           <input
-            type="number"
-            min="0"
-            value={prix}
-            onChange={(e) => setPrix(Number(e.target.value))}
-            className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            type="checkbox"
+            checked={visible}
+            onChange={(e) => setVisible(e.target.checked)}
+            className="h-4 w-4 accent-[#C62828]"
+          />
+        </label>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Prix public</label>
+            <input
+              type="number"
+              min="0"
+              value={prix}
+              onChange={(e) => setPrix(Number(e.target.value))}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Delai fabrication</label>
+            <input
+              type="number"
+              min="0"
+              value={delai}
+              onChange={(e) => setDelai(Number(e.target.value))}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Min. commande</label>
+            <input
+              type="number"
+              min="1"
+              value={minCommande}
+              onChange={(e) => setMinCommande(Number(e.target.value))}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Description boutique</label>
+          <textarea
+            rows={4}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Images produit</label>
+          <label className="mb-2 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-3 text-sm font-medium text-gray-600 transition-colors hover:border-[#C62828] hover:text-[#C62828]">
+            <Upload className="h-4 w-4" />
+            {uploadImages.isPending ? 'Televersement en cours...' : 'Televerser depuis le PC'}
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              disabled={uploadImages.isPending}
+              onChange={(e) => {
+                handleImageUpload(e.target.files)
+                e.currentTarget.value = ''
+              }}
+              className="hidden"
+            />
+          </label>
+          <textarea
+            rows={3}
+            value={images}
+            onChange={(e) => setImages(e.target.value)}
+            placeholder="https://.../image-1.jpg"
+            className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+          />
+          {imageList.length > 0 && (
+            <div className="mt-2 flex gap-2 overflow-x-auto">
+              {imageList.map((src, index) => (
+                <div key={src} className="relative h-16 w-16 flex-shrink-0">
+                  <img src={src} alt="" className="h-16 w-16 rounded-lg border border-gray-100 object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => setImageList(imageList.filter((_, i) => i !== index))}
+                    className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-white text-red-600 shadow-sm ring-1 ring-red-100"
+                    title="Retirer cette image"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Tags</label>
+          <input
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+            placeholder="aluminium, portail, sur mesure"
+            className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]"
           />
         </div>
         <div className="flex gap-2 justify-end">
           <Button variant="ghost" onClick={onClose}>Annuler</Button>
           <Button
-            disabled={updatePrix.isPending}
-            onClick={() => updatePrix.mutate({ id: produit.id, prix }, { onSuccess: onClose })}
+            disabled={updateVitrine.isPending}
+            onClick={handleSave}
           >
-            {updatePrix.isPending ? 'Mise à jour…' : 'Enregistrer'}
+            {updateVitrine.isPending ? 'Mise a jour...' : 'Enregistrer'}
           </Button>
         </div>
       </div>
@@ -173,7 +313,7 @@ function CommandeShopDetail({ commande, onClose }: { commande: CommandeShop; onC
 
 export default function Boutique() {
   const [tab, setTab]                     = useState<Tab>('catalogue')
-  const [editPrix, setEditPrix]           = useState<ProduitShopErp | null>(null)
+  const [editProduit, setEditProduit]     = useState<ProduitShopErp | null>(null)
   const [selectedCommande, setSelectedCommande] = useState<CommandeShop | null>(null)
 
   const { data: analytics }                   = useShopAnalytics()
@@ -182,6 +322,7 @@ export default function Boutique() {
   const { data: devisData, isLoading: dLoad } = useDevisWeb()
   const toggleVis   = useToggleVisibilite()
   const creerDevis  = useCreerDevisErp()
+  const changerStatutDevis = useChangerStatutDevisWeb()
 
   const kpis      = analytics?.kpis
   const produitsList = produits ?? []
@@ -210,6 +351,13 @@ export default function Boutique() {
     { id: 'prix', header: 'Prix public', accessor: 'prix_public',
       render: (v) => <span className="text-sm font-semibold">{v ? formatXAF(v as number) : <span className="text-gray-300 italic text-xs">Non défini</span>}</span>,
     },
+    { id: 'images', header: 'Images', accessor: 'images',
+      render: (v) => (
+        <span className="inline-flex items-center gap-1 text-xs text-gray-500">
+          <Image className="h-3 w-3" /> {Array.isArray(v) ? v.length : 0}
+        </span>
+      ),
+    },
     {
       id: 'visible', header: 'Visible', accessor: 'visible_shop',
       render: (v, row) => (
@@ -231,10 +379,10 @@ export default function Boutique() {
       id: 'actions', header: '', accessor: 'id', sortable: false,
       render: (_, row) => (
         <button
-          onClick={() => setEditPrix(row)}
+          onClick={() => setEditProduit(row)}
           className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
         >
-          <Edit2 className="h-3 w-3" /> Prix
+          <Edit2 className="h-3 w-3" /> Fiche
         </button>
       ),
     },
@@ -274,6 +422,33 @@ export default function Boutique() {
       return <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ color: s.color, backgroundColor: s.bg }}>{s.label}</span>
     }},
     { id: 'date', header: 'Date', accessor: 'created_at', render: (v) => <span className="text-xs text-gray-400">{formatDate((v as string).split('T')[0])}</span> },
+    {
+      id: 'traitement', header: 'Traitement', accessor: 'id', sortable: false,
+      render: (v, row) => (
+        <div className="flex flex-wrap gap-1.5">
+          {row.statut === 'nouvelle' && (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={changerStatutDevis.isPending}
+              onClick={() => changerStatutDevis.mutate({ id: v as string, statut: 'en_cours' })}
+            >
+              <Clock className="h-3 w-3" /> Traiter
+            </Button>
+          )}
+          {row.statut !== 'refusee' && !row.erp_devis_id && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={changerStatutDevis.isPending}
+              onClick={() => changerStatutDevis.mutate({ id: v as string, statut: 'refusee' })}
+            >
+              <XCircle className="h-3 w-3" /> Refuser
+            </Button>
+          )}
+        </div>
+      ),
+    },
     {
       id: 'action', header: '', accessor: 'id', sortable: false,
       render: (v, row) => (
@@ -399,11 +574,10 @@ export default function Boutique() {
       </div>
 
       {/* Modals */}
-      <EditPrixModal
-        isOpen={!!editPrix}
-        onClose={() => setEditPrix(null)}
-        produit={editPrix}
-        onSave={(id, prix) => {}}
+      <EditVitrineModal
+        isOpen={!!editProduit}
+        onClose={() => setEditProduit(null)}
+        produit={editProduit}
       />
 
       {selectedCommande && (

@@ -1,11 +1,12 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Wrench, Gauge, AlertTriangle, Clock, Plus } from 'lucide-react'
+import { Wrench, Gauge, AlertTriangle, Clock, Plus, Play, CheckCircle2, Package } from 'lucide-react'
 import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatDate } from '@/lib/utils'
-import { useJobs, useCreateJob } from '@/hooks/useOperations'
+import { useJobs, useCreateJob, useUpdateJobStatut } from '@/hooks/useOperations'
 import type { Job } from '@/hooks/useOperations'
+import { useStocks } from '@/hooks/useStocks'
 
 type JobRecord = Job & Record<string, unknown>
 
@@ -13,19 +14,54 @@ const MACHINES = ['Soudure MIG #1', 'Soudure MIG #2', 'Découpe plasma', 'Pliage
 const TECHNICIENS = ['Mvondo Serge', 'Biya Christine', 'Atangana Félix', 'Nkolo Pierre']
 
 interface JobForm {
+  typeJob: 'commande' | 'stock'
+  produitId: string
+  ref: string
   produit: string; machine: string; technicien: string
+  categorie: string; unite: string
+  quantitePrevue: string
+  prixUnitaire: string
+  prixPublic: string
+  publierShop: boolean
+  description: string
   debut: string; finPrevue: string
 }
 
 const DEFAULT_FORM: JobForm = {
+  typeJob: 'commande',
+  produitId: '',
+  ref: '',
   produit: '', machine: '', technicien: '',
+  categorie: '',
+  unite: 'unite',
+  quantitePrevue: '',
+  prixUnitaire: '',
+  prixPublic: '',
+  publierShop: false,
+  description: '',
   debut: new Date().toISOString().split('T')[0],
   finPrevue: '',
 }
 
-const COLUMNS: Column<JobRecord>[] = [
+const BASE_COLUMNS: Column<JobRecord>[] = [
   { id: 'numero', header: 'Job', accessor: 'numero', render: (v) => <span className="font-mono text-xs font-semibold text-gray-600">{v as string}</span> },
   { id: 'produit', header: 'Produit', accessor: 'produit_designation', render: (v) => <span className="text-sm font-semibold">{v as string}</span> },
+  {
+    id: 'type', header: 'Flux', accessor: 'type_job',
+    render: (v) => (
+      <span className="inline-flex items-center gap-1 rounded-md bg-gray-50 px-2 py-1 text-xs font-semibold text-gray-600">
+        {(v as string) === 'stock' ? <Package className="h-3 w-3" /> : null}
+        {(v as string) === 'stock' ? 'Stock' : 'Commande'}
+      </span>
+    ),
+  },
+  {
+    id: 'quantite', header: 'Qte', accessor: 'quantite_prevue',
+    render: (_, row) => {
+      const qte = row.quantite_produite ?? row.quantite_prevue
+      return <span className="text-sm text-gray-500">{qte ? `${qte} ${row.unite ?? ''}` : '-'}</span>
+    },
+  },
   { id: 'machine', header: 'Machine', accessor: 'machine_nom', render: (v) => <span className="text-sm text-gray-500">{(v as string) ?? '—'}</span> },
   { id: 'tech', header: 'Technicien', accessor: 'technicien_nom', render: (v) => <span className="text-sm">{(v as string) ?? '—'}</span> },
   { id: 'fin', header: 'Fin prévue', accessor: 'date_fin_prevue', render: (v) => <span className="text-sm text-gray-500">{v ? formatDate(v as string) : '—'}</span> },
@@ -52,16 +88,66 @@ export default function Production() {
   const [form, setForm] = useState<JobForm>(DEFAULT_FORM)
 
   const { data, isLoading } = useJobs()
+  const { data: stocksData } = useStocks()
   const createJob = useCreateJob()
+  const updateJobStatut = useUpdateJobStatut()
 
   const jobs = (data?.data ?? []) as JobRecord[]
-  const formValid = form.produit.trim() !== '' && form.machine !== '' && form.technicien !== '' && form.finPrevue !== ''
+  const stocks = stocksData?.data ?? []
+  const formValid =
+    form.produit.trim() !== '' &&
+    form.machine !== '' &&
+    form.technicien !== '' &&
+    form.finPrevue !== '' &&
+    (form.typeJob === 'commande' || Number(form.quantitePrevue) > 0)
+
+  const columns: Column<JobRecord>[] = [
+    ...BASE_COLUMNS,
+    {
+      id: 'actions',
+      header: '',
+      accessor: 'id',
+      render: (_, row) => (
+        <div className="flex items-center justify-end gap-2">
+          {row.statut === 'confirmed' ? (
+            <Button size="sm" variant="ghost" onClick={() => updateJobStatut.mutate({ id: row.id, statut: 'in_production', avancement_pct: 25 })}>
+              <Play className="h-3.5 w-3.5" /> Lancer
+            </Button>
+          ) : null}
+          {row.statut === 'in_production' ? (
+            <Button
+              size="sm"
+              onClick={() => updateJobStatut.mutate({
+                id: row.id,
+                statut: 'pret',
+                quantite_produite: row.type_job === 'stock'
+                  ? Number(row.quantite_prevue ?? 0)
+                  : undefined,
+              })}
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" /> Terminer
+            </Button>
+          ) : null}
+        </div>
+      ),
+    },
+  ]
 
   const handleCreate = () => {
     if (!formValid) return
     createJob.mutate(
       {
         produit_designation: form.produit,
+        type_job: form.typeJob,
+        produit_id: form.produitId || undefined,
+        produit_ref: form.ref || undefined,
+        categorie: form.categorie || undefined,
+        unite: form.unite || undefined,
+        quantite_prevue: form.typeJob === 'stock' ? Number(form.quantitePrevue) : undefined,
+        prix_unitaire_xaf: form.prixUnitaire ? Number(form.prixUnitaire) : undefined,
+        prix_public_xaf: form.prixPublic ? Number(form.prixPublic) : undefined,
+        publier_shop: form.publierShop,
+        description_produit: form.description || undefined,
         machine_nom: form.machine,
         technicien_nom: form.technicien,
         date_debut: form.debut,
@@ -105,11 +191,51 @@ export default function Production() {
             <Clock className="h-3.5 w-3.5" /> {jobs.length} job{jobs.length > 1 ? 's' : ''}
           </div>
         </div>
-        <DataTable<JobRecord> columns={COLUMNS} data={jobs} keyField="id" loading={isLoading} />
+        <DataTable<JobRecord> columns={columns} data={jobs} keyField="id" loading={isLoading} />
       </div>
 
       <SlideOver isOpen={slideOpen} onClose={() => setSlideOpen(false)} title="Nouveau job de production" width="md">
         <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-2 rounded-lg bg-gray-50 p-1">
+            <button
+              type="button"
+              onClick={() => setForm((f) => ({ ...f, typeJob: 'commande', publierShop: false }))}
+              className={`rounded-md px-3 py-2 text-sm font-semibold ${form.typeJob === 'commande' ? 'bg-white text-[#C62828] shadow-sm' : 'text-gray-500'}`}
+            >
+              Commande client
+            </button>
+            <button
+              type="button"
+              onClick={() => setForm((f) => ({ ...f, typeJob: 'stock' }))}
+              className={`rounded-md px-3 py-2 text-sm font-semibold ${form.typeJob === 'stock' ? 'bg-white text-[#C62828] shadow-sm' : 'text-gray-500'}`}
+            >
+              Produit stock
+            </button>
+          </div>
+          {form.typeJob === 'stock' ? (
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Produit stock existant</label>
+              <select
+                value={form.produitId}
+                onChange={(e) => {
+                  const produit = stocks.find((p) => p.id === e.target.value)
+                  setForm((f) => ({
+                    ...f,
+                    produitId: e.target.value,
+                    produit: produit?.designation ?? f.produit,
+                    ref: produit?.ref ?? f.ref,
+                    categorie: produit?.categorie ?? f.categorie,
+                    unite: produit?.unite ?? f.unite,
+                    prixUnitaire: produit?.prix_unitaire_xaf ? String(produit.prix_unitaire_xaf) : f.prixUnitaire,
+                  }))
+                }}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+              >
+                <option value="">Nouveau produit après production</option>
+                {stocks.map((p) => <option key={p.id} value={p.id}>{p.ref} - {p.designation}</option>)}
+              </select>
+            </div>
+          ) : null}
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Produit / Description *</label>
             <input
@@ -119,6 +245,80 @@ export default function Production() {
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
             />
           </div>
+          {form.typeJob === 'stock' ? (
+            <>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Ref</label>
+                  <input
+                    value={form.ref}
+                    onChange={(e) => setForm((f) => ({ ...f, ref: e.target.value }))}
+                    placeholder="PRD-..."
+                    className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Catégorie</label>
+                  <input
+                    value={form.categorie}
+                    onChange={(e) => setForm((f) => ({ ...f, categorie: e.target.value }))}
+                    placeholder="Production"
+                    className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Unité</label>
+                  <input
+                    value={form.unite}
+                    onChange={(e) => setForm((f) => ({ ...f, unite: e.target.value }))}
+                    className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Qté prévue *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.quantitePrevue}
+                    onChange={(e) => setForm((f) => ({ ...f, quantitePrevue: e.target.value }))}
+                    className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Coût unit.</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.prixUnitaire}
+                    onChange={(e) => setForm((f) => ({ ...f, prixUnitaire: e.target.value }))}
+                    className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Prix shop</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.prixPublic}
+                    onChange={(e) => setForm((f) => ({ ...f, prixPublic: e.target.value }))}
+                    className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                  />
+                </div>
+              </div>
+              <label className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2.5 text-sm">
+                <input
+                  type="checkbox"
+                  checked={form.publierShop}
+                  onChange={(e) => setForm((f) => ({ ...f, publierShop: e.target.checked }))}
+                  className="h-4 w-4 rounded border-gray-300 text-[#C62828] focus:ring-[#C62828]"
+                />
+                Publier sur la boutique après production
+              </label>
+            </>
+          ) : null}
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Machine *</label>
             <select

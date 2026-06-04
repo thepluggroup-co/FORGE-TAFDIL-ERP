@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
+import { randomUUID } from 'crypto'
 import { supabaseAdmin } from '@forge/db'
 
 const db = supabaseAdmin!
@@ -462,6 +463,35 @@ async function genererNumeroDevis(): Promise<string> {
   return `DEV-${yyyymmdd}-${String((count ?? 0) + 1).padStart(4, '0')}`
 }
 
+async function syncProduitsShopManquants(): Promise<void> {
+  const [produitsRes, shopRes] = await Promise.all([
+    db.from('produits').select('id, prix_unitaire_xaf'),
+    db.from('produits_shop').select('product_id'),
+  ])
+
+  if (produitsRes.error || shopRes.error) return
+
+  const idsShop = new Set((shopRes.data ?? []).map((p: { product_id: string }) => p.product_id))
+  const manquants = (produitsRes.data ?? [])
+    .filter((p: { id: string }) => !idsShop.has(p.id))
+    .map((p: { id: string; prix_unitaire_xaf?: number | null }) => ({
+      product_id:   p.id,
+      visible_shop: false,
+      prix_public:  p.prix_unitaire_xaf || null,
+      min_commande: 1,
+    }))
+
+  if (manquants.length === 0) return
+  await db.from('produits_shop').insert(manquants)
+}
+
+function extFromFile(file: File): string {
+  const byName = file.name.split('.').pop()?.toLowerCase()
+  if (byName && /^[a-z0-9]{2,5}$/.test(byName)) return byName
+  const byType = file.type.split('/').pop()?.toLowerCase()
+  return byType && /^[a-z0-9]{2,5}$/.test(byType) ? byType : 'jpg'
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // GET /api/shop-erp/analytics
 // KPIs + CA mensuel comparé ERP vs Shop (6 derniers mois)
@@ -540,16 +570,22 @@ shopErpRouter.get('/analytics', async (c) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 shopErpRouter.get('/produits', async (c) => {
+  await syncProduitsShopManquants()
+
   const { data, error } = await db
     .from('produits_shop')
     .select(`
       product_id,
       visible_shop,
       prix_public,
+      description_longue,
       images,
+      tags,
+      delai_fabrication_jours,
+      min_commande,
       updated_at,
       produits!inner (
-        ref, designation, categorie, stock_actuel, stock_min, stock_critique, unite, statut
+        ref, designation, description, categorie, stock_actuel, stock_min, stock_critique, unite, statut
       )
     `)
     .order('updated_at', { ascending: false })
@@ -561,6 +597,7 @@ shopErpRouter.get('/produits', async (c) => {
     ref:            r.produits.ref,
     nom:            r.produits.designation,
     categorie:      r.produits.categorie,
+    description:    r.produits.description,
     unite:          r.produits.unite,
     stock_actuel:   r.produits.stock_actuel,
     stock_min:      r.produits.stock_min,
@@ -568,7 +605,11 @@ shopErpRouter.get('/produits', async (c) => {
     statut:         r.produits.statut,
     visible_shop:   r.visible_shop,
     prix_public:    r.prix_public,
+    description_longue: r.description_longue,
     images:         r.images ?? [],
+    tags:           r.tags ?? [],
+    delai_fabrication_jours: r.delai_fabrication_jours,
+    min_commande:   r.min_commande,
   }))
 
   return c.json({ data: produits, total: produits.length })
@@ -627,6 +668,108 @@ shopErpRouter.put('/produits/:id/prix',
 // Demandes de devis web à traiter
 // ══════════════════════════════════════════════════════════════════════════════
 
+shopErpRouter.put('/produits/:id/vitrine',
+  zValidator('json', z.object({
+    visible_shop: z.boolean().optional(),
+    prix_public: z.number().min(0).nullable().optional(),
+    description_longue: z.string().max(4000).nullable().optional(),
+    images: z.array(z.string().url()).max(12).optional(),
+    tags: z.array(z.string().min(1).max(40)).max(12).optional(),
+    delai_fabrication_jours: z.number().int().min(0).max(365).optional(),
+    min_commande: z.number().positive().optional(),
+  })),
+  async (c) => {
+    const id = c.req.param('id')
+    const body = c.req.valid('json')
+
+    const updates: Record<string, unknown> = {
+      updated_at: new Date().toISOString(),
+    }
+
+    for (const key of [
+      'visible_shop',
+      'prix_public',
+      'description_longue',
+      'images',
+      'tags',
+      'delai_fabrication_jours',
+      'min_commande',
+    ] as const) {
+      if (key in body) updates[key] = body[key]
+    }
+
+    const { data, error } = await db
+      .from('produits_shop')
+      .update(updates)
+      .eq('product_id', id)
+      .select(`
+        product_id,
+        visible_shop,
+        prix_public,
+        description_longue,
+        images,
+        tags,
+        delai_fabrication_jours,
+        min_commande
+      `)
+      .single()
+
+    if (error || !data) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
+
+    return c.json({ data })
+  }
+)
+
+shopErpRouter.post('/produits/:id/images', async (c) => {
+  const id = c.req.param('id')
+  const form = await c.req.formData()
+  const files = form.getAll('images').filter((item): item is File => item instanceof File)
+
+  if (files.length === 0) {
+    return c.json({ error: 'Aucune image fournie', code: 'NO_FILE' }, 400)
+  }
+
+  const { data: produit } = await db
+    .from('produits')
+    .select('id')
+    .eq('id', id)
+    .single()
+
+  if (!produit) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
+
+  const bucket = 'produits-shop'
+  await db.storage.createBucket(bucket, { public: true }).catch(() => {})
+
+  const urls: string[] = []
+
+  for (const file of files.slice(0, 12)) {
+    if (!file.type.startsWith('image/')) {
+      return c.json({ error: 'Seuls les fichiers image sont acceptes', code: 'INVALID_FILE' }, 400)
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      return c.json({ error: 'Image trop lourde, maximum 5 Mo', code: 'FILE_TOO_LARGE' }, 413)
+    }
+
+    const ext = extFromFile(file)
+    const path = `${id}/${Date.now()}-${randomUUID()}.${ext}`
+    const buffer = Buffer.from(await file.arrayBuffer())
+    const { error } = await db.storage.from(bucket).upload(path, buffer, {
+      contentType: file.type || 'image/jpeg',
+      upsert: false,
+    })
+
+    if (error) {
+      console.error('[shop-erp] upload image produit:', error)
+      return c.json({ error: 'Erreur upload image', details: error.message }, 500)
+    }
+
+    const { data } = db.storage.from(bucket).getPublicUrl(path)
+    urls.push(data.publicUrl)
+  }
+
+  return c.json({ data: { urls } }, 201)
+})
+
 shopErpRouter.get('/devis-web', async (c) => {
   const { statut } = c.req.query()
 
@@ -651,6 +794,25 @@ shopErpRouter.get('/devis-web', async (c) => {
 // POST /api/shop-erp/devis/:id/creer-erp
 // Créer un devis ERP à partir d'une demande web
 // ══════════════════════════════════════════════════════════════════════════════
+
+shopErpRouter.patch('/devis-web/:id/statut',
+  zValidator('json', z.object({ statut: z.enum(['nouvelle', 'en_cours', 'traitee', 'refusee']) })),
+  async (c) => {
+    const id = c.req.param('id')
+    const { statut } = c.req.valid('json')
+
+    const { data, error } = await db
+      .from('demandes_devis_web')
+      .update({ statut })
+      .eq('id', id)
+      .select('*')
+      .single()
+
+    if (error || !data) return c.json({ error: 'Demande introuvable', code: 'NOT_FOUND' }, 404)
+
+    return c.json({ data })
+  }
+)
 
 shopErpRouter.post('/devis/:id/creer-erp', async (c) => {
   const id = c.req.param('id')
