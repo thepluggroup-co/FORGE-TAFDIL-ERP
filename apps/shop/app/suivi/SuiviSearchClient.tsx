@@ -8,11 +8,16 @@ export function SuiviSearchClient() {
   const router  = useRouter()
   const params  = useSearchParams()
   const [ref, setRef] = useState(params.get('ref') ?? '')
+  const [telephone, setTelephone] = useState(params.get('tel') ?? '')
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     const cleaned = ref.trim().toUpperCase()
-    if (cleaned) router.push(`/suivi/${encodeURIComponent(cleaned)}`)
+    const phone = telephone.trim()
+    if (cleaned) {
+      const qs = phone ? `?tel=${encodeURIComponent(phone)}` : ''
+      router.push(`/suivi/${encodeURIComponent(cleaned)}${qs}`)
+    }
   }
 
   return (
@@ -28,6 +33,13 @@ export function SuiviSearchClient() {
           className="w-full rounded-2xl border-2 border-gray-200 py-4 pl-11 pr-5 font-mono text-base font-bold uppercase tracking-widest outline-none transition placeholder:font-normal placeholder:tracking-normal placeholder:text-gray-400 focus:border-forge-red focus:ring-4 focus:ring-forge-red/10"
         />
       </div>
+      <input
+        type="tel"
+        value={telephone}
+        onChange={(e) => setTelephone(e.target.value)}
+        placeholder="Téléphone client (optionnel)"
+        className="w-full rounded-2xl border-2 border-gray-200 px-5 py-4 text-sm outline-none transition placeholder:text-gray-400 focus:border-forge-red focus:ring-4 focus:ring-forge-red/10"
+      />
       <button
         type="submit"
         disabled={!ref.trim()}

@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { MapPin, Phone, Mail } from 'lucide-react'
+import { MapPin, Phone, Mail, Search } from 'lucide-react'
 import { MetalForgeLogo } from '@/components/ui/BrandLogo'
 
 export function Footer() {
@@ -21,6 +21,7 @@ export function Footer() {
             <ul className="space-y-2 text-sm text-gray-400">
               {[
                 { href: '/catalogue', label: 'Catalogue' },
+                { href: '/suivi', label: 'Suivre ma commande' },
                 { href: '/categories', label: 'Catégories' },
                 { href: '/promotions', label: 'Promotions' },
                 { href: '/contact', label: 'Contact' },
@@ -38,6 +39,12 @@ export function Footer() {
           <div>
             <p className="mb-3 text-sm font-semibold uppercase tracking-wider text-gray-300">Contact</p>
             <ul className="space-y-2 text-sm text-gray-400">
+              <li className="flex items-center gap-2">
+                <Search size={14} className="shrink-0 text-forge-red" />
+                <Link href="/suivi" className="hover:text-white">
+                  Suivi commande
+                </Link>
+              </li>
               <li className="flex items-start gap-2">
                 <MapPin size={14} className="mt-0.5 shrink-0 text-forge-red" />
                 <span>Douala, Cameroun</span>

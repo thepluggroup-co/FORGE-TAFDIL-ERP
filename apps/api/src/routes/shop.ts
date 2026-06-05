@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { randomUUID } from 'crypto'
 import { supabaseAdmin } from '@forge/db'
+import { notifyCommandeSms } from '../services/sms.service'
 
 const db = supabaseAdmin!
 import type { HonoVariables } from '../types'
@@ -330,6 +331,13 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     event:   'nouvelle_commande_web',
     payload: { ref, montant_ttc, client: body.client_nom },
   })
+
+  void notifyCommandeSms({
+    numero:        ref,
+    client_nom:    body.client_nom,
+    telephone:     body.client_telephone,
+    total_ttc_xaf: montant_ttc,
+  }, 'commande_recue').catch((e) => console.error('[sms] confirmation commande shop:', e))
 
   return c.json({ ref, montant_ttc, statut: 'recue' }, 201)
 })

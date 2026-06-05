@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react'
+﻿import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   FileText, ReceiptText,
@@ -11,11 +11,13 @@ import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import {
   useFactures, useCredits, useEcritures, useEnvoyerFacture, useRemboursement, useCreerFacture,
+  useUpdateStatutFacture, usePaiementFacture, useFinanceDashboard,
 } from '@/hooks/useFinance'
 import type { Facture as FactureApi, Credit as CreditApi, FactureLigne } from '@/hooks/useFinance'
 import { useClients } from '@/hooks/useClients'
 import { useCommandes } from '@/hooks/useCommandes'
-import { apiClient } from '@/lib/api-client'
+import { API_BASE, apiClient } from '@/lib/api-client'
+import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -84,7 +86,7 @@ function Badge({ statut, map }: { statut: string; map: Record<string, { label: s
 
 // ── Tabs ───────────────────────────────────────────────────────────────────────
 
-const TABS = ['Factures', 'Crédits', 'Comptabilité', 'Déclarations Fiscales'] as const
+const TABS = ['Dashboard', 'Factures', 'Crédits', 'Comptabilité', 'Déclarations Fiscales'] as const
 type Tab = typeof TABS[number]
 
 // ── PDF Preview ────────────────────────────────────────────────────────────────
@@ -779,10 +781,119 @@ function RemboursementModal({ isOpen, onClose, credit }: { isOpen: boolean; onCl
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
+function PaiementFactureModal({ isOpen, onClose, facture }: { isOpen: boolean; onClose: () => void; facture: FactureRecord | null }) {
+  const [type, setType] = useState<'total' | 'partiel'>('total')
+  const [montant, setMontant] = useState('')
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0])
+  const [mode, setMode] = useState<'banque' | 'caisse'>('banque')
+  const paiement = usePaiementFacture()
+
+  useEffect(() => {
+    if (isOpen) {
+      setType('total')
+      setMontant('')
+      setDate(new Date().toISOString().split('T')[0])
+      setMode('banque')
+    }
+  }, [isOpen, facture?.id])
+
+  if (!facture) return null
+
+  const solde = Number(facture.solde_restant_xaf ?? 0)
+  const montantFinal = type === 'total' ? solde : Number(montant)
+
+  const handleSubmit = () => {
+    paiement.mutate({
+      id: facture.id as string,
+      montant_xaf: montantFinal,
+      date_paiement: date,
+      mode,
+    }, {
+      onSuccess: () => onClose(),
+    })
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Encaisser une facture" size="sm">
+      <div className="space-y-4">
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+          <div className="text-sm font-semibold text-amber-800">{facture.client?.nom as string} - {facture.numero as string}</div>
+          <div className="text-xs text-amber-600 mt-0.5">
+            Solde restant : <span className="font-bold">{formatXAF(solde)}</span>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">Type de paiement</label>
+          <div className="flex gap-4">
+            {(['total', 'partiel'] as const).map((t) => (
+              <label key={t} className="flex items-center gap-2 cursor-pointer">
+                <input type="radio" checked={type === t} onChange={() => setType(t)} className="accent-[#C62828]" />
+                <span className="text-sm">{t === 'total' ? 'Paiement total' : 'Partiel'}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {type === 'partiel' && (
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant encaisse (FCFA)</label>
+            <input type="number" value={montant} onChange={(e) => setMontant(e.target.value)}
+              max={solde}
+              placeholder={`Max : ${solde.toLocaleString('fr-CM')}`}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Date</label>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Mode</label>
+            <select value={mode} onChange={(e) => setMode(e.target.value as 'banque' | 'caisse')}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30 bg-white">
+              <option value="banque">Banque</option>
+              <option value="caisse">Caisse</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="flex gap-2 justify-end pt-2">
+          <Button variant="ghost" onClick={onClose}>Annuler</Button>
+          <Button onClick={handleSubmit} disabled={paiement.isPending || solde <= 0 || montantFinal <= 0 || montantFinal > solde}>
+            <CheckCircle className="h-3.5 w-3.5" /> {paiement.isPending ? 'Enregistrement...' : 'Encaisser'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+async function downloadFacturePdf(id: string, numero: string) {
+  const token = (await supabase.auth.getSession()).data.session?.access_token
+  const res = await fetch(`${API_BASE}/api/factures/${id}/pdf`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) throw new Error('PDF indisponible')
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${numero}.pdf`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export default function Finance() {
-  const [activeTab, setActiveTab]         = useState<Tab>('Factures')
+  const [activeTab, setActiveTab]         = useState<Tab>('Dashboard')
   const [showNewFacture, setShowNewFacture] = useState(false)
   const [selectedFacture, setSelectedFacture] = useState<FactureRecord | null>(null)
+  const [paiementFacture, setPaiementFacture] = useState<FactureRecord | null>(null)
   const [remboursementCredit, setRemboursementCredit] = useState<CreditRecord | null>(null)
   const [relanceCredit, setRelanceCredit] = useState<CreditRecord | null>(null)
   const [documentsCredit, setDocumentsCredit] = useState<CreditRecord | null>(null)
@@ -795,11 +906,15 @@ export default function Finance() {
     compte: compteFilter || undefined,
     mois:   periodeFilter || undefined,
   })
+  const { data: dashboardEcrituresData } = useEcritures()
+  const { data: financeDashboardData } = useFinanceDashboard()
   const envoyerFacture = useEnvoyerFacture()
+  const updateStatutFacture = useUpdateStatutFacture()
 
   const factures  = (facturesData?.data  ?? []) as FactureRecord[]
   const credits   = (creditsData?.data   ?? []) as CreditRecord[]
   const ecritures = ecrituresData?.data  ?? []
+  const dashboardEcritures = dashboardEcrituresData?.data ?? []
 
   // IDs des commandes déjà facturées (pour filtrer le picker du slide-over)
   const factureeCommandeIds = useMemo(
@@ -809,6 +924,51 @@ export default function Finance() {
 
   const echusCount = credits.filter((c) => c.statut === 'echu').length
   const totalEchus = credits.filter((c) => c.statut === 'echu').reduce((s, c) => s + (c.solde_restant_xaf as number), 0)
+  const financeSummary = useMemo(() => {
+    const facturesActives = factures.filter((f) => f.statut !== 'annule')
+    const caFacture = facturesActives.reduce((s, f) => s + Number(f.montant_ttc_xaf ?? 0), 0)
+    const encaisse = facturesActives.reduce((s, f) => s + Number(f.montant_paye_xaf ?? 0), 0)
+    const aRecevoir = facturesActives.reduce((s, f) => s + Number(f.solde_restant_xaf ?? 0), 0)
+    const brouillons = facturesActives.filter((f) => f.statut === 'brouillon')
+    const aRelancer = facturesActives.filter((f) => ['valide', 'envoye'].includes(f.statut as string) && Number(f.solde_restant_xaf ?? 0) > 0)
+    const payees = facturesActives.filter((f) => f.statut === 'paye').length
+    const creditsOuverts = credits.filter((c) => c.statut !== 'rembourse')
+    const creditsSolde = creditsOuverts.reduce((s, c) => s + Number(c.solde_restant_xaf ?? 0), 0)
+    const banqueCaisse = dashboardEcritures
+      .filter((e) => ['521', '571'].includes(String(e.compte_syscohada ?? e.compte ?? '')))
+      .reduce((s, e) => s + Number(e.debit_xaf ?? 0) - Number(e.credit_xaf ?? 0), 0)
+    const tauxEncaissement = caFacture > 0 ? Math.round((encaisse / caFacture) * 100) : 0
+
+    const apiKpis = financeDashboardData?.kpis
+    return {
+      caFacture,
+      encaisse,
+      aRecevoir,
+      brouillons,
+      aRelancer,
+      payees,
+      totalFactures: facturesActives.length,
+      creditsSolde,
+      banqueCaisse,
+      tauxEncaissement,
+      apiKpis,
+      apiRepartition: financeDashboardData?.repartition_factures,
+      apiEcritures: financeDashboardData?.dernieres_ecritures,
+    }
+  }, [credits, dashboardEcritures, factures, financeDashboardData])
+
+  const dashboardKpis = {
+    caFacture: financeSummary.apiKpis?.ca_facture_xaf ?? financeSummary.caFacture,
+    encaisse: financeSummary.apiKpis?.encaisse_xaf ?? financeSummary.encaisse,
+    aRecevoir: financeSummary.apiKpis?.a_recevoir_xaf ?? financeSummary.aRecevoir,
+    banqueCaisse: financeSummary.apiKpis?.banque_caisse_xaf ?? financeSummary.banqueCaisse,
+    tauxEncaissement: financeSummary.apiKpis?.taux_encaissement ?? financeSummary.tauxEncaissement,
+    totalFactures: financeSummary.apiKpis?.factures_total ?? financeSummary.totalFactures,
+    brouillons: financeSummary.apiKpis?.factures_brouillon ?? financeSummary.brouillons.length,
+    aRelancer: financeSummary.apiKpis?.factures_a_relancer ?? financeSummary.aRelancer.length,
+    creditsOuverts: financeSummary.apiKpis?.credits_ouverts ?? credits.filter((c) => c.statut !== 'rembourse').length,
+    creditsSolde: financeSummary.apiKpis?.credits_solde_xaf ?? financeSummary.creditsSolde,
+  }
 
   const factureColumns = useMemo<Column<FactureRecord>[]>(() => [
     { id: 'numero', header: 'Référence', accessor: 'numero', render: (v) => <span className="font-mono text-xs font-semibold text-gray-700">{v as string}</span> },
@@ -821,16 +981,36 @@ export default function Finance() {
       id: 'actions', header: '', accessor: 'id', sortable: false,
       render: (_, row) => (
         <div className="flex gap-1">
+          {row.statut === 'brouillon' && (
+            <button title="Valider"
+              onClick={(e) => { e.stopPropagation(); updateStatutFacture.mutate({ id: row.id as string, statut: 'valide' }) }}
+              disabled={updateStatutFacture.isPending}
+              className="p-1.5 rounded hover:bg-blue-50 text-gray-400 hover:text-blue-600 transition-colors disabled:opacity-50">
+              <CheckCircle className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {Number(row.solde_restant_xaf ?? 0) > 0 && row.statut !== 'annule' && (
+            <button title="Encaisser"
+              onClick={(e) => { e.stopPropagation(); setPaiementFacture(row) }}
+              className="p-1.5 rounded hover:bg-amber-50 text-gray-400 hover:text-amber-600 transition-colors">
+              <ReceiptText className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button onClick={(e) => { e.stopPropagation(); setSelectedFacture(row) }} title="Aperçu"
             className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
             <FileText className="h-3.5 w-3.5" />
           </button>
-          <button title="Télécharger PDF" className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
+          <button title="Telecharger PDF"
+            onClick={(e) => {
+              e.stopPropagation()
+              downloadFacturePdf(row.id as string, row.numero as string).catch((err: Error) => toast.error(err.message))
+            }}
+            className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
             <Download className="h-3.5 w-3.5" />
           </button>
-          <button title="Envoyer WhatsApp"
+          <button title="Marquer envoyee"
             onClick={(e) => { e.stopPropagation(); envoyerFacture.mutate(row.id as string) }}
-            disabled={envoyerFacture.isPending}
+            disabled={envoyerFacture.isPending || row.statut === 'annule' || row.statut === 'paye'}
             className="p-1.5 rounded hover:bg-green-50 text-gray-400 hover:text-green-600 transition-colors disabled:opacity-50">
             <MessageCircle className="h-3.5 w-3.5" />
           </button>
@@ -841,7 +1021,7 @@ export default function Finance() {
         </div>
       ),
     },
-  ], [envoyerFacture.isPending])
+  ], [envoyerFacture.isPending, updateStatutFacture.isPending])
 
   const creditColumns = useMemo<Column<CreditRecord>[]>(() => [
     { id: 'numero', header: 'Référence', accessor: 'numero', render: (v) => <span className="font-mono text-xs font-semibold text-gray-700">{v as string}</span> },
@@ -922,6 +1102,103 @@ export default function Finance() {
         <AnimatePresence mode="wait">
           <motion.div key={activeTab} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}>
 
+            {activeTab === 'Dashboard' && (
+              <div className="p-5 space-y-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                  {[
+                    { label: 'CA facture', value: formatXAF(dashboardKpis.caFacture), hint: `${dashboardKpis.totalFactures} facture${dashboardKpis.totalFactures !== 1 ? 's' : ''}`, color: '#C62828' },
+                    { label: 'Encaisse', value: formatXAF(dashboardKpis.encaisse), hint: `${dashboardKpis.tauxEncaissement}% du CA`, color: '#15803d' },
+                    { label: 'A recevoir', value: formatXAF(dashboardKpis.aRecevoir), hint: `${dashboardKpis.aRelancer} facture${dashboardKpis.aRelancer !== 1 ? 's' : ''} a suivre`, color: '#d97706' },
+                    { label: 'Banque + caisse', value: formatXAF(dashboardKpis.banqueCaisse), hint: 'Selon ecritures 521/571', color: '#1d4ed8' },
+                  ].map((kpi) => (
+                    <div key={kpi.label} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                      <div className="text-xs font-semibold uppercase text-gray-400">{kpi.label}</div>
+                      <div className="mt-2 text-xl font-black text-[#212121]">{kpi.value}</div>
+                      <div className="mt-1 text-xs font-medium" style={{ color: kpi.color }}>{kpi.hint}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                  <div className="xl:col-span-2 rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-sm font-bold text-[#212121]">Priorites finance</h3>
+                        <p className="text-xs text-gray-400 mt-0.5">Validation, recouvrement et risques client.</p>
+                      </div>
+                      <Button size="sm" variant="ghost" onClick={() => setActiveTab('Factures')}>
+                        <ExternalLink className="h-3.5 w-3.5" /> Factures
+                      </Button>
+                    </div>
+                    <div className="space-y-2">
+                      {[
+                        { label: 'Factures brouillon a valider', count: dashboardKpis.brouillons, amount: financeSummary.brouillons.reduce((s, f) => s + Number(f.montant_ttc_xaf ?? 0), 0), tone: '#1d4ed8' },
+                        { label: 'Factures a encaisser ou relancer', count: dashboardKpis.aRelancer, amount: dashboardKpis.aRecevoir, tone: '#d97706' },
+                        { label: 'Credits client ouverts', count: dashboardKpis.creditsOuverts, amount: dashboardKpis.creditsSolde, tone: '#dc2626' },
+                      ].map((item) => (
+                        <div key={item.label} className="flex items-center justify-between rounded-lg border border-gray-100 px-3 py-3">
+                          <div>
+                            <div className="text-sm font-semibold text-gray-800">{item.label}</div>
+                            <div className="text-xs text-gray-400">{item.count} dossier{item.count !== 1 ? 's' : ''}</div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-sm font-black" style={{ color: item.tone }}>{formatXAF(item.amount)}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                    <h3 className="text-sm font-bold text-[#212121] mb-4">Repartition factures</h3>
+                    <div className="space-y-3">
+                      {Object.entries(FACT_MAP).filter(([key]) => key !== 'annule').map(([statut, meta]) => {
+                        const count = financeSummary.apiRepartition?.find((item) => item.statut === statut)?.count
+                          ?? factures.filter((f) => f.statut === statut).length
+                        const pct = dashboardKpis.totalFactures > 0 ? Math.round((count / dashboardKpis.totalFactures) * 100) : 0
+                        return (
+                          <div key={statut}>
+                            <div className="flex items-center justify-between text-xs mb-1">
+                              <span className="font-semibold text-gray-600">{meta.label}</span>
+                              <span className="text-gray-400">{count} - {pct}%</span>
+                            </div>
+                            <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+                              <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: meta.color }} />
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-bold text-[#212121]">Dernieres ecritures</h3>
+                    <Button size="sm" variant="ghost" onClick={() => setActiveTab('Comptabilité')}>
+                      <ExternalLink className="h-3.5 w-3.5" /> Comptabilite
+                    </Button>
+                  </div>
+                  <div className="divide-y divide-gray-50">
+                    {(financeSummary.apiEcritures ?? dashboardEcritures).slice(0, 5).map((e) => (
+                      <div key={e.id} className="flex items-center justify-between py-2">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-gray-800 truncate">{e.libelle}</div>
+                          <div className="text-xs text-gray-400">{formatDate(e.date)} - {e.compte_syscohada} {e.compte_label}</div>
+                        </div>
+                        <div className="text-right text-xs font-bold">
+                          {Number(e.debit_xaf ?? 0) > 0 ? formatXAF(e.debit_xaf) : formatXAF(e.credit_xaf)}
+                        </div>
+                      </div>
+                    ))}
+                    {(financeSummary.apiEcritures ?? dashboardEcritures).length === 0 && (
+                      <div className="py-8 text-center text-sm text-gray-400">Aucune ecriture comptable disponible</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* ── Factures ── */}
             {activeTab === 'Factures' && (
               selectedFacture ? (
@@ -931,11 +1208,26 @@ export default function Finance() {
                       <ChevronLeft className="h-4 w-4" /> Retour à la liste
                     </button>
                     <div className="flex gap-2">
-                      <Button variant="ghost" size="sm"><Download className="h-3.5 w-3.5" /> PDF</Button>
+                      {Number(selectedFacture.solde_restant_xaf ?? 0) > 0 && selectedFacture.statut !== 'annule' && (
+                        <Button variant="ghost" size="sm" onClick={() => setPaiementFacture(selectedFacture)}>
+                          <ReceiptText className="h-3.5 w-3.5" /> Encaisser
+                        </Button>
+                      )}
+                      {selectedFacture.statut === 'brouillon' && (
+                        <Button variant="ghost" size="sm"
+                          onClick={() => updateStatutFacture.mutate({ id: selectedFacture.id as string, statut: 'valide' })}
+                          disabled={updateStatutFacture.isPending}>
+                          <CheckCircle className="h-3.5 w-3.5" /> Valider
+                        </Button>
+                      )}
+                      <Button variant="ghost" size="sm"
+                        onClick={() => downloadFacturePdf(selectedFacture.id as string, selectedFacture.numero as string).catch((err: Error) => toast.error(err.message))}>
+                        <Download className="h-3.5 w-3.5" /> PDF
+                      </Button>
                       <Button variant="ghost" size="sm"
                         onClick={() => envoyerFacture.mutate(selectedFacture.id as string)}
-                        disabled={envoyerFacture.isPending}>
-                        <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
+                        disabled={envoyerFacture.isPending || selectedFacture.statut === 'annule' || selectedFacture.statut === 'paye'}>
+                        <MessageCircle className="h-3.5 w-3.5" /> Envoyee
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => window.print()}><Printer className="h-3.5 w-3.5" /> Imprimer</Button>
                     </div>
@@ -1068,9 +1360,12 @@ export default function Finance() {
         onClose={() => setShowNewFacture(false)}
         factureeCommandeIds={factureeCommandeIds}
       />
+      <PaiementFactureModal isOpen={!!paiementFacture} onClose={() => setPaiementFacture(null)} facture={paiementFacture} />
       <RemboursementModal isOpen={!!remboursementCredit} onClose={() => setRemboursementCredit(null)} credit={remboursementCredit} />
       <RelanceModal isOpen={!!relanceCredit} onClose={() => setRelanceCredit(null)} credit={relanceCredit} />
       <DocumentsModal isOpen={!!documentsCredit} onClose={() => setDocumentsCredit(null)} credit={documentsCredit} />
     </motion.div>
   )
 }
+
+

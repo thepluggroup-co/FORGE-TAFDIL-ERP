@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import {
@@ -345,85 +345,109 @@ export function useDeleteRessourceProjet() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 export interface Livraison {
-  id: string; numero: string; client_nom: string; destination: string
-  transporteur?: string; client_id?: string
-  statut: 'confirmed' | 'in_production' | 'pret' | 'delivered' | 'cancelled'
-  date_depart?: string; date_livraison_prevue?: string; date_livraison_reelle?: string
-  notes?: string; created_at: string
+  id: string
+  numero: string
+  commande_id?: string | null
+  client_id?: string | null
+  client_nom: string
+  destination: string
+  transporteur?: string | null
+  statut: 'planifiee' | 'en_transit' | 'livree' | 'annulee'
+  date_depart?: string | null
+  date_livraison_prevue?: string | null
+  date_livraison_reelle?: string | null
+  notes?: string | null
+  created_at: string
+  livraisons_historique?: Array<{
+    id: string
+    ancien_statut: string | null
+    nouveau_statut: string
+    commentaire: string | null
+    changed_at: string
+  }>
 }
+
+export interface CommandePreteLivraison {
+  id: string
+  numero: string
+  client_id: string | null
+  client_nom: string
+  date_livraison_prevue: string | null
+  total_ttc_xaf: number
+  statut: 'pret'
+}
+
 export interface CreateLivraisonPayload {
-  client_nom: string; destination: string; transporteur?: string
-  client_id?: string; commande_id?: string
-  date_depart?: string; date_livraison_prevue?: string; notes?: string
+  client_nom: string
+  destination: string
+  transporteur?: string
+  client_id?: string
+  commande_id?: string
+  date_depart?: string
+  date_livraison_prevue?: string
+  notes?: string
 }
+
 interface LivraisonsResponse { data: Livraison[]; total: number }
+
+function queryString(params?: Record<string, string | undefined>) {
+  const qs = new URLSearchParams()
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    if (value) qs.set(key, value)
+  })
+  const value = qs.toString()
+  return value ? `?${value}` : ''
+}
 
 export function useLivraisons(params?: { statut?: string; search?: string }) {
   return useQuery({
     queryKey:  ['livraisons', params],
-    queryFn:   () => dbGetLivraisons(params) as Promise<LivraisonsResponse>,
+    queryFn:   () => apiClient.get<LivraisonsResponse>(`/api/logistique/livraisons${queryString(params)}`),
+    staleTime: 20_000,
+  })
+}
+
+export function useCommandesPretesLivraison() {
+  return useQuery({
+    queryKey: ['logistique', 'commandes-pretes'],
+    queryFn:  () => apiClient.get<{ data: CommandePreteLivraison[]; total: number }>('/api/logistique/commandes-pretes'),
     staleTime: 20_000,
   })
 }
 
 export function useCreateLivraison() {
-  const qc   = useQueryClient()
-  const auth = useAuth()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (payload: CreateLivraisonPayload) => {
-      const numero = await genererNumero('livraisons', 'LIV')
-      let { client_nom, client_id } = payload
-      if (payload.commande_id) {
-        const { data: cmd } = await supabase.from('commandes')
-          .select('client_id,client_nom').eq('id', payload.commande_id).single()
-        if (cmd) {
-          const c = cmd as { client_id: string | null; client_nom: string }
-          client_id  = client_id  ?? c.client_id ?? undefined
-          client_nom = client_nom ?? c.client_nom
-        }
-      }
-      const { data, error } = await supabase.from('livraisons')
-        .insert({ ...payload, numero, client_id: client_id ?? null, client_nom, created_by: auth.user?.id, sync_status: 'synced' })
-        .select().single()
-      if (error) throw new Error(error.message)
-      return data!
+    mutationFn: (payload: CreateLivraisonPayload) =>
+      apiClient.post<Livraison>('/api/logistique/livraisons', payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['livraisons'] })
+      void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
+      toast.success('Livraison créée')
     },
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['livraisons'] }); toast.success('Livraison créée') },
-    onError:   (err: Error) => toast.error(err.message),
+    onError: (err: Error) => toast.error(err.message),
   })
 }
 
 export function useUpdateLivraisonStatut() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, statut, date_livraison_reelle }: {
-      id: string; statut: Livraison['statut']; date_livraison_reelle?: string; notes?: string
-    }) => {
-      const extra: Record<string, unknown> = {}
-      if (statut === 'delivered')
-        extra.date_livraison_reelle = date_livraison_reelle ?? new Date().toISOString().slice(0, 10)
-      const data = await dbUpdateStatut('livraisons', id, statut, Object.keys(extra).length ? extra : undefined)
-      // Auto-transition commande si livraison complétée
-      if (statut === 'delivered') {
-        const liv = data as { commande_id?: string } | null
-        if (liv?.commande_id) {
-          const { data: cmd } = await supabase.from('commandes').select('statut').eq('id', liv.commande_id).single()
-          if (cmd && (cmd as { statut: string }).statut === 'pret') {
-            await supabase.from('commandes').update({ statut: 'delivered', updated_at: new Date().toISOString() }).eq('id', liv.commande_id)
-          }
-        }
-      }
-      return data
+    mutationFn: ({ id, statut, date_livraison_reelle, notes }: {
+      id: string
+      statut: Livraison['statut']
+      date_livraison_reelle?: string
+      notes?: string
+    }) => apiClient.patch<Livraison>(`/api/logistique/livraisons/${id}/statut`, { statut, date_livraison_reelle, notes }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['livraisons'] })
+      void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
+      void qc.invalidateQueries({ queryKey: ['commandes'] })
     },
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['livraisons'] }),
-    onError:   (err: Error) => toast.error(err.message),
+    onError: (err: Error) => toast.error(err.message),
   })
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// MARKETING — CAMPAGNES
-// ══════════════════════════════════════════════════════════════════════════════
-
+// MARKETING - CAMPAGNES
 export interface Campagne {
   id: string; nom: string; description?: string; canal: string
   budget_xaf: number; reach: number; leads_count: number; conversions_count: number
@@ -528,3 +552,4 @@ export function useUpdateIncidentStatut() {
     onError:   (err: Error) => toast.error(err.message),
   })
 }
+

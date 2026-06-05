@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+﻿import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
@@ -6,6 +6,7 @@ import { supabaseAdmin } from '@forge/db'
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import { notifyCommandeSms } from '../services/sms.service'
+import { ensureFactureForCommande } from '../services/finance-core.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
@@ -70,6 +71,19 @@ async function enregistrerMouvementStock(args: {
 }
 
 async function ensureFactureCommande(commandeId: string, userId?: string) {
+  try {
+    const result = await ensureFactureForCommande({
+      commandeId,
+      statut: 'brouillon',
+      userId,
+      notes: 'Facture generee automatiquement apres production. Validation finance requise avant envoi.',
+    })
+    return result.created
+  } catch (e) {
+    console.error('[finance] facture auto production:', e)
+    return false
+  }
+
   const { data: existing } = await db
     .from('factures')
     .select('id')
@@ -261,10 +275,14 @@ const TRANSITIONS_PROJET: Record<string, string[]> = {
 }
 
 const TRANSITIONS_LIVRAISON: Record<string, string[]> = {
-  confirmed:     ['pret', 'cancelled'],
+  confirmed:     ['pret', 'cancelled'], // compat anciennes donnees
   pret:          ['delivered', 'cancelled'],
   delivered:     [],
   cancelled:     [],
+  planifiee:     ['en_transit', 'annulee'],
+  en_transit:    ['livree', 'annulee'],
+  livree:        [],
+  annulee:       [],
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1057,10 +1075,27 @@ const livraisonSchema = z.object({
 })
 
 const livraisonStatutSchema = z.object({
-  statut:                z.enum(['confirmed', 'pret', 'delivered', 'cancelled']),
+  statut:                z.enum(['planifiee', 'en_transit', 'livree', 'annulee']),
   date_livraison_reelle: z.string().optional(),
   notes:                 z.string().optional(),
 })
+
+async function insertHistoriqueLivraison(params: {
+  livraisonId: string
+  ancienStatut?: string | null
+  nouveauStatut: string
+  commentaire?: string | null
+  userId?: string
+}) {
+  const { error } = await db.from('livraisons_historique').insert({
+    livraison_id:   params.livraisonId,
+    ancien_statut:  params.ancienStatut ?? null,
+    nouveau_statut: params.nouveauStatut,
+    commentaire:    params.commentaire ?? null,
+    changed_by:     params.userId ?? null,
+  })
+  if (error) console.error('[logistique] historique livraison:', error)
+}
 
 router.get('/logistique/livraisons', async (c) => {
   const { statut, search } = c.req.query()
@@ -1077,7 +1112,60 @@ router.get('/logistique/livraisons', async (c) => {
     .range(from, from + perPage - 1)
 
   if (error) return c.json({ error: error.message }, 500)
-  return c.json({ data, total: count ?? 0, page, per_page: perPage })
+
+  const livraisons = data ?? []
+  const livraisonIds = livraisons.map((livraison) => livraison.id).filter(Boolean)
+  const historiqueParLivraison = new Map<string, unknown[]>()
+
+  if (livraisonIds.length > 0) {
+    const { data: historique, error: historiqueError } = await db
+      .from('livraisons_historique')
+      .select('*')
+      .in('livraison_id', livraisonIds)
+      .order('changed_at', { ascending: false })
+
+    if (historiqueError) {
+      console.error('[logistique] lecture historique livraison:', historiqueError)
+    } else {
+      for (const entree of historique ?? []) {
+        const livraisonId = entree.livraison_id
+        if (!historiqueParLivraison.has(livraisonId)) historiqueParLivraison.set(livraisonId, [])
+        historiqueParLivraison.get(livraisonId)?.push(entree)
+      }
+    }
+  }
+
+  const enrichedData = livraisons.map((livraison) => ({
+    ...livraison,
+    livraisons_historique: historiqueParLivraison.get(livraison.id) ?? [],
+  }))
+
+  return c.json({ data: enrichedData, total: count ?? 0, page, per_page: perPage })
+})
+
+router.get('/logistique/commandes-pretes', async (c) => {
+  const { data: livraisonsActives } = await db
+    .from('livraisons')
+    .select('commande_id')
+    .in('statut', ['planifiee', 'en_transit', 'confirmed', 'pret'])
+    .not('commande_id', 'is', null)
+
+  const commandeIdsDejaPlanifiees = ((livraisonsActives ?? []) as { commande_id: string | null }[])
+    .map((l) => l.commande_id)
+    .filter(Boolean) as string[]
+
+  let q = db
+    .from('commandes')
+    .select('id, numero, client_id, client_nom, date_livraison_prevue, total_ttc_xaf, statut')
+    .eq('statut', 'pret')
+
+  if (commandeIdsDejaPlanifiees.length > 0) {
+    q = q.not('id', 'in', `(${commandeIdsDejaPlanifiees.join(',')})`)
+  }
+
+  const { data, error } = await q.order('date_livraison_prevue', { ascending: true, nullsFirst: false })
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data: data ?? [], total: data?.length ?? 0 })
 })
 
 router.post('/logistique/livraisons', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', livraisonSchema), async (c) => {
@@ -1090,13 +1178,37 @@ router.post('/logistique/livraisons', requireRole(['admin', 'superviseur', 'oper
   if (body.commande_id) {
     const { data: commande } = await db
       .from('commandes')
-      .select('client_id, client_nom')
+      .select('client_id, client_nom, statut, numero, date_livraison_prevue')
       .eq('id', body.commande_id)
       .single()
-    if (commande) {
-      const cmd = commande as { client_id: string | null; client_nom: string }
-      client_id  = client_id  ?? cmd.client_id ?? undefined
-      client_nom = client_nom ?? cmd.client_nom
+    if (!commande) return c.json({ error: 'Commande introuvable', code: 'COMMANDE_NOT_FOUND' }, 404)
+
+    const cmd = commande as { client_id: string | null; client_nom: string; statut: string; numero: string; date_livraison_prevue: string | null }
+    if (cmd.statut !== 'pret') {
+      return c.json({
+        error: `La commande ${cmd.numero} n'est pas prête à livrer`,
+        code: 'COMMANDE_NOT_READY',
+      }, 422)
+    }
+
+    const { count: activeLivraisons } = await db
+      .from('livraisons')
+      .select('*', { count: 'exact', head: true })
+      .eq('commande_id', body.commande_id)
+      .in('statut', ['planifiee', 'en_transit', 'confirmed', 'pret'])
+
+    if ((activeLivraisons ?? 0) > 0) {
+      return c.json({
+        error: `Une livraison active existe déjà pour la commande ${cmd.numero}`,
+        code: 'LIVRAISON_ALREADY_EXISTS',
+      }, 422)
+    }
+
+    client_id  = client_id  ?? cmd.client_id ?? undefined
+    client_nom = client_nom ?? cmd.client_nom
+
+    if (!body.date_livraison_prevue && cmd.date_livraison_prevue) {
+      body.date_livraison_prevue = cmd.date_livraison_prevue
     }
   }
 
@@ -1112,16 +1224,32 @@ router.post('/logistique/livraisons', requireRole(['admin', 'superviseur', 'oper
 
   const { data, error } = await db
     .from('livraisons')
-    .insert({ ...body, numero, client_id: client_id ?? null, client_nom, created_by: user.id, sync_status: 'synced' })
+    .insert({
+      ...body,
+      numero,
+      statut: 'planifiee',
+      client_id: client_id ?? null,
+      client_nom,
+      created_by: user.id,
+      sync_status: 'synced',
+    })
     .select().single()
 
   if (error) return c.json({ error: error.message, code: error.code }, 400)
+  await insertHistoriqueLivraison({
+    livraisonId: (data as { id: string }).id,
+    ancienStatut: null,
+    nouveauStatut: 'planifiee',
+    commentaire: body.commande_id ? 'Livraison planifiée depuis une commande prête' : 'Livraison planifiée',
+    userId: user.id,
+  })
   return c.json(data, 201)
 })
 
 router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', livraisonStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
+  const user   = c.get('user')
 
   const { data: existing } = await db
     .from('livraisons')
@@ -1136,7 +1264,7 @@ router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'supervi
 
   if (!allowed.includes(body.statut)) {
     return c.json({
-      error: `Transition "${ex.statut}" → "${body.statut}" non autorisée`,
+      error: `Transition "${ex.statut}" -> "${body.statut}" non autorisee`,
       code:  'INVALID_TRANSITION',
       transitions_autorisees: allowed,
     }, 422)
@@ -1148,8 +1276,7 @@ router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'supervi
   }
   if (body.notes) updates.notes = body.notes
 
-  // Capturer la date de livraison réelle automatiquement
-  if (body.statut === 'delivered') {
+  if (body.statut === 'livree') {
     updates.date_livraison_reelle = body.date_livraison_reelle ?? new Date().toISOString().slice(0, 10)
   }
 
@@ -1159,9 +1286,15 @@ router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'supervi
   if (error) return c.json({ error: error.message }, 400)
   if (!data)  return c.json({ error: 'Livraison introuvable', code: 'NOT_FOUND' }, 404)
 
-  // Transition auto de la commande liée si livraison delivered
-  // (les livraisons annulées ne ferment PAS automatiquement la commande)
-  if (body.statut === 'delivered' && ex.commande_id) {
+  await insertHistoriqueLivraison({
+    livraisonId: id,
+    ancienStatut: ex.statut,
+    nouveauStatut: body.statut,
+    commentaire: body.notes ?? null,
+    userId: user.id,
+  })
+
+  if (body.statut === 'livree' && ex.commande_id) {
     const { data: commande } = await db
       .from('commandes').select('statut').eq('id', ex.commande_id).single()
     if (commande && (commande as { statut: string }).statut === 'pret') {
@@ -1172,7 +1305,8 @@ router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'supervi
         commande_id:    ex.commande_id,
         ancien_statut:  'pret',
         nouveau_statut: 'delivered',
-        commentaire:    `[Auto] Livraison ${id} confirmée`,
+        commentaire:    `[Auto] Livraison ${id} confirmee`,
+        changed_by:     user.id,
       })
       await notifyCommandeEvent(ex.commande_id, 'commande_livree')
     }
@@ -1181,10 +1315,7 @@ router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'supervi
   return c.json(data)
 })
 
-// ══════════════════════════════════════════════════════════════════════════════
-// MARKETING — CAMPAGNES
-// ══════════════════════════════════════════════════════════════════════════════
-
+// MARKETING - CAMPAGNES
 const campagneSchema = z.object({
   nom:         z.string().min(1),
   description: z.string().optional(),
@@ -1571,3 +1702,4 @@ router.delete('/projets/:id/ressources/:rid', requireRole(['admin', 'superviseur
 })
 
 export { router as operationsRouter }
+

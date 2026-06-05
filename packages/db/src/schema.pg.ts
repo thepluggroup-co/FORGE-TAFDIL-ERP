@@ -501,7 +501,7 @@ export const livraisonsPg = pgTable('livraisons', {
   clientNom:            text('client_nom').notNull(),
   destination:          text('destination').notNull(),
   transporteur:         text('transporteur'),
-  statut:               commandeStatutEnum('statut').notNull().default('confirmed'),
+  statut:               text('statut').notNull().default('planifiee'),
   dateDepart:           tsN('date_depart'),
   dateLivraisonPrevue:  tsN('date_livraison_prevue'),
   dateLivraisonReelle:  tsN('date_livraison_reelle'),
@@ -510,6 +510,16 @@ export const livraisonsPg = pgTable('livraisons', {
   createdAt:            ts('created_at'),
   updatedAt:            ts('updated_at'),
   syncStatus:           syncStatusEnum('sync_status').notNull().default('pending'),
+})
+
+export const livraisonsHistoriquePg = pgTable('livraisons_historique', {
+  id:            id(),
+  livraisonId:   uuid('livraison_id').notNull().references(() => livraisonsPg.id),
+  ancienStatut:  text('ancien_statut'),
+  nouveauStatut: text('nouveau_statut').notNull(),
+  commentaire:   text('commentaire'),
+  changedBy:     uuid('changed_by').references(() => profilesPg.id),
+  changedAt:     ts('changed_at'),
 })
 
 // ══════════════════════════════════════════════════════════════════════════════

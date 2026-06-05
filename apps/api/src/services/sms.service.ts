@@ -2,6 +2,7 @@ const SITE_URL = process.env.SITE_URL ?? 'https://shop.tafdil.cm'
 const DEFAULT_COUNTRY_CODE = process.env.SMS_DEFAULT_COUNTRY_CODE ?? '237'
 
 type SmsEvent =
+  | 'commande_recue'
   | 'commande_en_production'
   | 'commande_prete'
   | 'commande_livree'
@@ -116,6 +117,9 @@ export function buildCommandeSms(commande: CommandeSmsInfo, event: SmsEvent) {
   const montant = formatXaf(commande.total_ttc_xaf)
   const suivi = `${SITE_URL}/suivi/${commande.numero}`
 
+  if (event === 'commande_recue') {
+    return `TAFDIL FORGE: Commande ${commande.numero} recue${montant ? ` (${montant})` : ''}. Suivi: ${suivi}`
+  }
   if (event === 'commande_en_production') {
     return `TAFDIL FORGE: Bonjour ${prenom}, votre commande ${commande.numero} est lancee en production. Suivi: ${suivi}`
   }

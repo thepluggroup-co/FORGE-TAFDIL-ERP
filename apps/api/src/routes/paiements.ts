@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { createHmac } from 'crypto'
 import { supabaseAdmin } from '@forge/db'
+import { enregistrerPaiementCommande } from '../services/finance-core.service'
 
 const db = supabaseAdmin!
 
@@ -367,13 +368,22 @@ paiementsRouter.post('/webhook', async (c) => {
       return c.json({ error: 'Erreur interne' }, 500)
     }
 
-    // Mise à jour commande ERP liée
+    // Synchronisation finance de la commande ERP liée
     if (commande.erp_commande_id) {
-      const { error: errERP } = await db
-        .from('commandes')
-        .update({ statut: 'paye', updated_at: new Date().toISOString() })
-        .eq('id', commande.erp_commande_id)
-      if (errERP) console.error('[webhook] update commande ERP:', errERP)
+      try {
+        await enregistrerPaiementCommande({
+          commandeId:               commande.erp_commande_id,
+          montantXaf:               Number(commande.montant_ttc),
+          methode:                  'notchpay',
+          referenceExt:             reference,
+          datePaiement:             new Date().toISOString().slice(0, 10),
+          notes:                    `Paiement NotchPay commande web ${commande.ref}`,
+          ensureFacture:            true,
+          factureStatutSiCreation:  'paye',
+        })
+      } catch (e) {
+        console.error('[webhook] sync finance commande ERP:', e)
+      }
     }
 
     // Décrémenter le stock pour chaque ligne

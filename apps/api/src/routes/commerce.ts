@@ -11,6 +11,7 @@ import { localCreateDevis, localCreateCommande, getClientsLocal, getCommandesLoc
 import { withOfflineFallback } from '../services/offline-fallback'
 import { notifyStatutChange } from '../services/notifications'
 import { notifyCommandeSms } from '../services/sms.service'
+import { enregistrerPaiementCommande } from '../services/finance-core.service'
 import { enqueueEmail, notifyWhatsApp } from '../services/email-queue.service'
 import type { HonoVariables } from '../types'
 
@@ -1185,60 +1186,38 @@ router.post(
     const user   = c.get('user')
     const body   = c.req.valid('json')
 
-    const { data: commande } = await db
-      .from('commandes')
-      .select('numero, client_id, client_nom, total_ttc_xaf, montant_paye_xaf, statut')
-      .eq('id', id)
-      .single()
-
-    if (!commande) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
-
-    const cmd = commande as {
-      numero: string; client_id: string | null; client_nom: string
-      total_ttc_xaf: number; montant_paye_xaf: number; statut: string
-    }
-
-    const soldeRestant = Math.max(0, cmd.total_ttc_xaf - cmd.montant_paye_xaf)
-    if (body.montant_xaf > soldeRestant + 1) {  // +1 tolérance arrondi
-      return c.json({
-        error: `Montant dépasse le solde restant (${soldeRestant.toLocaleString()} XAF)`,
-        code: 'AMOUNT_EXCEEDED',
-      }, 422)
-    }
-
-    const { data: paiement, error: pErr } = await db
-      .from('paiements_commande')
-      .insert({
-        commande_id:    id,
-        client_id:      cmd.client_id,
-        montant_xaf:    body.montant_xaf,
-        methode:        body.methode,
-        reference_ext:  body.reference_ext ?? null,
-        statut:         'confirme',
-        date_paiement:  body.date_paiement,
-        notes:          body.notes ?? null,
-        enregistre_par: user.id,
+    try {
+      const result = await enregistrerPaiementCommande({
+        commandeId:               id,
+        montantXaf:               body.montant_xaf,
+        methode:                  body.methode,
+        referenceExt:             body.reference_ext ?? null,
+        datePaiement:             body.date_paiement,
+        notes:                    body.notes ?? null,
+        userId:                   user.id,
+        ensureFacture:            true,
+        factureStatutSiCreation:  'envoye',
       })
-      .select().single()
 
-    if (pErr) return c.json({ error: pErr.message }, 400)
+      if (result.solde_restant_xaf <= 0) {
+        const { data: commande } = await db
+          .from('commandes')
+          .select('numero, client_nom')
+          .eq('id', id)
+          .single()
+        const cmd = commande as { numero?: string; client_nom?: string } | null
 
-    const nouveauMontantPaye = Math.min(cmd.total_ttc_xaf, cmd.montant_paye_xaf + body.montant_xaf)
-    await db.from('commandes').update({
-      montant_paye_xaf: nouveauMontantPaye,
-      updated_at:       new Date().toISOString(),
-    }).eq('id', id)
+        await notifyWhatsApp(
+          process.env.DIRECTEUR_WHATSAPP_PHONE ?? '',
+          `✅ Commande ${cmd?.numero ?? id} soldée intégralement par ${cmd?.client_nom ?? 'client'}`,
+        )
+      }
 
-    const soldeApres = Math.max(0, cmd.total_ttc_xaf - nouveauMontantPaye)
-
-    if (soldeApres <= 0) {
-      await notifyWhatsApp(
-        process.env.DIRECTEUR_WHATSAPP_PHONE ?? '',
-        `✅ Commande ${cmd.numero} soldée intégralement par ${cmd.client_nom}`,
-      )
+      return c.json(result, 201)
+    } catch (err) {
+      const e = err as Error & { code?: string; httpStatus?: number }
+      return c.json({ error: e.message, code: e.code ?? 'PAYMENT_ERROR' }, e.httpStatus ?? 400)
     }
-
-    return c.json({ paiement, montant_paye_xaf: nouveauMontantPaye, solde_restant_xaf: soldeApres }, 201)
   },
 )
 

@@ -150,6 +150,54 @@ function enrichirFacture(f: any): any {
 // FACTURES
 // ══════════════════════════════════════════════════════════════════════════════
 
+router.get('/finance/dashboard', requireRole(['admin', 'superviseur']), async (c) => {
+  const [facturesRes, creditsRes, ecrituresRes] = await Promise.all([
+    db.from('factures').select('id,numero,client_nom,statut,total_ttc_xaf,montant_paye_xaf,date_emission,created_at').neq('statut', 'annule'),
+    db.from('credits').select('id,statut,solde_restant_xaf').neq('statut', 'rembourse'),
+    db.from('ecritures_comptables').select('*').order('date', { ascending: false }).limit(200),
+  ])
+
+  if (facturesRes.error) return c.json({ error: facturesRes.error.message }, 500)
+  if (creditsRes.error) return c.json({ error: creditsRes.error.message }, 500)
+  if (ecrituresRes.error) return c.json({ error: ecrituresRes.error.message }, 500)
+
+  type Fact = { statut: string; total_ttc_xaf: number; montant_paye_xaf: number }
+  type Credit = { solde_restant_xaf: number }
+  type Ecriture = { compte_syscohada: string; debit_xaf: number; credit_xaf: number }
+
+  const factures = (facturesRes.data ?? []) as Fact[]
+  const credits = (creditsRes.data ?? []) as Credit[]
+  const ecritures = (ecrituresRes.data ?? []) as Ecriture[]
+  const caFacture = factures.reduce((s, f) => s + Number(f.total_ttc_xaf ?? 0), 0)
+  const encaisse = factures.reduce((s, f) => s + Number(f.montant_paye_xaf ?? 0), 0)
+  const aRecevoir = factures.reduce((s, f) => s + Math.max(0, Number(f.total_ttc_xaf ?? 0) - Number(f.montant_paye_xaf ?? 0)), 0)
+  const aRelancer = factures.filter((f) => ['valide', 'envoye'].includes(f.statut) && Number(f.total_ttc_xaf ?? 0) > Number(f.montant_paye_xaf ?? 0))
+  const brouillons = factures.filter((f) => f.statut === 'brouillon')
+  const banqueCaisse = ecritures
+    .filter((e) => ['521', '571'].includes(e.compte_syscohada))
+    .reduce((s, e) => s + Number(e.debit_xaf ?? 0) - Number(e.credit_xaf ?? 0), 0)
+
+  return c.json({
+    kpis: {
+      ca_facture_xaf:      Math.round(caFacture),
+      encaisse_xaf:        Math.round(encaisse),
+      a_recevoir_xaf:      Math.round(aRecevoir),
+      banque_caisse_xaf:   Math.round(banqueCaisse),
+      taux_encaissement:   caFacture > 0 ? Math.round((encaisse / caFacture) * 100) : 0,
+      factures_total:      factures.length,
+      factures_brouillon:  brouillons.length,
+      factures_a_relancer: aRelancer.length,
+      credits_ouverts:     credits.length,
+      credits_solde_xaf:   Math.round(credits.reduce((s, credit) => s + Number(credit.solde_restant_xaf ?? 0), 0)),
+    },
+    repartition_factures: ['brouillon', 'valide', 'envoye', 'paye'].map((statut) => ({
+      statut,
+      count: factures.filter((f) => f.statut === statut).length,
+    })),
+    dernieres_ecritures: ecrituresRes.data ?? [],
+  })
+})
+
 router.get('/factures', async (c) => {
   const { statut, client_id, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
@@ -800,6 +848,39 @@ router.post('/credits/:id/documents', requireRole(['admin']), async (c) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // ÉCRITURES SYSCOHADA (saisie manuelle)
 // ══════════════════════════════════════════════════════════════════════════════
+
+router.get('/ecritures', requireRole(['admin', 'superviseur']), async (c) => {
+  const { compte, mois, facture_id, commande_id } = c.req.query()
+  const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
+  const perPage = Math.min(200, parseInt(c.req.query('per_page') ?? '100'))
+  const from    = (page - 1) * perPage
+
+  let q = db.from('ecritures_comptables').select('*', { count: 'exact' })
+  if (compte)      q = q.eq('compte_syscohada', compte)
+  if (facture_id)  q = q.eq('facture_id', facture_id)
+  if (commande_id) q = q.eq('commande_id', commande_id)
+  if (mois) {
+    q = q.gte('date', `${mois}-01`)
+    const end = new Date(`${mois}-01T00:00:00.000Z`)
+    end.setUTCMonth(end.getUTCMonth() + 1)
+    q = q.lt('date', end.toISOString().slice(0, 10))
+  }
+
+  const { data, count, error } = await q.order('date', { ascending: false }).range(from, from + perPage - 1)
+  if (error) return c.json({ error: error.message }, 500)
+
+  return c.json({
+    data: (data ?? []).map((e) => ({
+      ...e,
+      compte:    (e as { compte_syscohada?: string }).compte_syscohada,
+      solde_xaf: Number((e as { debit_xaf?: number }).debit_xaf ?? 0) - Number((e as { credit_xaf?: number }).credit_xaf ?? 0),
+    })),
+    total:       count ?? 0,
+    page,
+    per_page:    perPage,
+    total_pages: Math.ceil((count ?? 0) / perPage),
+  })
+})
 
 router.post('/ecritures', requireRole(['admin']), zValidator('json', ecritureSchema), async (c) => {
   const user = c.get('user')
