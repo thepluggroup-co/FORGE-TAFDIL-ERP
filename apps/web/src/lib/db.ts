@@ -563,27 +563,28 @@ export async function dbGetDashboardKpis() {
   debut6Mois.setDate(1)
   const debut6MoisStr = debut6Mois.toISOString().slice(0, 10)
 
-  const [
-    commandesActif, alertesStock, apprenants, bons, creditsEchus,
-    recentCommandes, caData,
-  ] = await Promise.all([
-    supabase.from('commandes').select('*', { count: 'exact', head: true }).in('statut', ['confirmed','in_production','pret']),
-    supabase.from('produits').select('*', { count: 'exact', head: true }).in('statut', ['alerte','critique','rupture']),
-    supabase.from('apprenants').select('*', { count: 'exact', head: true }).eq('statut', 'actif'),
-    supabase.from('bons_sortie').select('*', { count: 'exact', head: true }).eq('statut', 'soumis'),
-    supabase.from('credits').select('*', { count: 'exact', head: true }).eq('statut', 'echu'),
-    supabase.from('commandes').select('id,numero,client_nom,total_ttc_xaf,statut,date_commande').order('created_at', { ascending: false }).limit(5),
-    supabase.from('commandes').select('total_ttc_xaf,date_commande').gte('date_commande', debut6MoisStr).neq('statut', 'cancelled'),
-  ])
+  // Single RPC call replaces 7 parallel round trips — much faster on cold connections.
+  const { data: raw, error } = await supabase.rpc('fn_dashboard_kpis', { debut_6mois: debut6MoisStr })
+  if (error) throw new Error(`[dbGetDashboardKpis] ${error.message}`)
+
+  const d = raw as {
+    commandes_actives: number
+    stocks_en_alerte:  number
+    apprenants_actifs: number
+    bons_en_attente:   number
+    credits_echus:     number
+    recent_commandes:  { id: string; numero: string; client_nom: string; total_ttc_xaf: number; statut: string; date_commande: string }[]
+    ca_data:           { total_ttc_xaf: number; date_commande: string }[]
+  }
 
   const MOIS_FR = ['Jan','Fév','Mar','Avr','Mai','Jui','Juil','Aoû','Sep','Oct','Nov','Déc']
   const caParMois = new Map<string, { label: string; ca: number }>()
   for (let i = 5; i >= 0; i--) {
-    const d = new Date(now); d.setMonth(d.getMonth() - i)
-    const cle = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    caParMois.set(cle, { label: MOIS_FR[d.getMonth()], ca: 0 })
+    const m = new Date(now); m.setMonth(m.getMonth() - i)
+    const cle = `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}`
+    caParMois.set(cle, { label: MOIS_FR[m.getMonth()], ca: 0 })
   }
-  for (const cmd of (caData.data ?? []) as { total_ttc_xaf: number; date_commande: string }[]) {
+  for (const cmd of (d.ca_data ?? [])) {
     const cle = cmd.date_commande.slice(0, 7)
     const ex  = caParMois.get(cle)
     if (ex) ex.ca += cmd.total_ttc_xaf
@@ -592,13 +593,13 @@ export async function dbGetDashboardKpis() {
   return {
     ca_mensuel: Array.from(caParMois.values()).map(({ label, ca }) => ({ mois: label, ca: Math.round(ca) })),
     kpis: {
-      commandes_actives: commandesActif.count ?? 0,
-      stocks_en_alerte:  alertesStock.count   ?? 0,
-      apprenants_actifs: apprenants.count      ?? 0,
-      bons_en_attente:   bons.count            ?? 0,
-      credits_echus:     creditsEchus.count     ?? 0,
+      commandes_actives: d.commandes_actives ?? 0,
+      stocks_en_alerte:  d.stocks_en_alerte  ?? 0,
+      apprenants_actifs: d.apprenants_actifs ?? 0,
+      bons_en_attente:   d.bons_en_attente   ?? 0,
+      credits_echus:     d.credits_echus     ?? 0,
     },
-    recent_commandes:  recentCommandes.data ?? [],
+    recent_commandes:  d.recent_commandes ?? [],
     recent_mouvements: [],
   }
 }
