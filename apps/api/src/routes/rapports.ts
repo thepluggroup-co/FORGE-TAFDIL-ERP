@@ -175,7 +175,14 @@ async function financeAgregee(debut: string, fin: string) {
 
   if (error) throw error
 
-  return ((data ?? []) as Array<Record<string, unknown>>).reduce((acc, facture) => {
+  return ((data ?? []) as Array<Record<string, unknown>>).reduce<{
+    factures: number
+    ca_facture_ht_xaf: number
+    tva_facturee_xaf: number
+    ca_facture_ttc_xaf: number
+    encaisse_xaf: number
+    reste_a_encaisser_xaf: number
+  }>((acc, facture) => {
     const totalTtc = Number(facture.total_ttc_xaf ?? 0)
     const montantPaye = Number(facture.montant_paye_xaf ?? 0)
     acc.factures += 1

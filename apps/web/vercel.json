@@ -3,9 +3,6 @@
   "outputDirectory": "dist",
   "installCommand": "echo skip",
   "rewrites": [
-    {
-      "source": "/((?!assets/|api/).*)",
-      "destination": "/index.html"
-    }
+    { "source": "/((?!assets/|api/).*)", "destination": "/index.html" }
   ]
 }

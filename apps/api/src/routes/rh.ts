@@ -1180,7 +1180,7 @@ router.get('/rh/presences/recap', requireRole(['admin', 'superviseur']), async (
   }> = {}
 
   for (const row of data ?? []) {
-    const r = row as {
+    const r = row as unknown as {
       employe_id: string; statut: string; heures: number
       employes: { nom: string; poste: string } | null
     }

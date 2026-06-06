@@ -7,14 +7,15 @@ import { apiClient } from '@/lib/api-client'
 export type StatutDevisWeb = 'nouvelle' | 'en_cours' | 'traitee' | 'refusee'
 
 export interface DevisWeb {
-  id:          string
-  nom:         string
-  telephone:   string
-  email?:      string
-  description: string
-  statut:      StatutDevisWeb
+  id:           string
+  nom:          string
+  telephone:    string
+  email?:       string
+  description:  string
+  type_projet?: string
+  statut:       StatutDevisWeb
   erp_devis_id?: string
-  created_at:  string
+  created_at:   string
 }
 
 // ── Hook : liste ───────────────────────────────────────────────────────────────

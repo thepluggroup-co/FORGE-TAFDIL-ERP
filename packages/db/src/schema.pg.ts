@@ -16,7 +16,7 @@ const tsN = (col: string) => timestamp(col, { withTimezone: true })
 
 // ── Enums PostgreSQL ───────────────────────────────────────────────────────────
 
-export const roleEnum          = pgEnum('role',           ['directeur', 'admin', 'operateur', 'viewer'])
+export const roleEnum          = pgEnum('role',           ['admin', 'superviseur', 'operateur', 'apprenant'])
 export const syncStatusEnum    = pgEnum('sync_status',    ['synced', 'pending', 'conflict'])
 export const clientTypeEnum    = pgEnum('client_type',    ['entreprise', 'particulier', 'institution'])
 export const clientStatutEnum  = pgEnum('client_statut',  ['actif', 'inactif', 'bloque'])

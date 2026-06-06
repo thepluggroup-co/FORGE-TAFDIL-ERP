@@ -28,6 +28,7 @@ export interface Devis {
   montant_ttc_xaf: number
   pdf_url: string | null
   notes: string | null
+  source_web: boolean
   expire: boolean
   jours_restants: number | null
   approuve_par_client: boolean

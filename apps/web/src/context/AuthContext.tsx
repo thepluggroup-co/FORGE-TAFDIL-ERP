@@ -7,6 +7,21 @@ export type AppRole = 'admin' | 'superviseur' | 'operateur' | 'apprenant'
 
 const VALID_ROLES: AppRole[] = ['admin', 'superviseur', 'operateur', 'apprenant']
 
+// Old role names → new role names (schema rename: directeur→admin, admin→superviseur, viewer→apprenant)
+const LEGACY_ROLE_MAP: Record<string, AppRole> = {
+  directeur:   'admin',
+  superviseur: 'superviseur',
+  operateur:   'operateur',
+  apprenant:   'apprenant',
+  viewer:      'apprenant',
+}
+
+function normalizeRole(r: string | null | undefined): AppRole | null {
+  if (!r) return null
+  if (VALID_ROLES.includes(r as AppRole)) return r as AppRole
+  return LEGACY_ROLE_MAP[r] ?? null
+}
+
 interface AuthContextValue {
   user: User | null
   session: Session | null
@@ -18,28 +33,25 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-// Read role directly from the JWT app_metadata — no network call, always available from localStorage.
-function roleFromSession(session: Session | null): AppRole | null {
-  const r = session?.user?.app_metadata?.role as string | undefined
-  return r && VALID_ROLES.includes(r as AppRole) ? (r as AppRole) : null
-}
-
 async function fetchRoleFromDB(userId: string): Promise<AppRole | null> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('profiles')
     .select('role')
     .eq('id', userId)
     .single()
-  return (data?.role as AppRole) ?? null
+  if (error) console.error('[AuthContext] fetchRoleFromDB error:', error.message, '| code:', error.code)
+  console.log('[AuthContext] fetchRoleFromDB raw role from DB:', data?.role)
+  return normalizeRole(data?.role)
 }
 
 async function resolveRole(session: Session): Promise<AppRole | null> {
-  // JWT app_metadata is the fastest and most reliable source on page refresh.
-  const jwtRole = roleFromSession(session)
-  if (jwtRole) return jwtRole
+  // Always check the DB first — it is the source of truth after the role migration.
+  const dbRole = await fetchRoleFromDB(session.user.id)
+  if (dbRole) return dbRole
 
-  // Fallback: profiles table (covers older sessions without app_metadata.role).
-  return fetchRoleFromDB(session.user.id)
+  // Fallback: normalize role from JWT app_metadata (covers sessions before DB migration).
+  const jwtRaw = session.user.app_metadata?.role as string | undefined
+  return normalizeRole(jwtRaw)
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -52,7 +64,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const safetyTimer = setTimeout(() => {
       console.warn('[AuthContext] Safety timeout fired — forcing loading=false')
       setLoading(false)
-    }, 5000)
+    }, 12000)
 
     const done = () => {
       clearTimeout(safetyTimer)
@@ -64,10 +76,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(session?.user ?? null)
       setApiToken(session?.access_token ?? null)
       if (session?.user) {
+        // Set role from JWT immediately (no network) so the UI is usable right away
+        const jwtRole = normalizeRole(session.user.app_metadata?.role as string | undefined)
+        if (jwtRole) setRole(jwtRole)
+
+        // Then confirm/override with DB role (source of truth)
         try {
           const r = await resolveRole(session)
-          setRole(r)
-          console.log('[AuthContext] getSession role:', r)
+          if (r) setRole(r)
+          console.log('[AuthContext] getSession role:', r, '| jwt fallback was:', jwtRole)
         } catch (e) {
           console.error('[AuthContext] fetchRole error (getSession):', e)
         }
@@ -83,10 +100,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(session?.user ?? null)
       setApiToken(session?.access_token ?? null)
       if (session?.user) {
+        // Immediate JWT role while DB call loads
+        const jwtRole = normalizeRole(session.user.app_metadata?.role as string | undefined)
+        if (jwtRole) setRole(jwtRole)
+
         try {
           const r = await resolveRole(session)
-          if (r !== null) setRole(r)
-          console.log('[AuthContext] onAuthStateChange role:', r)
+          if (r) setRole(r)
+          console.log('[AuthContext] onAuthStateChange role:', r, '| event:', event)
         } catch (e) {
           console.error('[AuthContext] fetchRole error (onAuthStateChange):', e)
         }
@@ -109,8 +130,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
+    // Clear local state immediately so the UI transitions even if the network call fails.
+    setUser(null)
+    setSession(null)
+    setRole(null)
     setApiToken(null)
-    await supabase.auth.signOut()
+    // scope:'local' clears the local session without requiring a server round-trip,
+    // so logout works correctly even when the app is offline.
+    try {
+      await supabase.auth.signOut({ scope: 'local' })
+    } catch {
+      // Local state is already cleared above — ignore network errors.
+    }
   }
 
   return (

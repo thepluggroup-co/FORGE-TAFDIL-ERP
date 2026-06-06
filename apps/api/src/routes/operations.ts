@@ -1,4 +1,5 @@
 ﻿import { Hono } from 'hono'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
@@ -521,7 +522,7 @@ router.patch(
         }
       } catch (err) {
         const e = err as Error & { httpStatus?: number; code?: string }
-        return c.json({ error: e.message, code: e.code ?? 'PRODUCTION_FINALIZE_ERROR' }, e.httpStatus ?? 400)
+        return c.json({ error: e.message, code: e.code ?? 'PRODUCTION_FINALIZE_ERROR' }, (e.httpStatus ?? 400) as ContentfulStatusCode)
       }
     }
 
@@ -686,6 +687,8 @@ router.get('/production/historique/:commande_id', async (c) => {
 
     return {
       ...j,
+      statut:         j.statut as string,
+      avancement_pct: j.avancement_pct as number,
       duree_prevue_h,
       duree_reelle_h,
       en_retard,

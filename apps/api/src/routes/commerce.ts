@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
@@ -12,7 +13,7 @@ import { withOfflineFallback } from '../services/offline-fallback'
 import { notifyStatutChange } from '../services/notifications'
 import { notifyCommandeSms } from '../services/sms.service'
 import { enregistrerPaiementCommande } from '../services/finance-core.service'
-import { enqueueEmail, notifyWhatsApp } from '../services/email-queue.service'
+import { enqueueEmail, notifyWhatsApp, sendEmailDirect } from '../services/email-queue.service'
 import type { HonoVariables } from '../types'
 
 // ── TVA Cameroun ────────────────────────────────────────────────────────────────
@@ -146,6 +147,7 @@ function mapDevis(row: any) {
     montant_ttc_xaf:      row.total_ttc_xaf ?? 0,
     pdf_url:              row.pdf_url ?? null,
     notes:                row.notes ?? null,
+    source_web:           typeof row.notes === 'string' && row.notes.startsWith('[SOURCE WEB]'),
     expire:               row.date_validite ? row.date_validite < today : false,
     jours_restants,
     approuve_par_client:  row.approuve_par_client ?? false,
@@ -312,11 +314,12 @@ router.get('/clients/recherche', async (c) => {
   const ranked = (data ?? [])
     .map((row: Record<string, unknown>) => ({
       ...row,
+      nom: row.nom as string,
       _rank: (row.nom as string).toLowerCase() === ql         ? 0   // exact
            : (row.nom as string).toLowerCase().startsWith(ql) ? 1   // préfixe
            :                                                     2,  // contient
     }))
-    .sort((a, b) => a._rank - b._rank || (a.nom as string).localeCompare(b.nom as string))
+    .sort((a, b) => a._rank - b._rank || a.nom.localeCompare(b.nom))
     .slice(0, limit)
     .map(({ _rank: _, ...rest }) => rest)
 
@@ -687,27 +690,42 @@ router.delete('/devis/:id', requireRole(['admin', 'superviseur']), async (c) => 
 
 /**
  * POST /devis/:id/envoyer-approbation
- * Génère un token d'approbation, envoie par email (queue) + WhatsApp immédiat.
+ * Génère un token 30 jours, envoie email avec PDF joint + WhatsApp immédiat.
  */
 router.post('/devis/:id/envoyer-approbation', requireRole(['admin', 'superviseur', 'operateur']), async (c) => {
   const { id } = c.req.param()
 
+  // Fetch full devis data (needed for PDF and professional email)
   const { data: devis } = await db
     .from('devis')
-    .select('statut, numero, client_nom, total_ttc_xaf, client_id')
+    .select(`
+      statut, numero, client_nom, client_id,
+      date_emission, date_validite, validite_jours,
+      acompte_pct, conditions_paiement,
+      total_ht_xaf, tva_xaf, total_ttc_xaf,
+      devis_lignes(designation, unite, quantite, prix_unitaire_ht_xaf, total_ht_xaf, ordre)
+    `)
     .eq('id', id)
     .single()
 
   if (!devis) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
 
-  const d = devis as { statut: string; numero: string; client_nom: string; total_ttc_xaf: number; client_id: string | null }
+  type LigneRow = { designation: string; unite: string; quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number; ordre: number }
+  const d = devis as {
+    statut: string; numero: string; client_nom: string; client_id: string | null
+    date_emission: string; date_validite: string; validite_jours: number; acompte_pct: number
+    conditions_paiement: string; total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number
+    devis_lignes: LigneRow[]
+  }
 
   if (['transforme', 'expire'].includes(d.statut)) {
     return c.json({ error: `Devis "${d.statut}" — envoi d'approbation impossible`, code: 'INVALID_STATUS' }, 422)
   }
 
   const token     = randomUUID()
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() // 7 jours
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 jours
+  const expiryLabel = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+    .toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })
 
   await db.from('devis').update({
     token_approbation: token,
@@ -719,37 +737,159 @@ router.post('/devis/:id/envoyer-approbation', requireRole(['admin', 'superviseur
   const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:5173'
   const approvalUrl = `${frontendUrl}/devis/approuver/${token}`
 
-  // Récupérer email du client si lié
-  let clientEmail: string | null = null
+  // Récupérer les détails du client pour le PDF et l'email
+  let clientEmail:     string | null = null
+  let clientAdresse:   string | null = null
+  let clientTelephone: string | null = null
+  let clientNiu:       string | null = null
+  let clientType:      string | null = null
+
   if (d.client_id) {
-    const { data: cli } = await db.from('clients').select('email').eq('id', d.client_id).single()
-    clientEmail = (cli as { email: string | null } | null)?.email ?? null
+    const { data: cli } = await db.from('clients')
+      .select('email, adresse, telephone, niu, type')
+      .eq('id', d.client_id).single()
+    const cliRow = cli as { email?: string | null; adresse?: string | null; telephone?: string | null; niu?: string | null; type?: string | null } | null
+    clientEmail    = cliRow?.email    ?? null
+    clientAdresse  = cliRow?.adresse  ?? null
+    clientTelephone = cliRow?.telephone ?? null
+    clientNiu      = cliRow?.niu      ?? null
+    clientType     = cliRow?.type     ?? null
+  }
+
+  // Générer le PDF pour la pièce jointe
+  const lignesSorted = [...d.devis_lignes].sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0))
+  let pdfBuffer: Buffer | null = null
+  try {
+    pdfBuffer = await generateDevisPDF(
+      {
+        numero:         d.numero,
+        date_emission:  d.date_emission,
+        date_validite:  d.date_validite,
+        validite_jours: d.validite_jours,
+        total_ht_xaf:   d.total_ht_xaf,
+        tva_xaf:        d.tva_xaf,
+        total_ttc_xaf:  d.total_ttc_xaf,
+      },
+      { nom: d.client_nom, adresse: clientAdresse, telephone: clientTelephone, email: clientEmail, niu: clientNiu, type: clientType },
+      lignesSorted,
+    )
+  } catch (e) {
+    console.error('[commerce] Erreur génération PDF pour email:', e)
   }
 
   if (clientEmail) {
-    await enqueueEmail({
-      destinataire:   clientEmail,
-      sujet:          `Devis ${d.numero} — Votre approbation est requise`,
-      corps_html:     `
-        <p>Bonjour,</p>
-        <p>Veuillez consulter et approuver le devis <strong>${d.numero}</strong>
-        d'un montant de <strong>${d.total_ttc_xaf.toLocaleString('fr-FR')} XAF TTC</strong>.</p>
-        <p><a href="${approvalUrl}" style="background:#C62828;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;display:inline-block">
-          Consulter et approuver le devis
-        </a></p>
-        <p>Ce lien est valable 7 jours.</p>
-        <p>Cordialement,<br>TAFDIL SARL</p>
-      `,
-      priorite:       'haute',
-      reference_type: 'devis',
-      reference_id:   id,
+    const lignesHtml = lignesSorted.map((l, i) => `
+      <tr style="background:${i % 2 === 0 ? '#F9FAFB' : '#ffffff'};">
+        <td style="padding:9px 12px;color:#111827;font-size:13px;border-bottom:1px solid #F3F4F6;">${l.designation}</td>
+        <td style="padding:9px 8px;color:#374151;font-size:13px;text-align:center;border-bottom:1px solid #F3F4F6;">${l.quantite}&nbsp;${l.unite}</td>
+        <td style="padding:9px 8px;color:#374151;font-size:13px;text-align:right;border-bottom:1px solid #F3F4F6;">${l.prix_unitaire_ht_xaf.toLocaleString('fr-FR')}&nbsp;XAF</td>
+        <td style="padding:9px 12px;color:#111827;font-size:13px;font-weight:600;text-align:right;border-bottom:1px solid #F3F4F6;">${l.total_ht_xaf.toLocaleString('fr-FR')}&nbsp;XAF</td>
+      </tr>`).join('')
+
+    const acompteXaf = Math.round(d.total_ttc_xaf * d.acompte_pct / 100)
+
+    const emailHtml = `<!DOCTYPE html>
+<html lang="fr">
+<head><meta charset="utf-8"><title>Devis ${d.numero} — TAFDIL SARL</title></head>
+<body style="margin:0;padding:0;background:#F3F4F6;font-family:Arial,Helvetica,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#F3F4F6;padding:32px 16px;">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.09);">
+<tr><td style="background:#C62828;padding:26px 36px;">
+  <table width="100%" cellpadding="0" cellspacing="0"><tr>
+    <td valign="middle">
+      <p style="margin:0;color:#ffffff;font-size:22px;font-weight:bold;letter-spacing:.4px;">TAFDIL SARL</p>
+      <p style="margin:5px 0 0;color:rgba(255,255,255,.82);font-size:12px;">Microusine Métallurgique &amp; BTP — Kotto Mairyvanas, Douala</p>
+      <p style="margin:3px 0 0;color:rgba(255,255,255,.65);font-size:11px;">NIU&nbsp;: M052116085624A &nbsp;|&nbsp; RCCM&nbsp;: RC/DLA/2021/B/2624</p>
+    </td>
+    <td align="right" valign="middle" style="padding-left:20px;">
+      <p style="margin:0;color:rgba(255,255,255,.55);font-size:10px;text-transform:uppercase;letter-spacing:1.5px;">DEVIS</p>
+      <p style="margin:5px 0 0;color:#EF9A9A;font-size:22px;font-weight:bold;">${d.numero}</p>
+      <p style="margin:4px 0 0;color:rgba(255,255,255,.7);font-size:11px;">Émis le ${d.date_emission}</p>
+    </td>
+  </tr></table>
+</td></tr>
+<tr><td style="padding:32px 36px;">
+  <p style="margin:0 0 6px;color:#111827;font-size:16px;font-weight:700;">Bonjour ${d.client_nom},</p>
+  <p style="margin:0 0 26px;color:#6B7280;font-size:14px;line-height:1.75;">
+    TAFDIL SARL vous adresse le devis <strong>${d.numero}</strong> établi le <strong>${d.date_emission}</strong>.<br>
+    Ce devis est valable jusqu'au <strong>${d.date_validite}</strong> (${d.validite_jours}&nbsp;jours).
+  </p>
+  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #E5E7EB;border-radius:8px;overflow:hidden;margin-bottom:22px;">
+    <tr style="background:#C62828;">
+      <td style="padding:10px 12px;color:#fff;font-size:11px;font-weight:bold;text-transform:uppercase;">Désignation</td>
+      <td style="padding:10px 8px;color:#fff;font-size:11px;font-weight:bold;text-align:center;white-space:nowrap;">Qté&nbsp;/&nbsp;Unité</td>
+      <td style="padding:10px 8px;color:#fff;font-size:11px;font-weight:bold;text-align:right;white-space:nowrap;">P.U.&nbsp;HT</td>
+      <td style="padding:10px 12px;color:#fff;font-size:11px;font-weight:bold;text-align:right;white-space:nowrap;">Total&nbsp;HT</td>
+    </tr>
+    ${lignesHtml}
+  </table>
+  <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px;">
+    <tr><td width="45%"></td><td>
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td style="padding:5px 0;color:#6B7280;font-size:13px;">Sous-total HT</td>
+          <td style="padding:5px 0;color:#111827;font-size:13px;font-weight:600;text-align:right;">${d.total_ht_xaf.toLocaleString('fr-FR')}&nbsp;XAF</td>
+        </tr>
+        <tr>
+          <td style="padding:5px 0;color:#6B7280;font-size:13px;">TVA (19,25&nbsp;%)</td>
+          <td style="padding:5px 0;color:#111827;font-size:13px;font-weight:600;text-align:right;">${d.tva_xaf.toLocaleString('fr-FR')}&nbsp;XAF</td>
+        </tr>
+        <tr><td colspan="2" style="padding:6px 0;"><hr style="border:none;border-top:1px solid #E5E7EB;margin:0;"></td></tr>
+        <tr><td colspan="2">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#C62828;border-radius:6px;">
+            <tr>
+              <td style="padding:11px 14px;color:#fff;font-size:14px;font-weight:bold;">TOTAL TTC</td>
+              <td style="padding:11px 14px;color:#fff;font-size:17px;font-weight:bold;text-align:right;">${d.total_ttc_xaf.toLocaleString('fr-FR')}&nbsp;XAF</td>
+            </tr>
+          </table>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+  <div style="text-align:center;margin:30px 0 26px;">
+    <a href="${approvalUrl}" style="display:inline-block;background:#C62828;color:#ffffff;font-size:15px;font-weight:bold;padding:15px 44px;border-radius:8px;text-decoration:none;letter-spacing:.3px;">
+      Consulter &amp; Approuver le Devis
+    </a>
+    <p style="margin:12px 0 0;color:#9CA3AF;font-size:12px;">Lien sécurisé valable jusqu'au ${expiryLabel}</p>
+  </div>
+  <div style="background:#EFF6FF;border-left:4px solid #1D4ED8;border-radius:4px;padding:13px 16px;margin-bottom:22px;">
+    <p style="margin:0;color:#1E40AF;font-size:13px;font-weight:600;">📎 Le devis complet en PDF est joint à cet email.</p>
+  </div>
+  <div style="background:#F9FAFB;border:1px solid #E5E7EB;border-radius:8px;padding:16px 20px;margin-bottom:24px;">
+    <p style="margin:0 0 10px;color:#374151;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Conditions de paiement</p>
+    <p style="margin:0;color:#6B7280;font-size:12px;line-height:1.85;">
+      ${d.acompte_pct > 0 ? `• Acompte : ${d.acompte_pct}% à la commande — ${acompteXaf.toLocaleString('fr-FR')}&nbsp;XAF<br>` : ''}• Règlement : ${d.conditions_paiement}<br>
+      • Devis valable ${d.validite_jours} jours à compter de la date d'émission
+    </p>
+  </div>
+  <p style="margin:0 0 4px;color:#374151;font-size:13px;font-weight:600;">Une question ?</p>
+  <p style="margin:0;color:#6B7280;font-size:13px;line-height:1.7;">Contactez-nous au <strong>+237 695 884 528</strong> ou à <strong>info@tafdil.cm</strong>.<br>
+  Disponible du lundi au vendredi, 8h–17h.</p>
+</td></tr>
+<tr><td style="background:#F9FAFB;border-top:1px solid #E5E7EB;padding:18px 36px;text-align:center;">
+  <p style="margin:0 0 3px;color:#6B7280;font-size:11px;font-weight:600;">TAFDIL SARL — Microusine Métallurgique &amp; BTP</p>
+  <p style="margin:0;color:#9CA3AF;font-size:10px;">NIU : M052116085624A &nbsp;|&nbsp; RCCM : RC/DLA/2021/B/2624 &nbsp;|&nbsp; Kotto Mairyvanas, Douala &nbsp;|&nbsp; +237 695 884 528</p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body></html>`
+
+    await sendEmailDirect({
+      to:      clientEmail,
+      subject: `Devis N°${d.numero} — TAFDIL SARL`,
+      html:    emailHtml,
+      attachments: pdfBuffer
+        ? [{ filename: `${d.numero}.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
+        : [],
     })
   }
 
-  // WhatsApp immédiat au directeur (notification interne)
+  // WhatsApp immédiat au directeur
   await notifyWhatsApp(
     process.env.DIRECTEUR_WHATSAPP_PHONE ?? '',
-    `📋 Devis ${d.numero} envoyé à ${d.client_nom} pour approbation.\nLien : ${approvalUrl}`,
+    `📋 Devis ${d.numero} envoyé à ${d.client_nom} pour approbation (30j).\nLien : ${approvalUrl}`,
   )
 
   return c.json({ token, expires_at: expiresAt, approval_url: approvalUrl })
@@ -819,13 +959,58 @@ publicDevisRouter.post('/devis/approuver/:token', async (c) => {
     updated_at:          new Date().toISOString(),
   }).eq('id', d.id)
 
-  // Notifier le directeur
+  const isAccepted = body.decision === 'accepte'
+  const decisionDate = new Date().toLocaleString('fr-FR')
+
+  // WhatsApp immédiat au directeur
   await notifyWhatsApp(
     process.env.DIRECTEUR_WHATSAPP_PHONE ?? '',
-    body.decision === 'accepte'
+    isAccepted
       ? `✅ Devis ${d.numero} APPROUVÉ par ${d.client_nom}`
       : `❌ Devis ${d.numero} REFUSÉ par ${d.client_nom}${body.commentaire ? `\nMotif: ${body.commentaire}` : ''}`,
   )
+
+  // Email de notification à TAFDIL
+  const directeurEmail = process.env.DIRECTEUR_EMAIL
+  if (directeurEmail) {
+    const accentColor = isAccepted ? '#15803d' : '#C62828'
+    const decisionLabel = isAccepted ? '✅ APPROUVÉ' : '❌ REFUSÉ'
+    await enqueueEmail({
+      destinataire:   directeurEmail,
+      sujet:          `${decisionLabel} — Devis ${d.numero} par ${d.client_nom}`,
+      corps_html:     `<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:24px 16px;background:#F3F4F6;font-family:Arial,Helvetica,sans-serif;">
+<table width="560" cellpadding="0" cellspacing="0" style="margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 8px rgba(0,0,0,.08);">
+  <tr><td style="background:${accentColor};padding:22px 28px;">
+    <p style="margin:0;color:#ffffff;font-size:20px;font-weight:bold;">${decisionLabel}</p>
+    <p style="margin:6px 0 0;color:rgba(255,255,255,.8);font-size:13px;">Devis ${d.numero} — ${decisionDate}</p>
+  </td></tr>
+  <tr><td style="padding:26px 28px;">
+    <p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.7;">
+      Le client <strong>${d.client_nom}</strong> a <strong>${isAccepted ? 'approuvé' : 'refusé'}</strong>
+      le devis <strong>${d.numero}</strong> le ${decisionDate}.
+    </p>
+    ${body.commentaire ? `
+    <div style="background:#F9FAFB;border-left:4px solid #E5E7EB;border-radius:4px;padding:12px 16px;margin-bottom:18px;">
+      <p style="margin:0 0 4px;color:#6B7280;font-size:12px;font-weight:600;">Commentaire du client :</p>
+      <p style="margin:0;color:#374151;font-size:13px;font-style:italic;">"${body.commentaire}"</p>
+    </div>` : ''}
+    ${isAccepted
+      ? '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;padding:14px 18px;"><p style="margin:0;color:#15803d;font-size:14px;font-weight:600;">Action requise : transformez ce devis en commande dans l\'ERP.</p></div>'
+      : '<p style="margin:0;color:#6B7280;font-size:13px;">Prenez contact avec le client pour comprendre ses objections et établir un nouveau devis si nécessaire.</p>'
+    }
+  </td></tr>
+  <tr><td style="background:#F9FAFB;border-top:1px solid #E5E7EB;padding:14px 28px;text-align:center;">
+    <p style="margin:0;color:#9CA3AF;font-size:11px;">TAFDIL SARL — ERP Interne — Notification automatique</p>
+  </td></tr>
+</table>
+</body></html>`,
+      priorite:       'haute',
+      reference_type: 'devis',
+      reference_id:   d.id,
+    })
+  }
 
   return c.json({ succes: true, decision: body.decision })
 })
@@ -1216,7 +1401,7 @@ router.post(
       return c.json(result, 201)
     } catch (err) {
       const e = err as Error & { code?: string; httpStatus?: number }
-      return c.json({ error: e.message, code: e.code ?? 'PAYMENT_ERROR' }, e.httpStatus ?? 400)
+      return c.json({ error: e.message, code: e.code ?? 'PAYMENT_ERROR' }, (e.httpStatus ?? 400) as ContentfulStatusCode)
     }
   },
 )

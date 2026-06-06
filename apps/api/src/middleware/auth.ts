@@ -65,7 +65,8 @@ async function getPublicKeyForToken(token: string): Promise<ReturnType<typeof cr
 
   try {
     // Node.js 15+ supports createPublicKey({ format: 'jwk', key: <JWK object> })
-    return createPublicKey({ format: 'jwk', key: jwk as Parameters<typeof createPublicKey>[0] & object })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return createPublicKey({ format: 'jwk', key: jwk as any })
   } catch (e) {
     console.error('[auth] createPublicKey failed:', e)
     return null
@@ -121,9 +122,19 @@ export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = a
 
   const email = (payload['email'] as string | undefined) ?? ''
   const appMeta = (payload['app_metadata'] as { role?: string } | undefined) ?? {}
-  const role = (appMeta.role as HonoVariables['user']['role']) ?? 'apprenant'
 
-  console.log('[auth] ✅', email, '| role:', role, '| alg:', alg)
+  // Normalize legacy role names (after rename: directeur→admin, viewer→apprenant)
+  const ROLE_MAP: Record<string, HonoVariables['user']['role']> = {
+    admin:       'admin',
+    superviseur: 'superviseur',
+    operateur:   'operateur',
+    apprenant:   'apprenant',
+    directeur:   'admin',       // legacy
+    viewer:      'apprenant',   // legacy
+  }
+  const role = ROLE_MAP[appMeta.role as string] ?? 'apprenant'
+
+  console.log('[auth] ✅', email, '| role:', role, '| jwt_raw:', appMeta.role, '| alg:', alg)
 
   c.set('user', { id: userId, email, role })
   c.set('requestId', crypto.randomUUID())

@@ -392,11 +392,51 @@ shopRouter.post('/devis', zValidator('json', devisWebSchema), async (c) => {
     return c.json({ error: 'Erreur enregistrement devis', code: 'DB_ERROR' }, 500)
   }
 
+  // Créer automatiquement un devis ERP brouillon
+  const numero   = await genererNumeroDevis()
+  const today    = new Date().toISOString().split('T')[0]
+  const validite = new Date(Date.now() + 30 * 86_400_000).toISOString().split('T')[0]
+  const notes    = [
+    `[SOURCE WEB] ${body.description}`,
+    body.type_projet  ? `Type de projet : ${body.type_projet}`    : null,
+    `Téléphone : ${body.telephone}`,
+    body.email        ? `Email : ${body.email}`                   : null,
+    body.produit_ref  ? `Réf. produit : ${body.produit_ref}`      : null,
+  ].filter(Boolean).join('\n')
+
+  const { data: erpDevis, error: errDevis } = await db
+    .from('devis')
+    .insert({
+      numero,
+      client_nom:          body.nom,
+      statut:              'brouillon',
+      date_emission:       today,
+      date_validite:       validite,
+      validite_jours:      30,
+      conditions_paiement: 'Virement bancaire',
+      notes,
+      total_ht_xaf:        0,
+      tva_xaf:             0,
+      total_ttc_xaf:       0,
+      sync_status:         'synced',
+    })
+    .select('id, numero')
+    .single()
+
+  if (!errDevis && erpDevis) {
+    await db
+      .from('demandes_devis_web')
+      .update({ statut: 'en_cours', erp_devis_id: erpDevis.id })
+      .eq('id', data.id)
+  } else {
+    console.error('[shop] auto-create devis ERP:', errDevis)
+  }
+
   // Notifier l'ERP
   await db.channel('commandes_web_nouvelles').send({
     type:    'broadcast',
     event:   'nouvelle_demande_devis',
-    payload: { id: data.id, nom: body.nom, telephone: body.telephone },
+    payload: { id: data.id, nom: body.nom, telephone: body.telephone, erp_devis_id: erpDevis?.id ?? null },
   })
 
   return c.json({ id: data.id, statut: 'nouvelle', created_at: data.created_at }, 201)
@@ -733,7 +773,7 @@ shopErpRouter.put('/produits/:id/vitrine',
 shopErpRouter.post('/produits/:id/images', async (c) => {
   const id = c.req.param('id')
   const form = await c.req.formData()
-  const files = form.getAll('images').filter((item): item is File => item instanceof File)
+  const files = form.getAll('images').filter(item => item instanceof File) as unknown as File[]
 
   if (files.length === 0) {
     return c.json({ error: 'Aucune image fournie', code: 'NO_FILE' }, 400)

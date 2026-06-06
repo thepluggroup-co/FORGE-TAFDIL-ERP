@@ -23,9 +23,10 @@ function getDb(): import('better-sqlite3').Database | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const BetterSQLite = require('better-sqlite3')
-    db = new BetterSQLite(sqlitePath)           // lecture + écriture
-    db.pragma('journal_mode = WAL')             // safe avec le main process
-    db.pragma('foreign_keys = ON')
+    const instance: import('better-sqlite3').Database = new BetterSQLite(sqlitePath)
+    db = instance
+    instance.pragma('journal_mode = WAL')
+    instance.pragma('foreign_keys = ON')
     console.info('[db-local] SQLite ouvert (rw):', sqlitePath)
     return db
   } catch (e) {
