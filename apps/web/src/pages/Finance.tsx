@@ -12,6 +12,11 @@ import { formatXAF, formatDate } from '@/lib/utils'
 import {
   useFactures, useCredits, useEcritures, useEnvoyerFacture, useRemboursement, useCreerFacture,
   useUpdateStatutFacture, usePaiementFacture, useFinanceDashboard,
+  useDeclarationsFiscales, usePreparerDeclarationTva, useUpdateStatutDeclaration, useRelanceFacture,
+  usePlanComptable, useJournauxComptables, useGrandLivre,
+  useBilanComptable, useResultatAnalytique,
+  useSyntheseComptable, useControlesComptables,
+  useClotureComptable,
 } from '@/hooks/useFinance'
 import type { Facture as FactureApi, Credit as CreditApi, FactureLigne } from '@/hooks/useFinance'
 import { useClients } from '@/hooks/useClients'
@@ -47,16 +52,6 @@ const SYSCOHADA = [
   { code: '701', label: '701 — Ventes produits finis' },
   { code: '443', label: '443 — TVA collectée' },
   { code: '612', label: '612 — Locations' },
-]
-
-// ── Static fiscal declarations (no API endpoint yet) ───────────────────────────
-
-const DECLARATIONS = [
-  { id: '1', type: 'TVA', periode: 'Avril 2026', statut: 'soumis', montant: 425000, echeance: '2026-05-15' },
-  { id: '2', type: 'IRCM (Retenues à la source)', periode: 'Avril 2026', statut: 'valide', montant: 89000, echeance: '2026-05-10' },
-  { id: '3', type: 'TVA', periode: 'Mai 2026', statut: 'a_declarer', montant: 0, echeance: '2026-06-15' },
-  { id: '4', type: 'DSF (Déclaration Statistique et Fiscale)', periode: 'Exercice 2025', statut: 'valide', montant: 0, echeance: '2026-03-31' },
-  { id: '5', type: 'IS (Impôt sur les Sociétés)', periode: 'Exercice 2025', statut: 'a_declarer', montant: 0, echeance: '2026-04-30' },
 ]
 
 // ── Status helpers ─────────────────────────────────────────────────────────────
@@ -99,6 +94,7 @@ interface PreviewableFacture {
   lignes: FactureLigne[]
   montant_ht_xaf: number
   montant_tva_xaf: number
+  frais_livraison_xaf?: number
   montant_ttc_xaf: number
 }
 
@@ -165,6 +161,12 @@ function InvoicePreview({ facture }: { facture: PreviewableFacture }) {
               <span className="text-gray-500">TVA 19,25 %</span>
               <span className="font-semibold text-gray-800">{formatXAF(facture.montant_tva_xaf)}</span>
             </div>
+            {facture.frais_livraison_xaf > 0 && (
+              <div className="flex justify-between text-sm py-1 border-b border-gray-100">
+                <span className="text-gray-500">Livraison</span>
+                <span className="font-semibold text-gray-800">{formatXAF(facture.frais_livraison_xaf)}</span>
+              </div>
+            )}
             <div className="flex justify-between text-sm pt-2 border-t-2 border-gray-800">
               <span className="font-bold text-gray-800">TOTAL TTC</span>
               <span className="font-black text-[#C62828] text-base">{formatXAF(facture.montant_ttc_xaf)}</span>
@@ -872,6 +874,61 @@ function PaiementFactureModal({ isOpen, onClose, facture }: { isOpen: boolean; o
   )
 }
 
+function RelanceFactureModal({ isOpen, onClose, facture }: { isOpen: boolean; onClose: () => void; facture: FactureRecord | null }) {
+  const [waUrl, setWaUrl] = useState('')
+  const [message, setMessage] = useState('')
+  const relance = useRelanceFacture()
+
+  useEffect(() => {
+    if (!isOpen || !facture) return
+    setWaUrl('')
+    setMessage('')
+    relance.mutate({ id: facture.id as string }, {
+      onSuccess: (res) => {
+        setWaUrl(res.url)
+        setMessage(res.message)
+      },
+    })
+  }, [isOpen, facture?.id])
+
+  if (!facture) return null
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Relancer une facture" size="sm">
+      <div className="space-y-4">
+        <div className="rounded-xl border border-red-100 bg-red-50 p-3">
+          <div className="text-sm font-semibold text-red-800">{facture.client?.nom as string} - {facture.numero as string}</div>
+          <div className="mt-0.5 text-xs text-red-600">Solde restant : <span className="font-bold">{formatXAF(Number(facture.solde_restant_xaf ?? 0))}</span></div>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Message WhatsApp</label>
+          <textarea
+            value={message}
+            onChange={(e) => {
+              const next = e.target.value
+              setMessage(next)
+              const base = waUrl.split('?text=')[0] || 'https://wa.me/'
+              setWaUrl(`${base}?text=${encodeURIComponent(next)}`)
+            }}
+            rows={7}
+            className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30"
+          />
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>Annuler</Button>
+          <Button
+            disabled={relance.isPending || !waUrl}
+            onClick={() => { window.open(waUrl, '_blank'); onClose() }}
+          >
+            {relance.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageCircle className="h-3.5 w-3.5" />}
+            Ouvrir WhatsApp
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 async function downloadFacturePdf(id: string, numero: string) {
   const token = (await supabase.auth.getSession()).data.session?.access_token
   const res = await fetch(`${API_BASE}/api/factures/${id}/pdf`, {
@@ -889,16 +946,39 @@ async function downloadFacturePdf(id: string, numero: string) {
   URL.revokeObjectURL(url)
 }
 
+async function downloadFinanceExport(path: string, filename: string) {
+  const token = (await supabase.auth.getSession()).data.session?.access_token
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) throw new Error('Export indisponible')
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export default function Finance() {
   const [activeTab, setActiveTab]         = useState<Tab>('Dashboard')
   const [showNewFacture, setShowNewFacture] = useState(false)
   const [selectedFacture, setSelectedFacture] = useState<FactureRecord | null>(null)
   const [paiementFacture, setPaiementFacture] = useState<FactureRecord | null>(null)
+  const [relanceFacture, setRelanceFacture] = useState<FactureRecord | null>(null)
   const [remboursementCredit, setRemboursementCredit] = useState<CreditRecord | null>(null)
   const [relanceCredit, setRelanceCredit] = useState<CreditRecord | null>(null)
   const [documentsCredit, setDocumentsCredit] = useState<CreditRecord | null>(null)
   const [compteFilter, setCompteFilter]   = useState('')
   const [periodeFilter, setPeriodeFilter] = useState('')
+  const [periodeTva, setPeriodeTva]       = useState(new Date().toISOString().slice(0, 7))
+  const exerciceCourant = String(new Date().getFullYear())
+  const [exerciceCompta, setExerciceCompta] = useState(exerciceCourant)
+  const [grandLivreDebut, setGrandLivreDebut] = useState(`${exerciceCourant}-01-01`)
+  const [grandLivreFin, setGrandLivreFin] = useState(`${exerciceCourant}-12-31`)
 
   const { data: facturesData, isLoading: facturesLoading } = useFactures()
   const { data: creditsData,  isLoading: creditsLoading  } = useCredits()
@@ -906,15 +986,43 @@ export default function Finance() {
     compte: compteFilter || undefined,
     mois:   periodeFilter || undefined,
   })
+  const { data: planComptableData } = usePlanComptable()
+  const { data: journauxData } = useJournauxComptables()
+  const { data: grandLivreData, isLoading: grandLivreLoading } = useGrandLivre({
+    compte: compteFilter || undefined,
+    debut: grandLivreDebut,
+    fin: grandLivreFin,
+  })
+  const { data: bilanData } = useBilanComptable({ exercice: exerciceCompta })
+  const { data: resultatData } = useResultatAnalytique({ exercice: exerciceCompta })
+  const { data: syntheseComptableData } = useSyntheseComptable({ exercice: exerciceCompta })
+  const { data: controlesComptablesData } = useControlesComptables({ exercice: exerciceCompta })
+  const { data: clotureComptableData } = useClotureComptable({ exercice: exerciceCompta })
   const { data: dashboardEcrituresData } = useEcritures()
   const { data: financeDashboardData } = useFinanceDashboard()
+  const { data: declarationsData, isLoading: declarationsLoading } = useDeclarationsFiscales({ type: 'TVA' })
   const envoyerFacture = useEnvoyerFacture()
   const updateStatutFacture = useUpdateStatutFacture()
+  const preparerTva = usePreparerDeclarationTva()
+  const updateStatutDeclaration = useUpdateStatutDeclaration()
 
   const factures  = (facturesData?.data  ?? []) as FactureRecord[]
   const credits   = (creditsData?.data   ?? []) as CreditRecord[]
   const ecritures = ecrituresData?.data  ?? []
   const dashboardEcritures = dashboardEcrituresData?.data ?? []
+  const declarations = declarationsData?.data ?? []
+  const comptesOptions = planComptableData?.comptes ?? SYSCOHADA.map((c) => ({
+    compte: c.code,
+    libelle: c.label.replace(`${c.code} — `, ''),
+    classe: Number(c.code[0]),
+    categorie: 'Comptable',
+    nature: 'compte',
+    sens_normal: 'debit' as const,
+    rubrique: 'Plan comptable',
+  }))
+  const compteSelectionne = comptesOptions.find((c) => c.compte === compteFilter)
+  const journaux = journauxData?.data ?? []
+  const reglesComptables = journauxData?.regles ?? []
 
   // IDs des commandes déjà facturées (pour filtrer le picker du slide-over)
   const factureeCommandeIds = useMemo(
@@ -966,6 +1074,10 @@ export default function Finance() {
     totalFactures: financeSummary.apiKpis?.factures_total ?? financeSummary.totalFactures,
     brouillons: financeSummary.apiKpis?.factures_brouillon ?? financeSummary.brouillons.length,
     aRelancer: financeSummary.apiKpis?.factures_a_relancer ?? financeSummary.aRelancer.length,
+    enRetard: financeSummary.apiKpis?.factures_en_retard ?? financeSummary.aRelancer.filter((f) => String(f.date_echeance ?? '') < new Date().toISOString().slice(0, 10)).length,
+    montantRetard: financeSummary.apiKpis?.montant_retard_xaf ?? financeSummary.aRelancer
+      .filter((f) => String(f.date_echeance ?? '') < new Date().toISOString().slice(0, 10))
+      .reduce((s, f) => s + Number(f.solde_restant_xaf ?? 0), 0),
     creditsOuverts: financeSummary.apiKpis?.credits_ouverts ?? credits.filter((c) => c.statut !== 'rembourse').length,
     creditsSolde: financeSummary.apiKpis?.credits_solde_xaf ?? financeSummary.creditsSolde,
   }
@@ -994,6 +1106,13 @@ export default function Finance() {
               onClick={(e) => { e.stopPropagation(); setPaiementFacture(row) }}
               className="p-1.5 rounded hover:bg-amber-50 text-gray-400 hover:text-amber-600 transition-colors">
               <ReceiptText className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {Number(row.solde_restant_xaf ?? 0) > 0 && !['annule', 'paye'].includes(row.statut as string) && (
+            <button title="Relancer"
+              onClick={(e) => { e.stopPropagation(); setRelanceFacture(row) }}
+              className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors">
+              <AlertCircle className="h-3.5 w-3.5" />
             </button>
           )}
           <button onClick={(e) => { e.stopPropagation(); setSelectedFacture(row) }} title="Aperçu"
@@ -1064,7 +1183,23 @@ export default function Finance() {
         title="Finance"
         subtitle="Factures · Crédits · Comptabilité · Fiscalité"
         breadcrumbs={[{ label: 'FORGE', href: '/' }, { label: 'Finance' }]}
-        actions={activeTab === 'Factures' ? (
+        actions={activeTab === 'Dashboard' ? (
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={() => {
+              const now = new Date()
+              const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10)
+              const to = now.toISOString().slice(0, 10)
+              downloadFinanceExport(`/api/finance/exports/indicateurs.xls?from=${from}&to=${to}`, `rapport-finance-${from}-${to}.xls`).catch((err: Error) => toast.error(err.message))
+            }}>
+              <Download className="h-3.5 w-3.5" /> Rapport Finance
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() =>
+              downloadFinanceExport(`/api/finance/exports/tva.xls?periode=${periodeTva}`, `rapport-tva-${periodeTva}.xls`).catch((err: Error) => toast.error(err.message))
+            }>
+              <Download className="h-3.5 w-3.5" /> TVA
+            </Button>
+          </div>
+        ) : activeTab === 'Factures' ? (
           <Button size="sm" onClick={() => setShowNewFacture(true)}>
             <Plus className="h-3.5 w-3.5" /> Nouvelle facture
           </Button>
@@ -1109,7 +1244,7 @@ export default function Finance() {
                     { label: 'CA facture', value: formatXAF(dashboardKpis.caFacture), hint: `${dashboardKpis.totalFactures} facture${dashboardKpis.totalFactures !== 1 ? 's' : ''}`, color: '#C62828' },
                     { label: 'Encaisse', value: formatXAF(dashboardKpis.encaisse), hint: `${dashboardKpis.tauxEncaissement}% du CA`, color: '#15803d' },
                     { label: 'A recevoir', value: formatXAF(dashboardKpis.aRecevoir), hint: `${dashboardKpis.aRelancer} facture${dashboardKpis.aRelancer !== 1 ? 's' : ''} a suivre`, color: '#d97706' },
-                    { label: 'Banque + caisse', value: formatXAF(dashboardKpis.banqueCaisse), hint: 'Selon ecritures 521/571', color: '#1d4ed8' },
+                    { label: 'Factures en retard', value: String(dashboardKpis.enRetard), hint: formatXAF(dashboardKpis.montantRetard), color: '#dc2626' },
                   ].map((kpi) => (
                     <div key={kpi.label} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
                       <div className="text-xs font-semibold uppercase text-gray-400">{kpi.label}</div>
@@ -1168,6 +1303,52 @@ export default function Finance() {
                           </div>
                         )
                       })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-bold text-[#212121]">Factures en retard</h3>
+                        <p className="mt-0.5 text-xs text-gray-400">Priorité de relance et d'encaissement.</p>
+                      </div>
+                      <Button size="sm" variant="ghost" onClick={() => setActiveTab('Factures')}>
+                        <ExternalLink className="h-3.5 w-3.5" /> Ouvrir
+                      </Button>
+                    </div>
+                    <div className="divide-y divide-gray-50">
+                      {(financeDashboardData?.factures_en_retard ?? []).slice(0, 5).map((facture) => (
+                        <div key={facture.id} className="flex items-center justify-between py-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-gray-800">{facture.numero} - {facture.client_nom}</div>
+                            <div className="text-xs text-gray-400">Échéance {formatDate(facture.date_echeance)}</div>
+                          </div>
+                          <div className="text-right text-sm font-black text-[#dc2626]">{formatXAF(facture.solde_restant_xaf)}</div>
+                        </div>
+                      ))}
+                      {(financeDashboardData?.factures_en_retard ?? []).length === 0 && (
+                        <div className="py-8 text-center text-sm text-gray-400">Aucune facture en retard</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                    <h3 className="mb-3 text-sm font-bold text-[#212121]">Top clients débiteurs</h3>
+                    <div className="divide-y divide-gray-50">
+                      {(financeDashboardData?.top_clients_debiteurs ?? []).slice(0, 5).map((client) => (
+                        <div key={client.client_id ?? client.client_nom} className="flex items-center justify-between py-2">
+                          <div>
+                            <div className="text-sm font-semibold text-gray-800">{client.client_nom}</div>
+                            <div className="text-xs text-gray-400">{client.factures} facture{client.factures !== 1 ? 's' : ''} ouverte{client.factures !== 1 ? 's' : ''}</div>
+                          </div>
+                          <div className="text-right text-sm font-black text-[#d97706]">{formatXAF(client.solde_xaf)}</div>
+                        </div>
+                      ))}
+                      {(financeDashboardData?.top_clients_debiteurs ?? []).length === 0 && (
+                        <div className="py-8 text-center text-sm text-gray-400">Aucun solde client ouvert</div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1269,11 +1450,347 @@ export default function Finance() {
             {/* ── Comptabilité ── */}
             {activeTab === 'Comptabilité' && (
               <div className="p-5 space-y-4">
+                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-[#212121]">Socle comptable</h3>
+                        <p className="mt-1 text-xs text-gray-500">
+                          Plan SYSCOHADA, journaux et règles de saisie utilisés par les écritures.
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-600">
+                        {planComptableData?.total ?? comptesOptions.length} comptes
+                      </span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {journaux.map((journal) => (
+                        <span key={journal.code} className="rounded-full border border-gray-200 bg-white px-2 py-1 text-xs font-semibold text-gray-600">
+                          {journal.code} · {journal.label}
+                        </span>
+                      ))}
+                    </div>
+                    {reglesComptables.length > 0 && (
+                      <div className="mt-3 space-y-1">
+                        {reglesComptables.slice(0, 3).map((regle) => (
+                          <div key={regle} className="text-xs text-gray-500">• {regle}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-lg border border-gray-100 bg-white p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-[#212121]">Grand livre général</h3>
+                        <p className="mt-1 text-xs text-gray-500">
+                          Solde progressif par compte sur la période sélectionnée.
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          if (!compteFilter) {
+                            toast.error('Sélectionnez un compte')
+                            return
+                          }
+                          downloadFinanceExport(
+                            `/api/rapports/grand-livre.xls?compte=${compteFilter}&debut=${grandLivreDebut}&fin=${grandLivreFin}`,
+                            `grand-livre-${compteFilter}.xls`,
+                          ).catch((err: Error) => toast.error(err.message))
+                        }}
+                      >
+                        <Download className="h-3.5 w-3.5" /> Export
+                      </Button>
+                    </div>
+                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <input
+                        type="date"
+                        value={grandLivreDebut}
+                        onChange={(e) => setGrandLivreDebut(e.target.value)}
+                        className="rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30"
+                      />
+                      <input
+                        type="date"
+                        value={grandLivreFin}
+                        onChange={(e) => setGrandLivreFin(e.target.value)}
+                        className="rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30"
+                      />
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                      <div className="rounded-lg bg-gray-50 p-3">
+                        <div className="text-gray-400">Débit</div>
+                        <div className="mt-1 font-bold text-[#1d4ed8]">{formatXAF(grandLivreData?.total_debit_xaf ?? 0)}</div>
+                      </div>
+                      <div className="rounded-lg bg-gray-50 p-3">
+                        <div className="text-gray-400">Crédit</div>
+                        <div className="mt-1 font-bold text-[#15803d]">{formatXAF(grandLivreData?.total_credit_xaf ?? 0)}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-gray-100 bg-white p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-bold text-[#212121]">États comptables</h3>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Bilan et compte de résultat générés depuis les écritures, avec rapprochement Finance.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        type="number"
+                        value={exerciceCompta}
+                        onChange={(e) => setExerciceCompta(e.target.value)}
+                        className="w-28 rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30"
+                      />
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => downloadFinanceExport(`/api/rapports/bilan.xls?exercice=${exerciceCompta}`, `bilan-${exerciceCompta}.xls`).catch((err: Error) => toast.error(err.message))}
+                      >
+                        <Download className="h-3.5 w-3.5" /> Bilan
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => downloadFinanceExport(`/api/rapports/resultat.xls?exercice=${exerciceCompta}`, `resultat-${exerciceCompta}.xls`).catch((err: Error) => toast.error(err.message))}
+                      >
+                        <Download className="h-3.5 w-3.5" /> Résultat
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
+                    <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-semibold uppercase text-gray-400">Bilan comptable</div>
+                          <div className="mt-1 text-sm font-bold text-[#212121]">
+                            {bilanData?.equilibre ? 'Équilibré' : 'À contrôler'}
+                          </div>
+                        </div>
+                        <span className={`rounded-full px-2 py-1 text-xs font-semibold ${bilanData?.equilibre ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+                          Écart {formatXAF(Math.abs(bilanData?.ecart_xaf ?? 0))}
+                        </span>
+                      </div>
+                      <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                        <div className="rounded-lg bg-white p-3">
+                          <div className="text-gray-400">Actif</div>
+                          <div className="mt-1 font-bold text-[#1d4ed8]">{formatXAF(bilanData?.total_actif_xaf ?? 0)}</div>
+                        </div>
+                        <div className="rounded-lg bg-white p-3">
+                          <div className="text-gray-400">Passif</div>
+                          <div className="mt-1 font-bold text-[#15803d]">{formatXAF(bilanData?.total_passif_xaf ?? 0)}</div>
+                        </div>
+                      </div>
+                      <div className="mt-3 space-y-2">
+                        {(bilanData?.actif ?? []).slice(0, 3).map((section) => (
+                          <div key={`actif-${section.rubrique}`} className="flex items-center justify-between text-xs">
+                            <span className="text-gray-500">{section.rubrique}</span>
+                            <span className="font-semibold text-gray-700">{formatXAF(section.total_xaf)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-semibold uppercase text-gray-400">Compte de résultat</div>
+                          <div className="mt-1 text-sm font-bold text-[#212121]">
+                            {resultatData?.beneficiaire ? 'Bénéficiaire' : 'Déficitaire'}
+                          </div>
+                        </div>
+                        <span className={`rounded-full px-2 py-1 text-xs font-semibold ${(resultatData?.resultat_net_xaf ?? 0) >= 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                          {formatXAF(resultatData?.resultat_net_xaf ?? 0)}
+                        </span>
+                      </div>
+                      <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                        <div className="rounded-lg bg-white p-3">
+                          <div className="text-gray-400">Produits</div>
+                          <div className="mt-1 font-bold text-[#15803d]">{formatXAF(resultatData?.total_produits_xaf ?? 0)}</div>
+                        </div>
+                        <div className="rounded-lg bg-white p-3">
+                          <div className="text-gray-400">Charges</div>
+                          <div className="mt-1 font-bold text-[#C62828]">{formatXAF(resultatData?.total_charges_xaf ?? 0)}</div>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                        <div className="rounded-lg bg-white p-3">
+                          <div className="text-gray-400">CA facturé HT</div>
+                          <div className="mt-1 font-semibold text-gray-700">{formatXAF(resultatData?.finance?.ca_facture_ht_xaf ?? 0)}</div>
+                        </div>
+                        <div className="rounded-lg bg-white p-3">
+                          <div className="text-gray-400">Reste à encaisser</div>
+                          <div className="mt-1 font-semibold text-gray-700">{formatXAF(resultatData?.finance?.reste_a_encaisser_xaf ?? 0)}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                  <div className="rounded-lg border border-gray-100 bg-white p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-[#212121]">Synthèse Finance-Comptabilité</h3>
+                        <p className="mt-1 text-xs text-gray-500">
+                          Lecture croisée entre factures, encaissements et écritures comptables.
+                        </p>
+                      </div>
+                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${syntheseComptableData?.comptabilite?.balance_equilibree ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+                        Balance {syntheseComptableData?.comptabilite?.balance_equilibree ? 'OK' : 'à contrôler'}
+                      </span>
+                    </div>
+                    <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                      <div className="rounded-lg bg-gray-50 p-3">
+                        <div className="text-gray-400">Comptes mouvementés</div>
+                        <div className="mt-1 font-bold text-[#212121]">{syntheseComptableData?.comptabilite?.comptes_mouvementes ?? 0}</div>
+                      </div>
+                      <div className="rounded-lg bg-gray-50 p-3">
+                        <div className="text-gray-400">Factures</div>
+                        <div className="mt-1 font-bold text-[#212121]">{syntheseComptableData?.finance?.factures ?? 0}</div>
+                      </div>
+                      <div className="rounded-lg bg-gray-50 p-3">
+                        <div className="text-gray-400">Débit total</div>
+                        <div className="mt-1 font-semibold text-[#1d4ed8]">{formatXAF(syntheseComptableData?.comptabilite?.total_debit_xaf ?? 0)}</div>
+                      </div>
+                      <div className="rounded-lg bg-gray-50 p-3">
+                        <div className="text-gray-400">Crédit total</div>
+                        <div className="mt-1 font-semibold text-[#15803d]">{formatXAF(syntheseComptableData?.comptabilite?.total_credit_xaf ?? 0)}</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 rounded-lg bg-gray-50 p-3 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-gray-500">Écart CA comptable / CA facturé HT</span>
+                        <span className="font-bold text-[#212121]">{formatXAF(syntheseComptableData?.rapprochement?.ecart_ca_xaf ?? 0)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-gray-100 bg-white p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-[#212121]">Contrôles avant clôture</h3>
+                        <p className="mt-1 text-xs text-gray-500">
+                          Vérifications automatiques sur la balance, le plan, le CA et la TVA.
+                        </p>
+                      </div>
+                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                        controlesComptablesData?.statut_global === 'ok'
+                          ? 'bg-green-50 text-green-700'
+                          : controlesComptablesData?.statut_global === 'alerte'
+                            ? 'bg-red-50 text-red-700'
+                            : 'bg-amber-50 text-amber-700'
+                      }`}>
+                        {controlesComptablesData?.statut_global ?? '...'}
+                      </span>
+                    </div>
+                    <div className="mt-4 space-y-2">
+                      {(controlesComptablesData?.controles ?? []).map((controle) => (
+                        <div key={controle.code} className="flex items-start justify-between gap-3 rounded-lg bg-gray-50 p-3 text-xs">
+                          <div>
+                            <div className="font-semibold text-[#212121]">{controle.label}</div>
+                            <div className="mt-0.5 text-gray-500">{controle.details}</div>
+                          </div>
+                          <span className={`shrink-0 rounded-full px-2 py-0.5 font-semibold ${
+                            controle.statut === 'ok'
+                              ? 'bg-green-50 text-green-700'
+                              : controle.statut === 'alerte'
+                                ? 'bg-red-50 text-red-700'
+                                : 'bg-amber-50 text-amber-700'
+                          }`}>
+                            {controle.statut}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    {(controlesComptablesData?.recommandations ?? []).length > 0 && (
+                      <div className="mt-3 rounded-lg border border-gray-100 bg-gray-50 p-3">
+                        {(controlesComptablesData?.recommandations ?? []).slice(0, 2).map((rec) => (
+                          <div key={rec} className="text-xs text-gray-500">• {rec}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-gray-100 bg-white p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-bold text-[#212121]">Pré-clôture comptable</h3>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Dossier annuel consolidé, prêt pour revue finance et archivage.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                        clotureComptableData?.statut === 'pret'
+                          ? 'bg-green-50 text-green-700'
+                          : clotureComptableData?.statut === 'bloque'
+                            ? 'bg-red-50 text-red-700'
+                            : 'bg-amber-50 text-amber-700'
+                      }`}>
+                        {clotureComptableData?.statut ?? '...'}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => downloadFinanceExport(`/api/rapports/dossier-cloture.xls?exercice=${exerciceCompta}`, `dossier-cloture-${exerciceCompta}.xls`).catch((err: Error) => toast.error(err.message))}
+                      >
+                        <Download className="h-3.5 w-3.5" /> Dossier
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs lg:grid-cols-4">
+                    <div className="rounded-lg bg-gray-50 p-3">
+                      <div className="text-gray-400">Comptes</div>
+                      <div className="mt-1 font-bold text-[#212121]">{clotureComptableData?.resume?.comptes_mouvementes ?? 0}</div>
+                    </div>
+                    <div className="rounded-lg bg-gray-50 p-3">
+                      <div className="text-gray-400">Résultat net</div>
+                      <div className="mt-1 font-bold text-[#212121]">{formatXAF(clotureComptableData?.resume?.resultat_net_xaf ?? 0)}</div>
+                    </div>
+                    <div className="rounded-lg bg-gray-50 p-3">
+                      <div className="text-gray-400">Encaisse</div>
+                      <div className="mt-1 font-bold text-[#15803d]">{formatXAF(clotureComptableData?.resume?.encaisse_xaf ?? 0)}</div>
+                    </div>
+                    <div className="rounded-lg bg-gray-50 p-3">
+                      <div className="text-gray-400">Reste à encaisser</div>
+                      <div className="mt-1 font-bold text-[#C62828]">{formatXAF(clotureComptableData?.resume?.reste_a_encaisser_xaf ?? 0)}</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-1 gap-2 lg:grid-cols-2">
+                    {(clotureComptableData?.etapes ?? []).map((etape) => (
+                      <div key={etape.code} className="flex items-start justify-between gap-3 rounded-lg bg-gray-50 p-3 text-xs">
+                        <div>
+                          <div className="font-semibold text-[#212121]">{etape.label}</div>
+                          <div className="mt-0.5 text-gray-500">{etape.details}</div>
+                        </div>
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 font-semibold ${
+                          etape.statut === 'ok'
+                            ? 'bg-green-50 text-green-700'
+                            : etape.statut === 'bloquant'
+                              ? 'bg-red-50 text-red-700'
+                              : 'bg-amber-50 text-amber-700'
+                        }`}>
+                          {etape.statut}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="flex flex-wrap gap-3 items-center">
                   <select value={compteFilter} onChange={(e) => setCompteFilter(e.target.value)}
                     className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30 bg-white">
                     <option value="">Tous les comptes</option>
-                    {SYSCOHADA.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                    {comptesOptions.map((c) => <option key={c.compte} value={c.compte}>{c.compte} — {c.libelle}</option>)}
                   </select>
                   <input type="month" value={periodeFilter} onChange={(e) => setPeriodeFilter(e.target.value)}
                     className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
@@ -1286,6 +1803,18 @@ export default function Finance() {
                   <span className="ml-auto text-xs text-gray-400">{ecritures.length} écriture{ecritures.length !== 1 ? 's' : ''}</span>
                 </div>
 
+                {compteSelectionne && grandLivreData && (
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                      <span className="font-mono font-bold text-[#212121]">{compteSelectionne.compte}</span>
+                      <span>{compteSelectionne.libelle}</span>
+                      <span className="rounded-full bg-white px-2 py-0.5 font-semibold">{grandLivreData.categorie}</span>
+                      <span className="rounded-full bg-white px-2 py-0.5 font-semibold">Solde {grandLivreData.solde_sens}</span>
+                      <span className="ml-auto font-bold text-[#212121]">{formatXAF(grandLivreData.solde_final_xaf)}</span>
+                    </div>
+                  </div>
+                )}
+
                 <div className="overflow-x-auto rounded-xl border border-gray-100">
                   <table className="w-full text-sm">
                     <thead>
@@ -1296,10 +1825,30 @@ export default function Finance() {
                       </tr>
                     </thead>
                     <tbody>
-                      {ecrituresLoading && (
+                      {compteFilter && grandLivreLoading && (
                         <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400">Chargement…</td></tr>
                       )}
-                      {!ecrituresLoading && ecritures.map((l, i) => (
+                      {compteFilter && !grandLivreLoading && (grandLivreData?.lignes ?? []).map((l, i) => (
+                        <tr key={l.id ?? i} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+                          <td className="px-4 py-3 font-mono text-xs text-gray-500 whitespace-nowrap">{formatDate(l.date)}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700">{l.libelle}</td>
+                          <td className="px-4 py-3">
+                            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-mono">{compteFilter} — {grandLivreData?.compte_label ?? compteSelectionne?.libelle}</span>
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-[#1d4ed8]">{l.debit_xaf > 0 ? formatXAF(l.debit_xaf) : '—'}</td>
+                          <td className="px-4 py-3 text-right font-semibold text-[#15803d]">{l.credit_xaf > 0 ? formatXAF(l.credit_xaf) : '—'}</td>
+                          <td className="px-4 py-3 text-right font-bold" style={{ color: l.solde_xaf >= 0 ? '#1d4ed8' : '#15803d' }}>
+                            {formatXAF(Math.abs(l.solde_xaf))}
+                          </td>
+                        </tr>
+                      ))}
+                      {compteFilter && !grandLivreLoading && (grandLivreData?.lignes ?? []).length === 0 && (
+                        <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400">Aucune ligne dans le grand livre pour cette période</td></tr>
+                      )}
+                      {!compteFilter && ecrituresLoading && (
+                        <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400">Chargement…</td></tr>
+                      )}
+                      {!compteFilter && !ecrituresLoading && ecritures.map((l, i) => (
                         <tr key={l.id ?? i} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
                           <td className="px-4 py-3 font-mono text-xs text-gray-500 whitespace-nowrap">{formatDate(l.date)}</td>
                           <td className="px-4 py-3 text-sm text-gray-700">{l.libelle}</td>
@@ -1313,7 +1862,7 @@ export default function Finance() {
                           </td>
                         </tr>
                       ))}
-                      {!ecrituresLoading && ecritures.length === 0 && (
+                      {!compteFilter && !ecrituresLoading && ecritures.length === 0 && (
                         <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400">Aucune écriture pour ces critères</td></tr>
                       )}
                     </tbody>
@@ -1324,8 +1873,48 @@ export default function Finance() {
 
             {/* ── Déclarations ── */}
             {activeTab === 'Déclarations Fiscales' && (
-              <div className="p-5 space-y-3">
-                {DECLARATIONS.map((d) => {
+              <div className="p-5 space-y-4">
+                <div className="flex flex-col gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-[#212121]">TVA mensuelle</h3>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Prépare la déclaration à partir des factures non annulées. La livraison reste hors base TVA.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="month"
+                      value={periodeTva}
+                      onChange={(e) => setPeriodeTva(e.target.value)}
+                      className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/20"
+                    />
+                    <Button size="sm" onClick={() => preparerTva.mutate({ periode: periodeTva })} disabled={preparerTva.isPending}>
+                      {preparerTva.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ReceiptText className="h-3.5 w-3.5" />}
+                      Préparer
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() =>
+                      downloadFinanceExport(`/api/finance/exports/tva.xls?periode=${periodeTva}`, `rapport-tva-${periodeTva}.xls`).catch((err: Error) => toast.error(err.message))
+                    }>
+                      <Download className="h-3.5 w-3.5" /> Export
+                    </Button>
+                  </div>
+                </div>
+
+                {declarationsLoading && (
+                  <div className="flex items-center justify-center rounded-xl border border-gray-100 p-8 text-sm text-gray-400">
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Chargement des déclarations...
+                  </div>
+                )}
+
+                {!declarationsLoading && declarations.length === 0 && (
+                  <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center">
+                    <ReceiptText className="mx-auto h-8 w-8 text-gray-300" />
+                    <p className="mt-2 text-sm font-semibold text-gray-500">Aucune déclaration TVA préparée</p>
+                    <p className="mt-1 text-xs text-gray-400">Choisissez une période puis cliquez sur Préparer.</p>
+                  </div>
+                )}
+
+                {declarations.map((d) => {
                   const s = DECL_MAP[d.statut] ?? DECL_MAP.a_declarer
                   return (
                     <div key={d.id} className="flex items-center justify-between p-4 border border-gray-100 rounded-xl hover:bg-gray-50 transition-colors">
@@ -1338,12 +1927,22 @@ export default function Finance() {
                           <div className="text-xs text-gray-400 mt-0.5">
                             Période : {d.periode} · Échéance : {formatDate(d.echeance)}
                           </div>
+                          {d.notes && <div className="mt-1 text-xs text-gray-400">{d.notes}</div>}
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        {d.montant > 0 && <span className="text-sm font-bold">{formatXAF(d.montant)}</span>}
+                        {Number(d.montant_xaf ?? 0) > 0 && <span className="text-sm font-bold">{formatXAF(d.montant_xaf)}</span>}
                         <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ color: s.color, backgroundColor: s.bg }}>{s.label}</span>
-                        {d.statut === 'a_declarer' && <Button size="sm">Déclarer</Button>}
+                        {d.statut === 'a_declarer' && (
+                          <Button size="sm" onClick={() => updateStatutDeclaration.mutate({ id: d.id, statut: 'soumis' })} disabled={updateStatutDeclaration.isPending}>
+                            Soumettre
+                          </Button>
+                        )}
+                        {d.statut === 'soumis' && (
+                          <Button size="sm" variant="ghost" onClick={() => updateStatutDeclaration.mutate({ id: d.id, statut: 'valide' })} disabled={updateStatutDeclaration.isPending}>
+                            Valider
+                          </Button>
+                        )}
                       </div>
                     </div>
                   )
@@ -1361,6 +1960,7 @@ export default function Finance() {
         factureeCommandeIds={factureeCommandeIds}
       />
       <PaiementFactureModal isOpen={!!paiementFacture} onClose={() => setPaiementFacture(null)} facture={paiementFacture} />
+      <RelanceFactureModal isOpen={!!relanceFacture} onClose={() => setRelanceFacture(null)} facture={relanceFacture} />
       <RemboursementModal isOpen={!!remboursementCredit} onClose={() => setRemboursementCredit(null)} credit={remboursementCredit} />
       <RelanceModal isOpen={!!relanceCredit} onClose={() => setRelanceCredit(null)} credit={relanceCredit} />
       <DocumentsModal isOpen={!!documentsCredit} onClose={() => setDocumentsCredit(null)} credit={documentsCredit} />

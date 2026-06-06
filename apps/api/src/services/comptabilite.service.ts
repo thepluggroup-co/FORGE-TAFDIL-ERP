@@ -82,6 +82,7 @@ export async function genererEcritureVente(facture: {
   client_nom:    string
   total_ht_xaf:  number
   tva_xaf:       number
+  frais_livraison_xaf?: number | null
   total_ttc_xaf: number
   created_by?:   string
   type_vente?:   'marchandises' | 'travaux' | 'services'
@@ -99,7 +100,8 @@ export async function genererEcritureVente(facture: {
   const libelle = `Vente — ${facture.numero} — ${facture.client_nom}`
   const date    = facture.date_emission.slice(0, 10)
 
-  return insertEcritures([
+  const fraisLivraison = Math.round(Number(facture.frais_livraison_xaf ?? 0))
+  const ecritures = [
     {
       date, libelle,
       compte_syscohada: '411',
@@ -131,7 +133,23 @@ export async function genererEcritureVente(facture: {
       facture_id:       facture.id,
       created_by:       facture.created_by,
     },
-  ])
+  ]
+
+  if (fraisLivraison > 0) {
+    ecritures.push({
+      date,
+      libelle:          `Frais de livraison - ${facture.numero}`,
+      compte_syscohada: '706',
+      compte_label:     libelleCompte('706'),
+      debit_xaf:        0,
+      credit_xaf:       fraisLivraison,
+      reference_doc:    facture.numero,
+      facture_id:       facture.id,
+      created_by:       facture.created_by,
+    })
+  }
+
+  return insertEcritures(ecritures)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

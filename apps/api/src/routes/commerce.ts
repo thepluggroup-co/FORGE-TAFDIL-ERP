@@ -1306,7 +1306,8 @@ router.patch(
       id: string; ref: string; statut_commande: string; statut_paiement: string
       lignes: Array<{ designation: string; quantite: number; prix_unitaire: number }>
       client_nom: string; client_telephone: string
-      montant_ttc: number; erp_commande_id: string | null
+      montant_ht: number; tva: number; montant_ttc: number; frais_livraison: number
+      erp_commande_id: string | null
     }
 
     if (body.statut_commande === 'en_preparation' &&
@@ -1337,9 +1338,10 @@ router.patch(
           statut:          'valide',
           date_emission:   today,
           date_echeance:   echeance,
-          total_ht_xaf:    Math.round(cmd.montant_ttc / 1.1925),
-          tva_xaf:         Math.round(cmd.montant_ttc - cmd.montant_ttc / 1.1925),
-          total_ttc_xaf:   cmd.montant_ttc,
+          total_ht_xaf:    Math.round(cmd.montant_ht ?? 0),
+          tva_xaf:         Math.round(cmd.tva ?? 0),
+          frais_livraison_xaf: Math.round(cmd.frais_livraison ?? 0),
+          total_ttc_xaf:   Math.round(cmd.montant_ttc ?? 0),
           montant_paye_xaf: cmd.statut_paiement === 'paye' ? cmd.montant_ttc : 0,
           created_by:      user.id,
         })

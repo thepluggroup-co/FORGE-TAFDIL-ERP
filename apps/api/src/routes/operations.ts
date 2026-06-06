@@ -95,7 +95,7 @@ async function ensureFactureCommande(commandeId: string, userId?: string) {
 
   const { data: commande, error } = await db
     .from('commandes')
-    .select('id, client_id, client_nom, total_ht_xaf, tva_xaf, total_ttc_xaf, commandes_lignes(*)')
+    .select('id, client_id, client_nom, total_ht_xaf, tva_xaf, frais_livraison_xaf, total_ttc_xaf, commandes_lignes(*)')
     .eq('id', commandeId)
     .single()
 
@@ -107,6 +107,7 @@ async function ensureFactureCommande(commandeId: string, userId?: string) {
     client_nom: string
     total_ht_xaf: number
     tva_xaf: number
+    frais_livraison_xaf?: number | null
     total_ttc_xaf: number
     commandes_lignes?: Array<{
       designation: string
@@ -134,6 +135,7 @@ async function ensureFactureCommande(commandeId: string, userId?: string) {
       date_echeance:   dateEcheance,
       total_ht_xaf:    cmd.total_ht_xaf,
       tva_xaf:         cmd.tva_xaf,
+      frais_livraison_xaf: Number(cmd.frais_livraison_xaf ?? 0),
       total_ttc_xaf:   cmd.total_ttc_xaf,
       created_by:      userId ?? null,
       sync_status:     'synced',

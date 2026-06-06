@@ -75,6 +75,7 @@ export interface PdfFacture {
   date_echeance: string
   total_ht_xaf:  number
   tva_xaf:       number
+  frais_livraison_xaf?: number | null
   total_ttc_xaf: number
 }
 
@@ -251,6 +252,7 @@ function drawTotals(
   y:      number,
   ht:     number,
   tva:    number,
+  livraison: number,
   ttc:    number,
 ): number {
   const TX = COL.pu   // left of totals block
@@ -270,7 +272,17 @@ function drawTotals(
   doc.text('TVA (19,25%) :',         TX, y,      { width: 84 })
   doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
   doc.text(xaf(tva), TX + 84, y, { width: TW - 84, align: 'right' })
-  y += 8
+  y += 16
+
+  if (livraison > 0) {
+    doc.font('Helvetica').fontSize(9).fillColor(C.mid)
+    doc.text('Livraison :', TX, y, { width: 84 })
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
+    doc.text(xaf(livraison), TX + 84, y, { width: TW - 84, align: 'right' })
+    y += 8
+  } else {
+    y -= 8
+  }
 
   // TTC box
   doc.rect(TX, y, TW, 26).fill(C.red)
@@ -373,7 +385,7 @@ function buildPdf(
   },
   client:  PdfClient,
   lignes:  PdfLigne[],
-  totaux:  { ht: number; tva: number; ttc: number },
+  totaux:  { ht: number; tva: number; livraison?: number; ttc: number },
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
@@ -424,7 +436,7 @@ function buildPdf(
       y = 40
     }
 
-    y = drawTotals(doc, y, totaux.ht, totaux.tva, totaux.ttc)
+    y = drawTotals(doc, y, totaux.ht, totaux.tva, Number(totaux.livraison ?? 0), totaux.ttc)
 
     // ── Extra section (BTP conditions for devis) ─────────────────────────────
     if (meta.extraFn) {
@@ -482,7 +494,12 @@ export async function generateFacturePDF(
     },
     client,
     lignes,
-    { ht: facture.total_ht_xaf, tva: facture.tva_xaf, ttc: facture.total_ttc_xaf },
+    {
+      ht: facture.total_ht_xaf,
+      tva: facture.tva_xaf,
+      livraison: Number(facture.frais_livraison_xaf ?? 0),
+      ttc: facture.total_ttc_xaf,
+    },
   )
 }
 

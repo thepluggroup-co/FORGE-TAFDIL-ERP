@@ -243,10 +243,11 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     }
   }
 
-  // 2. Calculer montants
-  const montant_ht  = body.lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0) + body.frais_livraison
-  const tva         = Math.round(montant_ht * TVA_RATE)
-  const montant_ttc = Math.round(montant_ht + tva)
+  // 2. Calculer montants : la livraison est ajoutee apres TVA.
+  const montant_ht       = Math.round(body.lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0))
+  const frais_livraison  = Math.round(body.frais_livraison)
+  const tva              = Math.round(montant_ht * TVA_RATE)
+  const montant_ttc      = Math.round(montant_ht + tva + frais_livraison)
 
   // 3. Générer référence unique
   const ref = genRef()
@@ -274,7 +275,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
       montant_ht,
       tva,
       montant_ttc,
-      frais_livraison:  body.frais_livraison,
+      frais_livraison,
       mode_paiement:    body.mode_paiement,
       notes_client:     body.notes_client ?? null,
       statut_commande:  'recue',
@@ -299,6 +300,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
       date_commande:       today,
       total_ht_xaf:        montant_ht,
       tva_xaf:             tva,
+      frais_livraison_xaf: frais_livraison,
       total_ttc_xaf:       montant_ttc,
       notes:               `[SOURCE WEB] ${body.notes_client ?? ''}`.trim(),
     })
@@ -352,7 +354,7 @@ shopRouter.get('/commandes/:ref', async (c) => {
 
   const { data, error } = await db
     .from('commandes_shop')
-    .select('ref, statut_commande, statut_paiement, mode_paiement, payment_reference, lignes, montant_ttc, frais_livraison, created_at, updated_at, client_ville, photos_livraison')
+    .select('ref, statut_commande, statut_paiement, mode_paiement, payment_reference, lignes, montant_ht, tva, montant_ttc, frais_livraison, created_at, updated_at, client_ville, photos_livraison')
     .eq('ref', ref)
     .single()
 

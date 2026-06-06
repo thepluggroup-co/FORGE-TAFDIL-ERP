@@ -25,7 +25,7 @@ export default async function SuiviRefPage({ params, searchParams }: {
     const db = createPublicClient()
     const { data, error } = await db
       .from('commandes_shop')
-      .select('ref, statut_commande, statut_paiement, mode_paiement, payment_reference, lignes, montant_ttc, frais_livraison, created_at, updated_at, client_ville, photos_livraison, client_telephone')
+      .select('ref, statut_commande, statut_paiement, mode_paiement, payment_reference, lignes, montant_ht, tva, montant_ttc, frais_livraison, created_at, updated_at, client_ville, photos_livraison, client_telephone')
       .eq('ref', commandeRef)
       .single()
 
