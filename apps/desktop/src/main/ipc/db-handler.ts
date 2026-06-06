@@ -504,6 +504,71 @@ function runMigrations(database: InstanceType<typeof Database>) {
       safeAddColumn(db, 'livraisons',      'client_id',   'TEXT')
       log.info('[db] migration 005 : bons_sortie + colonnes jobs/livraisons')
     },
+
+    // ── 006: module crédit — plafonds, plans de paiement, échéances ──────────
+    // Offline-first : les paiements enregistrés hors-ligne sont mis en
+    // sync_queue et synchronisés à la reconnexion.
+    // Conflit : statuts serveur prioritaires, nouveaux paiements locaux gardés.
+    '006_credit_module': (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS customer_credit_limits (
+          id                       TEXT PRIMARY KEY,
+          customer_id              TEXT NOT NULL,
+          max_credit_amount        INTEGER NOT NULL DEFAULT 0,
+          is_active                INTEGER NOT NULL DEFAULT 1,
+          eligibility_type         TEXT NOT NULL DEFAULT 'INDIVIDUAL',
+          min_order_history_months INTEGER NOT NULL DEFAULT 3,
+          min_past_orders_count    INTEGER NOT NULL DEFAULT 5,
+          created_by               TEXT,
+          created_at               TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at               TEXT NOT NULL DEFAULT (datetime('now')),
+          sync_status              TEXT NOT NULL DEFAULT 'pending'
+        );
+
+        CREATE TABLE IF NOT EXISTS payment_plans (
+          id                  TEXT PRIMARY KEY,
+          order_id            TEXT NOT NULL,
+          customer_id         TEXT NOT NULL,
+          total_amount        INTEGER NOT NULL,
+          outstanding_balance INTEGER NOT NULL,
+          status              TEXT NOT NULL DEFAULT 'ACTIVE',
+          created_by          TEXT,
+          created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+          sync_status         TEXT NOT NULL DEFAULT 'pending'
+        );
+
+        CREATE TABLE IF NOT EXISTS payment_installments (
+          id                  TEXT PRIMARY KEY,
+          payment_plan_id     TEXT NOT NULL,
+          installment_number  INTEGER NOT NULL,
+          due_date            TEXT NOT NULL,
+          amount_due          INTEGER NOT NULL,
+          amount_paid         INTEGER NOT NULL DEFAULT 0,
+          paid_at             TEXT,
+          payment_method      TEXT,
+          status              TEXT NOT NULL DEFAULT 'PENDING',
+          notes               TEXT,
+          created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+          sync_status         TEXT NOT NULL DEFAULT 'pending'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_credit_limits_customer
+          ON customer_credit_limits(customer_id);
+        CREATE INDEX IF NOT EXISTS idx_payment_plans_customer
+          ON payment_plans(customer_id);
+        CREATE INDEX IF NOT EXISTS idx_payment_plans_status
+          ON payment_plans(status);
+        CREATE INDEX IF NOT EXISTS idx_installments_plan
+          ON payment_installments(payment_plan_id);
+        CREATE INDEX IF NOT EXISTS idx_installments_due_date
+          ON payment_installments(due_date);
+        CREATE INDEX IF NOT EXISTS idx_installments_status
+          ON payment_installments(status);
+      `)
+      log.info('[db] migration 006 : credit_module (payment_plans, installments, limits)')
+    },
   }
 
   const alreadyRan = new Set(
@@ -568,6 +633,81 @@ export async function registerDbHandlers() {
       log.error('[db:execute]', err, { sql })
       throw err
     }
+  })
+
+  // ── IPC Crédit offline ────────────────────────────────────────────────────
+
+  // Enregistrer un paiement hors-ligne (mis en sync_queue)
+  ipcMain.handle('credit:recordPaymentOffline', (_e, payload: {
+    installmentId: string
+    amount:        number
+    method:        string
+    notes?:        string
+    planId:        string
+  }) => {
+    try {
+      const now = new Date().toISOString()
+
+      // Lire l'échéance courante
+      const inst = database
+        .prepare('SELECT * FROM payment_installments WHERE id = ?')
+        .get(payload.installmentId) as Record<string, unknown> | undefined
+
+      if (!inst) throw new Error('Échéance introuvable en local')
+      if (inst.status === 'PAID') throw new Error('Déjà payée')
+
+      const amountPaid = (inst.amount_paid as number) + payload.amount
+      const newStatus  = amountPaid >= (inst.amount_due as number) ? 'PAID' : 'PARTIAL'
+
+      // Mise à jour locale
+      database.prepare(`
+        UPDATE payment_installments
+        SET amount_paid = ?, status = ?, payment_method = ?, paid_at = ?,
+            notes = ?, updated_at = ?, sync_status = 'pending'
+        WHERE id = ?
+      `).run(amountPaid, newStatus, payload.method, newStatus === 'PAID' ? now : null,
+             payload.notes ?? null, now, payload.installmentId)
+
+      // Recalculer outstanding_balance du plan
+      const insts = database
+        .prepare('SELECT amount_due, amount_paid FROM payment_installments WHERE payment_plan_id = ?')
+        .all(payload.planId) as Array<{ amount_due: number; amount_paid: number }>
+
+      const outstanding = insts.reduce((s, i) => s + Math.max(0, i.amount_due - i.amount_paid), 0)
+
+      database.prepare(`
+        UPDATE payment_plans
+        SET outstanding_balance = ?, updated_at = ?, sync_status = 'pending'
+        WHERE id = ?
+      `).run(outstanding, now, payload.planId)
+
+      // Ajouter à la sync_queue
+      database.prepare(`
+        INSERT INTO sync_queue (table_name, operation, record_id, payload)
+        VALUES ('payment_installments', 'UPDATE', ?, ?)
+      `).run(payload.installmentId, JSON.stringify({ ...inst, amount_paid: amountPaid, status: newStatus, payment_method: payload.method, paid_at: now }))
+
+      log.info('[credit:offline] paiement enregistré localement', payload.installmentId)
+      return { ok: true, newStatus, outstanding }
+    } catch (err) {
+      log.error('[credit:offline] erreur paiement', err)
+      throw err
+    }
+  })
+
+  // Lire les plans et échéances d'un client (offline)
+  ipcMain.handle('credit:getPlansOffline', (_e, customerId: string) => {
+    const plans = database
+      .prepare('SELECT * FROM payment_plans WHERE customer_id = ? ORDER BY created_at DESC')
+      .all(customerId)
+    return plans
+  })
+
+  ipcMain.handle('credit:getInstallmentsOffline', (_e, planId: string) => {
+    const insts = database
+      .prepare('SELECT * FROM payment_installments WHERE payment_plan_id = ? ORDER BY installment_number ASC')
+      .all(planId)
+    return insts
   })
 
   ipcMain.handle('app:version', () => app.getVersion())

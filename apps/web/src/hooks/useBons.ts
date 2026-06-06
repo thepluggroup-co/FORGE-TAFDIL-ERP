@@ -9,7 +9,10 @@ export interface BonLigne {
   quantite_demandee?: number; unite: string
 }
 export interface BonSortie {
-  id: string; numero: string; statut: 'soumis' | 'valide' | 'execute' | 'refuse'
+  id: string; numero: string
+  statut: 'en_attente' | 'soumis' | 'valide' | 'execute' | 'refuse'
+  type?: 'commande' | 'devis' | 'manuel'
+  commande_id?: string | null
   demandeur: string; motif: string; notes?: string | null
   lignes: BonLigne[]; created_at: string; code_unique?: string
 }
@@ -20,6 +23,23 @@ export function useBons(params?: { statut?: string }) {
     queryKey:  ['bons', params],
     queryFn:   () => dbGetBons(params) as Promise<BonsResponse>,
     staleTime: 15_000,
+  })
+}
+
+/** Retourne le nombre de bons en statut 'en_attente' — utilisé pour le badge magasinier */
+export function useBonsEnAttente() {
+  return useQuery({
+    queryKey:   ['bons', 'en_attente', 'count'],
+    queryFn:    async () => {
+      const { data, error } = await supabase
+        .from('bons_sortie')
+        .select('id', { count: 'exact', head: false })
+        .eq('statut', 'en_attente')
+      if (error) throw new Error(error.message)
+      return (data ?? []).length
+    },
+    staleTime:  10_000,
+    refetchInterval: 30_000,
   })
 }
 
@@ -69,7 +89,7 @@ export function useValidateBon() {
       const decision = typeof arg === 'string' ? 'valide' : arg.decision
       const { data: ex } = await supabase.from('bons_sortie').select('statut').eq('id', id).single()
       if (!ex) throw new Error('Bon introuvable')
-      if ((ex as { statut: string }).statut !== 'soumis') throw new Error('Bon déjà traité')
+      if (!['en_attente', 'soumis'].includes((ex as { statut: string }).statut)) throw new Error('Bon déjà traité')
       const { data, error } = await supabase.from('bons_sortie')
         .update({ statut: decision, valide_par_id: auth.user?.id, updated_at: new Date().toISOString() })
         .eq('id', id).select().single()

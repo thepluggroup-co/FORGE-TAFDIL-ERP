@@ -19,6 +19,15 @@ export type { DB } from './client'
 export { supabase, supabaseAdmin } from './supabase-client'
 export type { SupabaseClient, ForgeTable } from './supabase-client'
 
+// ── Module Crédit / Plans de paiement ─────────────────────────────────────────
+export * from './schema-credit'
+export * from './schema.pg.credit'
+
+// ── Module Sécurité / RBAC ────────────────────────────────────────────────────
+export * from './schema-rbac'
+export * from './schema.pg.rbac'
+export { runRbacSeed, ROLE_PERMISSIONS_MATRIX, SEED_ROLES, IMMUTABLE_PERMISSIONS } from './seeds/rbac'
+
 // ── Synchronisation offline-first ─────────────────────────────────────────────
 export {
   syncToCloud,

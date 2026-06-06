@@ -182,6 +182,26 @@ async function requestForm<T>(path: string, form: FormData): Promise<T> {
   }
 }
 
+async function requestBlob(path: string): Promise<Blob> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    const token = _cachedToken ?? (await supabase.auth.getSession()).data.session?.access_token
+    const res = await fetch(`${API_BASE}${path}`, {
+      method:  'GET',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal:  controller.signal,
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({})) as { error?: string }
+      throw new Error(data.error ?? `Erreur ${res.status}`)
+    }
+    return res.blob()
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export const apiClient = {
   get:      <T>(path: string)                    => request<T>('GET',    path),
   post:     <T>(path: string, body: unknown)     => request<T>('POST',   path, body),
@@ -189,4 +209,5 @@ export const apiClient = {
   patch:    <T>(path: string, body: unknown)     => request<T>('PATCH',  path, body),
   delete:   <T>(path: string)                    => request<T>('DELETE', path),
   postForm: <T>(path: string, form: FormData)    => requestForm<T>(path, form),
+  getBlob:  (path: string)                       => requestBlob(path),
 }

@@ -21,7 +21,8 @@ export const syncStatusEnum    = pgEnum('sync_status',    ['synced', 'pending', 
 export const clientTypeEnum    = pgEnum('client_type',    ['entreprise', 'particulier', 'institution'])
 export const clientStatutEnum  = pgEnum('client_statut',  ['actif', 'inactif', 'bloque'])
 export const produitStatutEnum = pgEnum('produit_statut', ['normal', 'alerte', 'critique', 'rupture'])
-export const bonStatutEnum     = pgEnum('bon_statut',     ['soumis', 'valide', 'execute', 'refuse'])
+export const bonStatutEnum     = pgEnum('bon_statut',     ['en_attente', 'soumis', 'valide', 'execute', 'refuse'])
+export const bonTypeEnum       = pgEnum('bon_type',       ['commande', 'devis', 'manuel'])
 export const devisStatutEnum   = pgEnum('devis_statut',   ['brouillon', 'envoye', 'accepte', 'refuse', 'expire', 'transforme'])
 export const commandeStatutEnum = pgEnum('commande_statut', ['confirmed', 'in_production', 'pret', 'delivered', 'cancelled'])
 export const factureStatutEnum = pgEnum('facture_statut', ['brouillon', 'valide', 'envoye', 'paye', 'annule'])
@@ -132,6 +133,10 @@ export const bonsSortiePg = pgTable('bons_sortie', {
   id:          id(),
   numero:      text('numero').notNull().unique(),
   statut:      bonStatutEnum('statut').notNull().default('soumis'),
+  type:        bonTypeEnum('type').notNull().default('manuel'),
+  // FK nullable vers commandes/devis — sans .references() (forward ref non supporté sans AnyPgColumn)
+  commandeId:  uuid('commande_id'),
+  devisId:     uuid('devis_id'),
   demandeur:   text('demandeur').notNull(),
   valideParId: uuid('valide_par_id').references(() => profilesPg.id),
   motif:       text('motif').notNull(),

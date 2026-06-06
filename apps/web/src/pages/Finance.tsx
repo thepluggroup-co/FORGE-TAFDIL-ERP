@@ -24,6 +24,7 @@ import { useCommandes } from '@/hooks/useCommandes'
 import { API_BASE, apiClient } from '@/lib/api-client'
 import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
+import { CreditDashboard, CreditLimitForm } from '@/features/credit'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -965,6 +966,8 @@ async function downloadFinanceExport(path: string, filename: string) {
 
 export default function Finance() {
   const [activeTab, setActiveTab]         = useState<Tab>('Dashboard')
+  const [creditSubTab, setCreditSubTab]   = useState<'tableau-de-bord' | 'creances'>('tableau-de-bord')
+  const [showCreditLimitForm, setShowCreditLimitForm] = useState(false)
   const [showNewFacture, setShowNewFacture] = useState(false)
   const [selectedFacture, setSelectedFacture] = useState<FactureRecord | null>(null)
   const [paiementFacture, setPaiementFacture] = useState<FactureRecord | null>(null)
@@ -1429,21 +1432,63 @@ export default function Finance() {
             {/* ── Crédits ── */}
             {activeTab === 'Crédits' && (
               <div>
-                {echusCount > 0 && (
-                  <div className="mx-5 mt-5 flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl p-4">
-                    <motion.div animate={{ scale: [1, 1.12, 1] }} transition={{ duration: 1.2, repeat: Infinity }}
-                      className="flex items-center justify-center w-10 h-10 rounded-full bg-red-100 shrink-0">
-                      <AlertCircle className="h-5 w-5 text-[#dc2626]" />
-                    </motion.div>
-                    <div>
-                      <div className="font-bold text-[#dc2626] text-sm">
-                        {echusCount} crédit{echusCount > 1 ? 's' : ''} échu{echusCount > 1 ? 's' : ''} — action requise
+                {/* Sub-tab navigation */}
+                <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+                  <div className="flex gap-1">
+                    {([
+                      { key: 'tableau-de-bord', label: 'Tableau de bord' },
+                      { key: 'creances',        label: 'Créances clients' },
+                    ] as const).map(({ key, label }) => (
+                      <button
+                        key={key}
+                        onClick={() => setCreditSubTab(key)}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                          creditSubTab === key
+                            ? 'bg-[#C62828] text-white'
+                            : 'text-gray-500 hover:bg-gray-100'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <Button size="sm" variant="ghost" onClick={() => setShowCreditLimitForm(true)}>
+                    <Plus className="h-3.5 w-3.5" /> Limite crédit
+                  </Button>
+                </div>
+
+                {/* Tableau de bord — nouveau module crédit */}
+                {creditSubTab === 'tableau-de-bord' && (
+                  <CreditDashboard />
+                )}
+
+                {/* Créances clients — vue legacy */}
+                {creditSubTab === 'creances' && (
+                  <div>
+                    {echusCount > 0 && (
+                      <div className="mx-5 mt-5 flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl p-4">
+                        <motion.div animate={{ scale: [1, 1.12, 1] }} transition={{ duration: 1.2, repeat: Infinity }}
+                          className="flex items-center justify-center w-10 h-10 rounded-full bg-red-100 shrink-0">
+                          <AlertCircle className="h-5 w-5 text-[#dc2626]" />
+                        </motion.div>
+                        <div>
+                          <div className="font-bold text-[#dc2626] text-sm">
+                            {echusCount} crédit{echusCount > 1 ? 's' : ''} échu{echusCount > 1 ? 's' : ''} — action requise
+                          </div>
+                          <div className="text-xs text-red-500 mt-0.5">{formatXAF(totalEchus)} à recouvrer</div>
+                        </div>
                       </div>
-                      <div className="text-xs text-red-500 mt-0.5">{formatXAF(totalEchus)} à recouvrer</div>
-                    </div>
+                    )}
+                    <DataTable<CreditRecord> columns={creditColumns} data={credits} keyField="id" loading={creditsLoading} />
                   </div>
                 )}
-                <DataTable<CreditRecord> columns={creditColumns} data={credits} keyField="id" loading={creditsLoading} />
+
+                {/* Modal limite de crédit */}
+                <CreditLimitForm
+                  open={showCreditLimitForm}
+                  onClose={() => setShowCreditLimitForm(false)}
+                  onSaved={() => setShowCreditLimitForm(false)}
+                />
               </div>
             )}
 

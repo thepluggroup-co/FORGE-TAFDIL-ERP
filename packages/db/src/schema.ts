@@ -110,7 +110,11 @@ export type NouveauMouvementStock = typeof mouvementsStock.$inferInsert
 export const bonsSortie = sqliteTable('bons_sortie', {
   id:          id(),
   numero:      text('numero').notNull().unique(),
-  statut:      text('statut', { enum: ['soumis', 'valide', 'execute', 'refuse'] }).notNull().default('soumis'),
+  statut:      text('statut', { enum: ['en_attente', 'soumis', 'valide', 'execute', 'refuse'] }).notNull().default('soumis'),
+  type:        text('type', { enum: ['commande', 'devis', 'manuel'] }).notNull().default('manuel'),
+  // FK nullable vers commandes/devis — définie sans .references() (forward ref SQLite)
+  commandeId:  text('commande_id'),
+  devisId:     text('devis_id'),
   demandeur:   text('demandeur').notNull(),
   valideParId: text('valide_par_id').references(() => profiles.id),
   motif:       text('motif').notNull(),

@@ -43,7 +43,7 @@ export function useUpdateUser() {
 export function useInviteUser() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (payload: { email: string; role: ForgeRole; nom: string }) =>
+    mutationFn: (payload: { email: string; nom: string; rbacRoleName?: string }) =>
       apiClient.post<{ success: boolean; userId?: string }>('/api/admin/users/invite', payload),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
   })

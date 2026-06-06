@@ -223,6 +223,113 @@ async function genererNumero(table: string, prefix: string): Promise<string> {
 }
 
 /**
+ * Crée automatiquement un bon de sortie lors du passage d'une commande
+ * en statut 'in_production'. Vérifie la disponibilité du stock pour chaque
+ * ligne — le résultat est logué mais ne bloque pas la transition.
+ */
+async function creerBonSortieCommande(
+  commandeId: string,
+  commandeNumero: string,
+  userId: string,
+): Promise<void> {
+  // 1. Récupérer les lignes de la commande
+  const { data: lignes, error: lignesErr } = await db
+    .from('commandes_lignes')
+    .select('produit_id, designation, unite, quantite')
+    .eq('commande_id', commandeId)
+
+  if (lignesErr || !lignes || lignes.length === 0) return
+
+  type Ligne = { produit_id: string | null; designation: string; unite: string; quantite: number }
+
+  // 2. Vérifier le stock pour les lignes avec produit_id — logguer les insuffisances
+  const alertesStock: string[] = []
+  for (const l of lignes as Ligne[]) {
+    if (!l.produit_id) continue
+    const { data: p } = await db
+      .from('produits')
+      .select('stock_actuel')
+      .eq('id', l.produit_id)
+      .single()
+    if (p && (p as { stock_actuel: number }).stock_actuel < l.quantite) {
+      alertesStock.push(
+        `${l.designation} (dispo: ${(p as { stock_actuel: number }).stock_actuel}, demandé: ${l.quantite})`,
+      )
+    }
+  }
+
+  // 3. Générer un numéro de bon
+  const today     = new Date()
+  const yyyymmdd  = today.toISOString().slice(0, 10).replace(/-/g, '')
+  const startDay  = `${today.toISOString().slice(0, 10)}T00:00:00.000Z`
+  const { count } = await db
+    .from('bons_sortie')
+    .select('*', { count: 'exact', head: true })
+    .gte('created_at', startDay)
+  const numeroBon = `TAF-${yyyymmdd}-${String((count ?? 0) + 1).padStart(4, '0')}`
+
+  // 4. Créer le bon de sortie
+  const { data: bon, error: bonErr } = await db
+    .from('bons_sortie')
+    .insert({
+      numero:       numeroBon,
+      statut:       'en_attente',
+      type:         'commande',
+      commande_id:  commandeId,
+      demandeur:    commandeNumero,
+      motif:        `Préparation commande ${commandeNumero}`,
+      notes:        alertesStock.length > 0
+        ? `⚠ Stock insuffisant : ${alertesStock.join(' | ')}`
+        : null,
+      created_by:   userId,
+      sync_status:  'synced',
+    })
+    .select('id')
+    .single()
+
+  if (bonErr || !bon) {
+    console.error('[commerce] creerBonSortieCommande — insert bon:', bonErr?.message)
+    return
+  }
+
+  // 5. Créer les lignes du bon
+  const bonLignes = (lignes as Ligne[]).map((l) => ({
+    bon_id:            (bon as { id: string }).id,
+    produit_id:        l.produit_id ?? null,
+    designation:       l.designation,
+    unite:             l.unite,
+    quantite_demandee: l.quantite,
+    quantite_servie:   0,
+  }))
+
+  const { error: ligErr } = await db.from('bons_sortie_lignes').insert(bonLignes)
+  if (ligErr) {
+    console.error('[commerce] creerBonSortieCommande — insert lignes:', ligErr.message)
+    // Rollback le bon orphelin
+    await db.from('bons_sortie').delete().eq('id', (bon as { id: string }).id)
+    return
+  }
+
+  // 6. Broadcast Realtime pour notifier le magasinier en temps réel
+  try {
+    const ch = db.channel('forge-bons')
+    await ch.send({
+      type:    'broadcast',
+      event:   'nouveau_bon_commande',
+      payload: {
+        bon_id:       (bon as { id: string }).id,
+        numero:       numeroBon,
+        commande_id:  commandeId,
+        commande_ref: commandeNumero,
+        nb_lignes:    bonLignes.length,
+        alertes:      alertesStock,
+      },
+    })
+    db.removeChannel(ch)
+  } catch { /* Realtime non critique */ }
+}
+
+/**
  * Vérifie si un client est bloqué pour de nouvelles commandes :
  *  - statut = 'bloque'
  *  - ou crédit en statut 'echu'
@@ -1280,6 +1387,13 @@ router.patch(
       commentaire:    body.commentaire ?? null,
       changed_by:     user.id,
     })
+
+    // ── Auto-création bon de sortie sur passage en production ──────────────────
+    if (body.statut === 'in_production') {
+      await creerBonSortieCommande(id, ex.numero, user.id).catch((e) =>
+        console.error('[commerce] auto-bon-sortie:', e)
+      )
+    }
 
     // Recalculer le score fiabilité si livraison complète ou annulation
     if (ex.client_id && ['delivered', 'cancelled'].includes(body.statut)) {

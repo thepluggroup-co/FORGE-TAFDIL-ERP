@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { randomUUID } from 'crypto'
 import { supabaseAdmin } from '@forge/db'
+import { FRAIS_LIVRAISON } from '@forge/shared'
 import { notifyCommandeSms } from '../services/sms.service'
 
 const db = supabaseAdmin!
@@ -12,13 +13,7 @@ import type { HonoVariables } from '../types'
 
 const TVA_RATE = 0.1925
 
-const TARIFS_LIVRAISON: Record<string, { tarif: number; delaiJours: number }> = {
-  'douala':         { tarif: 2000,  delaiJours: 1 },
-  'douala_banlieue':{ tarif: 3500,  delaiJours: 1 },
-  'yaounde':        { tarif: 8000,  delaiJours: 2 },
-  'bafoussam':      { tarif: 10000, delaiJours: 3 },
-  'autre':          { tarif: 15000, delaiJours: 5 },
-}
+const TARIFS_LIVRAISON: Record<string, { tarif: number; delaiJours: number }> = FRAIS_LIVRAISON
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 

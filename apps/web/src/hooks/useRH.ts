@@ -1,10 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
+import { apiClient } from '@/lib/api-client'
 import {
-  dbGetEmployes, dbCreateEmploye,
   dbGetApprenants, dbCreateApprenant,
-  dbGetPresences, dbGetBulletins,
   dbGetFormationSessions, dbUpdateStatut,
 } from '@/lib/db'
 import { useAuth } from '@/context/AuthContext'
@@ -77,18 +76,41 @@ export interface RecruterPayload {
   date_entree: string; salaire_base_xaf: number; commentaire?: string
 }
 
+export interface Conge {
+  id: string; employe_id: string; type: string
+  date_debut: string; date_fin: string; jours_ouvres: number
+  statut: 'en_attente' | 'approuve' | 'refuse' | 'annule'
+  motif?: string | null; commentaire_rh?: string | null
+  approuve_par?: string | null; approuve_at?: string | null
+  created_at: string
+  employes?: { nom: string; poste: string; departement: string } | null
+}
+export interface SoldeConge {
+  employe_id: string; employe_nom: string
+  jours_acquis: number; jours_pris: number; jours_restants: number
+}
+export interface CreateCongePayload {
+  employe_id: string; type: string
+  date_debut: string; date_fin: string; jours_ouvres: number; motif?: string
+}
+
 interface EmployesResponse   { data: Employe[];          total: number }
 interface PresencesResponse  { data: Presence[];         total: number }
 interface BulletinsResponse  { data: BulletinPaie[];     total: number; mois: string; deja_genere?: boolean }
 interface ApprenantsResponse { data: Apprenant[];        total: number }
 interface SessionsResponse   { data: FormationSession[]; total: number }
+interface CongesResponse     { data: Conge[];            total: number }
 
 // ── Employés ──────────────────────────────────────────────────────────────────
 
 export function useEmployes(params?: { search?: string; statut?: string }) {
   return useQuery({
     queryKey:  ['employes', params],
-    queryFn:   () => dbGetEmployes(params) as Promise<EmployesResponse>,
+    queryFn:   () => {
+      const entries = Object.entries(params ?? {}).filter(([, v]) => v) as [string, string][]
+      const qs = entries.length ? '?' + new URLSearchParams(entries).toString() : ''
+      return apiClient.get<EmployesResponse>(`/api/rh/employes${qs}`)
+    },
     staleTime: 60_000,
   })
 }
@@ -96,7 +118,8 @@ export function useEmployes(params?: { search?: string; statut?: string }) {
 export function useCreateEmploye() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (payload: CreateEmployePayload) => dbCreateEmploye(payload as unknown as Record<string, unknown>),
+    mutationFn: (payload: CreateEmployePayload) =>
+      apiClient.post<Employe>('/api/rh/employes', payload),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['employes'] }); toast.success('Employé ajouté') },
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -104,10 +127,14 @@ export function useCreateEmploye() {
 
 // ── Présences ─────────────────────────────────────────────────────────────────
 
-export function usePresences(params?: { date?: string }) {
+export function usePresences(params?: { date?: string; employe_id?: string }) {
   return useQuery({
     queryKey:  ['presences', params],
-    queryFn:   () => dbGetPresences(params) as Promise<PresencesResponse>,
+    queryFn:   () => {
+      const entries = Object.entries(params ?? {}).filter(([, v]) => v) as [string, string][]
+      const qs = entries.length ? '?' + new URLSearchParams(entries).toString() : ''
+      return apiClient.get<PresencesResponse>(`/api/rh/presences${qs}`)
+    },
     staleTime: 30_000,
   })
 }
@@ -142,7 +169,7 @@ export function useCreatePresence() {
 export function useBulletinsPaie(params?: { mois?: string }) {
   return useQuery({
     queryKey:  ['bulletins', params],
-    queryFn:   () => dbGetBulletins(params?.mois ?? '') as Promise<BulletinsResponse>,
+    queryFn:   () => apiClient.get<BulletinsResponse>(`/api/rh/paie?mois=${params?.mois ?? ''}`),
     staleTime: 60_000,
     enabled:   !!params?.mois,
   })
@@ -151,20 +178,15 @@ export function useBulletinsPaie(params?: { mois?: string }) {
 export function useGenererPaie() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ mois }: { mois: string; forcer?: boolean }) => {
-      // Déléguer au serveur API pour le calcul CNPS/IRPP
-      const { data: session } = await supabase.auth.getSession()
-      const token = session.session?.access_token
-      const res = await fetch(`${import.meta.env.VITE_API_URL ?? 'http://localhost:3001'}/api/rh/paie`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ mois, generer_pdf: false }),
-      })
-      if (!res.ok) throw new Error((await res.json()).error ?? 'Erreur génération paie')
-      return res.json()
-    },
+    mutationFn: ({ mois, forcer }: { mois: string; forcer?: boolean }) =>
+      apiClient.post<{ data: BulletinPaie[]; total: number; mois: string }>('/api/rh/paie', {
+        mois,
+        generer_pdf: false,
+        forcer: forcer ?? false,
+      }),
     onSuccess: (_, { mois }) => {
       void qc.invalidateQueries({ queryKey: ['bulletins', { mois }] })
+      void qc.invalidateQueries({ queryKey: ['bulletins'] })
       toast.success('Bulletins de paie générés')
     },
     onError: (err: Error) => toast.error(err.message),
@@ -366,6 +388,145 @@ export function useUpdateInscription() {
       void qc.invalidateQueries({ queryKey: ['formation-sessions'] })
       void qc.invalidateQueries({ queryKey: ['apprenant-historique'] })
       toast.success('Inscription mise à jour')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+// ── Congés ────────────────────────────────────────────────────────────────────
+
+export function useConges(params?: { employe_id?: string; statut?: string; mois?: string }) {
+  return useQuery({
+    queryKey:  ['conges', params],
+    queryFn:   () => {
+      const entries = Object.entries(params ?? {}).filter(([, v]) => v) as [string, string][]
+      const qs = entries.length ? '?' + new URLSearchParams(entries).toString() : ''
+      return apiClient.get<CongesResponse>(`/api/rh/conges${qs}`)
+    },
+    staleTime: 30_000,
+  })
+}
+
+export function useSoldesConges() {
+  return useQuery({
+    queryKey: ['conges-soldes'],
+    queryFn:  () => apiClient.get<{ data: SoldeConge[] }>('/api/rh/conges/soldes'),
+    staleTime: 5 * 60_000,
+  })
+}
+
+export function useCreateConge() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateCongePayload) =>
+      apiClient.post<Conge>('/api/rh/conges', payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['conges'] })
+      void qc.invalidateQueries({ queryKey: ['conges-soldes'] })
+      toast.success('Demande de congé enregistrée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useApprouverConge() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, statut, commentaire_rh }: { id: string; statut: 'approuve' | 'refuse' | 'annule'; commentaire_rh?: string }) =>
+      apiClient.patch<Conge>(`/api/rh/conges/${id}/statut`, { statut, commentaire_rh }),
+    onSuccess: (_, { statut }) => {
+      void qc.invalidateQueries({ queryKey: ['conges'] })
+      void qc.invalidateQueries({ queryKey: ['conges-soldes'] })
+      void qc.invalidateQueries({ queryKey: ['employes'] })
+      toast.success(statut === 'approuve' ? 'Congé approuvé' : statut === 'refuse' ? 'Congé refusé' : 'Congé annulé')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+// ── Pointage batch ────────────────────────────────────────────────────────────
+
+export function usePresenceBatch() {
+  const qc   = useQueryClient()
+  const auth = useAuth()
+  return useMutation({
+    mutationFn: async (lignes: Array<{
+      employe_id: string; date: string; arrivee?: string; depart?: string
+      statut: Presence['statut']; notes?: string; heures?: number
+    }>) => {
+      if (lignes.length === 0) return 0
+
+      const date = lignes[0].date
+
+      // Calculer les heures pour chaque ligne
+      const rows = lignes.map(l => {
+        let heures = l.heures ?? 0
+        if (l.arrivee && l.depart) {
+          const [ah, am] = l.arrivee.split(':').map(Number)
+          const [dh, dm] = l.depart.split(':').map(Number)
+          heures = Math.max(0, (dh * 60 + dm - ah * 60 - am) / 60)
+        }
+        return { ...l, heures: Math.round(heures * 100) / 100, created_by: auth.user?.id }
+      })
+
+      // 1. Lire les présences déjà enregistrées pour cette date
+      const employeIds = rows.map(r => r.employe_id)
+      const { data: existing, error: readErr } = await supabase
+        .from('presences')
+        .select('id, employe_id')
+        .in('employe_id', employeIds)
+        .eq('date', date)
+
+      if (readErr) throw new Error(readErr.message)
+
+      const existingMap = new Map(
+        (existing ?? []).map(e => [e.employe_id as string, e.id as string]),
+      )
+
+      // 2. Séparer en "à mettre à jour" et "à insérer"
+      const toUpdate = rows.filter(r => existingMap.has(r.employe_id))
+      const toInsert = rows.filter(r => !existingMap.has(r.employe_id))
+
+      // 3. Mettre à jour les enregistrements existants
+      if (toUpdate.length > 0) {
+        await Promise.all(
+          toUpdate.map(r =>
+            supabase.from('presences')
+              .update({
+                arrivee:  r.arrivee,
+                depart:   r.depart,
+                heures:   r.heures,
+                statut:   r.statut,
+                notes:    r.notes,
+              })
+              .eq('id', existingMap.get(r.employe_id)!),
+          ),
+        )
+      }
+
+      // 4. Insérer les nouvelles lignes
+      if (toInsert.length > 0) {
+        const { error: insertErr } = await supabase.from('presences').insert(toInsert)
+        if (insertErr) throw new Error(insertErr.message)
+      }
+
+      return rows.length
+    },
+    onSuccess: (count) => {
+      void qc.invalidateQueries({ queryKey: ['presences'] })
+      toast.success(`${count} pointage(s) enregistré(s)`)
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+// ── Bulletin PDF ──────────────────────────────────────────────────────────────
+
+export function useBulletinPdf() {
+  return useMutation({
+    mutationFn: async ({ id }: { id: string; nom: string; mois: string }): Promise<string> => {
+      const blob = await apiClient.getBlob(`/api/rh/paie/${id}/pdf`)
+      return URL.createObjectURL(blob)
     },
     onError: (err: Error) => toast.error(err.message),
   })

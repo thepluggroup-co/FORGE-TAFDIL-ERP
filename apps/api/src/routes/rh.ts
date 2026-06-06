@@ -1263,6 +1263,57 @@ router.get('/rh/cnps/rapport', requireRole(['admin', 'superviseur']), async (c) 
   })
 })
 
+// ══════════════════════════════════════════════════════════════════════════════
+// PDF BULLETIN INDIVIDUEL
+// ══════════════════════════════════════════════════════════════════════════════
+
+router.get('/rh/paie/:id/pdf', requireRole(['admin', 'superviseur']), async (c) => {
+  const { id } = c.req.param()
+
+  const { data, error } = await db
+    .from('bulletins_paie')
+    .select('*, employes(id, nom, poste, departement, type_contrat, cnps, salaire_base_xaf)')
+    .eq('id', id)
+    .single()
+
+  if (error || !data) return c.json({ error: 'Bulletin introuvable', code: 'NOT_FOUND' }, 404)
+
+  const row = data as {
+    mois: string; salaire_base_xaf: number; heures_sup_xaf: number; primes_xaf: number
+    deductions_xaf: number; cotisation_cnps_xaf: number; cnps_employeur_xaf: number
+    irpp_xaf: number; net_xaf: number; cout_employeur_xaf: number
+    employes: { id: string; nom: string; poste: string; departement: string; type_contrat: string; cnps: string | null; salaire_base_xaf: number } | null
+  }
+
+  const emp = row.employes
+  if (!emp) return c.json({ error: 'Employé introuvable', code: 'NOT_FOUND' }, 404)
+
+  const bulletin: BulletinCalc = {
+    employe_id:          emp.id,
+    employe_nom:         emp.nom,
+    poste:               emp.poste,
+    departement:         emp.departement,
+    type_contrat:        emp.type_contrat,
+    cnps:                emp.cnps ?? '',
+    mois:                row.mois,
+    salaire_base_xaf:    row.salaire_base_xaf,
+    heures_sup_xaf:      row.heures_sup_xaf ?? 0,
+    primes_xaf:          row.primes_xaf ?? 0,
+    deductions_xaf:      row.deductions_xaf ?? 0,
+    cotisation_cnps_xaf: row.cotisation_cnps_xaf ?? 0,
+    cnps_employeur_xaf:  row.cnps_employeur_xaf ?? 0,
+    irpp_xaf:            row.irpp_xaf ?? 0,
+    net_xaf:             row.net_xaf ?? 0,
+    cout_employeur_xaf:  row.cout_employeur_xaf ?? 0,
+  }
+
+  const buf = await genererBulletinPdf(bulletin)
+
+  c.header('Content-Type', 'application/pdf')
+  c.header('Content-Disposition', `inline; filename="Bulletin-${emp.nom.replace(/\s+/g, '-')}-${row.mois}.pdf"`)
+  return c.body(buf.buffer as ArrayBuffer)
+})
+
 // ── Attestation de formation PDF (Gap 4 CDC MOD-05) ──────────────────────────
 
 router.get('/apprenants/:id/attestation', async (c) => {
