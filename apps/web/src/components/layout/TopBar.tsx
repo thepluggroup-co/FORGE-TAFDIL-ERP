@@ -137,7 +137,7 @@ const ROLE_LABELS: Record<string, string> = {
   apprenant:   'Apprenant',
 }
 
-function UserDropdown({ email, initial, onClose }: { email: string; initial: string; onClose: () => void }) {
+function UserDropdown({ email, displayName, initial, onClose }: { email: string; displayName: string; initial: string; onClose: () => void }) {
   const navigate  = useNavigate()
   const { signOut, role } = useAuth()
 
@@ -152,9 +152,10 @@ function UserDropdown({ email, initial, onClose }: { email: string; initial: str
       onClick={(e) => e.stopPropagation()}
     >
       <div className="px-4 py-3 border-b border-gray-100">
-        <p className="text-xs font-semibold text-[#212121] truncate">{email}</p>
+        <p className="text-sm font-semibold text-[#212121] truncate">{displayName}</p>
+        <p className="text-xs text-gray-400 truncate mt-0.5">{email}</p>
         <span
-          className="inline-block mt-1 px-2 py-0.5 text-[10px] font-bold rounded-full"
+          className="inline-block mt-1.5 px-2 py-0.5 text-[10px] font-bold rounded-full"
           style={{ color: '#C62828', backgroundColor: '#FFEBEE' }}
         >
           {roleLabel}
@@ -185,7 +186,7 @@ interface TopBarProps {
 }
 
 export function TopBar({ onMobileMenuToggle, sidebarCollapsed, onSidebarToggle }: TopBarProps) {
-  const { user, role } = useAuth()
+  const { user, role, displayName: authName } = useAuth()
   const location = useLocation()
   const [isOnline, setIsOnline] = useState(navigator.onLine)
   const [showNotifs, setShowNotifs] = useState(false)
@@ -242,8 +243,9 @@ export function TopBar({ onMobileMenuToggle, sidebarCollapsed, onSidebarToggle }
     })),
   ]
 
-  const email   = user?.email ?? ''
-  const initial = email.charAt(0).toUpperCase()
+  const email       = user?.email ?? ''
+  const displayName = authName ?? email.split('@')[0] ?? 'Utilisateur'
+  const initial     = displayName.charAt(0).toUpperCase()
 
   return (
     <>
@@ -345,7 +347,7 @@ export function TopBar({ onMobileMenuToggle, sidebarCollapsed, onSidebarToggle }
               {initial}
             </button>
             {showUser && (
-              <UserDropdown email={email} initial={initial} onClose={() => setShowUser(false)} />
+              <UserDropdown email={email} displayName={displayName} initial={initial} onClose={() => setShowUser(false)} />
             )}
           </div>
         </div>

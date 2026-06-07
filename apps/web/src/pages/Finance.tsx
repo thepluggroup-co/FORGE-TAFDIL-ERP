@@ -950,6 +950,21 @@ async function downloadFacturePdf(id: string, numero: string) {
   URL.revokeObjectURL(url)
 }
 
+async function printFacturePdf(id: string) {
+  const token = (await supabase.auth.getSession()).data.session?.access_token
+  const res = await fetch(`${API_BASE}/api/factures/${id}/pdf`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) throw new Error('PDF indisponible')
+  const blob = await res.blob()
+  const blobUrl = URL.createObjectURL(blob)
+  const win = window.open(blobUrl)
+  if (win) {
+    win.onload = () => { setTimeout(() => { win.focus(); win.print() }, 400) }
+  }
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000)
+}
+
 async function downloadFinanceExport(path: string, filename: string) {
   const token = (await supabase.auth.getSession()).data.session?.access_token
   const res = await fetch(`${API_BASE}${path}`, {
@@ -1301,7 +1316,7 @@ export default function Finance() {
             className="p-1.5 rounded hover:bg-green-50 text-gray-400 hover:text-green-600 transition-colors disabled:opacity-50">
             <MessageCircle className="h-3.5 w-3.5" />
           </button>
-          <button title="Imprimer" onClick={(e) => { e.stopPropagation(); window.print() }}
+          <button title="Imprimer" onClick={(e) => { e.stopPropagation(); printFacturePdf(row.id as string).catch((err: Error) => toast.error(err.message)) }}
             className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
             <Printer className="h-3.5 w-3.5" />
           </button>
@@ -1586,7 +1601,7 @@ export default function Finance() {
                         disabled={envoyerFacture.isPending || selectedFacture.statut === 'annule' || selectedFacture.statut === 'paye'}>
                         <MessageCircle className="h-3.5 w-3.5" /> Envoyee
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={() => window.print()}><Printer className="h-3.5 w-3.5" /> Imprimer</Button>
+                      <Button variant="ghost" size="sm" onClick={() => printFacturePdf(selectedFacture.id as string).catch((err: Error) => toast.error(err.message))}><Printer className="h-3.5 w-3.5" /> Imprimer</Button>
                     </div>
                   </div>
                   <InvoicePreview facture={selectedFacture as PreviewableFacture} />

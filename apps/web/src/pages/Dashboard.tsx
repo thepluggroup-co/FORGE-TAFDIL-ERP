@@ -29,14 +29,16 @@ function Skeleton({ className }: { className?: string }) {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const { user } = useAuth()
+  const { user, displayName: authName } = useAuth()
   const navigate = useNavigate()
   const { data: dashboard, isLoading } = useDashboardKpis()
 
-  const userName = (user?.user_metadata?.name as string) ?? user?.email?.split('@')[0] ?? 'Utilisateur'
+  const userName = authName ?? user?.email?.split('@')[0] ?? 'Utilisateur'
   const today = new Date().toLocaleDateString('fr-CM', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   })
+  const hour     = new Date().getHours()
+  const greeting = hour < 12 ? 'Bonjour' : hour < 18 ? 'Bon après-midi' : 'Bonsoir'
 
   // CA du mois en cours (dernier point du graphique)
   const caMoisActuel = dashboard?.ca_mensuel?.at(-1)?.ca ?? 0
@@ -76,8 +78,22 @@ export default function Dashboard() {
     >
       <PageHeader
         title="Tableau de Bord FORGE — TAFDIL"
-        subtitle={`${today.charAt(0).toUpperCase() + today.slice(1)} · Bonjour, ${userName}`}
+        subtitle={today.charAt(0).toUpperCase() + today.slice(1)}
       />
+
+      {/* Welcome */}
+      <div className="flex items-center gap-3">
+        <div
+          className="flex items-center justify-center rounded-full shrink-0 text-white text-base font-bold"
+          style={{ width: 40, height: 40, backgroundColor: '#C62828' }}
+        >
+          {userName.charAt(0).toUpperCase()}
+        </div>
+        <div>
+          <div className="text-sm text-gray-400">{greeting},</div>
+          <div className="text-lg font-bold text-[#212121] leading-tight">{userName}</div>
+        </div>
+      </div>
 
       {/* KPIs */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">

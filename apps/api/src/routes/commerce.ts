@@ -90,14 +90,15 @@ const commandeLigneSchema = z.object({
 })
 
 const commandeSchema = z.object({
-  client_id:             z.string().optional(),
-  client_nom:            z.string().min(1),
-  devis_id:              z.string().optional(),
-  date_commande:         z.string(),
-  date_livraison_prevue: z.string().optional(),
-  notes:                 z.string().optional(),
-  acompte_recu_xaf:      z.number().min(0).default(0),
-  lignes:                z.array(commandeLigneSchema).min(1),
+  client_id:              z.string().optional(),
+  client_nom:             z.string().min(1),
+  devis_id:               z.string().optional(),
+  date_commande:          z.string(),
+  date_livraison_prevue:  z.string().optional(),
+  notes:                  z.string().optional(),
+  acompte_recu_xaf:       z.number().min(0).default(0),
+  condition_paiement_id:  z.string().uuid().optional(),
+  lignes:                 z.array(commandeLigneSchema).min(1),
 })
 
 const statutCommandeSchema = z.object({
@@ -176,16 +177,22 @@ function mapCommande(row: any) {
   const cli = row.clients as { id?: string; nom?: string; telephone?: string } | null
   const totalTtc      = row.total_ttc_xaf ?? 0
   const montantPaye   = row.acompte_recu_xaf ?? 0
+  const montantAcompte = row.montant_acompte ?? 0
   return {
-    id:                    row.id,
-    reference:             row.numero,
-    statut:                row.statut,
-    date_commande:         row.date_commande,
-    date_livraison_prevue: row.date_livraison_prevue ?? null,
-    montant_ttc_xaf:       totalTtc,
-    acompte_recu_xaf:      montantPaye,
-    solde_restant_xaf:     Math.max(0, totalTtc - montantPaye),
-    notes:                 row.notes ?? null,
+    id:                      row.id,
+    reference:               row.numero,
+    statut:                  row.statut,
+    date_commande:           row.date_commande,
+    date_livraison_prevue:   row.date_livraison_prevue ?? null,
+    montant_ttc_xaf:         totalTtc,
+    acompte_recu_xaf:        montantPaye,
+    solde_restant_xaf:       Math.max(0, totalTtc - montantPaye),
+    condition_paiement_id:   row.condition_paiement_id ?? null,
+    condition_paiement:      row.conditions_paiement ?? null,
+    montant_acompte:         montantAcompte,
+    date_echeance_solde:     row.date_echeance_solde ?? null,
+    statut_paiement:         row.statut_paiement ?? 'non_paye',
+    notes:                   row.notes ?? null,
     client: {
       id:        row.client_id ?? '',
       nom:       cli?.nom ?? row.client_nom ?? '',
@@ -1226,6 +1233,20 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
+// CONDITIONS DE PAIEMENT
+// ══════════════════════════════════════════════════════════════════════════════
+
+router.get('/conditions-paiement', async (c) => {
+  const { data, error } = await db
+    .from('conditions_paiement')
+    .select('id, code, libelle, acompte_pct, delai_solde_jours')
+    .eq('actif', true)
+    .order('code')
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data: data ?? [] })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
 // COMMANDES
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -1237,7 +1258,7 @@ router.get('/commandes', async (c) => {
   const to      = from + perPage - 1
 
   let query = db.from('commandes').select(
-    '*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone)',
+    '*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone), conditions_paiement(code, libelle, acompte_pct, delai_solde_jours)',
     { count: 'exact' },
   )
 
@@ -1269,7 +1290,8 @@ router.get('/commandes/:id', async (c) => {
       *,
       commandes_lignes (*),
       historique_commandes (*),
-      clients (nom, telephone, email, adresse)
+      clients (nom, telephone, email, adresse),
+      conditions_paiement (code, libelle, acompte_pct, delai_solde_jours)
     `)
     .eq('id', id)
     .single()
@@ -1293,11 +1315,40 @@ router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zV
       const numero = await genererNumero('commandes', 'CMD')
       const totaux = calculerTotaux(body.lignes)
 
+      // ── Résolution condition de paiement ──────────────────────────────────
+      let montantAcompte    = 0
+      let dateEcheanceSolde: string | null = null
+
+      if (body.condition_paiement_id) {
+        const { data: cp } = await db
+          .from('conditions_paiement')
+          .select('acompte_pct, delai_solde_jours')
+          .eq('id', body.condition_paiement_id)
+          .single()
+
+        if (cp) {
+          montantAcompte = Math.round(totaux.total_ttc_xaf * (cp.acompte_pct / 100))
+
+          if (cp.delai_solde_jours > 0) {
+            const base = new Date(body.date_commande)
+            base.setDate(base.getDate() + cp.delai_solde_jours)
+            dateEcheanceSolde = base.toISOString().slice(0, 10)
+          } else if (cp.delai_solde_jours === 0 && cp.acompte_pct < 100) {
+            // Paiement à la livraison — échéance = date livraison prévue si connue
+            dateEcheanceSolde = body.date_livraison_prevue ?? null
+          }
+        }
+      }
+
       const { data: commande, error: cmdErr } = await db.from('commandes')
         .insert({ numero, client_id: body.client_id ?? null, client_nom: body.client_nom,
           devis_id: body.devis_id ?? null, statut: 'confirmed',
           date_commande: body.date_commande, date_livraison_prevue: body.date_livraison_prevue ?? null,
           acompte_recu_xaf: body.acompte_recu_xaf, notes: body.notes ?? null,
+          condition_paiement_id: body.condition_paiement_id ?? null,
+          montant_acompte: montantAcompte,
+          date_echeance_solde: dateEcheanceSolde,
+          statut_paiement: 'non_paye',
           created_by: user.id, sync_status: 'synced', ...totaux })
         .select().single()
 
@@ -1321,7 +1372,7 @@ router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zV
       })
 
       const { data: full, error: fullErr } = await db.from('commandes')
-        .select('*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone)')
+        .select('*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone), conditions_paiement(code, libelle, acompte_pct, delai_solde_jours)')
         .eq('id', cmd.id).single()
 
       return fullErr || !full ? commande : mapCommande(full)
@@ -1408,7 +1459,7 @@ router.patch(
 
     const { data: full } = await db
       .from('commandes')
-      .select('*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone)')
+      .select('*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone), conditions_paiement(code, libelle, acompte_pct, delai_solde_jours)')
       .eq('id', id)
       .single()
 

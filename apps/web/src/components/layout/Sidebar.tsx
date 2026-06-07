@@ -45,7 +45,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
-  const { user, role: appRole, signOut } = useAuth()
+  const { user, role: appRole, displayName: authName, signOut } = useAuth()
   const navigate = useNavigate()
 
   // Dynamic badge: new web orders today
@@ -68,8 +68,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     navigate('/login')
   }
 
-  const email   = user?.email ?? ''
-  const initial = email.charAt(0).toUpperCase()
+  const email       = user?.email ?? ''
+  const displayName = authName ?? user?.email?.split('@')[0] ?? 'Utilisateur'
+  const initial     = displayName.charAt(0).toUpperCase()
 
   const roleLabels: Record<string, string> = {
     admin:       'Admin (Patron)',
@@ -124,8 +125,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             transition={{ delay: 0.12 }}
             className="min-w-0 flex-1"
           >
-            <div className="text-white text-xs font-medium truncate">{email}</div>
-            <span className="inline-block mt-0.5 px-1.5 py-px text-xs rounded-full bg-[#C62828]/30 text-[#EF9A9A]">
+            <div className="text-white text-sm font-semibold truncate leading-tight">{displayName}</div>
+            <div className="text-white/40 text-xs truncate leading-tight mt-0.5">{email}</div>
+            <span className="inline-block mt-1 px-1.5 py-px text-xs rounded-full bg-[#C62828]/30 text-[#EF9A9A]">
               {roleLabel}
             </span>
           </motion.div>

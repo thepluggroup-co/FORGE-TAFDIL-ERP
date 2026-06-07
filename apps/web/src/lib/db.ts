@@ -236,6 +236,7 @@ export async function dbCreateCommande(
     client_id?: string; client_nom: string; devis_id?: string
     date_commande: string; date_livraison_prevue?: string
     notes?: string; acompte_recu_xaf?: number
+    condition_paiement_id?: string
     lignes: Array<{
       produit_id?: string; designation: string; unite?: string
       quantite: number; prix_unitaire_ht_xaf: number; ordre?: number
@@ -268,6 +269,8 @@ export async function dbCreateCommande(
       date_commande:         payload.date_commande,
       date_livraison_prevue: payload.date_livraison_prevue ?? null,
       acompte_recu_xaf:      payload.acompte_recu_xaf ?? 0,
+      condition_paiement_id: payload.condition_paiement_id ?? null,
+      statut_paiement:       'non_paye',
       notes:                 payload.notes ?? null,
       created_by:            userId ?? null,
       sync_status:           'synced',
@@ -575,6 +578,7 @@ export async function dbGetDashboardKpis() {
     credits_echus:     number
     recent_commandes:  { id: string; numero: string; client_nom: string; total_ttc_xaf: number; statut: string; date_commande: string }[]
     ca_data:           { total_ttc_xaf: number; date_commande: string }[]
+    recent_mouvements: { id: string; type: 'entree' | 'sortie'; quantite: number; created_at: string; produits: { designation: string; unite: string } | null }[]
   }
 
   const MOIS_FR = ['Jan','Fév','Mar','Avr','Mai','Jui','Juil','Aoû','Sep','Oct','Nov','Déc']
@@ -599,8 +603,8 @@ export async function dbGetDashboardKpis() {
       bons_en_attente:   d.bons_en_attente   ?? 0,
       credits_echus:     d.credits_echus     ?? 0,
     },
-    recent_commandes:  d.recent_commandes ?? [],
-    recent_mouvements: [],
+    recent_commandes:  d.recent_commandes  ?? [],
+    recent_mouvements: d.recent_mouvements ?? [],
   }
 }
 

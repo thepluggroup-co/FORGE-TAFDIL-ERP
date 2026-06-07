@@ -4,14 +4,14 @@ import {
   LayoutGrid, Table2, Plus, GripVertical, Globe,
   Truck, Package, CheckCircle, XCircle, Wrench,
   Search, Trash2, BookOpen, CalendarDays, ChevronRight,
-  Info, BadgePercent, OctagonX,
+  Info, BadgePercent, OctagonX, CreditCard, Clock, AlertTriangle,
 } from 'lucide-react'
 import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import { toast } from 'sonner'
-import { useCommandes, useStatutCommande, useCreateCommande } from '@/hooks/useCommandes'
-import type { Commande, CommandeLigne, CommandeHistorique } from '@/hooks/useCommandes'
+import { useCommandes, useStatutCommande, useCreateCommande, useConditionsPaiement } from '@/hooks/useCommandes'
+import type { Commande, CommandeLigne, CommandeHistorique, ConditionPaiement } from '@/hooks/useCommandes'
 import { useClients } from '@/hooks/useClients'
 import type { Client } from '@/hooks/useClients'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
@@ -243,7 +243,7 @@ function KanbanCard({ order, containerRef, columnRefs, onDrop, onClick }: Kanban
 
       {/* Footer : date commande + livraison prévue + statut */}
       <div className="flex items-center justify-between mt-2.5 gap-1">
-        <span className="text-xs text-gray-400">{formatDate(order.date_commande)}</span>
+        <span className="text-xs text-gray-400">{formatDate(order.date_commande ?? '')}</span>
         <StatusBadge status={order.statut} />
       </div>
 
@@ -371,6 +371,13 @@ const TABLE_COLS: Column<CommandeRecord>[] = [
 
 // ── OrderDetail (ERP) ──────────────────────────────────────────────────────────
 
+const STATUT_PAIEMENT_CONFIG: Record<string, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
+  non_paye:       { label: 'Non payé',        color: '#6b7280', bg: '#f3f4f6', icon: <Clock className="h-3 w-3" /> },
+  acompte_recu:   { label: 'Acompte reçu',    color: '#d97706', bg: '#fef3c7', icon: <CreditCard className="h-3 w-3" /> },
+  solde_recu:     { label: 'Soldé',           color: '#15803d', bg: '#dcfce7', icon: <CheckCircle className="h-3 w-3" /> },
+  solde_en_retard:{ label: 'Solde en retard', color: '#dc2626', bg: '#fee2e2', icon: <AlertTriangle className="h-3 w-3" /> },
+}
+
 function OrderDetail({ order, onClose }: { order: CommandeRecord; onClose: () => void }) {
   const lignes    = (order.lignes as CommandeLigne[]) ?? []
   const historique = (order.historique as CommandeHistorique[]) ?? []
@@ -378,6 +385,10 @@ function OrderDetail({ order, onClose }: { order: CommandeRecord; onClose: () =>
   const tva       = Math.round(totalHT * 0.1925)
   const ttc       = Math.round(totalHT + tva)
   const soldeRestant = Math.max(0, ttc - ((order.acompte_recu_xaf as number) ?? 0))
+
+  const cp = order.condition_paiement as ConditionPaiement | null
+  const statutPaiement = (order.statut_paiement as string) ?? 'non_paye'
+  const statutPaiementCfg = STATUT_PAIEMENT_CONFIG[statutPaiement] ?? STATUT_PAIEMENT_CONFIG['non_paye']
 
   return (
     <SlideOver isOpen={true} onClose={onClose} title={`Commande ${order.reference}`} width="lg">
@@ -388,6 +399,54 @@ function OrderDetail({ order, onClose }: { order: CommandeRecord; onClose: () =>
           <h3 className="mb-3 text-xs font-semibold uppercase text-gray-400">Progression</h3>
           <PipelineStepper statut={order.statut} />
         </div>
+
+        {/* Condition de paiement */}
+        {cp && (
+          <div className="rounded-xl border border-gray-100 bg-gray-50 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <CreditCard className="h-4 w-4 text-gray-400" />
+                <span className="text-xs font-semibold text-gray-500 uppercase">Condition de paiement</span>
+              </div>
+              <span
+                className="flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full"
+                style={{ color: statutPaiementCfg.color, backgroundColor: statutPaiementCfg.bg }}
+              >
+                {statutPaiementCfg.icon} {statutPaiementCfg.label}
+              </span>
+            </div>
+            <p className="text-sm font-semibold text-[#212121]">
+              <span className="text-xs font-mono text-gray-400 mr-2">{cp.code}</span>
+              {cp.libelle}
+            </p>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              {cp.acompte_pct > 0 && (
+                <div>
+                  <p className="text-[11px] text-gray-400 uppercase font-semibold mb-0.5">Acompte dû</p>
+                  <p className="font-bold text-[#C62828]">
+                    {formatXAF(order.montant_acompte as number ?? 0)}
+                    <span className="text-xs font-normal text-gray-400 ml-1">({cp.acompte_pct}%)</span>
+                  </p>
+                </div>
+              )}
+              {order.date_echeance_solde && (
+                <div>
+                  <p className="text-[11px] text-gray-400 uppercase font-semibold mb-0.5">Échéance solde</p>
+                  <p className={`font-semibold flex items-center gap-1 ${
+                    new Date(order.date_echeance_solde as string) < new Date() && statutPaiement !== 'solde_recu'
+                      ? 'text-red-600' : 'text-[#212121]'
+                  }`}>
+                    <CalendarDays className="h-3.5 w-3.5" />
+                    {formatDate(order.date_echeance_solde as string)}
+                  </p>
+                </div>
+              )}
+              {!cp.acompte_pct && !order.date_echeance_solde && (
+                <p className="text-sm text-gray-500 col-span-2">Paiement intégral à la livraison</p>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Client */}
         <div>
@@ -402,7 +461,7 @@ function OrderDetail({ order, onClose }: { order: CommandeRecord; onClose: () =>
         <div className="grid grid-cols-2 gap-4">
           <div>
             <h3 className="text-xs font-semibold text-gray-400 uppercase mb-1">Date commande</h3>
-            <p className="text-sm text-[#212121]">{formatDate(order.date_commande)}</p>
+            <p className="text-sm text-[#212121]">{formatDate(order.date_commande ?? '')}</p>
           </div>
           {order.date_livraison_prevue && (
             <div>
@@ -506,6 +565,7 @@ interface NouvelleCommandeForm {
   client_telephone: string
   date_livraison_prevue: string
   notes: string
+  condition_paiement_id: string
   lignes: LigneForm[]
 }
 
@@ -513,6 +573,7 @@ const DEFAULT_LIGNE: LigneForm = { designation: '', quantite: 1, prix_unitaire_h
 const DEFAULT_CMD: NouvelleCommandeForm = {
   client_nom: '', client_telephone: '',
   date_livraison_prevue: '', notes: '',
+  condition_paiement_id: '',
   lignes: [{ ...DEFAULT_LIGNE }],
 }
 
@@ -536,6 +597,8 @@ export default function Commandes() {
   const { data, isLoading, isError } = useCommandes()
   const statutMutation  = useStatutCommande()
   const createCommande  = useCreateCommande()
+  const { data: conditionsData } = useConditionsPaiement()
+  const conditions = (conditionsData ?? []) as ConditionPaiement[]
   const { data: clientsData } = useClients()
 
   const { data: shopData } = useCommandesShop()
@@ -627,6 +690,7 @@ export default function Commandes() {
         client_nom:            cmdForm.client_nom,
         date_commande:         new Date().toISOString().split('T')[0],
         date_livraison_prevue: cmdForm.date_livraison_prevue || undefined,
+        condition_paiement_id: cmdForm.condition_paiement_id || undefined,
         notes,
         lignes: cmdForm.lignes
           .filter((l) => l.designation.trim() && l.quantite > 0)
@@ -860,6 +924,58 @@ export default function Commandes() {
               />
             </div>
           </div>
+
+          {/* Condition de paiement */}
+          {conditions.length > 0 && (
+            <div className="col-span-2">
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5 flex items-center gap-1">
+                <CreditCard className="h-3 w-3" /> Condition de paiement
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {conditions.map((cp) => {
+                  const selected = cmdForm.condition_paiement_id === cp.id
+                  return (
+                    <button
+                      key={cp.id}
+                      type="button"
+                      onClick={() => setCmdForm((f) => ({
+                        ...f,
+                        condition_paiement_id: selected ? '' : cp.id,
+                      }))}
+                      className={`text-left px-3 py-2.5 rounded-xl border-2 transition-all text-sm ${
+                        selected
+                          ? 'border-[#C62828] bg-[#FFEBEE]'
+                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      <p className={`font-semibold text-xs ${selected ? 'text-[#C62828]' : 'text-[#212121]'}`}>
+                        {cp.libelle}
+                      </p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">
+                        {cp.acompte_pct > 0 ? `${cp.acompte_pct}% à la commande` : 'Sans acompte'}
+                        {cp.delai_solde_jours > 0 ? ` · solde J+${cp.delai_solde_jours}` : ''}
+                      </p>
+                    </button>
+                  )
+                })}
+              </div>
+              {cmdForm.condition_paiement_id && (() => {
+                const cp = conditions.find(c => c.id === cmdForm.condition_paiement_id)
+                if (!cp || !formTTC) return null
+                const acompte = Math.round(formTTC * cp.acompte_pct / 100)
+                return (
+                  <div className="mt-2 flex items-center gap-3 text-xs px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-800">
+                    <BadgePercent className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      Acompte calculé : <strong>{formatXAF(acompte)}</strong>
+                      {cp.delai_solde_jours > 0 && <> · Solde dans <strong>{cp.delai_solde_jours} jours</strong></>}
+                      {cp.delai_solde_jours === 0 && cp.acompte_pct < 100 && <> · Solde <strong>à la livraison</strong></>}
+                    </span>
+                  </div>
+                )
+              })()}
+            </div>
+          )}
 
           {/* Alerte client bloqué */}
           {selectedClient?.statut === 'bloque' && (
