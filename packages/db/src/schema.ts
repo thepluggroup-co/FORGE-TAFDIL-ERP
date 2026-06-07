@@ -187,6 +187,22 @@ export type DevisLigne       = typeof devisLignes.$inferSelect
 export type NouveauDevisLigne = typeof devisLignes.$inferInsert
 
 // ══════════════════════════════════════════════════════════════════════════════
+// COMMERCIAL — CONDITIONS DE PAIEMENT
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const conditionsPaiement = sqliteTable('conditions_paiement', {
+  id:               id(),
+  code:             text('code').notNull().unique(),
+  libelle:          text('libelle').notNull(),
+  acomptePct:       integer('acompte_pct').notNull().default(0),
+  delaiSoldeJours:  integer('delai_solde_jours').notNull().default(0),
+  actif:            integer('actif', { mode: 'boolean' }).notNull().default(true),
+})
+
+export type ConditionPaiement       = typeof conditionsPaiement.$inferSelect
+export type NouvelleConditionPaiement = typeof conditionsPaiement.$inferInsert
+
+// ══════════════════════════════════════════════════════════════════════════════
 // COMMERCIAL — COMMANDES
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -202,7 +218,13 @@ export const commandes = sqliteTable('commandes', {
   totalHtXaf:          real('total_ht_xaf').notNull().default(0),
   tvaXaf:              real('tva_xaf').notNull().default(0),
   totalTtcXaf:         real('total_ttc_xaf').notNull().default(0),
-  acompteRecu:         real('acompte_recu_xaf').notNull().default(0),
+  acompteRecu:            real('acompte_recu_xaf').notNull().default(0),
+  conditionPaiementId:    text('condition_paiement_id').references(() => conditionsPaiement.id),
+  montantAcompte:         real('montant_acompte').notNull().default(0),
+  dateEcheanceSolde:      text('date_echeance_solde'),
+  statutPaiement:         text('statut_paiement', {
+    enum: ['non_paye', 'acompte_recu', 'solde_recu', 'solde_en_retard'],
+  }).notNull().default('non_paye'),
   notes:               text('notes'),
   createdBy:           text('created_by').references(() => profiles.id),
   createdAt:           ts('created_at'),

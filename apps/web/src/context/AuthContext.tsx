@@ -60,6 +60,7 @@ interface AuthContextValue {
   user: User | null
   session: Session | null
   role: AppRole | null
+  displayName: string | null
   loading: boolean
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
@@ -67,29 +68,26 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-async function fetchRoleFromDB(userId: string): Promise<AppRole | null> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 5000)
+async function fetchProfileFromDB(userId: string): Promise<{ role: AppRole | null; nom: string | null }> {
   try {
     const { data, error } = await supabase
       .from('profiles')
-      .select('role')
+      .select('role, nom')
       .eq('id', userId)
       .single()
-      .abortSignal(controller.signal)
-    if (error) console.warn('[AuthContext] fetchRoleFromDB:', error.message)
-    return normalizeRole(data?.role)
+    if (error) console.warn('[AuthContext] fetchProfileFromDB:', error.message)
+    return { role: normalizeRole(data?.role), nom: (data?.nom as string | null) ?? null }
   } catch {
-    return null
-  } finally {
-    clearTimeout(timer)
+    return { role: null, nom: null }
   }
 }
 
-async function resolveRole(session: Session): Promise<AppRole | null> {
-  const dbRole = await fetchRoleFromDB(session.user.id)
-  if (dbRole) return dbRole
-  return normalizeRole(session.user.app_metadata?.role as string | undefined)
+async function resolveProfile(session: Session): Promise<{ role: AppRole | null; nom: string | null }> {
+  const { role, nom } = await fetchProfileFromDB(session.user.id)
+  return {
+    role: role ?? normalizeRole(session.user.app_metadata?.role as string | undefined),
+    nom,
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -97,6 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser]       = useState<User | null>(_cached?.user ?? null)
   const [session, setSession] = useState<Session | null>(null)
   const [role, setRole]       = useState<AppRole | null>(_cached?.role ?? null)
+  const [nom, setNom]         = useState<string | null>(null)
   // Only show loading screen when there is genuinely no cached session
   const [loading, setLoading] = useState(_cached === null)
 
@@ -111,10 +110,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (session?.user) {
         const jwtRole = normalizeRole(session.user.app_metadata?.role as string | undefined)
         if (jwtRole) setRole(jwtRole)
-        // Confirm role from DB in background
-        resolveRole(session)
-          .then(r => { if (r) setRole(r) })
-          .catch(e => console.error('[AuthContext] fetchRole error:', e))
+        // Confirm role + nom from DB in background
+        resolveProfile(session)
+          .then(({ role: r, nom: n }) => { if (r) setRole(r); if (n) setNom(n) })
+          .catch(e => console.error('[AuthContext] fetchProfile error:', e))
       } else {
         // Session expired or invalid — clear everything
         setRole(null)
@@ -131,9 +130,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const jwtRole = normalizeRole(session.user.app_metadata?.role as string | undefined)
         if (jwtRole) setRole(jwtRole)
         if (event !== 'INITIAL_SESSION') {
-          resolveRole(session)
-            .then(r => { if (r) setRole(r) })
-            .catch(e => console.error('[AuthContext] onAuthStateChange fetchRole error:', e))
+          resolveProfile(session)
+            .then(({ role: r, nom: n }) => { if (r) setRole(r); if (n) setNom(n) })
+            .catch(e => console.error('[AuthContext] onAuthStateChange fetchProfile error:', e))
         }
       } else if (event === 'SIGNED_OUT') {
         setRole(null)
@@ -154,6 +153,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null)
     setSession(null)
     setRole(null)
+    setNom(null)
     setApiToken(null)
     try {
       await supabase.auth.signOut({ scope: 'local' })
@@ -161,7 +161,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, session, role, loading, signIn, signOut }}>
+    <AuthContext.Provider value={{ user, session, role, displayName: nom, loading, signIn, signOut }}>
       {children}
     </AuthContext.Provider>
   )
