@@ -9,6 +9,7 @@ import { KpiCard } from '@forge/ui'
 import { Package, AlertTriangle, TrendingDown, DollarSign } from 'lucide-react'
 import { toast } from 'sonner'
 import { useStocks, useMouvement, useCreateProduit } from '@/hooks/useStocks'
+import { useBonsEnAttente } from '@/hooks/useBons'
 import type { StockProduit, CreateProduitPayload } from '@/hooks/useStocks'
 
 // ── Types (alignés sur l'API) ─────────────────────────────────────────────────
@@ -160,6 +161,7 @@ export default function Stocks() {
   const { data, isLoading, isError } = useStocks({ search: debouncedSearch, categorie, statut: statusFilter })
   const mouvement = useMouvement()
   const createProduit = useCreateProduit()
+  const { data: bonsEnAttenteCount = 0 } = useBonsEnAttente()
 
   const produits = (data?.data ?? []) as Product[]
   const categories = useMemo(() => [...new Set(produits.map((p) => p.categorie as string))], [produits])
@@ -200,9 +202,14 @@ export default function Stocks() {
         breadcrumbs={[{ label: 'FORGE', href: '/' }, { label: 'Stocks' }]}
         actions={
           <>
-            <Button variant="secondary" size="sm" onClick={() => navigate('/stocks/bons-sortie')}>
+            <Button variant="secondary" size="sm" onClick={() => navigate('/stocks/bons-sortie')} className="relative">
               <FileOutput className="h-3.5 w-3.5" />
               Bons de sortie
+              {bonsEnAttenteCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-[#C62828] px-1 text-[10px] font-bold text-white">
+                  {bonsEnAttenteCount > 99 ? '99+' : bonsEnAttenteCount}
+                </span>
+              )}
             </Button>
             <Button variant="ghost" size="sm" onClick={() => openSortie()}>
               <Minus className="h-3.5 w-3.5" />

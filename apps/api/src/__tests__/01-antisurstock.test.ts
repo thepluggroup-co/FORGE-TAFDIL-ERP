@@ -51,7 +51,7 @@ describe('TEST-01 : Anti-survente de stock concurrent', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(supabase.from).mockReturnValue(
-      mkChain({ data: null, error: null }) as ReturnType<typeof mkChain>,
+      mkChain({ data: null, error: null }) as unknown as ReturnType<typeof supabase.from>,
     )
   })
 

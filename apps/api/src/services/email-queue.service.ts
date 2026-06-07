@@ -99,6 +99,64 @@ export async function processBatchEmails(maxBatch = 5): Promise<{ sent: number; 
   return { sent, failed }
 }
 
+// ── Envoi direct (avec pièce jointe) ──────────────────────────────────────────
+
+export interface DirectEmailAttachment {
+  filename:    string
+  content:     Buffer
+  contentType: string
+}
+
+export interface DirectEmailPayload {
+  to:          string
+  subject:     string
+  html:        string
+  attachments?: DirectEmailAttachment[]
+}
+
+/**
+ * Envoi immédiat hors-queue — pour les emails prioritaires avec pièce jointe.
+ * Ne lance pas d'exception : retourne { success, error }.
+ */
+export async function sendEmailDirect(
+  payload: DirectEmailPayload,
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const smtpHost = process.env.SMTP_HOST
+  const smtpUser = process.env.SMTP_USER
+  const smtpPass = process.env.SMTP_PASS
+
+  if (!smtpHost || !smtpUser || !smtpPass) {
+    console.warn('[email-direct] SMTP non configuré — email non envoyé')
+    return { success: false, error: 'SMTP non configuré' }
+  }
+
+  const transporter = nodemailer.createTransport({
+    host:   smtpHost,
+    port:   Number(process.env.SMTP_PORT ?? 587),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth:   { user: smtpUser, pass: smtpPass },
+  })
+
+  try {
+    const info = await transporter.sendMail({
+      from:        `TAFDIL SARL <${smtpUser}>`,
+      to:          payload.to,
+      subject:     payload.subject,
+      html:        payload.html,
+      attachments: (payload.attachments ?? []).map(a => ({
+        filename:    a.filename,
+        content:     a.content,
+        contentType: a.contentType,
+      })),
+    })
+    console.info(`[email-direct] Envoyé à ${payload.to} — messageId: ${info.messageId}`)
+    return { success: true, messageId: info.messageId as string }
+  } catch (err) {
+    console.error('[email-direct] Erreur envoi:', err)
+    return { success: false, error: String(err) }
+  }
+}
+
 /** Notification WhatsApp de secours (CallMeBot). */
 export async function notifyWhatsApp(phone: string, message: string): Promise<void> {
   const apiKey = process.env.CALLMEBOT_APIKEY

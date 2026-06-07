@@ -1,4 +1,5 @@
 ﻿import { Hono } from 'hono'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
@@ -95,7 +96,7 @@ async function ensureFactureCommande(commandeId: string, userId?: string) {
 
   const { data: commande, error } = await db
     .from('commandes')
-    .select('id, client_id, client_nom, total_ht_xaf, tva_xaf, total_ttc_xaf, commandes_lignes(*)')
+    .select('id, client_id, client_nom, total_ht_xaf, tva_xaf, frais_livraison_xaf, total_ttc_xaf, commandes_lignes(*)')
     .eq('id', commandeId)
     .single()
 
@@ -107,6 +108,7 @@ async function ensureFactureCommande(commandeId: string, userId?: string) {
     client_nom: string
     total_ht_xaf: number
     tva_xaf: number
+    frais_livraison_xaf?: number | null
     total_ttc_xaf: number
     commandes_lignes?: Array<{
       designation: string
@@ -134,6 +136,7 @@ async function ensureFactureCommande(commandeId: string, userId?: string) {
       date_echeance:   dateEcheance,
       total_ht_xaf:    cmd.total_ht_xaf,
       tva_xaf:         cmd.tva_xaf,
+      frais_livraison_xaf: Number(cmd.frais_livraison_xaf ?? 0),
       total_ttc_xaf:   cmd.total_ttc_xaf,
       created_by:      userId ?? null,
       sync_status:     'synced',
@@ -519,7 +522,7 @@ router.patch(
         }
       } catch (err) {
         const e = err as Error & { httpStatus?: number; code?: string }
-        return c.json({ error: e.message, code: e.code ?? 'PRODUCTION_FINALIZE_ERROR' }, e.httpStatus ?? 400)
+        return c.json({ error: e.message, code: e.code ?? 'PRODUCTION_FINALIZE_ERROR' }, (e.httpStatus ?? 400) as ContentfulStatusCode)
       }
     }
 
@@ -684,6 +687,8 @@ router.get('/production/historique/:commande_id', async (c) => {
 
     return {
       ...j,
+      statut:         j.statut as string,
+      avancement_pct: j.avancement_pct as number,
       duree_prevue_h,
       duree_reelle_h,
       en_retard,

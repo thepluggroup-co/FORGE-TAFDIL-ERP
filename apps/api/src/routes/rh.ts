@@ -574,67 +574,83 @@ async function genererBulletinsMois(
   pdfs?:         Array<{ employe_nom: string; pdf_url: string | null }>
   recapitulatif: { masse_salariale_nette_xaf: number; cout_total_employeur_xaf: number; total_irpp_xaf: number; total_cnps_xaf: number }
 }> {
-  // Employés actifs (ou en congé) entrés avant la fin du mois
-  // Les employés 'inactif' sont exclus de la paie
-  const { data: employes, error } = await db
+  type EmpRow = { id: string; nom: string; poste: string; departement: string; type_contrat: string; cnps: string | null; salaire_base_xaf: number; statut: string }
+  type PresRow = { employe_id: string; heures: number; statut: string }
+  type BulRow  = { employe_id: string; statut: string }
+
+  // ── 1 requête : tous les employés actifs ──────────────────────────────────
+  const { data: employes, error: empErr } = await db
     .from('employes')
     .select('id, nom, poste, departement, type_contrat, cnps, salaire_base_xaf, statut')
     .in('statut', ['actif', 'conge', 'essai'])
     .lte('date_entree', `${moisStr}-31`)
 
-  if (error) throw new Error(error.message)
+  if (empErr) throw new Error(empErr.message)
+  const empList = (employes ?? []) as EmpRow[]
+  if (empList.length === 0) return { bulletins: [], recapitulatif: { masse_salariale_nette_xaf: 0, cout_total_employeur_xaf: 0, total_irpp_xaf: 0, total_cnps_xaf: 0 } }
 
+  const empIds = empList.map(e => e.id)
+
+  // ── 1 requête : toutes les présences du mois pour tous les employés ────────
+  const { data: toutesPresences } = await db
+    .from('presences')
+    .select('employe_id, heures, statut')
+    .in('employe_id', empIds)
+    .gte('date', `${moisStr}-01`)
+    .lte('date', `${moisStr}-31`)
+
+  // Grouper par employe_id en mémoire
+  const presencesParEmp = new Map<string, PresRow[]>()
+  for (const p of (toutesPresences ?? []) as PresRow[]) {
+    const arr = presencesParEmp.get(p.employe_id) ?? []
+    arr.push(p)
+    presencesParEmp.set(p.employe_id, arr)
+  }
+
+  // ── 1 requête : bulletins existants pour ce mois (id + statut) ───────────
+  const { data: bulletinsExistants } = await db
+    .from('bulletins_paie')
+    .select('id, employe_id, statut')
+    .in('employe_id', empIds)
+    .eq('mois', moisStr)
+
+  type BulletinExistant = { id: string; employe_id: string; statut: string }
+  const existantsMap = new Map<string, BulletinExistant>(
+    ((bulletinsExistants ?? []) as BulletinExistant[]).map(b => [b.employe_id, b]),
+  )
+
+  // ── Calcul en mémoire pour chaque employé ─────────────────────────────────
   const bulletinsCalc: BulletinCalc[] = []
+  const aInserer: Record<string, unknown>[] = []
+  const aMetAJour: Array<{ id: string; data: Record<string, unknown> }> = []
   const pdfs: Array<{ employe_nom: string; pdf_url: string | null }> = []
 
-  for (const emp of (employes ?? []) as Array<{ id: string; nom: string; poste: string; departement: string; type_contrat: string; cnps: string | null; salaire_base_xaf: number; statut: string }>) {
-    // Charger toutes les présences du mois (tous statuts) pour le calcul d'impact
-    const { data: presences } = await db
-      .from('presences')
-      .select('heures, statut')
-      .eq('employe_id', emp.id)
-      .gte('date', `${moisStr}-01`)
-      .lte('date', `${moisStr}-31`)
+  const heuresBase = 173.33  // 40h/sem × 52/12
 
-    type PresenceRow = { heures: number; statut: string }
-    const rows = (presences ?? []) as PresenceRow[]
+  for (const emp of empList) {
+    const existant = existantsMap.get(emp.id)
 
-    // Heures effectives = présents + retards seulement (pas absents/congé/maladie)
+    // Bulletin déjà validé ou viré → immuable
+    if (existant && ['valide', 'vire'].includes(existant.statut)) continue
+
+    const rows = presencesParEmp.get(emp.id) ?? []
+
     const heuresEffectives = rows
       .filter(p => p.statut === 'present' || p.statut === 'retard')
       .reduce((s, p) => s + p.heures, 0)
 
-    const heuresBase     = 173.33  // 40 h/semaine × 52 / 12
     const heuresSup      = Math.max(0, heuresEffectives - heuresBase)
     const txHeureSup     = (emp.salaire_base_xaf / heuresBase) * 1.5
     const heures_sup_xaf = Math.round(heuresSup * txHeureSup)
 
-    // Déduction pour absences maladie non justifiées :
-    // chaque jour maladie = 50% du salaire journalier déduit
-    // (congé normal = maintien de salaire intégral → pas de déduction)
-    const joursMaladie = rows.filter(p => p.statut === 'maladie').length
-    const salaireJournalier = emp.salaire_base_xaf / 26  // ~26 jours ouvrables/mois
+    const joursMaladie      = rows.filter(p => p.statut === 'maladie').length
+    const salaireJournalier = emp.salaire_base_xaf / 26
     const deduction_maladie = Math.round(joursMaladie * salaireJournalier * 0.5)
 
     const bulletin = calculerBulletin(emp, moisStr, heures_sup_xaf, 0, deduction_maladie)
     bulletinsCalc.push(bulletin)
 
-    // Upsert en DB — seuls les bulletins en statut 'en_attente' peuvent être recalculés.
-    // Les bulletins 'valide' ou 'vire' sont immuables.
-    const { data: existant } = await db
-      .from('bulletins_paie')
-      .select('statut')
-      .eq('employe_id', emp.id)
-      .eq('mois', moisStr)
-      .single()
-
-    const existantStatut = (existant as { statut: string } | null)?.statut
-    if (existantStatut && ['valide', 'vire'].includes(existantStatut)) {
-      // Bulletin validé → immuable : on le lit sans écraser
-      continue
-    }
-
-    await db.from('bulletins_paie').upsert({
+    const payload = {
       employe_id:          emp.id,
       mois:                moisStr,
       salaire_base_xaf:    emp.salaire_base_xaf,
@@ -648,24 +664,44 @@ async function genererBulletinsMois(
       cout_employeur_xaf:  bulletin.cout_employeur_xaf,
       statut:              'en_attente',
       sync_status:         'synced',
-      generated_by:        userId,
-    }, { onConflict: 'employe_id,mois' })
+      created_by:          userId,
+    }
 
-    // PDF optionnel
-    if (genererPdf) {
-      try {
-        const buf  = await genererBulletinPdf(bulletin)
-        const path = `bulletins/${moisStr}/${emp.id}.pdf`
-        await db.storage.from('paie').upload(path, buf, { contentType: 'application/pdf', upsert: true })
-        const { data: { publicUrl } } = db.storage.from('paie').getPublicUrl(path)
-        pdfs.push({ employe_nom: emp.nom, pdf_url: publicUrl })
-      } catch {
-        pdfs.push({ employe_nom: emp.nom, pdf_url: null })
-      }
+    if (existant) {
+      // Bulletin en_attente existant → mettre à jour
+      aMetAJour.push({ id: existant.id, data: { ...payload, updated_at: new Date().toISOString() } })
+    } else {
+      // Nouveau bulletin → insérer
+      aInserer.push(payload)
     }
   }
 
-  // Relire depuis la DB pour retourner le format mappé avec les IDs
+  // ── Écriture en base : INSERT batch + UPDATE individuel en parallèle ──────
+  await Promise.all([
+    aInserer.length > 0
+      ? db.from('bulletins_paie').insert(aInserer).then(({ error }) => { if (error) throw new Error(error.message) })
+      : Promise.resolve(),
+    ...aMetAJour.map(({ id, data }) =>
+      db.from('bulletins_paie').update(data).eq('id', id).then(({ error }) => { if (error) throw new Error(error.message) }),
+    ),
+  ])
+
+  // PDF optionnel (en parallèle)
+  if (genererPdf && bulletinsCalc.length > 0) {
+    await Promise.all(bulletinsCalc.map(async (b) => {
+      try {
+        const buf  = await genererBulletinPdf(b)
+        const path = `bulletins/${moisStr}/${b.employe_id}.pdf`
+        await db.storage.from('paie').upload(path, buf, { contentType: 'application/pdf', upsert: true })
+        const { data: { publicUrl } } = db.storage.from('paie').getPublicUrl(path)
+        pdfs.push({ employe_nom: b.employe_nom, pdf_url: publicUrl })
+      } catch {
+        pdfs.push({ employe_nom: b.employe_nom, pdf_url: null })
+      }
+    }))
+  }
+
+  // ── 1 requête : relecture pour retourner les données mappées ──────────────
   const { data: stored } = await db
     .from('bulletins_paie')
     .select('*, employes(nom, poste, departement)')
@@ -805,6 +841,57 @@ router.patch('/rh/paie/:id/statut', requireRole(['admin']), zValidator('json', z
 
   if (error) return c.json({ error: error.message }, 400)
   return c.json(data)
+})
+
+// ── GET /rh/paie/:id/pdf  — bulletin PDF individuel ──────────────────────────
+// DOIT être défini AVANT /:annee/:mois pour éviter que Hono interprète
+// "pdf" comme le paramètre :mois et UUID comme :annee.
+
+router.get('/rh/paie/:id/pdf', requireRole(['admin', 'superviseur']), async (c) => {
+  const { id } = c.req.param()
+
+  const { data, error } = await db
+    .from('bulletins_paie')
+    .select('*, employes(id, nom, poste, departement, type_contrat, cnps, salaire_base_xaf)')
+    .eq('id', id)
+    .single()
+
+  if (error || !data) return c.json({ error: 'Bulletin introuvable', code: 'NOT_FOUND' }, 404)
+
+  const row = data as {
+    mois: string; salaire_base_xaf: number; heures_sup_xaf: number; primes_xaf: number
+    deductions_xaf: number; cotisation_cnps_xaf: number; cnps_employeur_xaf: number
+    irpp_xaf: number; net_xaf: number; cout_employeur_xaf: number
+    employes: { id: string; nom: string; poste: string; departement: string; type_contrat: string; cnps: string | null; salaire_base_xaf: number } | null
+  }
+
+  const emp = row.employes
+  if (!emp) return c.json({ error: 'Employé introuvable', code: 'NOT_FOUND' }, 404)
+
+  const bulletin: BulletinCalc = {
+    employe_id:          emp.id,
+    employe_nom:         emp.nom,
+    poste:               emp.poste,
+    departement:         emp.departement,
+    type_contrat:        emp.type_contrat,
+    cnps:                emp.cnps ?? '',
+    mois:                row.mois,
+    salaire_base_xaf:    row.salaire_base_xaf,
+    heures_sup_xaf:      row.heures_sup_xaf ?? 0,
+    primes_xaf:          row.primes_xaf ?? 0,
+    deductions_xaf:      row.deductions_xaf ?? 0,
+    cotisation_cnps_xaf: row.cotisation_cnps_xaf ?? 0,
+    cnps_employeur_xaf:  row.cnps_employeur_xaf ?? 0,
+    irpp_xaf:            row.irpp_xaf ?? 0,
+    net_xaf:             row.net_xaf ?? 0,
+    cout_employeur_xaf:  row.cout_employeur_xaf ?? 0,
+  }
+
+  const buf = await genererBulletinPdf(bulletin)
+
+  c.header('Content-Type', 'application/pdf')
+  c.header('Content-Disposition', `inline; filename="Bulletin-${emp.nom.replace(/\s+/g, '-')}-${row.mois}.pdf"`)
+  return c.body(buf.buffer as ArrayBuffer)
 })
 
 // ── GET /rh/paie/:annee/:mois  — rétrocompatibilité (génère si besoin) ─────────
@@ -1180,7 +1267,7 @@ router.get('/rh/presences/recap', requireRole(['admin', 'superviseur']), async (
   }> = {}
 
   for (const row of data ?? []) {
-    const r = row as {
+    const r = row as unknown as {
       employe_id: string; statut: string; heures: number
       employes: { nom: string; poste: string } | null
     }

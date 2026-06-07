@@ -10,6 +10,11 @@ import { useAdminUsers, useUpdateUser, useInviteUser } from '@/hooks/useAdmin'
 import type { ForgeRole, UserProfile } from '@/hooks/useAdmin'
 import { toast } from 'sonner'
 import { Navigate } from 'react-router-dom'
+import { UserManagement, PermissionsMatrix, AuditLogViewer, SecuritySettings } from '@/features/admin'
+import type { RbacRoleName } from '@/hooks/useRbac'
+
+type AdminTab = 'Utilisateurs' | 'RBAC' | 'Permissions' | 'Audit' | 'Sécurité'
+const ADMIN_TABS: AdminTab[] = ['Utilisateurs', 'RBAC', 'Permissions', 'Audit', 'Sécurité']
 
 // ── Role config ────────────────────────────────────────────────────────────────
 
@@ -176,28 +181,43 @@ function UserRow({ user, isSelf }: { user: UserProfile; isSelf: boolean }) {
   )
 }
 
+// ── Rôles RBAC pour le formulaire d'invitation ────────────────────────────────
+
+// Rôles basés sur la configuration originale de FORGE
+const FORGE_ROLES: Array<{
+  name: RbacRoleName; label: string; desc: string; color: string; bg: string; icon?: string
+}> = [
+  { name: 'SUPER_ADMIN', label: 'Admin (Patron)',  desc: 'Accès complet + gestion utilisateurs',       color: '#C62828', bg: '#FFEBEE', icon: '👑' },
+  { name: 'MANAGER',     label: 'Superviseur',     desc: 'Validation, stocks, rapports, formation',    color: '#1d4ed8', bg: '#dbeafe' },
+  { name: 'COMMERCIAL',  label: 'Opérateur',       desc: 'Stocks, commandes, bons, production',        color: '#15803d', bg: '#dcfce7' },
+  { name: 'READONLY',    label: 'Apprenant',       desc: 'Lecture tâches, stock et formation',         color: '#6b7280', bg: '#f3f4f6' },
+]
+
 // ── Invite slide-over ──────────────────────────────────────────────────────────
 
-const DEFAULT_INVITE = { email: '', role: 'operateur' as ForgeRole, nom: '' }
+const DEFAULT_INVITE = { email: '', rbacRoleName: 'COMMERCIAL' as RbacRoleName, nom: '' }
 
 function InviteSlideOver({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [form, setForm]   = useState(DEFAULT_INVITE)
-  const [err, setErr]     = useState<string | null>(null)
-  const inviteUser        = useInviteUser()
+  const [form, setForm] = useState(DEFAULT_INVITE)
+  const [err, setErr]   = useState<string | null>(null)
+  const inviteUser      = useInviteUser()
 
   const handleSubmit = () => {
     if (!form.email.trim()) { setErr('Email requis'); return }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) { setErr('Email invalide'); return }
     setErr(null)
 
-    inviteUser.mutate(form, {
-      onSuccess: () => {
-        toast.success(`Invitation envoyée à ${form.email}`)
-        setForm(DEFAULT_INVITE)
-        onClose()
+    inviteUser.mutate(
+      { email: form.email, nom: form.nom, rbacRoleName: form.rbacRoleName },
+      {
+        onSuccess: () => {
+          toast.success(`Invitation envoyée à ${form.email}`)
+          setForm(DEFAULT_INVITE)
+          onClose()
+        },
+        onError: (e: Error) => setErr(e.message),
       },
-      onError: (e: Error) => setErr(e.message),
-    })
+    )
   }
 
   return (
@@ -239,29 +259,33 @@ function InviteSlideOver({ open, onClose }: { open: boolean; onClose: () => void
           />
         </div>
 
-        {/* Role */}
+        {/* Rôle RBAC */}
         <div>
           <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">
-            Rôle
+            Rôle &amp; permissions
           </label>
           <div className="grid grid-cols-2 gap-2">
-            {ROLES.map((r) => (
-              <button
-                key={r.value}
-                onClick={() => setForm((f) => ({ ...f, role: r.value }))}
-                className="flex flex-col items-start gap-1 p-3 rounded-xl border-2 text-left transition-all"
-                style={{
-                  borderColor:     form.role === r.value ? r.color : '#e5e7eb',
-                  backgroundColor: form.role === r.value ? r.bg   : 'transparent',
-                }}
-              >
-                <span className="text-xs font-bold" style={{ color: r.color }}>
-                  {r.value === 'admin' && '👑 '}{r.label}
-                </span>
-                <span className="text-[11px] text-gray-400 leading-snug">{r.desc}</span>
-              </button>
-            ))}
-          </div>
+              {FORGE_ROLES.map((r) => {
+                const selected = form.rbacRoleName === r.name
+                return (
+                  <button
+                    key={r.name}
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, rbacRoleName: r.name }))}
+                    className="flex flex-col items-start gap-1 p-3 rounded-xl border-2 text-left transition-all"
+                    style={{
+                      borderColor:     selected ? r.color : '#e5e7eb',
+                      backgroundColor: selected ? r.bg    : 'transparent',
+                    }}
+                  >
+                    <span className="text-xs font-bold" style={{ color: r.color }}>
+                      {r.icon && `${r.icon} `}{r.label}
+                    </span>
+                    <span className="text-[11px] text-gray-400 leading-snug">{r.desc}</span>
+                  </button>
+                )
+              })}
+            </div>
         </div>
 
         {/* Error */}
@@ -298,6 +322,8 @@ export default function AdminSettings() {
   const { data, isLoading }     = useAdminUsers()
   const [search, setSearch]     = useState('')
   const [inviteOpen, setInvite] = useState(false)
+  const [adminTab, setAdminTab]       = useState<AdminTab>('Utilisateurs')
+  const [permRoleIdx, setPermRoleIdx] = useState(0)
 
   // Guard — non-admins get redirected
   if (appRole !== null && appRole !== 'admin') {
@@ -332,17 +358,40 @@ export default function AdminSettings() {
     >
       <PageHeader
         title="Administration"
-        subtitle="Gestion des utilisateurs et des rôles"
+        subtitle="Gestion des utilisateurs, permissions et sécurité"
         breadcrumbs={[
           { label: 'FORGE', href: '/' },
           { label: 'Administration' },
         ]}
         actions={
-          <Button size="sm" onClick={() => setInvite(true)}>
-            <UserPlus className="h-3.5 w-3.5" /> Inviter un utilisateur
-          </Button>
+          adminTab === 'Utilisateurs' ? (
+            <Button size="sm" onClick={() => setInvite(true)}>
+              <UserPlus className="h-3.5 w-3.5" /> Inviter un utilisateur
+            </Button>
+          ) : null
         }
       />
+
+      {/* ── Tab navigation ── */}
+      <div className="flex gap-1 border-b border-gray-100 pb-0 -mt-2">
+        {ADMIN_TABS.map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setAdminTab(tab)}
+            className={`px-4 py-2.5 text-sm font-semibold rounded-t-lg border-b-2 transition-colors ${
+              adminTab === tab
+                ? 'border-[#C62828] text-[#C62828] bg-[#FFEBEE]/50'
+                : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50'
+            }`}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Onglet : Utilisateurs (legacy) ── */}
+      {adminTab === 'Utilisateurs' && (
+        <div className="space-y-6">
 
       {/* ── Stats ── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -478,6 +527,55 @@ export default function AdminSettings() {
 
       {/* Invite slide-over */}
       <InviteSlideOver open={inviteOpen} onClose={() => setInvite(false)} />
+
+        </div>
+      )}
+
+      {/* ── Onglet : RBAC Utilisateurs ── */}
+      {adminTab === 'RBAC' && (
+        <UserManagement />
+      )}
+
+      {/* ── Onglet : Matrice des permissions ── */}
+      {adminTab === 'Permissions' && (
+        <div className="space-y-4">
+          {/* Sélecteur de rôle — 4 rôles originaux */}
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="text-xs font-semibold uppercase text-gray-500">Rôle :</span>
+              {FORGE_ROLES.map((r, idx) => (
+                <button
+                  key={r.name}
+                  onClick={() => setPermRoleIdx(idx)}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border-2 transition-colors"
+                  style={
+                    permRoleIdx === idx
+                      ? { backgroundColor: r.color, color: '#fff', borderColor: r.color }
+                      : { backgroundColor: 'transparent', color: r.color, borderColor: r.color }
+                  }
+                >
+                  {r.icon && `${r.icon} `}{r.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <PermissionsMatrix
+            rbacName={FORGE_ROLES[permRoleIdx].name}
+            label={FORGE_ROLES[permRoleIdx].label}
+          />
+        </div>
+      )}
+
+      {/* ── Onglet : Journal d'audit ── */}
+      {adminTab === 'Audit' && (
+        <AuditLogViewer />
+      )}
+
+      {/* ── Onglet : Paramètres de sécurité ── */}
+      {adminTab === 'Sécurité' && (
+        <SecuritySettings />
+      )}
+
     </motion.div>
   )
 }

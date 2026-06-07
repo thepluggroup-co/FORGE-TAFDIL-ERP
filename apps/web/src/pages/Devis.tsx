@@ -14,7 +14,8 @@ import {
   useDevis, useCreateDevis, useUpdateDevis, useDeleteDevis,
   useUpdateStatutDevis, useEnvoyerApprobation, useTransformerDevis,
 } from '@/hooks/useDevis'
-import { useClients } from '@/hooks/useClients'
+import { apiClient } from '@/lib/api-client'
+import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/context/AuthContext'
 import type { Devis as DevisApi, DevisLigne, CreateDevisPayload } from '@/hooks/useDevis'
 import type { Client } from '@/hooks/useClients'
@@ -262,7 +263,7 @@ function DevisDetailPanel({
                 <p className="text-sm font-semibold text-blue-700">
                   {envoyerApprobation.isPending ? 'Génération du lien…' : 'Envoyer lien d\'approbation au client'}
                 </p>
-                <p className="text-xs text-blue-500">Lien valable 7 jours · copié automatiquement</p>
+                <p className="text-xs text-blue-500">Lien valable 30 jours · copié automatiquement</p>
               </div>
             </button>
           )}
@@ -384,8 +385,13 @@ function DevisFormPanel({
   editingDevis?: DevisRecord | null
   onClose: () => void
 }) {
-  const { data: clientsData } = useClients()
-  const clients = (clientsData?.data ?? []) as Client[]
+  // Use API (not Supabase direct) so the auth Bearer token is always sent
+  const { data: clientsData } = useQuery({
+    queryKey: ['clients-select'],
+    queryFn:  () => apiClient.get<{ data: Client[] }>('/api/clients?per_page=200&statut=actif'),
+    staleTime: 60_000,
+  })
+  const clients = clientsData?.data ?? []
 
   const createDevis = useCreateDevis()
   const updateDevis = useUpdateDevis()
@@ -725,7 +731,14 @@ export default function Devis() {
   const COLUMNS: Column<DevisRecord>[] = useMemo(() => [
     {
       id: 'reference', header: 'Référence', accessor: 'reference',
-      render: (v) => <span className="font-mono text-xs font-bold text-[#212121]">{v as string}</span>,
+      render: (v, row) => (
+        <div className="flex items-center gap-1.5">
+          <span className="font-mono text-xs font-bold text-[#212121]">{v as string}</span>
+          {(row.source_web as boolean) && (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 uppercase tracking-wide">WEB</span>
+          )}
+        </div>
+      ),
     },
     {
       id: 'client', header: 'Client',

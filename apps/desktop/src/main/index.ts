@@ -3,8 +3,11 @@ import { join } from 'path'
 import { fork } from 'child_process'
 import type { ChildProcess } from 'child_process'
 import log from 'electron-log'
-import { registerDbHandlers } from './ipc/db-handler'
+import { registerDbHandlers, getDb } from './ipc/db-handler'
 import { SyncManager } from './ipc/sync-handler'
+import { registerSessionHandlers } from '../auth/session'
+import { registerOfflinePermissionsHandlers } from '../auth/offlinePermissions'
+import { registerAutoLockHandlers } from '../auth/autoLock'
 
 // Set app name before anything else so userData path uses "FORGE by TAFDIL"
 app.setName('FORGE by TAFDIL')
@@ -314,16 +317,24 @@ app.whenReady().then(async () => {
   // 1. Handlers IPC SQLite
   await registerDbHandlers()
 
-  // 2. Démarrer le serveur API embarqué (Hono → port 3001)
+  // 2. Auth : session chiffrée + permissions offline + auto-lock
+  registerSessionHandlers()
+  const sqlite = getDb()
+  if (sqlite) registerOfflinePermissionsHandlers(sqlite)
+
+  // 3. Démarrer le serveur API embarqué (Hono → port 3001)
   //    Tous les hooks React appellent http://localhost:3001/api/*
   await startApiServer()
 
-  // 3. Gestionnaire de synchronisation Supabase
+  // 4. Gestionnaire de synchronisation Supabase
   syncMgr = new SyncManager(() => win)
   syncMgr.start()
 
-  // 4. Ouvrir la fenêtre principale (le serveur API est prêt)
+  // 5. Ouvrir la fenêtre principale (le serveur API est prêt)
   createWindow()
+
+  // 6. Auto-lock (timeout depuis security_settings, défaut 60 min)
+  if (win) registerAutoLockHandlers(win, 60)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

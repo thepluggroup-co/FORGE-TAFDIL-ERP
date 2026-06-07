@@ -57,6 +57,10 @@ export function useAiAlertes() {
     queryKey: ['ai', 'alertes'],
     queryFn:  () => apiClient.get<{ alertes: AlerteIA[] }>('/api/ai/alertes'),
     staleTime: 5 * 60_000,
-    refetchInterval: 10 * 60_000,
+    // Don't poll or retry when the API server is unreachable — avoids
+    // console spam on every page navigation when running without the API.
+    retry: false,
+    refetchOnMount: (query) => query.state.status !== 'error',
+    refetchInterval: (query) => query.state.status === 'error' ? false : 10 * 60_000,
   })
 }

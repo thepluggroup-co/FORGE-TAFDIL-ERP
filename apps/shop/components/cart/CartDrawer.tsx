@@ -11,16 +11,17 @@ import {
 import { toast } from 'sonner'
 import { useCartStore, computeTotal, isCartStale } from '@/lib/cart'
 import type { CartItem } from '@/lib/cart'
+import { FRAIS_LIVRAISON } from '@forge/shared'
 
 // ── Tarifs livraison ───────────────────────────────────────────────────────────
 
 const LIVRAISON_ZONES: Record<string, number | null> = {
-  'Douala Centre (Akwa, Bonanjo)': 2000,
-  'Douala Nord (Bonamoussadi, Makepe)': 2500,
-  'Douala Est (Logpom, Bassa)': 3000,
-  'Douala Bonaberi': 3500,
-  'Yaoundé': 8000,
-  'Autre ville': null,
+  'Douala Centre (Akwa, Bonanjo)':      FRAIS_LIVRAISON.douala.tarif,
+  'Douala Nord (Bonamoussadi, Makepe)': 2500, // zone intermédiaire non définie dans l'API
+  'Douala Est (Logpom, Bassa)':         3000, // zone intermédiaire non définie dans l'API
+  'Douala Bonaberi':                    FRAIS_LIVRAISON.douala_banlieue.tarif,
+  'Yaoundé':                            FRAIS_LIVRAISON.yaounde.tarif,
+  'Autre ville':                        null,
 }
 
 function fmt(n: number) {

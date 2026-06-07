@@ -18,6 +18,8 @@ export interface CommandeSuivi {
   mode_paiement:    string | null
   payment_reference: string | null
   lignes:           Array<{ designation: string; quantite: number; prix_unitaire: number; total_ht?: number }>
+  montant_ht?:      number | null
+  tva?:             number | null
   montant_ttc:      number
   frais_livraison:  number
   client_ville:     string | null
@@ -219,8 +221,9 @@ export function SuiviClient({ commandeRef, initialCommande }: {
     return () => { void sb.removeChannel(channel) }
   }, [commandeRef])
 
-  const montant_ht = Math.round(commande.montant_ttc / 1.1925)
-  const tva        = commande.montant_ttc - montant_ht
+  const lignesHt = commande.lignes.reduce((s, l) => s + (l.total_ht ?? l.quantite * l.prix_unitaire), 0)
+  const montant_ht = Math.round(Number(commande.montant_ht ?? lignesHt))
+  const tva        = Math.round(Number(commande.tva ?? montant_ht * 0.1925))
   const waUrl      = `https://wa.me/${WA_TEL}?text=${encodeURIComponent(`Bonjour TAFDIL, je souhaite des informations sur ma commande *${commandeRef}*.`)}`
 
   return (

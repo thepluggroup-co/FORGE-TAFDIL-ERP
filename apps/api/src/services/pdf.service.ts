@@ -1,19 +1,24 @@
 import PDFDocument from 'pdfkit'
+import { join } from 'node:path'
 import { supabaseAdmin } from '@forge/db'
 
 const db = supabaseAdmin!
 
 // ── Company info ───────────────────────────────────────────────────────────────
 const CO = {
-  nom:     'TAFDIL SARL',
-  activite:'Microusine Métallurgique & BTP',
-  adresse: 'Bassa Industrie, Douala, Cameroun',
-  tel:     '+237 699 000 000',
-  email:   'info@tafdil.cm',
-  niu:     'M0820000123456A',
-  rccm:    'RC/DLA/2020/B/1234',
-  capital: '10 000 000 XAF',
+  nom:       'TAFDIL SARL',
+  activite:  'Microusine Métallurgique & BTP',
+  adresse:   'Kotto Mairyvanas, Douala, Cameroun',
+  tel:       '+237 695 884 528',
+  email:     'info@tafdil.cm',
+  niu:       'M052116085624A',
+  rccm:      'RC/DLA/2021/B/2624',
+  capital:   '10 000 000 XAF',
+  directeur: 'M. CARMEL TANEKEU',
 } as const
+
+// Logo TAFDIL — placer le fichier dans apps/api/src/assets/logo-tafdil.png
+const LOGO_PATH = join(process.cwd(), 'src', 'assets', 'logo-tafdil.png')
 
 // ── Design tokens ──────────────────────────────────────────────────────────────
 const C = {
@@ -75,6 +80,7 @@ export interface PdfFacture {
   date_echeance: string
   total_ht_xaf:  number
   tva_xaf:       number
+  frais_livraison_xaf?: number | null
   total_ttc_xaf: number
 }
 
@@ -164,12 +170,15 @@ function drawHeader(
   doc.rect(0, 0, PW, 118).fill(C.red)
 
   // ── Left: company identity ──────────────────────────────────────────────────
-  // Logo placeholder box
-  doc.rect(ML, 14, 44, 44).fill('rgba(255,255,255,0.15)').stroke()
-  doc.font('Helvetica-Bold').fontSize(9).fillColor('white')
-    .text('FORGE', ML + 3, 28, { width: 44, align: 'center' })
-  doc.font('Helvetica-Bold').fontSize(4.5).fillColor('rgba(255,255,255,0.7)')
-    .text('TAFDIL', ML + 3, 39, { width: 44, align: 'center' })
+  // Logo TAFDIL (fond blanc + image, fallback texte si fichier absent)
+  try {
+    doc.rect(ML, 12, 50, 50).fill('#FFFFFF')
+    doc.image(LOGO_PATH, ML + 2, 13, { width: 46, height: 46 })
+  } catch {
+    doc.rect(ML, 14, 44, 44).fill('rgba(255,255,255,0.15)').stroke()
+    doc.font('Helvetica-Bold').fontSize(11).fillColor('white')
+      .text('TAFDIL', ML + 3, 30, { width: 44, align: 'center' })
+  }
 
   doc.font('Helvetica-Bold').fontSize(16).fillColor('white')
     .text(CO.nom, ML + 52, 16)
@@ -251,6 +260,7 @@ function drawTotals(
   y:      number,
   ht:     number,
   tva:    number,
+  livraison: number,
   ttc:    number,
 ): number {
   const TX = COL.pu   // left of totals block
@@ -270,7 +280,17 @@ function drawTotals(
   doc.text('TVA (19,25%) :',         TX, y,      { width: 84 })
   doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
   doc.text(xaf(tva), TX + 84, y, { width: TW - 84, align: 'right' })
-  y += 8
+  y += 16
+
+  if (livraison > 0) {
+    doc.font('Helvetica').fontSize(9).fillColor(C.mid)
+    doc.text('Livraison :', TX, y, { width: 84 })
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
+    doc.text(xaf(livraison), TX + 84, y, { width: TW - 84, align: 'right' })
+    y += 8
+  } else {
+    y -= 8
+  }
 
   // TTC box
   doc.rect(TX, y, TW, 26).fill(C.red)
@@ -327,15 +347,17 @@ function drawPaymentTerms(doc: InstanceType<typeof PDFDocument>, y: number): num
 function drawSignatureZone(doc: InstanceType<typeof PDFDocument>, y: number) {
   y += 16
   // Client signature
-  doc.rect(ML, y, 220, 56).stroke()
+  doc.rect(ML, y, 220, 62).stroke()
   doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
     .text('BON POUR ACCORD — Signature & Cachet Client', ML + 6, y + 5)
   // Company signature
-  doc.rect(ML + W - 220, y, 220, 56).stroke()
+  doc.rect(ML + W - 220, y, 220, 62).stroke()
   doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
-    .text('Signature & Cachet TAFDIL', ML + W - 214, y + 5)
+    .text('La Direction', ML + W - 214, y + 5)
+  doc.font('Helvetica-Bold').fontSize(8).fillColor(C.dark)
+    .text(CO.directeur, ML + W - 214, y + 40)
   doc.font('Helvetica').fontSize(7).fillColor(C.muted)
-    .text(CO.nom, ML + W - 214, y + 44)
+    .text(CO.nom, ML + W - 214, y + 51)
 }
 
 function drawBtpConditions(doc: InstanceType<typeof PDFDocument>, y: number): number {
@@ -373,7 +395,7 @@ function buildPdf(
   },
   client:  PdfClient,
   lignes:  PdfLigne[],
-  totaux:  { ht: number; tva: number; ttc: number },
+  totaux:  { ht: number; tva: number; livraison?: number; ttc: number },
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
@@ -424,7 +446,7 @@ function buildPdf(
       y = 40
     }
 
-    y = drawTotals(doc, y, totaux.ht, totaux.tva, totaux.ttc)
+    y = drawTotals(doc, y, totaux.ht, totaux.tva, Number(totaux.livraison ?? 0), totaux.ttc)
 
     // ── Extra section (BTP conditions for devis) ─────────────────────────────
     if (meta.extraFn) {
@@ -482,7 +504,12 @@ export async function generateFacturePDF(
     },
     client,
     lignes,
-    { ht: facture.total_ht_xaf, tva: facture.tva_xaf, ttc: facture.total_ttc_xaf },
+    {
+      ht: facture.total_ht_xaf,
+      tva: facture.tva_xaf,
+      livraison: Number(facture.frais_livraison_xaf ?? 0),
+      ttc: facture.total_ttc_xaf,
+    },
   )
 }
 
@@ -532,10 +559,13 @@ export async function generateRecuPDF(recu: PdfRecu): Promise<Buffer> {
     // ── En-tête rouge ──────────────────────────────────────────────────────────
     doc.rect(0, 0, PW, 100).fill(C.red)
     doc.rect(ML, 14, 44, 44).fill('rgba(255,255,255,0.15)').stroke()
-    doc.font('Helvetica-Bold').fontSize(9).fillColor('white')
-      .text('FORGE', ML + 3, 28, { width: 44, align: 'center' })
-    doc.font('Helvetica-Bold').fontSize(4.5).fillColor('rgba(255,255,255,0.7)')
-      .text('TAFDIL', ML + 3, 39, { width: 44, align: 'center' })
+    try {
+      doc.rect(ML, 12, 44, 44).fill('#FFFFFF')
+      doc.image(LOGO_PATH, ML + 1, 13, { width: 42, height: 42 })
+    } catch {
+      doc.font('Helvetica-Bold').fontSize(11).fillColor('white')
+        .text('TAFDIL', ML + 3, 30, { width: 44, align: 'center' })
+    }
 
     doc.font('Helvetica-Bold').fontSize(16).fillColor('white').text(CO.nom, ML + 52, 16)
     doc.font('Helvetica').fontSize(7.5).fillColor('rgba(255,255,255,0.85)')
@@ -591,11 +621,12 @@ export async function generateRecuPDF(recu: PdfRecu): Promise<Buffer> {
 
     // ── Zone signatures ────────────────────────────────────────────────────────
     y += 20
-    doc.rect(ML, y, 220, 56).stroke()
+    doc.rect(ML, y, 220, 62).stroke()
     doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('Signature & Cachet Client', ML + 6, y + 5)
-    doc.rect(ML + W - 220, y, 220, 56).stroke()
-    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('Signature & Cachet TAFDIL', ML + W - 214, y + 5)
-    doc.font('Helvetica').fontSize(7).fillColor(C.muted).text(CO.nom, ML + W - 214, y + 44)
+    doc.rect(ML + W - 220, y, 220, 62).stroke()
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('La Direction', ML + W - 214, y + 5)
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.dark).text(CO.directeur, ML + W - 214, y + 38)
+    doc.font('Helvetica').fontSize(7).fillColor(C.muted).text(CO.nom, ML + W - 214, y + 50)
 
     // ── Pied de page ───────────────────────────────────────────────────────────
     drawFooter(doc, 1)
@@ -640,11 +671,14 @@ export async function generateAttestationPDF(attest: PdfAttestation): Promise<Bu
 
     // ── En-tête ────────────────────────────────────────────────────────────────
     doc.rect(0, 0, PW, 140).fill(C.red)
-    doc.font('Helvetica-Bold').fontSize(9).fillColor('white')
-      .text('FORGE', 60, 28, { width: 44, align: 'center' })
-    doc.font('Helvetica-Bold').fontSize(4.5).fillColor('rgba(255,255,255,0.7)')
-      .text('TAFDIL', 60, 39, { width: 44, align: 'center' })
     doc.rect(60, 14, 44, 44).fill('rgba(255,255,255,0.15)').stroke()
+    try {
+      doc.rect(60, 14, 44, 44).fill('#FFFFFF')
+      doc.image(LOGO_PATH, 61, 15, { width: 42, height: 42 })
+    } catch {
+      doc.font('Helvetica-Bold').fontSize(11).fillColor('white')
+        .text('TAFDIL', 60, 30, { width: 44, align: 'center' })
+    }
 
     doc.font('Helvetica-Bold').fontSize(13).fillColor('white').text(CO.nom, 115, 18)
     doc.font('Helvetica').fontSize(8).fillColor('rgba(255,255,255,0.85)')
@@ -703,11 +737,12 @@ export async function generateAttestationPDF(attest: PdfAttestation): Promise<Bu
 
     // ── Zone signatures ────────────────────────────────────────────────────────
     y = Math.max(y + 24, 620)
-    doc.rect(ML, y, 200, 60).stroke()
+    doc.rect(ML, y, 200, 68).stroke()
     doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('Signature du bénéficiaire', ML + 6, y + 5)
-    doc.rect(ML + W - 200, y, 200, 60).stroke()
-    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('Le Directeur — TAFDIL SARL', ML + W - 194, y + 5)
-    doc.font('Helvetica').fontSize(7).fillColor(C.muted).text(CO.nom, ML + W - 194, y + 48)
+    doc.rect(ML + W - 200, y, 200, 68).stroke()
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('Le Directeur', ML + W - 194, y + 5)
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.dark).text(CO.directeur, ML + W - 194, y + 42)
+    doc.font('Helvetica').fontSize(7).fillColor(C.muted).text(CO.nom, ML + W - 194, y + 54)
 
     // ── Pied de page ───────────────────────────────────────────────────────────
     doc.font('Helvetica').fontSize(7).fillColor(C.light)

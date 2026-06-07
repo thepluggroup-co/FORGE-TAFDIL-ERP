@@ -16,12 +16,13 @@ const tsN = (col: string) => timestamp(col, { withTimezone: true })
 
 // ── Enums PostgreSQL ───────────────────────────────────────────────────────────
 
-export const roleEnum          = pgEnum('role',           ['directeur', 'admin', 'operateur', 'viewer'])
+export const roleEnum          = pgEnum('role',           ['admin', 'superviseur', 'operateur', 'apprenant'])
 export const syncStatusEnum    = pgEnum('sync_status',    ['synced', 'pending', 'conflict'])
 export const clientTypeEnum    = pgEnum('client_type',    ['entreprise', 'particulier', 'institution'])
 export const clientStatutEnum  = pgEnum('client_statut',  ['actif', 'inactif', 'bloque'])
 export const produitStatutEnum = pgEnum('produit_statut', ['normal', 'alerte', 'critique', 'rupture'])
-export const bonStatutEnum     = pgEnum('bon_statut',     ['soumis', 'valide', 'execute', 'refuse'])
+export const bonStatutEnum     = pgEnum('bon_statut',     ['en_attente', 'soumis', 'valide', 'execute', 'refuse'])
+export const bonTypeEnum       = pgEnum('bon_type',       ['commande', 'devis', 'manuel'])
 export const devisStatutEnum   = pgEnum('devis_statut',   ['brouillon', 'envoye', 'accepte', 'refuse', 'expire', 'transforme'])
 export const commandeStatutEnum = pgEnum('commande_statut', ['confirmed', 'in_production', 'pret', 'delivered', 'cancelled'])
 export const factureStatutEnum = pgEnum('facture_statut', ['brouillon', 'valide', 'envoye', 'paye', 'annule'])
@@ -132,6 +133,10 @@ export const bonsSortiePg = pgTable('bons_sortie', {
   id:          id(),
   numero:      text('numero').notNull().unique(),
   statut:      bonStatutEnum('statut').notNull().default('soumis'),
+  type:        bonTypeEnum('type').notNull().default('manuel'),
+  // FK nullable vers commandes/devis — sans .references() (forward ref non supporté sans AnyPgColumn)
+  commandeId:  uuid('commande_id'),
+  devisId:     uuid('devis_id'),
   demandeur:   text('demandeur').notNull(),
   valideParId: uuid('valide_par_id').references(() => profilesPg.id),
   motif:       text('motif').notNull(),
@@ -205,6 +210,7 @@ export const commandesPg = pgTable('commandes', {
   dateLivraisonPrevue: text('date_livraison_prevue'),
   totalHtXaf:          real('total_ht_xaf').notNull().default(0),
   tvaXaf:              real('tva_xaf').notNull().default(0),
+  fraisLivraisonXaf:   real('frais_livraison_xaf').notNull().default(0),
   totalTtcXaf:         real('total_ttc_xaf').notNull().default(0),
   acompteRecu:         real('acompte_recu_xaf').notNull().default(0),
   notes:               text('notes'),
@@ -251,6 +257,7 @@ export const facturesPg = pgTable('factures', {
   dateEcheance:   text('date_echeance').notNull(),
   totalHtXaf:     real('total_ht_xaf').notNull().default(0),
   tvaXaf:         real('tva_xaf').notNull().default(0),
+  fraisLivraisonXaf: real('frais_livraison_xaf').notNull().default(0),
   totalTtcXaf:    real('total_ttc_xaf').notNull().default(0),
   montantPayeXaf: real('montant_paye_xaf').notNull().default(0),
   notes:          text('notes'),

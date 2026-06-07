@@ -126,7 +126,8 @@ describe('Test 2 — POST mouvement sortie > stock → 422', () => {
 
   it('retourne 422 INSUFFICIENT_STOCK quand quantite > stock_actuel', async () => {
     // RPC non déployée → fallback JS (mockImplementation pour robustesse vitest 2.x)
-    vi.mocked(supabase.rpc).mockImplementation(async () => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(vi.mocked(supabase.rpc) as any).mockImplementation(async () => ({
       data:  null,
       error: { code: '42883', message: 'function fn_mouvement_stock does not exist' },
     }))

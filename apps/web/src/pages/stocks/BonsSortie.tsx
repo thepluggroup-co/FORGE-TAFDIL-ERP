@@ -1,13 +1,14 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Plus, Check, ChevronRight } from 'lucide-react'
+import { Plus, Check, ChevronRight, RefreshCw } from 'lucide-react'
 import { PageHeader, DataTable, StatusBadge, SlideOver, Button, EmptyState } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDateTime } from '@/lib/utils'
-import { useBons, useCreateBon, useValidateBon, useExecuteBon } from '@/hooks/useBons'
+import { useBons, useCreateBon, useValidateBon, useExecuteBon, useBackfillBons } from '@/hooks/useBons'
 import { useStocks } from '@/hooks/useStocks'
 import { useEmployes } from '@/hooks/useRH'
 import type { BonSortie as BonApi, BonLigne } from '@/hooks/useBons'
+import { supabase } from '@/lib/supabase'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -15,13 +16,14 @@ type BonRecord = BonApi & Record<string, unknown>
 
 type BonStatus = 'soumis' | 'valide' | 'execute'
 
-const STEP_LABELS: Record<BonStatus, string> = { soumis: 'Soumis', valide: 'Validé', execute: 'Exécuté' }
+const STEP_LABELS: Record<BonStatus, string> = { soumis: 'En attente', valide: 'Validé', execute: 'Exécuté' }
 const STEPS: BonStatus[] = ['soumis', 'valide', 'execute']
 
 // ── Stepper ────────────────────────────────────────────────────────────────────
 
-function WorkflowStepper({ status }: { status: BonStatus }) {
-  const currentIdx = STEPS.indexOf(status)
+function WorkflowStepper({ status }: { status: string }) {
+  const normalized = (status === 'en_attente' ? 'soumis' : status) as BonStatus
+  const currentIdx = STEPS.indexOf(normalized)
   return (
     <div className="flex items-center gap-1">
       {STEPS.map((step, i) => (
@@ -52,11 +54,12 @@ export default function BonsSortie() {
   const [nouveauOpen, setNouveauOpen] = useState(false)
 
   const { data, isLoading } = useBons()
-  const validateBon = useValidateBon()
-  const executeBon  = useExecuteBon()
+  const validateBon  = useValidateBon()
+  const executeBon   = useExecuteBon()
+  const backfillBons = useBackfillBons()
 
   const bons = (data?.data ?? []) as BonRecord[]
-  const enAttente = bons.filter((b) => b.statut === 'soumis').length
+  const enAttente = bons.filter((b) => b.statut === 'soumis' || b.statut === 'en_attente').length
 
   const COLUMNS: Column<BonRecord>[] = [
     {
@@ -89,36 +92,41 @@ export default function BonsSortie() {
       id: 'statut_workflow',
       header: 'Workflow',
       accessor: 'statut',
-      render: (v) => <WorkflowStepper status={v as BonStatus} />,
+      render: (v) => <WorkflowStepper status={v as string} />,
     },
     {
       id: 'badge',
       header: 'Statut',
       accessor: 'statut',
-      render: (v) => <StatusBadge status={v as string} />,
+      render: (v) => <StatusBadge status={v === 'en_attente' ? 'soumis' : v as string} />,
     },
     {
       id: 'produits',
-      header: 'Produits',
+      header: 'Articles',
       accessor: 'lignes',
       sortable: false,
       render: (v) => {
         const lignes = (v as BonLigne[] | null | undefined) ?? []
+        if (lignes.length === 0) return <span className="text-xs text-gray-400 italic">—</span>
         return (
           <div>
-            <span className="text-sm font-medium">{lignes.length} article{lignes.length > 1 ? 's' : ''}</span>
-            <div className="text-xs text-gray-400 truncate max-w-40">
-              {lignes.map((l) => l.designation).join(', ')}
+            <span className="text-sm font-semibold text-[#212121]">
+              {lignes.length} article{lignes.length > 1 ? 's' : ''}
+            </span>
+            <div className="text-xs text-gray-400 truncate max-w-48 mt-0.5">
+              {lignes.map((l) => `${l.quantite_demandee ?? l.quantite ?? ''} × ${l.designation}`).join(' · ')}
             </div>
           </div>
         )
       },
     },
     {
-      id: 'cout_total_xaf',
+      id: 'montant_total_xaf',
       header: 'Montant',
-      accessor: 'cout_total_xaf',
-      render: (v) => <span className="text-sm font-semibold">{formatXAF(v as number)}</span>,
+      accessor: 'montant_total_xaf',
+      render: (v) => v != null
+        ? <span className="text-sm font-semibold">{formatXAF(v as number)}</span>
+        : <span className="text-xs text-gray-400 italic">Sur devis</span>,
     },
     {
       id: 'created_at',
@@ -133,7 +141,7 @@ export default function BonsSortie() {
       sortable: false,
       render: (v, row) => (
         <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-          {v === 'soumis' && (
+          {(v === 'soumis' || v === 'en_attente') && (
             <button
               disabled={validateBon.isPending}
               onClick={() => validateBon.mutate(row.id as string)}
@@ -176,10 +184,22 @@ export default function BonsSortie() {
           { label: 'Bons de sortie' },
         ]}
         actions={
-          <Button size="sm" onClick={() => setNouveauOpen(true)}>
-            <Plus className="h-3.5 w-3.5" />
-            Nouveau Bon
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={backfillBons.isPending}
+              onClick={() => backfillBons.mutate()}
+              title="Importer les commandes web en préparation sans bon de sortie"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${backfillBons.isPending ? 'animate-spin' : ''}`} />
+              Synchroniser
+            </Button>
+            <Button size="sm" onClick={() => setNouveauOpen(true)}>
+              <Plus className="h-3.5 w-3.5" />
+              Nouveau Bon
+            </Button>
+          </div>
         }
       />
 
@@ -197,54 +217,149 @@ export default function BonsSortie() {
 
 // ── Nouveau bon form ───────────────────────────────────────────────────────────
 
+type TypeSource = 'manuel' | 'commande' | 'devis'
+interface CommandeOption { id: string; numero: string; client_nom: string }
+interface DevisOption    { id: string; reference: string }
+
 function NouveauBonSlideOver({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { data: stocksData } = useStocks()
   const { data: empData }    = useEmployes()
   const createBon = useCreateBon()
 
-  const produits   = stocksData?.data ?? []
+  const produits    = stocksData?.data ?? []
   const techniciens = (empData?.data ?? []).map((e) => e.nom)
+
+  const [typeSrc, setTypeSrc]     = useState<TypeSource>('manuel')
+  const [sourceId, setSourceId]   = useState('')
+  const [cmdOptions, setCmdOptions] = useState<CommandeOption[]>([])
+  const [devOptions, setDevOptions] = useState<DevisOption[]>([])
 
   const [form, setForm] = useState({
     technicien_nom: '',
     lignes: [{ produit_id: '', quantite: 1, unite: 'kg' }],
   })
 
+  useEffect(() => {
+    setSourceId('')
+    if (typeSrc === 'commande') {
+      void supabase.from('commandes').select('id, numero, client_nom')
+        .in('statut', ['confirmed', 'in_production'])
+        .then(({ data }) => setCmdOptions((data ?? []) as CommandeOption[]))
+    } else if (typeSrc === 'devis') {
+      void supabase.from('devis').select('id, reference')
+        .eq('statut', 'accepte')
+        .then(({ data }) => setDevOptions((data ?? []) as DevisOption[]))
+    }
+  }, [typeSrc])
+
   const addLigne    = () => setForm((f) => ({ ...f, lignes: [...f.lignes, { produit_id: '', quantite: 1, unite: 'kg' }] }))
   const removeLigne = (i: number) => setForm((f) => ({ ...f, lignes: f.lignes.filter((_, idx) => idx !== i) }))
   const updateLigne = (i: number, field: string, value: string | number) =>
     setForm((f) => ({ ...f, lignes: f.lignes.map((l, idx) => idx === i ? { ...l, [field]: value } : l) }))
 
-  const valid = form.technicien_nom !== '' && form.lignes.every((l) => l.produit_id !== '' && l.quantite > 0)
+  const lignesValid = form.lignes.every((l) => l.produit_id !== '' && l.quantite > 0)
+  const sourceValid = typeSrc === 'manuel' ? form.technicien_nom !== '' : sourceId !== ''
+  const valid       = lignesValid && sourceValid
 
   const handleSubmit = () => {
     const lignes = form.lignes.map((l) => {
       const produit = produits.find((p) => p.id === l.produit_id)
       return { produit_id: l.produit_id, quantite: l.quantite, unite: produit?.unite ?? l.unite }
     })
-    createBon.mutate({ technicien_nom: form.technicien_nom, lignes }, { onSuccess: onClose })
+
+    const sourceRef =
+      typeSrc === 'commande' ? (cmdOptions.find((c) => c.id === sourceId)?.numero ?? '')
+      : typeSrc === 'devis'  ? (devOptions.find((d) => d.id === sourceId)?.reference ?? '')
+      : ''
+
+    createBon.mutate({
+      type:         typeSrc,
+      demandeur:    typeSrc !== 'manuel' ? sourceRef : undefined,
+      technicien_nom: typeSrc === 'manuel' ? form.technicien_nom : undefined,
+      motif:
+        typeSrc === 'commande' ? `Préparation commande ${sourceRef}`
+        : typeSrc === 'devis'  ? `Sortie devis ${sourceRef}`
+        : 'Sortie de stock',
+      commande_id: typeSrc === 'commande' ? sourceId : undefined,
+      devis_id:    typeSrc === 'devis'    ? sourceId : undefined,
+      lignes,
+    }, { onSuccess: onClose })
   }
+
+  const selectCls = 'w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]'
 
   return (
     <SlideOver isOpen={open} onClose={onClose} title="Nouveau bon de sortie" width="lg">
       <div className="space-y-5">
-        {/* Technicien */}
+        {/* Type de source */}
         <div>
-          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Technicien</label>
-          <select
-            value={form.technicien_nom}
-            onChange={(e) => setForm((f) => ({ ...f, technicien_nom: e.target.value }))}
-            className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-          >
-            <option value="">Sélectionner...</option>
-            {techniciens.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Type de source</label>
+          <div className="flex gap-2">
+            {(['manuel', 'commande', 'devis'] as TypeSource[]).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTypeSrc(t)}
+                className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors capitalize ${
+                  typeSrc === t
+                    ? 'bg-[#C62828] text-white border-[#C62828]'
+                    : 'bg-white text-gray-500 border-gray-200 hover:border-[#C62828] hover:text-[#C62828]'
+                }`}
+              >
+                {t === 'manuel' ? 'Manuel' : t === 'commande' ? 'Commande' : 'Devis'}
+              </button>
+            ))}
+          </div>
         </div>
+
+        {/* Source selector */}
+        {typeSrc === 'manuel' && (
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Technicien</label>
+            <select
+              value={form.technicien_nom}
+              onChange={(e) => setForm((f) => ({ ...f, technicien_nom: e.target.value }))}
+              className={selectCls}
+            >
+              <option value="">Sélectionner...</option>
+              {techniciens.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+        )}
+
+        {typeSrc === 'commande' && (
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Commande associée</label>
+            <select value={sourceId} onChange={(e) => setSourceId(e.target.value)} className={selectCls}>
+              <option value="">Sélectionner une commande...</option>
+              {cmdOptions.map((c) => (
+                <option key={c.id} value={c.id}>{c.numero} — {c.client_nom}</option>
+              ))}
+            </select>
+            {cmdOptions.length === 0 && (
+              <p className="mt-1 text-xs text-gray-400">Aucune commande en cours trouvée.</p>
+            )}
+          </div>
+        )}
+
+        {typeSrc === 'devis' && (
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Devis associé</label>
+            <select value={sourceId} onChange={(e) => setSourceId(e.target.value)} className={selectCls}>
+              <option value="">Sélectionner un devis...</option>
+              {devOptions.map((d) => (
+                <option key={d.id} value={d.id}>{d.reference}</option>
+              ))}
+            </select>
+            {devOptions.length === 0 && (
+              <p className="mt-1 text-xs text-gray-400">Aucun devis accepté trouvé.</p>
+            )}
+          </div>
+        )}
 
         {/* Lignes produits */}
         <div>
           <div className="flex items-center justify-between mb-2">
-            <label className="text-xs font-semibold text-gray-500 uppercase">Produits</label>
+            <label className="text-xs font-semibold text-gray-500 uppercase">Produits à sortir</label>
             <button onClick={addLigne} className="text-xs text-[#C62828] hover:underline font-medium flex items-center gap-1">
               <Plus className="h-3 w-3" /> Ajouter
             </button>

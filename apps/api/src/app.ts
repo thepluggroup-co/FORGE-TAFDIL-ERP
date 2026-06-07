@@ -18,7 +18,11 @@ import { paiementsRouter } from './routes/paiements'
 import { operationsRouter } from './routes/operations'
 import { adminRouter } from './routes/admin'
 import { equipementsRouter } from './routes/equipements'
+import { creditRouter } from './routes/credit'
+import { profileRouter } from './routes/profile'
 import { demarrerCronRelances } from './services/relances-cron.service'
+import { checkOverdueInstallments } from './services/creditService'
+import { sendUpcomingReminders } from './services/notificationService'
 import { HTTPException } from 'hono/http-exception'
 
 const app = new Hono<{ Variables: HonoVariables }>()
@@ -114,6 +118,8 @@ api.route('/shop-erp', shopErpRouter)
 api.route('/',         operationsRouter)
 api.route('/',         equipementsRouter)
 api.route('/admin',    adminRouter)
+api.route('/credit',   creditRouter)
+api.route('/profile',  profileRouter)
 
 app.route('/api', api)
 
@@ -145,7 +151,33 @@ app.notFound((c) =>
 )
 
 // ── Cron relances automatiques WhatsApp (MOD-04 CDC) ──────────────────────────
-// Démarre en arrière-plan — n'attend pas, ne bloque pas le démarrage de l'API
 demarrerCronRelances()
+
+// ── Cron Crédit : mark-overdue quotidien 06:00, rappels J-3 08:00 ─────────────
+;(function startCreditCrons() {
+  const MS_HOUR = 3_600_000
+  const MS_DAY  = 86_400_000
+
+  function scheduleAt(hour: number, fn: () => void) {
+    const now    = new Date()
+    const target = new Date(now)
+    target.setHours(hour, 0, 0, 0)
+    if (target <= now) target.setDate(target.getDate() + 1)
+    const delay  = target.getTime() - now.getTime()
+    setTimeout(() => { fn(); setInterval(fn, MS_DAY) }, delay)
+  }
+
+  scheduleAt(6, () => {
+    checkOverdueInstallments()
+      .then(r => console.info('[cron:credit:overdue]', r))
+      .catch(e => console.error('[cron:credit:overdue] erreur', e))
+  })
+
+  scheduleAt(8, () => {
+    sendUpcomingReminders()
+      .then(r => console.info('[cron:credit:reminders]', r))
+      .catch(e => console.error('[cron:credit:reminders] erreur', e))
+  })
+})()
 
 export default app

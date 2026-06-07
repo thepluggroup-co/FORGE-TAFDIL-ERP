@@ -110,7 +110,11 @@ export type NouveauMouvementStock = typeof mouvementsStock.$inferInsert
 export const bonsSortie = sqliteTable('bons_sortie', {
   id:          id(),
   numero:      text('numero').notNull().unique(),
-  statut:      text('statut', { enum: ['soumis', 'valide', 'execute', 'refuse'] }).notNull().default('soumis'),
+  statut:      text('statut', { enum: ['en_attente', 'soumis', 'valide', 'execute', 'refuse'] }).notNull().default('soumis'),
+  type:        text('type', { enum: ['commande', 'devis', 'manuel'] }).notNull().default('manuel'),
+  // FK nullable vers commandes/devis — définie sans .references() (forward ref SQLite)
+  commandeId:  text('commande_id'),
+  devisId:     text('devis_id'),
   demandeur:   text('demandeur').notNull(),
   valideParId: text('valide_par_id').references(() => profiles.id),
   motif:       text('motif').notNull(),
@@ -154,6 +158,7 @@ export const devis = sqliteTable('devis', {
   conditionsPaiement:  text('conditions_paiement').notNull().default('Virement bancaire'),
   totalHtXaf:          real('total_ht_xaf').notNull().default(0),
   tvaXaf:              real('tva_xaf').notNull().default(0),
+  fraisLivraisonXaf:   real('frais_livraison_xaf').notNull().default(0),
   totalTtcXaf:         real('total_ttc_xaf').notNull().default(0),
   notes:               text('notes'),
   createdBy:           text('created_by').references(() => profiles.id),
@@ -251,6 +256,7 @@ export const factures = sqliteTable('factures', {
   dateEcheance:  text('date_echeance').notNull(),
   totalHtXaf:    real('total_ht_xaf').notNull().default(0),
   tvaXaf:        real('tva_xaf').notNull().default(0),
+  fraisLivraisonXaf: real('frais_livraison_xaf').notNull().default(0),
   totalTtcXaf:   real('total_ttc_xaf').notNull().default(0),
   montantPayeXaf: real('montant_paye_xaf').notNull().default(0),
   notes:         text('notes'),

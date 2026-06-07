@@ -13,6 +13,7 @@ interface CommandeRow {
   client_nom: string
   total_ht_xaf: number
   tva_xaf: number
+  frais_livraison_xaf?: number | null
   total_ttc_xaf: number
   montant_paye_xaf?: number | null
   commandes_lignes?: Array<{
@@ -84,7 +85,7 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
 
   const { data: commande, error } = await db
     .from('commandes')
-    .select('id, numero, client_id, client_nom, total_ht_xaf, tva_xaf, total_ttc_xaf, montant_paye_xaf, commandes_lignes(*)')
+    .select('id, numero, client_id, client_nom, total_ht_xaf, tva_xaf, frais_livraison_xaf, total_ttc_xaf, montant_paye_xaf, commandes_lignes(*)')
     .eq('id', options.commandeId)
     .single()
 
@@ -109,6 +110,7 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
       date_echeance:     dateEcheance,
       total_ht_xaf:      cmd.total_ht_xaf,
       tva_xaf:           cmd.tva_xaf,
+      frais_livraison_xaf: Number(cmd.frais_livraison_xaf ?? 0),
       total_ttc_xaf:     cmd.total_ttc_xaf,
       montant_paye_xaf:  montantPaye,
       notes:             options.notes ?? null,
@@ -146,6 +148,7 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
     client_nom:     cmd.client_nom,
     total_ht_xaf:   cmd.total_ht_xaf,
     tva_xaf:        cmd.tva_xaf,
+    frais_livraison_xaf: Number(cmd.frais_livraison_xaf ?? 0),
     total_ttc_xaf:  cmd.total_ttc_xaf,
     created_by:     options.userId,
   }).catch(e => console.error('[compta] vente auto:', e))

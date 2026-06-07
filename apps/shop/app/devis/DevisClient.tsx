@@ -7,20 +7,28 @@ import { motion } from 'framer-motion'
 import {
   Send, CheckCircle, Paperclip, X, FileText, HardHat,
   Clock, Phone, Mail, MapPin,
+  Wrench, Droplets, Megaphone, Shield, Truck, Home,
+  DoorOpen, Settings, Building2, Package, ShoppingBag, HelpCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 
-// ── Types de projet ────────────────────────────────────────────────────────────
+// ── Types de projet (savoir-faire TAFDIL) ─────────────────────────────────────
 
 const TYPES_PROJET = [
-  'Menuiserie aluminium (fenêtres, portes)',
-  'Ferronnerie (grilles, portails)',
-  'Charpente / Construction métallique',
-  'Façade vitrée / Véranda',
-  'Formation professionnelle',
-  'Devis produit catalogue',
-  'Autre',
+  { label: 'Charpente / Hangar métallique',   icon: HardHat,     desc: 'Structure métallique, toiture, mezzanine',           atelier: 'Métallerie'  },
+  { label: 'Tuyauterie industrielle',          icon: Wrench,      desc: 'Installation et maintenance de tuyauteries',         atelier: 'Métallerie'  },
+  { label: 'Citerne / Bac de stockage',        icon: Droplets,    desc: "Citerne eau potable, bac carburant ou produits",     atelier: 'Métallerie'  },
+  { label: 'Panneau publicitaire / Kiosque',   icon: Megaphone,   desc: 'Supports de communication, kiosques commerciaux',    atelier: 'Métallerie'  },
+  { label: 'Portail / Grilles / Ferronnerie',  icon: Shield,      desc: 'Portails, grilles, garde-corps, rampes, escaliers',  atelier: 'Ferronnerie' },
+  { label: 'Carrosserie Plateau Camion',       icon: Truck,       desc: 'Plateau, benne, caisson pour véhicules',             atelier: 'Métallerie'  },
+  { label: 'Auvent / Couverture métallique',   icon: Home,        desc: 'Auvent, marquise, couverture en acier',              atelier: 'Métallerie'  },
+  { label: 'Menuiserie métallique',            icon: DoorOpen,    desc: 'Portes, fenêtres, volets, portes de garage',         atelier: 'Ferronnerie' },
+  { label: 'Mécanosoudure / Tôlerie',          icon: Settings,    desc: 'Assemblage, soudure de pièces sur mesure',           atelier: 'Métallerie'  },
+  { label: 'Aménagement / Bâtiment',           icon: Building2,   desc: 'Cloisons, cabines, faux-plafonds, architecture',     atelier: 'Les deux'    },
+  { label: 'Fournitures industrielles',        icon: Package,     desc: 'Équipements, matériels et fournitures',              atelier: 'Les deux'    },
+  { label: 'Produit du catalogue',             icon: ShoppingBag, desc: 'Commander un produit de notre gamme',                atelier: ''            },
+  { label: 'Autre / Je ne sais pas',           icon: HelpCircle,  desc: 'Décrivez votre besoin, nous vous orienterons',       atelier: ''            },
 ]
 
 // ── Confetti léger ─────────────────────────────────────────────────────────────
@@ -209,13 +217,47 @@ function DevisForm() {
         </div>
 
         <div>
-          <label className="mb-1.5 block text-xs font-semibold text-forge-steel">Type de projet</label>
-          <select className={inputCls} value={form.type_projet} onChange={set('type_projet')}>
-            <option value="">Sélectionnez un type de projet…</option>
-            {TYPES_PROJET.map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
+          <label className="mb-1.5 block text-xs font-semibold text-forge-steel">
+            Type de projet
+            {form.type_projet && (
+              <button
+                type="button"
+                onClick={() => setForm((f) => ({ ...f, type_projet: '' }))}
+                className="ml-2 text-[10px] font-medium text-forge-red underline"
+              >
+                effacer
+              </button>
+            )}
+          </label>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {TYPES_PROJET.map((t) => {
+              const Icon = t.icon
+              const selected = form.type_projet === t.label
+              return (
+                <button
+                  key={t.label}
+                  type="button"
+                  onClick={() => setForm((f) => ({ ...f, type_projet: selected ? '' : t.label }))}
+                  className={`flex flex-col items-start gap-1 rounded-xl border p-3 text-left transition-all ${
+                    selected
+                      ? 'border-forge-red bg-forge-red/5 ring-1 ring-forge-red/30'
+                      : 'border-gray-200 bg-white hover:border-forge-red/40 hover:bg-gray-50'
+                  }`}
+                >
+                  <Icon
+                    size={16}
+                    className={selected ? 'text-forge-red' : 'text-gray-400'}
+                  />
+                  <span className={`text-xs font-semibold leading-tight ${selected ? 'text-forge-red' : 'text-forge-dark'}`}>
+                    {t.label}
+                  </span>
+                  {t.atelier && (
+                    <span className="text-[10px] text-gray-400">{t.atelier}</span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
         </div>
 
         <div>

@@ -18,6 +18,7 @@ export interface Facture {
   date_echeance: string
   montant_ht_xaf: number
   montant_tva_xaf: number
+  frais_livraison_xaf: number
   montant_ttc_xaf: number
   montant_paye_xaf: number
   solde_restant_xaf: number
@@ -50,9 +51,170 @@ export interface EcritureLigne {
   solde_xaf: number
 }
 
+export interface PlanCompte {
+  compte: string
+  libelle: string
+  classe: number
+  categorie: string
+  nature: string
+  sens_normal: 'debit' | 'credit'
+  rubrique: string
+}
+
+export interface JournalComptable {
+  code: string
+  label: string
+  source: string
+  comptes_usuels: string[]
+}
+
+export interface GrandLivreLigne {
+  id: string
+  date: string
+  libelle: string
+  reference: string | null
+  debit_xaf: number
+  credit_xaf: number
+  solde_xaf: number
+  sens: string
+}
+
+export interface GrandLivreResponse {
+  compte: string
+  compte_label: string
+  categorie: string
+  nature: string
+  sens_normal: 'debit' | 'credit'
+  rubrique: string
+  periode: { debut: string; fin: string }
+  lignes: GrandLivreLigne[]
+  total_debit_xaf: number
+  total_credit_xaf: number
+  solde_final_xaf: number
+  solde_sens: string
+}
+
+export interface RapportSectionCompte {
+  compte: string
+  compte_label: string
+  montant_xaf: number
+}
+
+export interface RapportSection {
+  rubrique: string
+  total_xaf: number
+  comptes: RapportSectionCompte[]
+}
+
+export interface BilanComptableResponse {
+  exercice: string
+  periode: { debut: string; fin: string }
+  actif: RapportSection[]
+  passif: RapportSection[]
+  resultat_exercice_xaf: number
+  total_actif_xaf: number
+  total_passif_xaf: number
+  ecart_xaf: number
+  equilibre: boolean
+}
+
+export interface ResultatAnalytiqueResponse {
+  exercice: string
+  periode: { debut: string; fin: string }
+  produits: RapportSection[]
+  charges: RapportSection[]
+  total_produits_xaf: number
+  total_charges_xaf: number
+  resultat_net_xaf: number
+  beneficiaire: boolean
+  finance: {
+    ca_facture_ht_xaf: number
+    tva_facturee_xaf: number
+    ca_facture_ttc_xaf: number
+    encaisse_xaf: number
+    reste_a_encaisser_xaf: number
+    ecart_ca_comptable_vs_facture_ht_xaf: number
+  }
+}
+
+export interface SyntheseComptableResponse {
+  exercice: string
+  periode: { debut: string; fin: string }
+  comptabilite: {
+    comptes_mouvementes: number
+    total_debit_xaf: number
+    total_credit_xaf: number
+    balance_equilibree: boolean
+    total_actif_xaf: number
+    total_passif_xaf: number
+    resultat_net_xaf: number
+  }
+  finance: {
+    factures: number
+    ca_facture_ht_xaf: number
+    tva_facturee_xaf: number
+    ca_facture_ttc_xaf: number
+    encaisse_xaf: number
+    reste_a_encaisser_xaf: number
+  }
+  rapprochement: {
+    ca_comptable_xaf: number
+    ca_facture_ht_xaf: number
+    ecart_ca_xaf: number
+  }
+  exports: { label: string; endpoint: string }[]
+}
+
+export interface ControleComptable {
+  code: string
+  label: string
+  statut: 'ok' | 'attention' | 'alerte'
+  details: string
+  ecart_xaf: number
+}
+
+export interface ControlesComptablesResponse {
+  exercice: string
+  periode: { debut: string; fin: string }
+  statut_global: 'ok' | 'attention' | 'alerte'
+  controles: ControleComptable[]
+  comptes_inconnus: {
+    compte: string
+    compte_label: string
+    total_debit_xaf: number
+    total_credit_xaf: number
+  }[]
+  recommandations: string[]
+}
+
+export interface ClotureComptableResponse {
+  exercice: string
+  periode: { debut: string; fin: string }
+  statut: 'pret' | 'pret_avec_reserves' | 'bloque'
+  cloturable: boolean
+  etapes: {
+    code: string
+    label: string
+    statut: 'ok' | 'a_revoir' | 'bloquant'
+    details: string
+  }[]
+  resume: {
+    comptes_mouvementes: number
+    total_debit_xaf: number
+    total_credit_xaf: number
+    resultat_net_xaf: number
+    ca_facture_ht_xaf: number
+    encaisse_xaf: number
+    reste_a_encaisser_xaf: number
+  }
+  actions_recommandees: string[]
+}
+
 interface FacturesResponse { data: Facture[]; total: number }
 interface CreditsResponse { data: Credit[]; total: number }
 interface EcrituresResponse { data: EcritureLigne[]; total: number }
+interface PlanComptableResponse { total: number; comptes: PlanCompte[]; classes: { classe: number; label: string }[] }
+interface JournauxComptablesResponse { data: JournalComptable[]; regles: string[] }
 
 export interface FinanceDashboard {
   kpis: {
@@ -64,12 +226,40 @@ export interface FinanceDashboard {
     factures_total: number
     factures_brouillon: number
     factures_a_relancer: number
+    factures_en_retard: number
+    montant_retard_xaf: number
     credits_ouverts: number
     credits_solde_xaf: number
   }
   repartition_factures: { statut: string; count: number }[]
+  factures_en_retard: {
+    id: string
+    numero: string
+    client_nom: string
+    date_echeance: string
+    solde_restant_xaf: number
+  }[]
+  top_clients_debiteurs: {
+    client_id: string | null
+    client_nom: string
+    solde_xaf: number
+    factures: number
+  }[]
   dernieres_ecritures: EcritureLigne[]
 }
+
+export interface DeclarationFiscale {
+  id: string
+  type: string
+  periode: string
+  statut: 'a_declarer' | 'soumis' | 'valide'
+  montant_xaf: number
+  echeance: string
+  soumis_le?: string | null
+  notes?: string | null
+}
+
+interface DeclarationsResponse { data: DeclarationFiscale[]; total: number }
 
 function queryString(params?: Record<string, string | undefined>) {
   const qs = new URLSearchParams()
@@ -94,6 +284,7 @@ function mapFacture(row: Record<string, unknown>): Facture {
     date_echeance:     row.date_echeance as string,
     montant_ht_xaf:    Number(row.total_ht_xaf ?? row.montant_ht_xaf ?? 0),
     montant_tva_xaf:   Number(row.tva_xaf ?? row.montant_tva_xaf ?? 0),
+    frais_livraison_xaf: Number(row.frais_livraison_xaf ?? 0),
     montant_ttc_xaf:   ttc,
     montant_paye_xaf:  paye,
     solde_restant_xaf: Number(row.solde_restant_xaf ?? Math.max(0, ttc - paye)),
@@ -239,11 +430,110 @@ export function useEcritures(params?: { compte?: string; mois?: string }) {
   })
 }
 
+export function usePlanComptable(params?: { classe?: string }) {
+  return useQuery({
+    queryKey: ['plan-comptable', params],
+    queryFn: () => apiClient.get<PlanComptableResponse>(`/api/rapports/plan-comptable${queryString(params)}`),
+    staleTime: 60_000,
+  })
+}
+
+export function useJournauxComptables() {
+  return useQuery({
+    queryKey: ['journaux-comptables'],
+    queryFn: () => apiClient.get<JournauxComptablesResponse>('/api/rapports/journaux-comptables'),
+    staleTime: 60_000,
+  })
+}
+
+export function useGrandLivre(params?: { compte?: string; debut?: string; fin?: string; exercice?: string }) {
+  return useQuery({
+    queryKey: ['grand-livre', params],
+    queryFn: () => apiClient.get<GrandLivreResponse>(`/api/rapports/grand-livre${queryString(params)}`),
+    enabled: Boolean(params?.compte),
+    staleTime: 60_000,
+  })
+}
+
+export function useBilanComptable(params?: { exercice?: string }) {
+  return useQuery({
+    queryKey: ['bilan-comptable', params],
+    queryFn: () => apiClient.get<BilanComptableResponse>(`/api/rapports/bilan${queryString(params)}`),
+    staleTime: 60_000,
+  })
+}
+
+export function useResultatAnalytique(params?: { exercice?: string }) {
+  return useQuery({
+    queryKey: ['resultat-analytique', params],
+    queryFn: () => apiClient.get<ResultatAnalytiqueResponse>(`/api/rapports/resultat${queryString(params)}`),
+    staleTime: 60_000,
+  })
+}
+
+export function useSyntheseComptable(params?: { exercice?: string }) {
+  return useQuery({
+    queryKey: ['synthese-comptable', params],
+    queryFn: () => apiClient.get<SyntheseComptableResponse>(`/api/rapports/synthese${queryString(params)}`),
+    staleTime: 60_000,
+  })
+}
+
+export function useControlesComptables(params?: { exercice?: string }) {
+  return useQuery({
+    queryKey: ['controles-comptables', params],
+    queryFn: () => apiClient.get<ControlesComptablesResponse>(`/api/rapports/controles${queryString(params)}`),
+    staleTime: 60_000,
+  })
+}
+
+export function useClotureComptable(params?: { exercice?: string }) {
+  return useQuery({
+    queryKey: ['cloture-comptable', params],
+    queryFn: () => apiClient.get<ClotureComptableResponse>(`/api/rapports/cloture${queryString(params)}`),
+    staleTime: 60_000,
+  })
+}
+
 export function useFinanceDashboard() {
   return useQuery({
     queryKey: ['finance', 'dashboard'],
     queryFn: () => apiClient.get<FinanceDashboard>('/api/finance/dashboard'),
     staleTime: 30_000,
+  })
+}
+
+export function useDeclarationsFiscales(params?: { type?: string; statut?: string }) {
+  return useQuery({
+    queryKey: ['declarations-fiscales', params],
+    queryFn: () => apiClient.get<DeclarationsResponse>(`/api/declarations-fiscales${queryString(params)}`),
+    staleTime: 30_000,
+  })
+}
+
+export function usePreparerDeclarationTva() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: { periode: string; notes?: string }) =>
+      apiClient.post('/api/declarations-fiscales/tva/preparer', payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['declarations-fiscales'] })
+      toast.success('Déclaration TVA préparée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateStatutDeclaration() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, statut }: { id: string; statut: DeclarationFiscale['statut'] }) =>
+      apiClient.patch(`/api/declarations-fiscales/${id}/statut`, { statut }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['declarations-fiscales'] })
+      toast.success('Statut fiscal mis à jour')
+    },
+    onError: (err: Error) => toast.error(err.message),
   })
 }
 
@@ -275,6 +565,17 @@ export function usePaiementFacture() {
       void qc.invalidateQueries({ queryKey: ['ecritures'] })
       toast.success('Paiement facture enregistre')
     },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useRelanceFacture() {
+  return useMutation({
+    mutationFn: (payload: { id: string; message?: string }) =>
+      apiClient.post<{ url: string; telephone: string | null; message: string; solde_restant_xaf: number }>(
+        `/api/factures/${payload.id}/relance`,
+        { message: payload.message },
+      ),
     onError: (err: Error) => toast.error(err.message),
   })
 }

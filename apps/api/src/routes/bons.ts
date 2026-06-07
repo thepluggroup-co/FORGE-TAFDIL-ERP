@@ -223,7 +223,7 @@ router.put(
           .from('bons_sortie').select('statut, demandeur, numero, created_by').eq('id', id).single()
 
         if (!existing) throw Object.assign(new Error('Bon introuvable'), { code: 'NOT_FOUND', httpStatus: 404 })
-        if ((existing as { statut: string }).statut !== 'soumis')
+        if (!['en_attente', 'soumis'].includes((existing as { statut: string }).statut))
           throw Object.assign(
             new Error(`Impossible de valider un bon en statut "${(existing as { statut: string }).statut}"`),
             { code: 'INVALID_TRANSITION', httpStatus: 422 },

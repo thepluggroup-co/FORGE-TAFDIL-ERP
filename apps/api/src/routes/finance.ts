@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
@@ -6,12 +6,13 @@ import { supabaseAdmin } from '@forge/db'
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import { generateFacturePDF, generateRecuPDF, uploadPDF } from '../services/pdf.service'
-import { genererEcritureVente, genererEcritureEncaissement } from '../services/comptabilite.service'
+import { genererEcritureVente, genererEcritureEncaissement, planComptable } from '../services/comptabilite.service'
 import { getFacturesLocal, getCreditsLocal, localCreateFacture, localCreateCredit, localRembourser } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
+type FinanceContext = Context<{ Variables: HonoVariables }>
 const TVA_RATE = 0.1925
 
 function xaf(n: number): string {
@@ -73,9 +74,37 @@ const ecritureSchema = z.object({
   commande_id:      z.string().optional(),
 })
 
+const journalSchema = z.object({
+  date:          z.string(),
+  journal:       z.enum(['VT', 'BQ', 'CA', 'AC', 'OD']).default('OD'),
+  libelle:       z.string().min(1),
+  reference_doc: z.string().optional(),
+  facture_id:    z.string().optional(),
+  commande_id:   z.string().optional(),
+  lignes: z.array(z.object({
+    compte_syscohada: z.string().min(2),
+    debit_xaf:        z.number().min(0).default(0),
+    credit_xaf:       z.number().min(0).default(0),
+  })).min(2),
+})
+
 const whatsappSchema = z.object({
   phone:   z.string().min(8),
   message: z.string().optional(),
+})
+
+const relanceFactureSchema = z.object({
+  message: z.string().optional(),
+})
+
+const declarationStatutSchema = z.object({
+  statut: z.enum(['a_declarer', 'soumis', 'valide']),
+  notes:  z.string().optional(),
+})
+
+const preparerTvaSchema = z.object({
+  periode: z.string().regex(/^\d{4}-\d{2}$/),
+  notes:   z.string().optional(),
 })
 
 // ── Helpers financiers ─────────────────────────────────────────────────────────
@@ -146,13 +175,115 @@ function enrichirFacture(f: any): any {
   return { ...f, solde_restant_xaf: Math.round(solde) }
 }
 
+type PlanEntry = { compte: string; libelle: string; classe: number }
+const PLAN_COMPTABLE = planComptable as PlanEntry[]
+
+function findCompte(compte: string) {
+  return PLAN_COMPTABLE.find((p) => p.compte === compte)
+}
+
+function validateDebitCredit(debit: number, credit: number) {
+  return !((debit <= 0 && credit <= 0) || (debit > 0 && credit > 0))
+}
+
+function periodeRange(periode: string) {
+  const [year, month] = periode.split('-').map(Number)
+  const start = `${year}-${String(month).padStart(2, '0')}-01`
+  const nextMonth = month === 12 ? 1 : month + 1
+  const nextYear = month === 12 ? year + 1 : year
+  const endDate = new Date(Date.UTC(nextYear, nextMonth - 1, 0)).toISOString().slice(0, 10)
+  return { start, end: endDate, year, month }
+}
+
+function defaultDateRange(c: FinanceContext) {
+  const now = new Date()
+  const first = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10)
+  const today = now.toISOString().slice(0, 10)
+  return {
+    from: c.req.query('from') ?? first,
+    to:   c.req.query('to') ?? today,
+  }
+}
+
+function escapeXml(value: unknown) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function xlsResponse(c: FinanceContext, filename: string, html: string) {
+  c.header('Content-Type', 'application/vnd.ms-excel; charset=utf-8')
+  c.header('Content-Disposition', `attachment; filename="${filename}"`)
+  c.header('Cache-Control', 'no-store')
+  return c.body('\ufeff' + html)
+}
+
+function tableHtml(title: string, headers: string[], rows: Array<Array<string | number>>) {
+  return `
+    <h2>${escapeXml(title)}</h2>
+    <table border="1">
+      <thead><tr>${headers.map((h) => `<th>${escapeXml(h)}</th>`).join('')}</tr></thead>
+      <tbody>
+        ${rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeXml(cell)}</td>`).join('')}</tr>`).join('')}
+      </tbody>
+    </table>
+  `
+}
+
+async function getFacturesPeriode(from: string, to: string) {
+  const { data, error } = await db
+    .from('factures')
+    .select('id, numero, client_nom, statut, date_emission, date_echeance, total_ht_xaf, tva_xaf, frais_livraison_xaf, total_ttc_xaf, montant_paye_xaf')
+    .neq('statut', 'annule')
+    .gte('date_emission', from)
+    .lte('date_emission', to)
+    .order('date_emission', { ascending: true })
+
+  if (error) throw new Error(error.message)
+  return (data ?? []) as Array<{
+    id: string
+    numero: string
+    client_nom: string
+    statut: string
+    date_emission: string
+    date_echeance: string
+    total_ht_xaf: number
+    tva_xaf: number
+    frais_livraison_xaf?: number | null
+    total_ttc_xaf: number
+    montant_paye_xaf: number
+  }>
+}
+
+function calculerIndicateursFinance(factures: Awaited<ReturnType<typeof getFacturesPeriode>>) {
+  const today = new Date().toISOString().slice(0, 10)
+  const caFacture = factures.reduce((s, f) => s + Number(f.total_ttc_xaf ?? 0), 0)
+  const encaisse = factures.reduce((s, f) => s + Number(f.montant_paye_xaf ?? 0), 0)
+  const reste = factures.reduce((s, f) => s + Math.max(0, Number(f.total_ttc_xaf ?? 0) - Number(f.montant_paye_xaf ?? 0)), 0)
+  const enRetard = factures.filter((f) =>
+    !['paye', 'annule'].includes(f.statut) &&
+    f.date_echeance < today &&
+    Number(f.total_ttc_xaf ?? 0) > Number(f.montant_paye_xaf ?? 0),
+  )
+
+  return {
+    ca_facture_xaf: Math.round(caFacture),
+    encaisse_xaf:   Math.round(encaisse),
+    reste_a_encaisser_xaf: Math.round(reste),
+    factures_en_retard: enRetard.length,
+    montant_retard_xaf: Math.round(enRetard.reduce((s, f) => s + Math.max(0, Number(f.total_ttc_xaf ?? 0) - Number(f.montant_paye_xaf ?? 0)), 0)),
+  }
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // FACTURES
 // ══════════════════════════════════════════════════════════════════════════════
 
 router.get('/finance/dashboard', requireRole(['admin', 'superviseur']), async (c) => {
   const [facturesRes, creditsRes, ecrituresRes] = await Promise.all([
-    db.from('factures').select('id,numero,client_nom,statut,total_ttc_xaf,montant_paye_xaf,date_emission,created_at').neq('statut', 'annule'),
+    db.from('factures').select('id,numero,client_id,client_nom,statut,total_ttc_xaf,montant_paye_xaf,date_emission,date_echeance,created_at').neq('statut', 'annule'),
     db.from('credits').select('id,statut,solde_restant_xaf').neq('statut', 'rembourse'),
     db.from('ecritures_comptables').select('*').order('date', { ascending: false }).limit(200),
   ])
@@ -161,7 +292,17 @@ router.get('/finance/dashboard', requireRole(['admin', 'superviseur']), async (c
   if (creditsRes.error) return c.json({ error: creditsRes.error.message }, 500)
   if (ecrituresRes.error) return c.json({ error: ecrituresRes.error.message }, 500)
 
-  type Fact = { statut: string; total_ttc_xaf: number; montant_paye_xaf: number }
+  type Fact = {
+    id: string
+    numero: string
+    client_id?: string | null
+    client_nom: string
+    statut: string
+    total_ttc_xaf: number
+    montant_paye_xaf: number
+    date_emission?: string | null
+    date_echeance?: string | null
+  }
   type Credit = { solde_restant_xaf: number }
   type Ecriture = { compte_syscohada: string; debit_xaf: number; credit_xaf: number }
 
@@ -172,6 +313,28 @@ router.get('/finance/dashboard', requireRole(['admin', 'superviseur']), async (c
   const encaisse = factures.reduce((s, f) => s + Number(f.montant_paye_xaf ?? 0), 0)
   const aRecevoir = factures.reduce((s, f) => s + Math.max(0, Number(f.total_ttc_xaf ?? 0) - Number(f.montant_paye_xaf ?? 0)), 0)
   const aRelancer = factures.filter((f) => ['valide', 'envoye'].includes(f.statut) && Number(f.total_ttc_xaf ?? 0) > Number(f.montant_paye_xaf ?? 0))
+  const today = new Date().toISOString().slice(0, 10)
+  const enRetard = factures.filter((f) =>
+    !['paye', 'annule'].includes(f.statut) &&
+    Boolean(f.date_echeance) &&
+    String(f.date_echeance) < today &&
+    Number(f.total_ttc_xaf ?? 0) > Number(f.montant_paye_xaf ?? 0),
+  )
+  const topClientsMap = new Map<string, { client_id: string | null; client_nom: string; solde_xaf: number; factures: number }>()
+  for (const facture of factures) {
+    const solde = Math.max(0, Number(facture.total_ttc_xaf ?? 0) - Number(facture.montant_paye_xaf ?? 0))
+    if (solde <= 0) continue
+    const key = facture.client_id ?? facture.client_nom
+    const row = topClientsMap.get(key) ?? {
+      client_id: facture.client_id ?? null,
+      client_nom: facture.client_nom,
+      solde_xaf: 0,
+      factures: 0,
+    }
+    row.solde_xaf += solde
+    row.factures += 1
+    topClientsMap.set(key, row)
+  }
   const brouillons = factures.filter((f) => f.statut === 'brouillon')
   const banqueCaisse = ecritures
     .filter((e) => ['521', '571'].includes(e.compte_syscohada))
@@ -187,6 +350,8 @@ router.get('/finance/dashboard', requireRole(['admin', 'superviseur']), async (c
       factures_total:      factures.length,
       factures_brouillon:  brouillons.length,
       factures_a_relancer: aRelancer.length,
+      factures_en_retard:  enRetard.length,
+      montant_retard_xaf:  Math.round(enRetard.reduce((s, f) => s + Math.max(0, Number(f.total_ttc_xaf ?? 0) - Number(f.montant_paye_xaf ?? 0)), 0)),
       credits_ouverts:     credits.length,
       credits_solde_xaf:   Math.round(credits.reduce((s, credit) => s + Number(credit.solde_restant_xaf ?? 0), 0)),
     },
@@ -194,8 +359,181 @@ router.get('/finance/dashboard', requireRole(['admin', 'superviseur']), async (c
       statut,
       count: factures.filter((f) => f.statut === statut).length,
     })),
+    factures_en_retard: enRetard
+      .map((f) => ({
+        id: f.id,
+        numero: f.numero,
+        client_nom: f.client_nom,
+        date_echeance: f.date_echeance,
+        solde_restant_xaf: Math.round(Math.max(0, Number(f.total_ttc_xaf ?? 0) - Number(f.montant_paye_xaf ?? 0))),
+      }))
+      .sort((a, b) => String(a.date_echeance).localeCompare(String(b.date_echeance)))
+      .slice(0, 8),
+    top_clients_debiteurs: Array.from(topClientsMap.values())
+      .map((row) => ({ ...row, solde_xaf: Math.round(row.solde_xaf) }))
+      .sort((a, b) => b.solde_xaf - a.solde_xaf)
+      .slice(0, 8),
     dernieres_ecritures: ecrituresRes.data ?? [],
   })
+})
+
+router.get('/finance/indicateurs', requireRole(['admin', 'superviseur']), async (c) => {
+  const { from, to } = defaultDateRange(c)
+  try {
+    const factures = await getFacturesPeriode(from, to)
+    return c.json({ periode: { from, to }, ...calculerIndicateursFinance(factures) })
+  } catch (error) {
+    return c.json({ error: (error as Error).message }, 500)
+  }
+})
+
+router.get('/declarations-fiscales', requireRole(['admin', 'superviseur']), async (c) => {
+  const { type, statut } = c.req.query()
+  let q = db.from('declarations_fiscales').select('*', { count: 'exact' })
+  if (type) q = q.eq('type', type)
+  if (statut) q = q.eq('statut', statut)
+
+  const { data, count, error } = await q.order('periode', { ascending: false })
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data: data ?? [], total: count ?? 0 })
+})
+
+router.post('/declarations-fiscales/tva/preparer', requireRole(['admin']), zValidator('json', preparerTvaSchema), async (c) => {
+  const body = c.req.valid('json')
+  const { start, end, year, month } = periodeRange(body.periode)
+  const echeance = new Date(Date.UTC(month === 12 ? year + 1 : year, month === 12 ? 0 : month, 15)).toISOString().slice(0, 10)
+
+  try {
+    const factures = await getFacturesPeriode(start, end)
+    const montantTva = Math.round(factures.reduce((s, f) => s + Number(f.tva_xaf ?? 0), 0))
+    const indicateurs = calculerIndicateursFinance(factures)
+
+    const { data, error } = await db
+      .from('declarations_fiscales')
+      .upsert({
+        type:        'TVA',
+        periode:     body.periode,
+        statut:      'a_declarer',
+        montant_xaf: montantTva,
+        echeance,
+        notes:       body.notes ?? `TVA calculee sur ${factures.length} facture(s), du ${start} au ${end}.`,
+        updated_at:  new Date().toISOString(),
+        sync_status: 'synced',
+      }, { onConflict: 'type,periode' })
+      .select()
+      .single()
+
+    if (error) return c.json({ error: error.message }, 500)
+    return c.json({ data, periode: { from: start, to: end }, indicateurs }, 201)
+  } catch (error) {
+    return c.json({ error: (error as Error).message }, 500)
+  }
+})
+
+router.patch('/declarations-fiscales/:id/statut', requireRole(['admin']), zValidator('json', declarationStatutSchema), async (c) => {
+  const { id } = c.req.param()
+  const user = c.get('user')
+  const body = c.req.valid('json')
+
+  const updates: Record<string, unknown> = {
+    statut:     body.statut,
+    notes:      body.notes,
+    updated_at: new Date().toISOString(),
+  }
+  if (body.statut === 'soumis') updates.soumis_le = new Date().toISOString()
+  if (body.statut === 'valide') updates.valide_by = user.id
+
+  const { data, error } = await db
+    .from('declarations_fiscales')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single()
+
+  if (error) return c.json({ error: error.message }, 400)
+  return c.json(data)
+})
+
+router.get('/finance/exports/indicateurs.xls', requireRole(['admin', 'superviseur']), async (c) => {
+  const { from, to } = defaultDateRange(c)
+  try {
+    const factures = await getFacturesPeriode(from, to)
+    const indicateurs = calculerIndicateursFinance(factures)
+    const rows = factures.map((f) => {
+      const solde = Math.max(0, Number(f.total_ttc_xaf ?? 0) - Number(f.montant_paye_xaf ?? 0))
+      const retard = f.date_echeance < new Date().toISOString().slice(0, 10) && solde > 0 && f.statut !== 'paye'
+      return [
+        f.numero,
+        f.client_nom,
+        f.statut,
+        f.date_emission,
+        f.date_echeance,
+        Math.round(Number(f.total_ht_xaf ?? 0)),
+        Math.round(Number(f.tva_xaf ?? 0)),
+        Math.round(Number(f.frais_livraison_xaf ?? 0)),
+        Math.round(Number(f.total_ttc_xaf ?? 0)),
+        Math.round(Number(f.montant_paye_xaf ?? 0)),
+        Math.round(solde),
+        retard ? 'Oui' : 'Non',
+      ]
+    })
+
+    const html = `
+      <html><head><meta charset="utf-8" /></head><body>
+        <h1>Rapport Finance - Indicateurs</h1>
+        <p>Periode : ${escapeXml(from)} au ${escapeXml(to)} | Devise : XAF | Genere le : ${escapeXml(new Date().toISOString().slice(0, 10))}</p>
+        ${tableHtml('Resume', ['Indicateur', 'Description', 'Valeur'], [
+          ['Chiffre d’affaires facture', 'Total TTC des factures non annulees sur la periode', indicateurs.ca_facture_xaf],
+          ['Chiffre d’affaires encaisse', 'Somme des montants payes sur ces factures', indicateurs.encaisse_xaf],
+          ['Reste a encaisser', 'Total TTC moins montant deja paye', indicateurs.reste_a_encaisser_xaf],
+          ['Factures en retard', 'Factures non payees dont echeance depassee', indicateurs.factures_en_retard],
+          ['Montant en retard', 'Solde restant des factures en retard', indicateurs.montant_retard_xaf],
+        ])}
+        ${tableHtml('Detail factures', ['Numero', 'Client', 'Statut', 'Emission', 'Echeance', 'HT produits', 'TVA', 'Livraison hors TVA', 'TTC', 'Encaisse', 'Reste', 'En retard'], rows)}
+      </body></html>
+    `
+    return xlsResponse(c, `rapport-finance-${from}-${to}.xls`, html)
+  } catch (error) {
+    return c.json({ error: (error as Error).message }, 500)
+  }
+})
+
+router.get('/finance/exports/tva.xls', requireRole(['admin', 'superviseur']), async (c) => {
+  const periode = c.req.query('periode') ?? new Date().toISOString().slice(0, 7)
+  const { start, end } = periodeRange(periode)
+  try {
+    const factures = await getFacturesPeriode(start, end)
+    const totalHt = Math.round(factures.reduce((s, f) => s + Number(f.total_ht_xaf ?? 0), 0))
+    const totalTva = Math.round(factures.reduce((s, f) => s + Number(f.tva_xaf ?? 0), 0))
+    const totalLivraison = Math.round(factures.reduce((s, f) => s + Number(f.frais_livraison_xaf ?? 0), 0))
+    const totalTtc = Math.round(factures.reduce((s, f) => s + Number(f.total_ttc_xaf ?? 0), 0))
+
+    const html = `
+      <html><head><meta charset="utf-8" /></head><body>
+        <h1>Rapport TVA</h1>
+        <p>Periode fiscale : ${escapeXml(periode)} | Du ${escapeXml(start)} au ${escapeXml(end)} | Taux : 19,25 %</p>
+        ${tableHtml('Resume TVA', ['Rubrique', 'Annotation', 'Montant XAF'], [
+          ['Base taxable HT', 'Somme des produits/prestations HT factures', totalHt],
+          ['TVA collectee', 'TVA calculee uniquement sur la base taxable HT', totalTva],
+          ['Livraison hors TVA', 'Frais de livraison ajoutes apres TVA', totalLivraison],
+          ['Total TTC facture', 'HT + TVA + livraison', totalTtc],
+        ])}
+        ${tableHtml('Detail TVA par facture', ['Numero', 'Client', 'Emission', 'Statut', 'Base HT', 'TVA', 'Livraison hors TVA', 'TTC'], factures.map((f) => [
+          f.numero,
+          f.client_nom,
+          f.date_emission,
+          f.statut,
+          Math.round(Number(f.total_ht_xaf ?? 0)),
+          Math.round(Number(f.tva_xaf ?? 0)),
+          Math.round(Number(f.frais_livraison_xaf ?? 0)),
+          Math.round(Number(f.total_ttc_xaf ?? 0)),
+        ]))}
+      </body></html>
+    `
+    return xlsResponse(c, `rapport-tva-${periode}.xls`, html)
+  } catch (error) {
+    return c.json({ error: (error as Error).message }, 500)
+  }
 })
 
 router.get('/factures', async (c) => {
@@ -519,6 +857,62 @@ router.post('/factures/:id/whatsapp', requireRole(['admin']), zValidator('json',
 // ══════════════════════════════════════════════════════════════════════════════
 // CRÉDITS
 // ══════════════════════════════════════════════════════════════════════════════
+
+router.post('/factures/:id/relance', requireRole(['admin', 'superviseur']), zValidator('json', relanceFactureSchema), async (c) => {
+  const { id } = c.req.param()
+  const user = c.get('user')
+  const body = c.req.valid('json')
+
+  const { data: facture, error } = await db
+    .from('factures')
+    .select('id, numero, client_id, client_nom, total_ttc_xaf, montant_paye_xaf, date_echeance, statut')
+    .eq('id', id)
+    .single()
+
+  if (error || !facture) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
+
+  const f = facture as {
+    id: string
+    numero: string
+    client_id: string | null
+    client_nom: string
+    total_ttc_xaf: number
+    montant_paye_xaf: number
+    date_echeance: string
+    statut: string
+  }
+
+  if (['paye', 'annule'].includes(f.statut)) {
+    return c.json({ error: 'Cette facture ne necessite pas de relance', code: 'RELANCE_NOT_ALLOWED' }, 422)
+  }
+
+  let telephone: string | null = null
+  if (f.client_id) {
+    const { data: client } = await db.from('clients').select('telephone').eq('id', f.client_id).maybeSingle()
+    telephone = (client as { telephone?: string | null } | null)?.telephone ?? null
+  }
+
+  const solde = Math.max(0, Number(f.total_ttc_xaf ?? 0) - Number(f.montant_paye_xaf ?? 0))
+  const message = body.message ??
+    `Bonjour ${f.client_nom},\n\nNous vous relancons concernant la facture TAFDIL ${f.numero}.\nMontant restant a regler : ${xaf(solde)}.\nEcheance : ${f.date_echeance}.\n\nMerci de proceder au reglement ou de nous contacter en cas de besoin.\n\nTAFDIL SARL`
+
+  const encoded = encodeURIComponent(message)
+  const waUrl = telephone
+    ? `https://wa.me/${telephone.replace(/\D/g, '')}?text=${encoded}`
+    : `https://wa.me/?text=${encoded}`
+
+  const { error: relanceError } = await db.from('relances_factures').insert({
+    facture_id:  f.id,
+    client_id:   f.client_id,
+    canal:       'whatsapp',
+    message,
+    statut:      'preparee',
+    relance_par: user.id,
+  })
+  if (relanceError) console.error('[finance] relance facture:', relanceError)
+
+  return c.json({ url: waUrl, telephone, message, solde_restant_xaf: Math.round(solde) })
+})
 
 router.get('/credits/alertes', async (c) => {
   // Auto-échoir les crédits dépassés avant de renvoyer les alertes
@@ -893,9 +1287,16 @@ router.post('/ecritures', requireRole(['admin']), zValidator('json', ecritureSch
   // Vérification équilibre débit/crédit non requise ici (écriture unique)
   // L'équilibre est vérifié au niveau du journal comptable (rapport bilan)
 
+  if (!validateDebitCredit(body.debit_xaf, body.credit_xaf)) {
+    return c.json({ error: 'Une ligne doit porter soit un debit soit un credit, pas les deux', code: 'INVALID_ENTRY' }, 422)
+  }
+
+  const compte = findCompte(body.compte_syscohada)
+  if (!compte) return c.json({ error: 'Compte inexistant dans le plan comptable', code: 'UNKNOWN_ACCOUNT' }, 422)
+
   const { data, error } = await db
     .from('ecritures_comptables')
-    .insert({ ...body, created_by: user.id, sync_status: 'synced' })
+    .insert({ ...body, compte_label: compte.libelle, created_by: user.id, sync_status: 'synced' })
     .select().single()
 
   if (error) return c.json({ error: error.message, code: error.code }, 400)
@@ -905,6 +1306,68 @@ router.post('/ecritures', requireRole(['admin']), zValidator('json', ecritureSch
 // ══════════════════════════════════════════════════════════════════════════════
 // RAPPORTS SYSCOHADA
 // ══════════════════════════════════════════════════════════════════════════════
+
+router.post('/ecritures/journal', requireRole(['admin']), zValidator('json', journalSchema), async (c) => {
+  const user = c.get('user')
+  const body = c.req.valid('json')
+  const totalDebit = body.lignes.reduce((sum, ligne) => sum + Number(ligne.debit_xaf ?? 0), 0)
+  const totalCredit = body.lignes.reduce((sum, ligne) => sum + Number(ligne.credit_xaf ?? 0), 0)
+
+  if (Math.abs(totalDebit - totalCredit) > 1) {
+    return c.json({
+      error: 'Piece comptable non equilibree : total debit different du total credit',
+      code: 'UNBALANCED_ENTRY',
+      total_debit_xaf: Math.round(totalDebit),
+      total_credit_xaf: Math.round(totalCredit),
+    }, 422)
+  }
+
+  const reference = body.reference_doc ?? `${body.journal}-${Date.now()}`
+  const lignes: Array<Record<string, unknown>> = []
+
+  for (const ligne of body.lignes) {
+    if (!validateDebitCredit(ligne.debit_xaf, ligne.credit_xaf)) {
+      return c.json({ error: 'Chaque ligne doit porter soit un debit soit un credit, pas les deux', code: 'INVALID_ENTRY' }, 422)
+    }
+
+    const compte = findCompte(ligne.compte_syscohada)
+    if (!compte) {
+      return c.json({
+        error: `Compte ${ligne.compte_syscohada} inexistant dans le plan comptable`,
+        code: 'UNKNOWN_ACCOUNT',
+      }, 422)
+    }
+
+    lignes.push({
+      date: body.date,
+      libelle: `[${body.journal}] ${body.libelle}`,
+      compte_syscohada: ligne.compte_syscohada,
+      compte_label: compte.libelle,
+      debit_xaf: ligne.debit_xaf,
+      credit_xaf: ligne.credit_xaf,
+      reference_doc: reference,
+      facture_id: body.facture_id ?? null,
+      commande_id: body.commande_id ?? null,
+      created_by: user.id,
+      sync_status: 'synced',
+    })
+  }
+
+  const { data, error } = await db
+    .from('ecritures_comptables')
+    .insert(lignes)
+    .select()
+
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+
+  return c.json({
+    data: data ?? [],
+    total_lignes: lignes.length,
+    total_debit_xaf: Math.round(totalDebit),
+    total_credit_xaf: Math.round(totalCredit),
+    equilibre: true,
+  }, 201)
+})
 
 router.get('/rapports/bilan', requireRole(['admin', 'superviseur']), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())

@@ -17,6 +17,24 @@ import { useDevisWeb, useCreerDevisErp, useChangerStatutDevisWeb } from '@/hooks
 import type { DevisWeb } from '@/hooks/useDevisWeb'
 import { useShopAnalytics } from '@/hooks/useShopAnalytics'
 
+// ── Savoir-faire TAFDIL — pour filtre devis ───────────────────────────────────
+
+const TYPES_PROJET_LABELS = [
+  'Charpente / Hangar métallique',
+  'Tuyauterie industrielle',
+  'Citerne / Bac de stockage',
+  'Panneau publicitaire / Kiosque',
+  'Portail / Grilles / Ferronnerie',
+  'Carrosserie Plateau Camion',
+  'Auvent / Couverture métallique',
+  'Menuiserie métallique',
+  'Mécanosoudure / Tôlerie',
+  'Aménagement / Bâtiment',
+  'Fournitures industrielles',
+  'Produit du catalogue',
+  'Autre / Je ne sais pas',
+]
+
 // ── Tab type ───────────────────────────────────────────────────────────────────
 
 type Tab = 'catalogue' | 'commandes' | 'devis'
@@ -315,6 +333,7 @@ export default function Boutique() {
   const [tab, setTab]                     = useState<Tab>('catalogue')
   const [editProduit, setEditProduit]     = useState<ProduitShopErp | null>(null)
   const [selectedCommande, setSelectedCommande] = useState<CommandeShop | null>(null)
+  const [filtreType, setFiltreType]       = useState<string>('')
 
   const { data: analytics }                   = useShopAnalytics()
   const { data: produits, isLoading: pLoad }  = useProduitsShop()
@@ -328,6 +347,9 @@ export default function Boutique() {
   const produitsList = produits ?? []
   const commandes = shopData?.data ?? []
   const devisList = devisData ?? []
+  const devisFiltres = filtreType
+    ? devisList.filter((d: DevisWeb) => d.type_projet === filtreType)
+    : devisList
 
   // ── Colonnes produits ──────────────────────────────────────────────────────
 
@@ -416,6 +438,11 @@ export default function Boutique() {
         <div className="text-xs text-gray-400">{row.telephone}</div>
       </div>
     )},
+    { id: 'type_projet', header: 'Type de projet', accessor: 'type_projet', render: (v) =>
+      v
+        ? <span className="inline-block max-w-[180px] truncate text-xs font-medium bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full" title={v as string}>{v as string}</span>
+        : <span className="text-xs text-gray-300 italic">—</span>
+    },
     { id: 'description', header: 'Demande', accessor: 'description', render: (v) => <span className="text-sm text-gray-600 line-clamp-2">{v as string}</span> },
     { id: 'statut', header: 'Statut', accessor: 'statut', render: (v) => {
       const s = STATUT_DEVIS_MAP[v as string] ?? { label: v as string, color: '#6b7280', bg: '#f3f4f6' }
@@ -471,7 +498,7 @@ export default function Boutique() {
   const TABS = [
     { id: 'catalogue' as Tab, label: 'Catalogue', icon: Package, count: produitsList.length },
     { id: 'commandes' as Tab, label: 'Commandes web', icon: ShoppingBag, count: commandes.length },
-    { id: 'devis' as Tab, label: 'Demandes devis', icon: FileText, count: devisList.filter((d: DevisWeb) => d.statut === 'nouvelle').length },
+    { id: 'devis' as Tab, label: 'Demandes devis', icon: FileText, count: devisList.filter((d: DevisWeb) => d.statut === 'nouvelle').length, },
   ]
 
   return (
@@ -562,12 +589,37 @@ export default function Boutique() {
             )}
 
             {tab === 'devis' && (
-              <DataTable<DevisWeb>
-                columns={devisCols}
-                data={devisList}
-                keyField="id"
-                loading={dLoad}
-              />
+              <>
+                <div className="flex items-center gap-3 border-b border-gray-100 px-4 py-3">
+                  <select
+                    value={filtreType}
+                    onChange={(e) => setFiltreType(e.target.value)}
+                    className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 outline-none focus:border-[#C62828] focus:ring-1 focus:ring-[#C62828]"
+                  >
+                    <option value="">Tous les types de projet</option>
+                    {TYPES_PROJET_LABELS.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                  {filtreType && (
+                    <button
+                      onClick={() => setFiltreType('')}
+                      className="text-xs text-[#C62828] underline"
+                    >
+                      Effacer
+                    </button>
+                  )}
+                  <span className="ml-auto text-xs text-gray-400">
+                    {devisFiltres.length} demande{devisFiltres.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <DataTable<DevisWeb>
+                  columns={devisCols}
+                  data={devisFiltres}
+                  keyField="id"
+                  loading={dLoad}
+                />
+              </>
             )}
           </motion.div>
         </AnimatePresence>

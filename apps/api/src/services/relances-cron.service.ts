@@ -59,12 +59,13 @@ async function dejaEnvoye(creditId: string, type: string): Promise<boolean> {
 
 /** Enregistre l'envoi dans le log. */
 async function logRelance(creditId: string, type: string, phone: string, message: string): Promise<void> {
-  await db.from('relances_log').insert({
+  const { error } = await db.from('relances_log').insert({
     credit_id:    creditId,
     type_relance: type,
     telephone:    phone,
     message,
-  }).catch(e => console.error('[relances] log insert error:', e))
+  })
+  if (error) console.error('[relances] log insert error:', error)
 }
 
 // ── Logique principale ─────────────────────────────────────────────────────────

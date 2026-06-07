@@ -47,4 +47,33 @@ contextBridge.exposeInMainWorld('forge', {
     version: () => ipcRenderer.invoke('app:version'),
     isDev:   () => ipcRenderer.invoke('app:isDev'),
   },
+
+  // ── Auth / Session / RBAC offline ─────────────────────────────────────────
+  auth: {
+    getSession:    ()                                      => ipcRenderer.invoke('auth:getSession'),
+    saveSession:   (session: unknown)                      => ipcRenderer.invoke('auth:saveSession', session),
+    clearSession:  ()                                      => ipcRenderer.invoke('auth:clearSession'),
+    setOfflineMode:(offline: boolean)                      => ipcRenderer.invoke('auth:setOfflineMode', offline),
+    isAllowedOffline: (action: string)                     => ipcRenderer.invoke('auth:isAllowedOffline', action),
+
+    getOfflinePermissions: (userId: string)                => ipcRenderer.invoke('auth:getOfflinePermissions', userId),
+    hasOfflinePermission:  (userId: string, mod: string, action: string) =>
+      ipcRenderer.invoke('auth:hasOfflinePermission', userId, mod, action),
+    cachePermissions: (userId: string, perms: unknown)     => ipcRenderer.invoke('auth:cachePermissions', userId, perms),
+    syncPermissionsFromServer: (userId: string, apiUrl: string, token: string) =>
+      ipcRenderer.invoke('auth:syncPermissionsFromServer', userId, apiUrl, token),
+
+    unlock:           ()               => ipcRenderer.invoke('auth:unlock'),
+    isLocked:         ()               => ipcRenderer.invoke('auth:isLocked'),
+    forceLock:        ()               => ipcRenderer.invoke('auth:forceLock'),
+    setTimeoutMinutes:(min: number)    => ipcRenderer.invoke('auth:setTimeoutMinutes', min),
+    notifyActivity:   ()               => ipcRenderer.send('autolock:activity'),
+
+    // Push events depuis le main process
+    onLock: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on('auth:lock', handler)
+      return () => ipcRenderer.removeListener('auth:lock', handler)
+    },
+  },
 })
