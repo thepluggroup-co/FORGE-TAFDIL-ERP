@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Users, Calendar, DollarSign, Plus, Briefcase, FileText,
@@ -564,6 +564,7 @@ export default function RH() {
   const [moisPaie, setMoisPaie]        = useState(new Date().toISOString().slice(0, 7))
   const [empSlide, setEmpSlide]        = useState(false)
   const [empForm, setEmpForm]          = useState<NouvelEmployeForm>(DEFAULT_EMP)
+  const [pdfModal, setPdfModal]        = useState<{ url: string; filename: string } | null>(null)
 
   const { data: empData,       isLoading: empLoading }       = useEmployes({ statut: 'actif' })
   const { data: presData,      isLoading: presLoading }      = usePresences({ date: presenceDate })
@@ -651,15 +652,31 @@ export default function RH() {
     },
     {
       id: 'pdf', header: '', accessor: 'id', sortable: false,
-      render: (v, row) => (
-        <button
-          onClick={() => bulletinPdf.mutate({ id: v as string, nom: row.employe_nom as string, mois: row.mois as string })}
-          disabled={bulletinPdf.isPending}
-          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
-        >
-          <Download className="h-3 w-3" /> PDF
-        </button>
-      ),
+      render: (v, row) => {
+        const id  = v as string
+        const nom = row.employe_nom as string
+        const mois = row.mois as string
+        const filename = `Bulletin-${nom.replace(/\s+/g, '-')}-${mois}.pdf`
+        const isLoading = bulletinPdf.isPending && bulletinPdf.variables?.id === id
+        return (
+          <button
+            onClick={() =>
+              bulletinPdf.mutate(
+                { id, nom, mois },
+                { onSuccess: (url) => setPdfModal({ url, filename }) },
+              )
+            }
+            disabled={bulletinPdf.isPending}
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-[#C62828]/30 text-[#C62828] hover:bg-[#C62828]/5 transition-colors disabled:opacity-50"
+          >
+            {isLoading
+              ? <Loader2 className="h-3 w-3 animate-spin" />
+              : <Eye className="h-3 w-3" />
+            }
+            {isLoading ? 'Chargement…' : 'Voir PDF'}
+          </button>
+        )
+      },
     },
   ]
 
@@ -869,6 +886,15 @@ export default function RH() {
           </div>
         </div>
       </SlideOver>
+
+      {/* Modal aperçu bulletin PDF */}
+      {pdfModal && (
+        <BulletinPdfModal
+          url={pdfModal.url}
+          filename={pdfModal.filename}
+          onClose={() => setPdfModal(null)}
+        />
+      )}
     </motion.div>
   )
 }

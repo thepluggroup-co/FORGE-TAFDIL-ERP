@@ -150,7 +150,7 @@ export function PaymentPlanDetail({ planId, onBack }: Props) {
                 )}
               </div>
               {canPay && plan.status !== 'CANCELLED' && (
-                <Button size="sm" variant="outline" onClick={() => openPayModal(inst)}>
+                <Button size="sm" variant="secondary" onClick={() => openPayModal(inst)}>
                   <CreditCard className="w-3.5 h-3.5 mr-1" /> Payer
                 </Button>
               )}
@@ -161,7 +161,7 @@ export function PaymentPlanDetail({ planId, onBack }: Props) {
 
       {/* Modal paiement */}
       <Modal
-        open={payModal.open}
+        isOpen={payModal.open}
         onClose={() => setPayModal({ open: false, installment: null })}
         title={`Paiement — Échéance ${payModal.installment?.installment_number}`}
       >
@@ -208,7 +208,7 @@ export function PaymentPlanDetail({ planId, onBack }: Props) {
           </div>
 
           <div className="flex justify-end gap-3 pt-2">
-            <Button type="button" variant="outline" onClick={() => setPayModal({ open: false, installment: null })}>
+            <Button type="button" variant="secondary" onClick={() => setPayModal({ open: false, installment: null })}>
               Annuler
             </Button>
             <Button type="submit" disabled={paying} loading={paying}>

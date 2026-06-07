@@ -21,10 +21,39 @@ interface JWK {
   y?:   string
   n?:   string
   e?:   string
+  [k: string]: unknown
 }
 
 let _jwks: JWK[] = []
 let _jwksFetchedAt = 0
+let _jwksFetching   = false
+
+async function fetchJwks(): Promise<void> {
+  if (_jwksFetching) return
+  _jwksFetching = true
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`, {
+      signal: AbortSignal.timeout(8_000),
+    })
+    if (res.ok) {
+      const data = await res.json() as { keys: JWK[] }
+      _jwks = data.keys ?? []
+      _jwksFetchedAt = Date.now()
+      console.log('[auth] JWKS refreshed —', _jwks.length, 'key(s)')
+    } else {
+      console.error('[auth] JWKS fetch HTTP', res.status)
+    }
+  } catch (e) {
+    console.error('[auth] JWKS fetch failed:', e)
+  } finally {
+    _jwksFetching = false
+  }
+}
+
+// Pré-charger le JWKS au démarrage du module (non bloquant)
+if (SUPABASE_URL) {
+  fetchJwks().catch(() => { /* silently ignore startup errors */ })
+}
 
 async function getPublicKeyForToken(token: string): Promise<ReturnType<typeof createPublicKey> | null> {
   // Decode JWT header without verifying
@@ -42,33 +71,32 @@ async function getPublicKeyForToken(token: string): Promise<ReturnType<typeof cr
   // Only needed for asymmetric algorithms
   if (!alg || alg === 'HS256') return null
 
-  // Refresh JWKS if stale (> 1 h)
+  // Refresh JWKS if empty or stale (> 1 h)
   const now = Date.now()
   if (!_jwks.length || now - _jwksFetchedAt > 3_600_000) {
-    try {
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`, {
-        signal: AbortSignal.timeout(5_000),
-      })
-      if (res.ok) {
-        const data = await res.json() as { keys: JWK[] }
-        _jwks = data.keys ?? []
-        _jwksFetchedAt = now
-        console.log('[auth] JWKS refreshed —', _jwks.length, 'key(s)')
-      }
-    } catch (e) {
-      console.error('[auth] JWKS fetch failed:', e)
-    }
+    await fetchJwks()
   }
 
-  const jwk = kid ? _jwks.find(k => k.kid === kid) : _jwks[0]
-  if (!jwk) return null
+  // Find key by kid, then fall back to first key, then force-refresh and retry once
+  let jwk = kid ? _jwks.find(k => k.kid === kid) : _jwks[0]
+
+  if (!jwk && kid && _jwks.length > 0) {
+    // kid mismatch: Supabase may have rotated keys — force refresh
+    console.warn('[auth] kid', kid, 'not in JWKS cache — forcing refresh')
+    await fetchJwks()
+    jwk = _jwks.find(k => k.kid === kid) ?? _jwks[0]
+  }
+
+  if (!jwk) {
+    console.error('[auth] No JWK found. kid:', kid, '_jwks.length:', _jwks.length)
+    return null
+  }
 
   try {
-    // Node.js 15+ supports createPublicKey({ format: 'jwk', key: <JWK object> })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return createPublicKey({ format: 'jwk', key: jwk as any })
   } catch (e) {
-    console.error('[auth] createPublicKey failed:', e)
+    console.error('[auth] createPublicKey failed for kid', kid, ':', e)
     return null
   }
 }

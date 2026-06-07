@@ -30,8 +30,11 @@ function readCachedSession(): { user: User; access_token: string; role: AppRole 
       if (!key?.startsWith('sb-') || !key.endsWith('-auth-token')) continue
       const raw = localStorage.getItem(key)
       if (!raw) continue
-      const data = JSON.parse(raw) as { user?: User; access_token?: string }
-      if (data?.user && data?.access_token) {
+      const data = JSON.parse(raw) as { user?: User; access_token?: string; expires_at?: number }
+      // Skip expired tokens — the Supabase SDK will refresh automatically,
+      // but preloading an expired token causes a 401 on the first API request.
+      const expired = data.expires_at && data.expires_at < Math.floor(Date.now() / 1000)
+      if (data?.user && data?.access_token && !expired) {
         return {
           user:         data.user,
           access_token: data.access_token,

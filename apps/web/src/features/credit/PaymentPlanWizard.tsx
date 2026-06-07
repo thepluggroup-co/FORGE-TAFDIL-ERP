@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CheckCircle, ChevronRight, ChevronLeft, AlertCircle, Loader2 } from 'lucide-react'
+import { CheckCircle, ChevronRight, ChevronLeft, AlertCircle, Loader2, ShieldPlus } from 'lucide-react'
 import { Button, Modal } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import { useEligibilityCheck, useCreatePaymentPlan } from '@/hooks/useCredit'
 import type { EligibilityCheck } from '@/hooks/useCredit'
+import { CreditLimitForm } from './CreditLimitForm'
 
 interface Props {
   open:       boolean
@@ -49,6 +50,7 @@ export function PaymentPlanWizard({ open, orderId, customerId, orderAmount, orde
   const [eligibility, setEligibility] = useState<EligibilityCheck | null>(null)
   const [installmentsCount, setInstallmentsCount] = useState<2|3|4|6>(3)
   const [firstPercent, setFirstPercent] = useState(30)
+  const [showSetLimit, setShowSetLimit] = useState(false)
 
   const { check, loading: checkLoading } = useEligibilityCheck(customerId)
   const { create, loading: creating }    = useCreatePaymentPlan()
@@ -102,7 +104,7 @@ export function PaymentPlanWizard({ open, orderId, customerId, orderAmount, orde
   }
 
   return (
-    <Modal open={open} onClose={handleClose} title="Créer un plan de paiement">
+    <Modal isOpen={open} onClose={handleClose} title="Créer un plan de paiement">
       <div className="min-h-[320px] flex flex-col">
         <StepIndicator current={step} />
 
@@ -137,7 +139,17 @@ export function PaymentPlanWizard({ open, orderId, customerId, orderAmount, orde
                     </span>
                   </div>
                   {!eligibility.eligible && (
-                    <p className="text-xs text-red-500 ml-7">{eligibility.reason}</p>
+                    <>
+                      <p className="text-xs text-red-500 ml-7">{eligibility.reason}</p>
+                      <button
+                        type="button"
+                        onClick={() => setShowSetLimit(true)}
+                        className="ml-7 flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:text-red-800 underline underline-offset-2 transition-colors"
+                      >
+                        <ShieldPlus className="w-3.5 h-3.5" />
+                        Définir un plafond de crédit
+                      </button>
+                    </>
                   )}
                   {eligibility.eligible && (
                     <div className="ml-7 text-xs text-green-700 space-y-0.5">
@@ -150,7 +162,7 @@ export function PaymentPlanWizard({ open, orderId, customerId, orderAmount, orde
               ) : null}
 
               <div className="flex justify-end gap-3 pt-4">
-                <Button variant="outline" onClick={handleClose}>Annuler</Button>
+                <Button variant="secondary" onClick={handleClose}>Annuler</Button>
                 <Button
                   onClick={() => setStep(2)}
                   disabled={!eligibility?.eligible}
@@ -209,7 +221,7 @@ export function PaymentPlanWizard({ open, orderId, customerId, orderAmount, orde
               </div>
 
               <div className="flex justify-between gap-3 pt-2">
-                <Button variant="outline" onClick={() => setStep(1)}>
+                <Button variant="secondary" onClick={() => setStep(1)}>
                   <ChevronLeft className="w-4 h-4 mr-1" /> Retour
                 </Button>
                 <Button onClick={() => setStep(3)}>
@@ -251,7 +263,7 @@ export function PaymentPlanWizard({ open, orderId, customerId, orderAmount, orde
               </p>
 
               <div className="flex justify-between gap-3 pt-2">
-                <Button variant="outline" onClick={() => setStep(2)}>
+                <Button variant="secondary" onClick={() => setStep(2)}>
                   <ChevronLeft className="w-4 h-4 mr-1" /> Retour
                 </Button>
                 <Button onClick={handleCreate} disabled={creating} loading={creating}>
@@ -264,6 +276,17 @@ export function PaymentPlanWizard({ open, orderId, customerId, orderAmount, orde
 
         </AnimatePresence>
       </div>
+
+      {/* Plafond inline — s'ouvre par dessus le wizard */}
+      <CreditLimitForm
+        open={showSetLimit}
+        customerId={customerId}
+        onClose={() => setShowSetLimit(false)}
+        onSaved={() => {
+          setShowSetLimit(false)
+          check().then(res => { if (res) setEligibility(res) })
+        }}
+      />
     </Modal>
   )
 }

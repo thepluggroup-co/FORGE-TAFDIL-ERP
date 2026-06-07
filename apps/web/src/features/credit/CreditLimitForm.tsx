@@ -74,7 +74,7 @@ export function CreditLimitForm({ open, customerId: initCustomerId, onClose, onS
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Plafond de crédit client">
+    <Modal isOpen={open} onClose={onClose} title="Plafond de crédit client">
       <form onSubmit={handleSubmit} className="space-y-5 p-1">
 
         {/* Sélection client */}
@@ -185,7 +185,7 @@ export function CreditLimitForm({ open, customerId: initCustomerId, onClose, onS
 
         {/* Actions */}
         <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
-          <Button type="button" variant="outline" onClick={onClose}>Annuler</Button>
+          <Button type="button" variant="secondary" onClick={onClose}>Annuler</Button>
           <Button type="submit" disabled={!selectedCustomerId || saving} loading={saving}>
             Enregistrer
           </Button>

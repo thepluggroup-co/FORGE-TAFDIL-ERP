@@ -59,6 +59,21 @@ const eligibilityRuleSchema = z.object({
 // PLAFONDS DE CRÉDIT
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// GET /credit/limits — list all limits with client info
+router.get('/limits', requireRole(['admin', 'superviseur']), async (c) => {
+  const { data, error } = await db
+    .from('customer_credit_limits')
+    .select('*, clients(id, nom, telephone, type)')
+    .order('created_at', { ascending: false })
+
+  if (error) {
+    console.error('[credit:limits:list]', { error: error.message })
+    return c.json({ error: 'Erreur lecture plafonds', code: 'DB_ERROR' }, 500)
+  }
+
+  return c.json({ data: data ?? [] })
+})
+
 // GET /credit/limits/:customerId
 router.get('/limits/:customerId', async (c) => {
   const { customerId } = c.req.param()

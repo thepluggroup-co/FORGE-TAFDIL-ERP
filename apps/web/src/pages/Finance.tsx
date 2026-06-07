@@ -24,7 +24,10 @@ import { useCommandes } from '@/hooks/useCommandes'
 import { API_BASE, apiClient } from '@/lib/api-client'
 import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
-import { CreditDashboard, CreditLimitForm } from '@/features/credit'
+import { CreditDashboard, CreditLimitForm, PaymentPlanWizard } from '@/features/credit'
+import type { Commande } from '@/hooks/useCommandes'
+import { useAllCreditLimits } from '@/hooks/useCredit'
+import type { CreditLimitWithClient } from '@/hooks/useCredit'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -964,10 +967,172 @@ async function downloadFinanceExport(path: string, filename: string) {
   URL.revokeObjectURL(url)
 }
 
+// ── Plafonds credit list ───────────────────────────────────────────────────────
+
+const ELIGIBILITY_LABELS: Record<string, string> = {
+  PROFESSIONAL: 'Professionnel',
+  INDIVIDUAL:   'Particulier',
+  VIP:          'VIP',
+}
+
+function PlafondsList({ onEdit, onNew }: { onEdit: (clientId: string) => void; onNew: () => void }) {
+  const { data, loading, refetch } = useAllCreditLimits()
+
+  const plafondColumns = useMemo<Column<CreditLimitWithClient>[]>(() => [
+    {
+      id:       'client',
+      header:   'Client',
+      accessor: 'id',
+      render:   (_, row) => (
+        <div>
+          <p className="text-sm font-semibold text-gray-900">{row.clients?.nom ?? '—'}</p>
+          {row.clients?.type && <p className="text-xs text-gray-400">{row.clients.type}</p>}
+        </div>
+      ),
+    },
+    {
+      id:       'plafond',
+      header:   'Plafond',
+      accessor: 'max_credit_amount',
+      render:   (_, row) => (
+        <span className="text-sm font-bold text-gray-800">{formatXAF(row.max_credit_amount)}</span>
+      ),
+    },
+    {
+      id:       'type',
+      header:   'Éligibilité',
+      accessor: 'eligibility_type',
+      render:   (_, row) => (
+        <span className="text-xs font-medium text-gray-600">
+          {ELIGIBILITY_LABELS[row.eligibility_type] ?? row.eligibility_type}
+        </span>
+      ),
+    },
+    {
+      id:       'statut',
+      header:   'Statut',
+      accessor: 'is_active',
+      render:   (_, row) => (
+        <span className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full ${row.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+          {row.is_active ? 'Actif' : 'Inactif'}
+        </span>
+      ),
+    },
+    {
+      id:       'criteres',
+      header:   'Critères min.',
+      accessor: 'id',
+      render:   (_, row) => (
+        <span className="text-xs text-gray-500">
+          {row.min_order_history_months}m · {row.min_past_orders_count} cmd
+        </span>
+      ),
+    },
+    {
+      id:       'actions',
+      header:   '',
+      accessor: 'id',
+      csvSkip:  true,
+      render:   (_, row) => (
+        <button
+          onClick={(e) => { e.stopPropagation(); onEdit(row.customer_id) }}
+          className="text-xs font-semibold text-[#C62828] hover:underline"
+        >
+          Modifier
+        </button>
+      ),
+    },
+  ], [onEdit])
+
+  return (
+    <div>
+      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-50">
+        <p className="text-xs text-gray-500">{data.length} plafond{data.length !== 1 ? 's' : ''} configuré{data.length !== 1 ? 's' : ''}</p>
+        <div className="flex items-center gap-2">
+          <button onClick={refetch} className="text-xs text-gray-400 hover:text-gray-700 transition-colors">
+            Actualiser
+          </button>
+          <Button size="sm" onClick={onNew}>
+            <Plus className="h-3.5 w-3.5" /> Nouveau plafond
+          </Button>
+        </div>
+      </div>
+      <DataTable<CreditLimitWithClient>
+        columns={plafondColumns}
+        data={data}
+        keyField="id"
+        loading={loading}
+        emptyMessage="Aucun plafond configuré — cliquez sur « Nouveau plafond » pour en créer un"
+      />
+    </div>
+  )
+}
+
+// ── Order selector before PaymentPlanWizard ────────────────────────────────────
+
+function OrderSelectorModal({ isOpen, onClose, onSelect }: {
+  isOpen:   boolean
+  onClose:  () => void
+  onSelect: (c: Commande) => void
+}) {
+  const { data: commandesData } = useCommandes({ enabled: isOpen })
+  const [selectedId, setSelectedId] = useState('')
+
+  const commandes = (commandesData?.data ?? []).filter(c => c.statut !== 'cancelled')
+  const selected  = commandes.find(c => c.id === selectedId) ?? null
+
+  function handleConfirm() {
+    if (selected) { onSelect(selected); setSelectedId('') }
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={() => { setSelectedId(''); onClose() }} title="Sélectionner une commande" size="sm">
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs font-semibold uppercase text-gray-500 mb-1.5">Commande</label>
+          <select
+            value={selectedId}
+            onChange={e => setSelectedId(e.target.value)}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30"
+          >
+            <option value="">— Choisir une commande —</option>
+            {commandes.map(c => (
+              <option key={c.id} value={c.id}>
+                {c.reference} — {c.client.nom} — reste {formatXAF(c.solde_restant_xaf)}
+              </option>
+            ))}
+          </select>
+        </div>
+        {selected && (
+          <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 text-sm space-y-1">
+            <div className="font-semibold text-blue-800">{selected.client.nom}</div>
+            <div className="text-xs text-blue-600">Réf : {selected.reference}</div>
+            <div className="text-xs text-blue-600">
+              Total : {formatXAF(selected.montant_ttc_xaf)}
+              {selected.acompte_recu_xaf > 0 && (
+                <span> · Acompte : {formatXAF(selected.acompte_recu_xaf)} · <strong>Reste : {formatXAF(selected.solde_restant_xaf)}</strong></span>
+              )}
+            </div>
+          </div>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={() => { setSelectedId(''); onClose() }}>Annuler</Button>
+          <Button disabled={!selected} onClick={handleConfirm}>
+            <Plus className="h-3.5 w-3.5" /> Créer le plan
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 export default function Finance() {
   const [activeTab, setActiveTab]         = useState<Tab>('Dashboard')
-  const [creditSubTab, setCreditSubTab]   = useState<'tableau-de-bord' | 'creances'>('tableau-de-bord')
+  const [creditSubTab, setCreditSubTab]   = useState<'tableau-de-bord' | 'creances' | 'plafonds'>('tableau-de-bord')
+  const [editLimitClientId, setEditLimitClientId] = useState<string | null>(null)
   const [showCreditLimitForm, setShowCreditLimitForm] = useState(false)
+  const [showOrderSelector, setShowOrderSelector]   = useState(false)
+  const [planOrder, setPlanOrder]                   = useState<Commande | null>(null)
   const [showNewFacture, setShowNewFacture] = useState(false)
   const [selectedFacture, setSelectedFacture] = useState<FactureRecord | null>(null)
   const [paiementFacture, setPaiementFacture] = useState<FactureRecord | null>(null)
@@ -1220,6 +1385,14 @@ export default function Finance() {
               style={{ color: activeTab === tab ? '#C62828' : '#6b7280' }}
             >
               {tab}
+              {tab === 'Factures' && dashboardKpis.brouillons > 0 && (
+                <span
+                  className="flex items-center justify-center w-5 h-5 rounded-full text-white text-[10px] font-bold"
+                  style={{ backgroundColor: '#d97706' }}
+                >
+                  {dashboardKpis.brouillons}
+                </span>
+              )}
               {tab === 'Crédits' && echusCount > 0 && (
                 <motion.span
                   animate={{ scale: [1, 1.15, 1] }}
@@ -1419,13 +1592,29 @@ export default function Finance() {
                   <InvoicePreview facture={selectedFacture as PreviewableFacture} />
                 </div>
               ) : (
-                <DataTable<FactureRecord>
-                  columns={factureColumns}
-                  data={factures}
-                  keyField="id"
-                  onRowClick={setSelectedFacture}
-                  loading={facturesLoading}
-                />
+                <>
+                  {financeSummary.brouillons.length > 0 && (
+                    <div className="mx-4 mt-3 mb-1 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-3">
+                      <AlertCircle className="h-4 w-4 text-amber-600 shrink-0" />
+                      <div className="min-w-0">
+                        <span className="text-sm font-semibold text-amber-800">
+                          {financeSummary.brouillons.length} facture{financeSummary.brouillons.length > 1 ? 's' : ''} brouillon{financeSummary.brouillons.length > 1 ? 's' : ''} à valider
+                        </span>
+                        <span className="ml-2 text-xs text-amber-600 hidden sm:inline">
+                          {financeSummary.brouillons.slice(0, 3).map((f) => String(f.numero ?? '')).filter(Boolean).join(', ')}
+                          {financeSummary.brouillons.length > 3 ? '…' : ''}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  <DataTable<FactureRecord>
+                    columns={factureColumns}
+                    data={factures}
+                    keyField="id"
+                    onRowClick={setSelectedFacture}
+                    loading={facturesLoading}
+                  />
+                </>
               )
             )}
 
@@ -1438,6 +1627,7 @@ export default function Finance() {
                     {([
                       { key: 'tableau-de-bord', label: 'Tableau de bord' },
                       { key: 'creances',        label: 'Créances clients' },
+                      { key: 'plafonds',        label: 'Plafonds crédit' },
                     ] as const).map(({ key, label }) => (
                       <button
                         key={key}
@@ -1452,9 +1642,14 @@ export default function Finance() {
                       </button>
                     ))}
                   </div>
-                  <Button size="sm" variant="ghost" onClick={() => setShowCreditLimitForm(true)}>
-                    <Plus className="h-3.5 w-3.5" /> Limite crédit
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="ghost" onClick={() => setShowCreditLimitForm(true)}>
+                      <Plus className="h-3.5 w-3.5" /> Limite crédit
+                    </Button>
+                    <Button size="sm" onClick={() => setShowOrderSelector(true)}>
+                      <Plus className="h-3.5 w-3.5" /> Nouveau plan
+                    </Button>
+                  </div>
                 </div>
 
                 {/* Tableau de bord — nouveau module crédit */}
@@ -1483,12 +1678,39 @@ export default function Finance() {
                   </div>
                 )}
 
-                {/* Modal limite de crédit */}
+                {/* Plafonds crédit */}
+                {creditSubTab === 'plafonds' && (
+                  <PlafondsList
+                    onEdit={(clientId) => setEditLimitClientId(clientId)}
+                    onNew={() => setShowCreditLimitForm(true)}
+                  />
+                )}
+
+                {/* Modal limite de crédit — nouveau ou édition */}
                 <CreditLimitForm
-                  open={showCreditLimitForm}
-                  onClose={() => setShowCreditLimitForm(false)}
-                  onSaved={() => setShowCreditLimitForm(false)}
+                  open={showCreditLimitForm || !!editLimitClientId}
+                  customerId={editLimitClientId ?? undefined}
+                  onClose={() => { setShowCreditLimitForm(false); setEditLimitClientId(null) }}
+                  onSaved={() => { setShowCreditLimitForm(false); setEditLimitClientId(null) }}
                 />
+
+                {/* Sélection commande → wizard plan */}
+                <OrderSelectorModal
+                  isOpen={showOrderSelector}
+                  onClose={() => setShowOrderSelector(false)}
+                  onSelect={(c) => { setPlanOrder(c); setShowOrderSelector(false) }}
+                />
+                {planOrder && (
+                  <PaymentPlanWizard
+                    open={true}
+                    orderId={planOrder.id}
+                    customerId={planOrder.client.id}
+                    orderAmount={planOrder.solde_restant_xaf > 0 ? planOrder.solde_restant_xaf : planOrder.montant_ttc_xaf}
+                    orderRef={planOrder.reference}
+                    onClose={() => setPlanOrder(null)}
+                    onCreated={() => setPlanOrder(null)}
+                  />
+                )}
               </div>
             )}
 

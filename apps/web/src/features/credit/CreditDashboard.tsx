@@ -2,7 +2,7 @@ import React from 'react'
 import { motion } from 'framer-motion'
 import { TrendingUp, Users, AlertTriangle, DollarSign, RefreshCw } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { PageHeader, KpiCard, Button } from '@forge/ui'
+import { KpiCard, Button } from '@forge/ui'
 import { formatXAF } from '@/lib/utils'
 import { useCreditDashboard } from '@/hooks/useCredit'
 import { CreditOverdueList } from './CreditOverdueList'
@@ -15,25 +15,25 @@ export function CreditDashboard() {
       title:   'Total encours',
       value:   data ? formatXAF(data.totalEncours) : '—',
       icon:    <DollarSign className="w-5 h-5" />,
-      color:   'blue' as const,
+      color:   '#3b82f6',
     },
     {
       title:   'Clients actifs',
       value:   data ? String(data.activeClients) : '—',
       icon:    <Users className="w-5 h-5" />,
-      color:   'green' as const,
+      color:   '#15803d',
     },
     {
       title:   'Échéances en retard',
       value:   data ? String(data.overdueCount) : '—',
       icon:    <AlertTriangle className="w-5 h-5" />,
-      color:   data && data.overdueCount > 0 ? 'red' as const : 'green' as const,
+      color:   data && data.overdueCount > 0 ? '#dc2626' : '#15803d',
     },
     {
       title:   'Taux de recouvrement',
       value:   data ? `${data.recoveryRate} %` : '—',
       icon:    <TrendingUp className="w-5 h-5" />,
-      color:   data && data.recoveryRate >= 80 ? 'green' as const : 'yellow' as const,
+      color:   data && data.recoveryRate >= 80 ? '#15803d' : '#d97706',
     },
   ]
 
@@ -43,17 +43,17 @@ export function CreditDashboard() {
   }))
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Tableau de bord Crédit"
-        subtitle="Suivi des créances et plans de paiement"
-        actions={
-          <Button variant="outline" size="sm" onClick={refetch} disabled={loading}>
-            <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-            Actualiser
-          </Button>
-        }
-      />
+    <div className="p-5 space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-bold text-gray-800">Tableau de bord crédit</h3>
+          <p className="text-xs text-gray-500 mt-0.5">Suivi des créances et plans de paiement</p>
+        </div>
+        <Button variant="secondary" size="sm" onClick={refetch} disabled={loading}>
+          <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
+          Actualiser
+        </Button>
+      </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -66,10 +66,9 @@ export function CreditDashboard() {
           >
             <KpiCard
               title={kpi.title}
-              value={kpi.value}
+              value={loading ? '…' : kpi.value}
               icon={kpi.icon}
               color={kpi.color}
-              loading={loading}
             />
           </motion.div>
         ))}

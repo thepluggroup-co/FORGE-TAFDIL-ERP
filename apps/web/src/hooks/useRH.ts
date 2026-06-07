@@ -179,11 +179,11 @@ export function useGenererPaie() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ mois, forcer }: { mois: string; forcer?: boolean }) =>
-      apiClient.post<{ data: BulletinPaie[]; total: number; mois: string }>('/api/rh/paie', {
-        mois,
-        generer_pdf: false,
-        forcer: forcer ?? false,
-      }),
+      apiClient.post<{ data: BulletinPaie[]; total: number; mois: string }>(
+        '/api/rh/paie',
+        { mois, generer_pdf: false, forcer: forcer ?? false },
+        60_000,  // 60s — la génération fait N requêtes Supabase (une par employé)
+      ),
     onSuccess: (_, { mois }) => {
       void qc.invalidateQueries({ queryKey: ['bulletins', { mois }] })
       void qc.invalidateQueries({ queryKey: ['bulletins'] })

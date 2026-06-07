@@ -231,16 +231,18 @@ async function creerBonSortieCommande(
   commandeId: string,
   commandeNumero: string,
   userId: string,
-): Promise<void> {
+): Promise<boolean> {
   // 1. Récupérer les lignes de la commande
   const { data: lignes, error: lignesErr } = await db
     .from('commandes_lignes')
-    .select('produit_id, designation, unite, quantite')
+    .select('produit_id, designation, unite, quantite, total_ht_xaf')
     .eq('commande_id', commandeId)
 
-  if (lignesErr || !lignes || lignes.length === 0) return
+  if (lignesErr || !lignes || lignes.length === 0) return false
 
-  type Ligne = { produit_id: string | null; designation: string; unite: string; quantite: number }
+  type Ligne = { produit_id: string | null; designation: string; unite: string; quantite: number; total_ht_xaf: number }
+
+  const montantTotal = (lignes as Ligne[]).reduce((sum, l) => sum + (l.total_ht_xaf ?? 0), 0)
 
   // 2. Vérifier le stock pour les lignes avec produit_id — logguer les insuffisances
   const alertesStock: string[] = []
@@ -272,24 +274,25 @@ async function creerBonSortieCommande(
   const { data: bon, error: bonErr } = await db
     .from('bons_sortie')
     .insert({
-      numero:       numeroBon,
-      statut:       'en_attente',
-      type:         'commande',
-      commande_id:  commandeId,
-      demandeur:    commandeNumero,
-      motif:        `Préparation commande ${commandeNumero}`,
-      notes:        alertesStock.length > 0
+      numero:             numeroBon,
+      statut:             'en_attente',
+      type:               'commande',
+      commande_id:        commandeId,
+      demandeur:          commandeNumero,
+      motif:              `Préparation commande ${commandeNumero}`,
+      montant_total_xaf:  montantTotal > 0 ? montantTotal : null,
+      notes:              alertesStock.length > 0
         ? `⚠ Stock insuffisant : ${alertesStock.join(' | ')}`
         : null,
-      created_by:   userId,
-      sync_status:  'synced',
+      created_by:         userId,
+      sync_status:        'synced',
     })
     .select('id')
     .single()
 
   if (bonErr || !bon) {
     console.error('[commerce] creerBonSortieCommande — insert bon:', bonErr?.message)
-    return
+    return false
   }
 
   // 5. Créer les lignes du bon
@@ -305,9 +308,8 @@ async function creerBonSortieCommande(
   const { error: ligErr } = await db.from('bons_sortie_lignes').insert(bonLignes)
   if (ligErr) {
     console.error('[commerce] creerBonSortieCommande — insert lignes:', ligErr.message)
-    // Rollback le bon orphelin
     await db.from('bons_sortie').delete().eq('id', (bon as { id: string }).id)
-    return
+    return false
   }
 
   // 6. Broadcast Realtime pour notifier le magasinier en temps réel
@@ -327,6 +329,8 @@ async function creerBonSortieCommande(
     })
     db.removeChannel(ch)
   } catch { /* Realtime non critique */ }
+
+  return true
 }
 
 /**
@@ -1682,23 +1686,322 @@ router.patch(
         annulee:        'cancelled',
       }
       const erpStatut = ERP_STATUT[body.statut_commande]
-      if (erpStatut) {
-        await db
-          .from('commandes')
-          .update({ statut: erpStatut, updated_at: new Date().toISOString() })
-          .eq('id', cmd.erp_commande_id)
+if (erpStatut) {
+  await db
+    .from('commandes')
+    .update({ statut: erpStatut, updated_at: new Date().toISOString() })
+    .eq('id', cmd.erp_commande_id)
 
-        await db.from('historique_commandes').insert({
-          commande_id:    cmd.erp_commande_id,
-          ancien_statut:  cmd.statut_commande,
-          nouveau_statut: erpStatut,
-          commentaire:    `[Shop Web] ${body.statut_commande}`,
-          changed_by:     user.id,
-        })
+  await db.from('historique_commandes').insert({
+    commande_id:    cmd.erp_commande_id,
+    ancien_statut:  cmd.statut_commande,
+    nouveau_statut: erpStatut,
+    commentaire:    `[Shop Web] ${body.statut_commande}`,
+    changed_by:     user.id,
+  })
+
+  // ── Auto-création bon de sortie quand la commande web passe en préparation ──
+  if (erpStatut === 'in_production' && cmd.erp_commande_id) {
+    const { data: erpCmd } = await db
+      .from('commandes')
+      .select('numero')
+      .eq('id', cmd.erp_commande_id)
+      .single()
+
+    if (erpCmd) {
+      await creerBonSortieCommande(
+        cmd.erp_commande_id,
+        (erpCmd as { numero: string }).numero,
+        user.id,
+      ).catch((e) => console.error('[commerce] auto-bon-sortie web:', e))
+    }
+        }
+      }
+    } else if (body.statut_commande === 'en_preparation') {
+      // Fallback : erp_commande_id absent — créer le bon depuis les lignes JSONB
+      console.warn('[commerce] commande web sans erp_commande_id — bon de sortie depuis lignes JSONB')
+      const numeroBon = `WEB-${cmd.ref}`
+      const { data: bonExist } = await db
+        .from('bons_sortie')
+        .select('id')
+        .eq('demandeur', cmd.ref)
+        .maybeSingle()
+
+      if (!bonExist) {
+        const { data: bon } = await db.from('bons_sortie').insert({
+          numero:      numeroBon,
+          statut:      'en_attente',
+          type:        'commande',
+          demandeur:   cmd.ref,
+          motif:       `Préparation commande web ${cmd.ref}`,
+          notes:       `Client : ${cmd.client_nom} — ${cmd.client_telephone}`,
+          created_by:  user.id,
+          sync_status: 'synced',
+        }).select('id').single()
+
+        if (bon) {
+          const lignesJson = (cmd.lignes ?? []).map((l: { designation: string; quantite: number }) => ({
+            bon_id:            (bon as { id: string }).id,
+            produit_id:        null,
+            designation:       l.designation,
+            unite:             'unité',
+            quantite_demandee: l.quantite,
+              quantite_servie:   0,
+          }))
+          if (lignesJson.length > 0) {
+            await db.from('bons_sortie_lignes').insert(lignesJson)
+          }
+        } 
       }
     }
 
     return c.json(data)
+  },
+)
+
+// ── Diagnostic backfill ────────────────────────────────────────────────────────
+
+router.get(
+  '/commandes/backfill-bons/debug',
+  requireRole(['admin', 'superviseur']),
+  async (c) => {
+    const userId = c.get('user').id
+
+    // Compter les commandes ERP in_production
+    const { count: erpCount, error: e1 } = await db
+      .from('commandes').select('*', { count: 'exact', head: true }).eq('statut', 'in_production')
+
+    // Compter les commandes shop en_preparation
+    const { count: shopCount, error: e2 } = await db
+      .from('commandes_shop').select('*', { count: 'exact', head: true }).eq('statut_commande', 'en_preparation')
+
+    // Compter les bons existants
+    const { count: bonsCount, error: e3 } = await db
+      .from('bons_sortie').select('*', { count: 'exact', head: true })
+
+    // Test insert avec statut en_attente (sans type ni commande_id pour isoler)
+    const t1 = await db.from('bons_sortie').insert({
+      numero: 'DBG-STATUT', statut: 'en_attente',
+      demandeur: 'debug', motif: 'debug', created_by: userId, sync_status: 'synced',
+    }).select('id').single()
+    const statut_test = t1.error ? `ECHEC: ${t1.error.message}` : 'OK'
+    if (!t1.error && t1.data) await db.from('bons_sortie').delete().eq('id', (t1.data as {id:string}).id)
+
+    // Test insert avec colonne type
+    const t2 = await db.from('bons_sortie').insert({
+      numero: 'DBG-TYPE', statut: 'soumis', type: 'commande',
+      demandeur: 'debug', motif: 'debug', created_by: userId, sync_status: 'synced',
+    }).select('id').single()
+    const type_test = t2.error ? `ECHEC: ${t2.error.message}` : 'OK'
+    if (!t2.error && t2.data) await db.from('bons_sortie').delete().eq('id', (t2.data as {id:string}).id)
+
+    // Test insert avec montant_total_xaf
+    const t3 = await db.from('bons_sortie').insert({
+      numero: 'DBG-MONTANT', statut: 'soumis', type: 'commande',
+      montant_total_xaf: 1000, demandeur: 'debug', motif: 'debug', created_by: userId, sync_status: 'synced',
+    }).select('id').single()
+    const montant_test = t3.error ? `ECHEC: ${t3.error.message}` : 'OK'
+    if (!t3.error && t3.data) await db.from('bons_sortie').delete().eq('id', (t3.data as {id:string}).id)
+
+    // Structure réelle des lignes JSONB + statuts des commandes
+    const { data: shopSample } = await db
+      .from('commandes_shop')
+      .select('ref, statut_commande, erp_commande_id, lignes, montant_ttc')
+      .eq('statut_commande', 'en_preparation')
+      .limit(3)
+
+    // Bons existants avec commande_id pour voir les doublons potentiels
+    const { data: bonsSample } = await db
+      .from('bons_sortie')
+      .select('id, numero, statut, type, commande_id, demandeur')
+      .order('created_at', { ascending: false })
+      .limit(10)
+
+    return c.json({
+      erp_in_production:   erpCount ?? 0,
+      shop_en_preparation: shopCount ?? 0,
+      bons_existants:      bonsCount ?? 0,
+      query_errors:        [e1?.message, e2?.message, e3?.message].filter(Boolean),
+      test_statut_en_attente: statut_test,
+      test_colonne_type:      type_test,
+      test_colonne_montant:   montant_test,
+      shop_sample:         shopSample,
+      bons_sample:         bonsSample,
+    })
+  },
+)
+
+// ── Backfill : bons de sortie pour commandes existantes en production ──────────
+
+type ShopLigne = { designation: string; quantite: number }
+
+async function creerBonDepuisLignesJsonb(params: {
+  commandeErpId:    string | null
+  ref:              string
+  clientNom:        string
+  clientTel:        string
+  lignes:           ShopLigne[]
+  userId:           string
+  montantTotalXaf?: number | null
+}): Promise<{ ok: boolean; error?: string }> {
+  const { commandeErpId, ref, clientNom, clientTel, lignes, userId, montantTotalXaf } = params
+
+  if (lignes.length === 0) return { ok: false, error: 'lignes JSONB vides' }
+
+  const today    = new Date()
+  const yyyymmdd = today.toISOString().slice(0, 10).replace(/-/g, '')
+  const startDay = `${today.toISOString().slice(0, 10)}T00:00:00.000Z`
+  const { count } = await db
+    .from('bons_sortie')
+    .select('*', { count: 'exact', head: true })
+    .gte('created_at', startDay)
+  const numeroBon = `TAF-${yyyymmdd}-${String((count ?? 0) + 1).padStart(4, '0')}`
+
+  const { data: bon, error: bonErr } = await db.from('bons_sortie').insert({
+    numero:            numeroBon,
+    statut:            'en_attente',
+    type:              'commande',
+    ...(commandeErpId ? { commande_id: commandeErpId } : {}),
+    demandeur:         ref,
+    motif:             `Préparation commande ${ref}`,
+    montant_total_xaf: montantTotalXaf ?? null,
+    notes:             `Client : ${clientNom} — ${clientTel}`,
+    created_by:        userId,
+    sync_status:       'synced',
+  }).select('id').single()
+
+  if (bonErr || !bon) return { ok: false, error: bonErr?.message ?? 'insert bon null' }
+
+  const bonId    = (bon as { id: string }).id
+  const bonLignes = lignes.map((l) => ({
+    bon_id:            bonId,
+    produit_id:        null,
+    designation:       l.designation,
+    unite:             'unité',
+    quantite_demandee: l.quantite,
+    quantite_servie:   0,
+  }))
+
+  const { error: ligErr } = await db.from('bons_sortie_lignes').insert(bonLignes)
+  if (ligErr) {
+    await db.from('bons_sortie').delete().eq('id', bonId)
+    return { ok: false, error: `insert lignes: ${ligErr.message}` }
+  }
+
+  return { ok: true }
+}
+
+router.post(
+  '/commandes/backfill-bons',
+  requireRole(['admin', 'superviseur']),
+  async (c) => {
+    const user   = c.get('user')
+    let created  = 0
+    const errors: string[] = []
+
+    // ── Branche 1 : commandes ERP in_production ───────────────────────────────
+    const { data: erpCommandes, error: erpErr } = await db
+      .from('commandes')
+      .select('id, numero')
+      .eq('statut', 'in_production')
+
+    if (erpErr) return c.json({ error: erpErr.message }, 500)
+
+    const erpIds = (erpCommandes ?? []).map((cmd) => cmd.id)
+
+    // Bons déjà liés
+    const { data: bonsDeja } = erpIds.length > 0
+      ? await db.from('bons_sortie').select('commande_id').in('commande_id', erpIds)
+      : { data: [] }
+    const dejaLiees = new Set((bonsDeja ?? []).map((b) => b.commande_id).filter(Boolean))
+    const manquantes = (erpCommandes ?? [] as { id: string; numero: string }[]).filter(
+      (cmd) => !dejaLiees.has(cmd.id),
+    )
+
+    for (const cmd of manquantes as { id: string; numero: string }[]) {
+      // Essai 1 : via commandes_lignes
+      const { data: cmdLignes } = await db
+        .from('commandes_lignes')
+        .select('id')
+        .eq('commande_id', cmd.id)
+      const hasLignes = (cmdLignes ?? []).length > 0
+      errors.push(`TRACE ERP ${cmd.numero}: commandes_lignes=${hasLignes ? (cmdLignes ?? []).length : 0}`)
+
+      const ok = await creerBonSortieCommande(cmd.id, cmd.numero, user.id).catch((e) => {
+        errors.push(`ERP ${cmd.numero} (commandes_lignes): ${(e as Error).message}`)
+        return false
+      })
+      if (ok) { created++; continue }
+
+      // Essai 2 : via lignes JSONB de commandes_shop liée
+      const { data: shopCmd, error: shopFindErr } = await db
+        .from('commandes_shop')
+        .select('ref, client_nom, client_telephone, lignes, montant_ttc')
+        .eq('erp_commande_id', cmd.id)
+        .maybeSingle()
+
+      if (shopFindErr) errors.push(`ERP ${cmd.numero}: shop query error: ${shopFindErr.message}`)
+
+      if (!shopCmd) {
+        errors.push(`ERP ${cmd.numero}: pas de commande shop liée et commandes_lignes vides`)
+        continue
+      }
+
+      type SC = { ref: string; client_nom: string; client_telephone: string; lignes: ShopLigne[]; montant_ttc: number | null }
+      const sc = shopCmd as SC
+      errors.push(`TRACE ERP ${cmd.numero}: shop trouvée ref=${sc.ref} lignes=${(sc.lignes ?? []).length}`)
+
+      const result = await creerBonDepuisLignesJsonb({
+        commandeErpId:    cmd.id,
+        ref:              sc.ref,
+        clientNom:        sc.client_nom,
+        clientTel:        sc.client_telephone,
+        lignes:           sc.lignes ?? [],
+        userId:           user.id,
+        montantTotalXaf:  sc.montant_ttc,
+      })
+      if (result.ok) created++
+      else errors.push(`ERP ${cmd.numero} (jsonb fallback): ${result.error}`)
+    }
+
+    // ── Branche 2 : commandes shop sans erp_commande_id ──────────────────────
+    const { data: shopCommandes, error: shopErr } = await db
+      .from('commandes_shop')
+      .select('ref, client_nom, client_telephone, lignes, montant_ttc')
+      .eq('statut_commande', 'en_preparation')
+      .is('erp_commande_id', null)
+
+    if (shopErr) errors.push(`shop query: ${shopErr.message}`)
+
+    for (const cmd of (shopCommandes ?? []) as Array<{ ref: string; client_nom: string; client_telephone: string; lignes: ShopLigne[]; montant_ttc: number | null }>) {
+      // Vérifier si un bon existe déjà pour ce ref
+      const { data: bonExist } = await db
+        .from('bons_sortie')
+        .select('id').eq('demandeur', cmd.ref).eq('type', 'commande').maybeSingle()
+      if (bonExist) continue
+
+      const result = await creerBonDepuisLignesJsonb({
+        commandeErpId:   null,
+        ref:             cmd.ref,
+        clientNom:       cmd.client_nom,
+        clientTel:       cmd.client_telephone,
+        lignes:          cmd.lignes ?? [],
+        userId:          user.id,
+        montantTotalXaf: cmd.montant_ttc,
+      })
+      if (result.ok) created++
+      else errors.push(`Shop ${cmd.ref}: ${result.error}`)
+    }
+
+    return c.json({
+      created,
+      errors,
+      message: created > 0
+        ? `${created} bon(s) créé(s)`
+        : errors.length > 0
+          ? `0 créé — voir errors pour diagnostic`
+          : 'Tous les bons sont déjà à jour',
+    })
   },
 )
 

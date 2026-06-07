@@ -84,6 +84,32 @@ export interface OverdueRow extends Installment {
   }
 }
 
+// ── useAllCreditLimits ────────────────────────────────────────────────────────
+
+export interface CreditLimitWithClient extends CreditLimit {
+  clients?: { id: string; nom: string; telephone?: string; type?: string }
+}
+
+export function useAllCreditLimits() {
+  const [data, setData]       = useState<CreditLimitWithClient[]>([])
+  const [loading, setLoading] = useState(false)
+
+  const fetch_ = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await apiClient.get<{ data: CreditLimitWithClient[] }>('/api/credit/limits')
+      setData(res.data)
+    } catch (e) {
+      toast.error(`Erreur chargement plafonds : ${(e as Error).message}`)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { fetch_() }, [fetch_])
+  return { data, loading, refetch: fetch_ }
+}
+
 // ── useCreditLimit ────────────────────────────────────────────────────────────
 
 export function useCreditLimit(customerId: string | null) {

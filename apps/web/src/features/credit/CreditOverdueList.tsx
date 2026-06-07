@@ -34,9 +34,10 @@ export function CreditOverdueList({ compact = false }: Props) {
 
   const columns: Column<OverdueRow>[] = [
     {
-      key:    'client',
-      header: 'Client',
-      render: (row) => (
+      id:       'client',
+      header:   'Client',
+      accessor: 'id',
+      render:   (_, row) => (
         <div>
           <p className="font-medium text-gray-900 text-sm">
             {row.payment_plans?.clients?.nom ?? '—'}
@@ -48,47 +49,53 @@ export function CreditOverdueList({ compact = false }: Props) {
       ),
     },
     {
-      key:    'amount_due',
-      header: 'Montant dû',
-      render: (row) => (
+      id:       'amount_due',
+      header:   'Montant dû',
+      accessor: 'amount_due',
+      render:   (_, row) => (
         <span className="font-semibold text-red-600">
           {formatXAF(row.amount_due - row.amount_paid)}
         </span>
       ),
     },
     {
-      key:    'due_date',
-      header: 'Échéance prévue',
-      render: (row) => <span className="text-sm text-gray-600">{formatDate(row.due_date)}</span>,
+      id:       'due_date',
+      header:   'Échéance prévue',
+      accessor: 'due_date',
+      render:   (_, row) => <span className="text-sm text-gray-600">{formatDate(row.due_date)}</span>,
     },
     {
-      key:    'days_late',
-      header: 'Retard',
-      render: (row) => (
+      id:       'days_late',
+      header:   'Retard',
+      accessor: 'days_late',
+      render:   (_, row) => (
         <span className={`text-sm font-semibold ${row.days_late > 30 ? 'text-red-600' : 'text-amber-600'}`}>
           {row.days_late}j
         </span>
       ),
     },
     {
-      key:    'status',
-      header: 'Statut',
-      render: (row) => (
+      id:       'status',
+      header:   'Statut',
+      accessor: 'status',
+      render:   (_, row) => (
         <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-red-50 text-red-600">
           <AlertTriangle className="w-3 h-3" /> {row.status}
         </span>
       ),
     },
     ...(!compact ? [{
-      key:    'actions',
-      header: '',
-      render: (row: OverdueRow) => {
+      id:       'actions',
+      header:   '',
+      accessor: 'id' as keyof OverdueRow,
+      csvSkip:  true,
+      render:   (_: unknown, row: OverdueRow) => {
         const planId = row.payment_plans?.id ?? row.payment_plan_id
         return (
           <div className="flex items-center gap-1">
             <Button
               size="sm"
-              variant="outline"
+              variant="secondary"
               onClick={() => setSelectedPlanId(planId)}
               title="Voir le plan"
             >
@@ -96,7 +103,7 @@ export function CreditOverdueList({ compact = false }: Props) {
             </Button>
             <Button
               size="sm"
-              variant="outline"
+              variant="secondary"
               onClick={() => handleSendReminder(row)}
               disabled={sendingReminder === planId}
               title="Envoyer rappel SMS"
@@ -135,7 +142,7 @@ export function CreditOverdueList({ compact = false }: Props) {
             </span>
           )}
         </h3>
-        <Button variant="outline" size="sm" onClick={refetch} disabled={loading}>
+        <Button variant="secondary" size="sm" onClick={refetch} disabled={loading}>
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
         </Button>
       </div>
