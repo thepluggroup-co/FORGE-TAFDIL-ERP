@@ -768,6 +768,8 @@ export function CheckoutClient() {
   const [numeroPaiement, setNumeroPaiement] = useState('')
   const [commandeRef, setCommandeRef] = useState('')
   const [loading, setLoading] = useState(false)
+  // Snapshot taken before clearCart() so StepConfirmation still has the correct totals.
+  const [confirmedTotals, setConfirmedTotals] = useState<CartTotals | null>(null)
 
   const goTo = (next: Step) => {
     setDirection(next > step ? 1 : -1)
@@ -835,6 +837,7 @@ export function CheckoutClient() {
 
       // ── 2. Paiement à la livraison → confirmation directe ────────────────────
       if (modePaiement === 'livraison') {
+        setConfirmedTotals(totals)
         clearCart()
         setCommandeRef(ref)
         goTo(4)
@@ -857,6 +860,7 @@ export function CheckoutClient() {
       if (!payRes.ok) {
         // Commande créée mais paiement non initié → aller à la confirmation quand même
         toast.warning('Commande créée. Contactez-nous pour le paiement via WhatsApp.')
+        setConfirmedTotals(totals)
         clearCart()
         setCommandeRef(ref)
         goTo(4)
@@ -936,7 +940,7 @@ export function CheckoutClient() {
               commandeRef={commandeRef}
               coordonnees={coordonnees}
               modePaiement={modePaiement}
-              totals={totals}
+              totals={confirmedTotals ?? totals}
             />
           )}
         </motion.div>

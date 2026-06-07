@@ -26,28 +26,32 @@ interface JWK {
 
 let _jwks: JWK[] = []
 let _jwksFetchedAt = 0
-let _jwksFetching   = false
+let _jwksFetchPromise: Promise<void> | null = null
 
 async function fetchJwks(): Promise<void> {
-  if (_jwksFetching) return
-  _jwksFetching = true
-  try {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`, {
-      signal: AbortSignal.timeout(8_000),
-    })
-    if (res.ok) {
-      const data = await res.json() as { keys: JWK[] }
-      _jwks = data.keys ?? []
-      _jwksFetchedAt = Date.now()
-      console.log('[auth] JWKS refreshed —', _jwks.length, 'key(s)')
-    } else {
-      console.error('[auth] JWKS fetch HTTP', res.status)
+  // Reuse the in-progress fetch so callers actually wait for it to finish
+  // instead of returning immediately and finding _jwks still empty.
+  if (_jwksFetchPromise) return _jwksFetchPromise
+  _jwksFetchPromise = (async () => {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`, {
+        signal: AbortSignal.timeout(12_000),
+      })
+      if (res.ok) {
+        const data = await res.json() as { keys: JWK[] }
+        _jwks = data.keys ?? []
+        _jwksFetchedAt = Date.now()
+        console.log('[auth] JWKS refreshed —', _jwks.length, 'key(s)')
+      } else {
+        console.error('[auth] JWKS fetch HTTP', res.status)
+      }
+    } catch (e) {
+      console.error('[auth] JWKS fetch failed:', e)
+    } finally {
+      _jwksFetchPromise = null
     }
-  } catch (e) {
-    console.error('[auth] JWKS fetch failed:', e)
-  } finally {
-    _jwksFetching = false
-  }
+  })()
+  return _jwksFetchPromise
 }
 
 // Pré-charger le JWKS au démarrage du module (non bloquant)
