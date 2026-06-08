@@ -14,6 +14,8 @@ import type { HonoVariables } from '../types'
 const TVA_RATE = 0.1925
 
 const TARIFS_LIVRAISON: Record<string, { tarif: number; delaiJours: number }> = FRAIS_LIVRAISON
+const SMS_RESEND_COOLDOWN_MS = 2 * 60 * 1000
+const smsResendAttempts = new Map<string, number>()
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -27,6 +29,32 @@ function disponibilite(stock: number, seuil: number): 'disponible' | 'stock_faib
   if (stock <= 0)      return 'indisponible'
   if (stock <= seuil)  return 'stock_faible'
   return 'disponible'
+}
+
+function smsStatusPayload(result: Awaited<ReturnType<typeof notifyCommandeSms>>) {
+  if (result.ok && !result.skipped) {
+    return { ok: true, message: 'SMS envoyé au client.' }
+  }
+  if (result.skipped) {
+    return {
+      ok: false,
+      skipped: true,
+      message: result.error ?? 'SMS non envoyé.',
+      retry_after_seconds: 120,
+    }
+  }
+  return {
+    ok: false,
+    message: result.error ? `SMS non envoyé : ${result.error}` : 'SMS non envoyé par Africa’s Talking.',
+    retry_after_seconds: 120,
+  }
+}
+
+function samePhone(a?: string | null, b?: string | null) {
+  const left = String(a ?? '').replace(/\D/g, '')
+  const right = String(b ?? '').replace(/\D/g, '')
+  if (!left || !right) return false
+  return left.endsWith(right) || right.endsWith(left)
 }
 
 // ── Schémas Zod ────────────────────────────────────────────────────────────────
@@ -48,6 +76,10 @@ const commandeShopSchema = z.object({
   mode_paiement:    z.enum(['mtn_momo', 'orange_money', 'livraison']),
   notes_client:     z.string().max(500).optional(),
   frais_livraison:  z.number().min(0).default(0),
+})
+
+const resendSmsSchema = z.object({
+  telephone: z.string().min(8).max(20),
 })
 
 const devisWebSchema = z.object({
@@ -329,14 +361,17 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     payload: { ref, montant_ttc, client: body.client_nom },
   })
 
-  void notifyCommandeSms({
+  const smsResult = await notifyCommandeSms({
     numero:        ref,
     client_nom:    body.client_nom,
     telephone:     body.client_telephone,
     total_ttc_xaf: montant_ttc,
-  }, 'commande_recue').catch((e) => console.error('[sms] confirmation commande shop:', e))
+  }, 'commande_recue').catch((e) => {
+    console.error('[sms] confirmation commande shop:', e)
+    return { ok: false, provider: 'africastalking' as const, error: e instanceof Error ? e.message : String(e) }
+  })
 
-  return c.json({ ref, montant_ttc, statut: 'recue' }, 201)
+  return c.json({ ref, montant_ttc, statut: 'recue', sms: smsStatusPayload(smsResult) }, 201)
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -358,6 +393,61 @@ shopRouter.get('/commandes/:ref', async (c) => {
   }
 
   return c.json({ data })
+})
+
+shopRouter.post('/commandes/:ref/sms/renvoyer', zValidator('json', resendSmsSchema), async (c) => {
+  const ref = c.req.param('ref').toUpperCase()
+  const body = c.req.valid('json')
+  const cacheKey = `${ref}:${String(body.telephone ?? '').replace(/\D/g, '')}`
+  const lastAttempt = smsResendAttempts.get(cacheKey) ?? 0
+  const waitMs = SMS_RESEND_COOLDOWN_MS - (Date.now() - lastAttempt)
+
+  if (waitMs > 0) {
+    return c.json({
+      error: 'Renvoi SMS temporairement indisponible',
+      code: 'SMS_COOLDOWN',
+      retry_after_seconds: Math.ceil(waitMs / 1000),
+    }, 429)
+  }
+
+  const { data, error } = await db
+    .from('commandes_shop')
+    .select('ref, client_nom, client_telephone, montant_ttc')
+    .eq('ref', ref)
+    .single()
+
+  if (error || !data) {
+    return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
+  }
+
+  const commande = data as {
+    ref: string
+    client_nom: string
+    client_telephone: string | null
+    montant_ttc: number | null
+  }
+
+  if (body.telephone && !samePhone(body.telephone, commande.client_telephone)) {
+    return c.json({ error: 'Téléphone non associé à cette commande', code: 'PHONE_MISMATCH' }, 403)
+  }
+
+  smsResendAttempts.set(cacheKey, Date.now())
+  const smsResult = await notifyCommandeSms({
+    numero:        commande.ref,
+    client_nom:    commande.client_nom,
+    telephone:     commande.client_telephone,
+    total_ttc_xaf: commande.montant_ttc,
+  }, 'commande_recue').catch((e) => {
+    console.error('[sms] renvoi confirmation commande shop:', e)
+    return { ok: false, provider: 'africastalking' as const, error: e instanceof Error ? e.message : String(e) }
+  })
+
+  const sms = smsStatusPayload(smsResult)
+  if (!sms.ok) {
+    return c.json({ sms }, 502)
+  }
+
+  return c.json({ sms })
 })
 
 // ══════════════════════════════════════════════════════════════════════════════

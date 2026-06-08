@@ -348,6 +348,79 @@ export type NouveauRemboursementCredit = typeof remboursementsCredit.$inferInser
 // FINANCE — COMPTABILITÉ SYSCOHADA
 // ══════════════════════════════════════════════════════════════════════════════
 
+export const charges = sqliteTable('charges', {
+  id:                 id(),
+  numero:             text('numero').notNull().unique(),
+  fournisseurNom:     text('fournisseur_nom').notNull(),
+  categorie:          text('categorie').notNull(),
+  compteCharge:       text('compte_charge').notNull(),
+  compteChargeLabel:  text('compte_charge_label').notNull(),
+  dateCharge:         text('date_charge').notNull(),
+  dateEcheance:       text('date_echeance'),
+  statut:             text('statut', { enum: ['brouillon', 'a_valider', 'validee', 'payee', 'annulee'] }).notNull().default('brouillon'),
+  montantHtXaf:       real('montant_ht_xaf').notNull().default(0),
+  tvaXaf:             real('tva_xaf').notNull().default(0),
+  montantTtcXaf:      real('montant_ttc_xaf').notNull().default(0),
+  montantPayeXaf:     real('montant_paye_xaf').notNull().default(0),
+  modePaiement:       text('mode_paiement', { enum: ['caisse', 'banque', 'mobile_money', 'credit_fournisseur'] }),
+  compteTresorerie:   text('compte_tresorerie'),
+  referencePaiement:  text('reference_paiement'),
+  justificatifStatut: text('justificatif_statut', { enum: ['manquant', 'recu', 'non_requis'] }).notNull().default('manquant'),
+  description:        text('description'),
+  notes:              text('notes'),
+  commandeId:         text('commande_id').references(() => commandes.id),
+  projetId:           text('projet_id').references(() => projets.id),
+  equipementId:       text('equipement_id'),
+  createdBy:          text('created_by').references(() => profiles.id),
+  validatedBy:        text('validated_by').references(() => profiles.id),
+  validatedAt:        text('validated_at'),
+  createdAt:          ts('created_at'),
+  updatedAt:          tsUp('updated_at'),
+  syncStatus:         sync(),
+})
+
+export type Charge = typeof charges.$inferSelect
+export type NouvelleCharge = typeof charges.$inferInsert
+
+export const sortiesTresorerie = sqliteTable('sorties_tresorerie', {
+  id:                 id(),
+  numero:             text('numero').notNull().unique(),
+  chargeId:           text('charge_id').references(() => charges.id),
+  dateSortie:         text('date_sortie').notNull(),
+  beneficiaire:       text('beneficiaire').notNull(),
+  motif:              text('motif').notNull(),
+  montantXaf:         real('montant_xaf').notNull(),
+  modePaiement:       text('mode_paiement', { enum: ['caisse', 'banque', 'mobile_money'] }).notNull(),
+  compteTresorerie:   text('compte_tresorerie').notNull(),
+  referencePaiement:  text('reference_paiement'),
+  statut:             text('statut', { enum: ['brouillon', 'validee', 'annulee'] }).notNull().default('validee'),
+  justificatifStatut: text('justificatif_statut', { enum: ['manquant', 'recu', 'non_requis'] }).notNull().default('manquant'),
+  notes:              text('notes'),
+  createdBy:          text('created_by').references(() => profiles.id),
+  createdAt:          ts('created_at'),
+  updatedAt:          tsUp('updated_at'),
+  syncStatus:         sync(),
+})
+
+export type SortieTresorerie = typeof sortiesTresorerie.$inferSelect
+export type NouvelleSortieTresorerie = typeof sortiesTresorerie.$inferInsert
+
+export const chargesJustificatifs = sqliteTable('charges_justificatifs', {
+  id:          id(),
+  chargeId:    text('charge_id').references(() => charges.id),
+  sortieId:    text('sortie_id').references(() => sortiesTresorerie.id),
+  nomFichier:  text('nom_fichier').notNull(),
+  typeMime:    text('type_mime').notNull(),
+  storagePath: text('storage_path').notNull(),
+  tailleBytes: integer('taille_bytes').notNull().default(0),
+  description: text('description'),
+  createdBy:   text('created_by').references(() => profiles.id),
+  createdAt:   ts('created_at'),
+})
+
+export type ChargeJustificatif = typeof chargesJustificatifs.$inferSelect
+export type NouveauChargeJustificatif = typeof chargesJustificatifs.$inferInsert
+
 export const ecrituresComptables = sqliteTable('ecritures_comptables', {
   id:              id(),
   date:            text('date').notNull(),
@@ -439,9 +512,20 @@ export const bulletinsPaie = sqliteTable('bulletins_paie', {
   primes:        real('primes_xaf').notNull().default(0),
   deductions:    real('deductions_xaf').notNull().default(0),
   cotisationCnps: real('cotisation_cnps_xaf').notNull().default(0),
+  cnpsEmployeurXaf: real('cnps_employeur_xaf').notNull().default(0),
+  irppXaf:       real('irpp_xaf').notNull().default(0),
+  coutEmployeurXaf: real('cout_employeur_xaf').notNull().default(0),
+  avanceDeduiteXaf: real('avance_deduite_xaf').notNull().default(0),
+  retenueDeduiteXaf: real('retenue_deduite_xaf').notNull().default(0),
   netXaf:        real('net_xaf').notNull(),
   statut:        text('statut', { enum: ['en_attente', 'valide', 'vire'] }).notNull().default('en_attente'),
+  pdfUrl:        text('pdf_url'),
+  pdfGeneratedAt: text('pdf_generated_at'),
   genereLe:      text('genere_le'),
+  validatedBy:   text('validated_by').references(() => profiles.id),
+  validatedAt:   text('validated_at'),
+  paidBy:        text('paid_by').references(() => profiles.id),
+  paidAt:        text('paid_at'),
   createdBy:     text('created_by').references(() => profiles.id),
   createdAt:     ts('created_at'),
   updatedAt:     tsUp('updated_at'),
@@ -450,6 +534,107 @@ export const bulletinsPaie = sqliteTable('bulletins_paie', {
 
 export type BulletinPaie       = typeof bulletinsPaie.$inferSelect
 export type NouveauBulletinPaie = typeof bulletinsPaie.$inferInsert
+
+export const avancesSalaire = sqliteTable('avances_salaire', {
+  id:                id(),
+  employeId:         text('employe_id').notNull().references(() => employes.id),
+  sortieId:          text('sortie_id').references(() => sortiesTresorerie.id),
+  dateAvance:        text('date_avance').notNull(),
+  moisDeduction:     text('mois_deduction').notNull(),
+  montantXaf:        real('montant_xaf').notNull(),
+  montantDeduitXaf:  real('montant_deduit_xaf').notNull().default(0),
+  statut:            text('statut', { enum: ['payee', 'deduite', 'annulee'] }).notNull().default('payee'),
+  modePaiement:      text('mode_paiement', { enum: ['caisse', 'banque', 'mobile_money'] }).notNull(),
+  compteTresorerie:  text('compte_tresorerie').notNull(),
+  referencePaiement: text('reference_paiement'),
+  motif:             text('motif'),
+  notes:             text('notes'),
+  createdBy:         text('created_by').references(() => profiles.id),
+  createdAt:         ts('created_at'),
+  updatedAt:         tsUp('updated_at'),
+  syncStatus:        sync(),
+})
+
+export type AvanceSalaire = typeof avancesSalaire.$inferSelect
+export type NouvelleAvanceSalaire = typeof avancesSalaire.$inferInsert
+
+export const retenuesSalaire = sqliteTable('retenues_salaire', {
+  id:               id(),
+  employeId:        text('employe_id').notNull().references(() => employes.id),
+  moisDeduction:    text('mois_deduction').notNull(),
+  type:             text('type', { enum: ['absence', 'materiel', 'pret_interne', 'discipline', 'autre'] }).notNull().default('autre'),
+  libelle:          text('libelle').notNull(),
+  montantXaf:       real('montant_xaf').notNull(),
+  montantDeduitXaf: real('montant_deduit_xaf').notNull().default(0),
+  statut:           text('statut', { enum: ['active', 'deduite', 'annulee'] }).notNull().default('active'),
+  notes:            text('notes'),
+  createdBy:        text('created_by').references(() => profiles.id),
+  createdAt:        ts('created_at'),
+  updatedAt:        tsUp('updated_at'),
+  syncStatus:       sync(),
+})
+
+export type RetenueSalaire = typeof retenuesSalaire.$inferSelect
+export type NouvelleRetenueSalaire = typeof retenuesSalaire.$inferInsert
+
+export const cotisationsSociales = sqliteTable('cotisations_sociales', {
+  id:                       id(),
+  mois:                     text('mois').notNull().unique(),
+  nbBulletins:              integer('nb_bulletins').notNull().default(0),
+  totalBrutXaf:             real('total_brut_xaf').notNull().default(0),
+  cnpsSalarieXaf:           real('cnps_salarie_xaf').notNull().default(0),
+  cnpsEmployeurXaf:         real('cnps_employeur_xaf').notNull().default(0),
+  totalCnpsXaf:             real('total_cnps_xaf').notNull().default(0),
+  irppXaf:                  real('irpp_xaf').notNull().default(0),
+  totalAvancesDeduitesXaf:  real('total_avances_deduites_xaf').notNull().default(0),
+  totalRetenuesDeduitesXaf: real('total_retenues_deduites_xaf').notNull().default(0),
+  netAPayerXaf:             real('net_a_payer_xaf').notNull().default(0),
+  coutTotalEmployeurXaf:    real('cout_total_employeur_xaf').notNull().default(0),
+  statut:                   text('statut', { enum: ['calculee', 'validee', 'payee'] }).notNull().default('calculee'),
+  notes:                    text('notes'),
+  createdBy:                text('created_by').references(() => profiles.id),
+  validatedBy:              text('validated_by').references(() => profiles.id),
+  validatedAt:              text('validated_at'),
+  paidAt:                   text('paid_at'),
+  createdAt:                ts('created_at'),
+  updatedAt:                tsUp('updated_at'),
+  syncStatus:               sync(),
+})
+
+export type CotisationSociale = typeof cotisationsSociales.$inferSelect
+export type NouvelleCotisationSociale = typeof cotisationsSociales.$inferInsert
+
+export const paiePeriodes = sqliteTable('paie_periodes', {
+  id:                       id(),
+  mois:                     text('mois').notNull().unique(),
+  sortieId:                 text('sortie_id').references(() => sortiesTresorerie.id),
+  statut:                   text('statut', { enum: ['calculee', 'validee', 'viree'] }).notNull().default('calculee'),
+  nbBulletins:              integer('nb_bulletins').notNull().default(0),
+  totalBrutXaf:             real('total_brut_xaf').notNull().default(0),
+  cnpsSalarieXaf:           real('cnps_salarie_xaf').notNull().default(0),
+  cnpsEmployeurXaf:         real('cnps_employeur_xaf').notNull().default(0),
+  irppXaf:                  real('irpp_xaf').notNull().default(0),
+  totalAvancesDeduitesXaf:  real('total_avances_deduites_xaf').notNull().default(0),
+  totalRetenuesDeduitesXaf: real('total_retenues_deduites_xaf').notNull().default(0),
+  totalAutresDeductionsXaf: real('total_autres_deductions_xaf').notNull().default(0),
+  netAPayerXaf:             real('net_a_payer_xaf').notNull().default(0),
+  coutTotalEmployeurXaf:    real('cout_total_employeur_xaf').notNull().default(0),
+  modePaiement:             text('mode_paiement', { enum: ['caisse', 'banque', 'mobile_money'] }),
+  compteTresorerie:         text('compte_tresorerie'),
+  referencePaiement:        text('reference_paiement'),
+  notes:                    text('notes'),
+  validatedBy:              text('validated_by').references(() => profiles.id),
+  validatedAt:              text('validated_at'),
+  paidBy:                   text('paid_by').references(() => profiles.id),
+  paidAt:                   text('paid_at'),
+  createdBy:                text('created_by').references(() => profiles.id),
+  createdAt:                ts('created_at'),
+  updatedAt:                tsUp('updated_at'),
+  syncStatus:               sync(),
+})
+
+export type PaiePeriode = typeof paiePeriodes.$inferSelect
+export type NouvellePaiePeriode = typeof paiePeriodes.$inferInsert
 
 export const apprenants = sqliteTable('apprenants', {
   id:          id(),

@@ -7,6 +7,12 @@ import { supabaseAdmin } from '@forge/db'
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import { generateAttestationPDF } from '../services/pdf.service'
+import {
+  annulerEcrituresReference,
+  genererEcrituresPaiePaiement,
+  genererEcrituresPaieValidation,
+  genererEcritureSortieTresorerie,
+} from '../services/comptabilite.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
@@ -62,6 +68,8 @@ interface BulletinCalc {
   cotisation_cnps_xaf: number
   cnps_employeur_xaf: number
   irpp_xaf:           number
+  avance_deduite_xaf: number
+  retenue_deduite_xaf: number
   net_xaf:            number
   cout_employeur_xaf: number
 }
@@ -72,6 +80,8 @@ function calculerBulletin(
   heures_sup_xaf = 0,
   primes_xaf = 0,
   deductions_xaf = 0,
+  avance_deduite_xaf = 0,
+  retenue_deduite_xaf = 0,
 ): BulletinCalc {
   const brut   = employe.salaire_base_xaf + heures_sup_xaf + primes_xaf
   const cnps   = calculerCNPS(brut)
@@ -94,6 +104,8 @@ function calculerBulletin(
     cotisation_cnps_xaf: cnps.salarie,
     cnps_employeur_xaf:  cnps.employeur,
     irpp_xaf:            irpp,
+    avance_deduite_xaf:  Math.round(avance_deduite_xaf),
+    retenue_deduite_xaf: Math.round(retenue_deduite_xaf),
     net_xaf:             Math.round(net),
     cout_employeur_xaf:  Math.round(brut + cnps.employeur),
   }
@@ -150,8 +162,11 @@ async function genererBulletinPdf(b: BulletinCalc): Promise<Buffer> {
     const retenues: Ligne[] = [
       ['Cotisation CNPS (salarié 4,2%)', `Base: ${Math.min(b.salaire_base_xaf + b.heures_sup_xaf + b.primes_xaf, 750000).toLocaleString('fr-FR')}`, b.cotisation_cnps_xaf],
       ['IRPP (barème progressif)', '', b.irpp_xaf],
-      ['Autres déductions', '', b.deductions_xaf],
     ]
+    if (b.avance_deduite_xaf > 0) retenues.push(['Avances sur salaire', '', b.avance_deduite_xaf])
+    if (b.retenue_deduite_xaf > 0) retenues.push(['Retenues salariales', '', b.retenue_deduite_xaf])
+    const autresDeductions = Math.max(0, b.deductions_xaf - b.avance_deduite_xaf - b.retenue_deduite_xaf)
+    if (autresDeductions > 0) retenues.push(['Autres déductions', '', autresDeductions])
 
     const drawRow = (label: string, base: string, montant: number, i: number, color: string) => {
       doc.rect(ML, y, W, 18).fill(i % 2 === 0 ? '#f9fafb' : '#ffffff')
@@ -245,13 +260,87 @@ function mapBulletinDb(row: any) {
     poste:               emp?.poste      ?? '',
     departement:         emp?.departement ?? '',
     mois:                row.mois,
+    salaire_base_xaf:    row.salaire_base_xaf ?? 0,
+    heures_sup_xaf:      row.heures_sup_xaf ?? 0,
+    primes_xaf:          row.primes_xaf ?? 0,
+    deductions_xaf:      row.deductions_xaf ?? 0,
+    avance_deduite_xaf:  row.avance_deduite_xaf ?? 0,
+    retenue_deduite_xaf: row.retenue_deduite_xaf ?? 0,
     salaire_brut_xaf:    brut,
     cnps_salarie_xaf:    row.cotisation_cnps_xaf ?? 0,
+    cnps_employeur_xaf:  row.cnps_employeur_xaf ?? 0,
     irpp_xaf:            row.irpp_xaf            ?? 0,
     salaire_net_xaf:     row.net_xaf             ?? 0,
     cout_employeur_xaf:  row.cout_employeur_xaf  ?? Math.round(brut + Math.round(Math.min(brut, CNPS_PLAFOND) * CNPS_EMPLOYEUR)),
+    pdf_url:             row.pdf_url ?? null,
+    pdf_generated_at:    row.pdf_generated_at ?? null,
     statut:              row.statut ?? 'en_attente',
   }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapAvanceSalaireDb(row: any) {
+  const emp = row.employes as { nom?: string; poste?: string; departement?: string } | null
+  return {
+    id:                  row.id,
+    employe_id:          row.employe_id,
+    employe_nom:         emp?.nom ?? '',
+    poste:               emp?.poste ?? '',
+    departement:         emp?.departement ?? '',
+    sortie_id:           row.sortie_id ?? null,
+    date_avance:         row.date_avance,
+    mois_deduction:      row.mois_deduction,
+    montant_xaf:         row.montant_xaf ?? 0,
+    montant_deduit_xaf:  row.montant_deduit_xaf ?? 0,
+    statut:              row.statut ?? 'payee',
+    mode_paiement:       row.mode_paiement,
+    compte_tresorerie:   row.compte_tresorerie,
+    reference_paiement:  row.reference_paiement ?? null,
+    motif:               row.motif ?? '',
+    notes:               row.notes ?? null,
+    created_at:          row.created_at,
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapRetenueSalaireDb(row: any) {
+  const emp = row.employes as { nom?: string; poste?: string; departement?: string } | null
+  return {
+    id:                 row.id,
+    employe_id:         row.employe_id,
+    employe_nom:        emp?.nom ?? '',
+    poste:              emp?.poste ?? '',
+    departement:        emp?.departement ?? '',
+    mois_deduction:     row.mois_deduction,
+    type:               row.type ?? 'autre',
+    libelle:            row.libelle,
+    montant_xaf:        row.montant_xaf ?? 0,
+    montant_deduit_xaf: row.montant_deduit_xaf ?? 0,
+    statut:             row.statut ?? 'active',
+    notes:              row.notes ?? null,
+    created_at:         row.created_at,
+  }
+}
+
+async function genererNumeroRh(table: string, prefix: string) {
+  const year = new Date().getFullYear()
+  const { count } = await db
+    .from(table)
+    .select('*', { count: 'exact', head: true })
+    .gte('created_at', `${year}-01-01T00:00:00.000Z`)
+  return `${prefix}-${year}-${String((count ?? 0) + 1).padStart(4, '0')}`
+}
+
+function compteTresorerieAttendu(mode: string) {
+  if (mode === 'caisse') return '571'
+  if (mode === 'banque') return '521'
+  if (mode === 'mobile_money') return '521'
+  return undefined
+}
+
+function csvCell(value: unknown) {
+  const s = String(value ?? '')
+  return `"${s.replace(/"/g, '""')}"`
 }
 
 // ── Schémas Zod ────────────────────────────────────────────────────────────────
@@ -563,6 +652,39 @@ const paieGenererSchema = z.object({
   forcer:      z.boolean().optional().default(false),
 })
 
+const avanceSalaireSchema = z.object({
+  employe_id:         z.string().uuid(),
+  date_avance:        z.string().min(1),
+  mois_deduction:     z.string().regex(/^\d{4}-\d{2}$/, 'Format requis : YYYY-MM'),
+  montant_xaf:        z.number().positive(),
+  mode_paiement:      z.enum(['caisse', 'banque', 'mobile_money']).default('caisse'),
+  compte_tresorerie:  z.enum(['571', '521']).optional(),
+  reference_paiement: z.string().optional(),
+  motif:              z.string().optional(),
+  notes:              z.string().optional(),
+})
+
+const retenueSalaireSchema = z.object({
+  employe_id:     z.string().uuid(),
+  mois_deduction: z.string().regex(/^\d{4}-\d{2}$/, 'Format requis : YYYY-MM'),
+  type:           z.enum(['absence', 'materiel', 'pret_interne', 'discipline', 'autre']).default('autre'),
+  libelle:        z.string().min(1),
+  montant_xaf:    z.number().positive(),
+  notes:          z.string().optional(),
+})
+
+const cotisationsSocialesSchema = z.object({
+  mois: z.string().regex(/^\d{4}-\d{2}$/, 'Format requis : YYYY-MM'),
+})
+
+const paiementPaieSchema = z.object({
+  mode_paiement:      z.enum(['caisse', 'banque', 'mobile_money']).default('banque'),
+  compte_tresorerie:  z.enum(['571', '521']).optional(),
+  reference_paiement: z.string().optional(),
+  date_paiement:      z.string().optional(),
+  notes:              z.string().optional(),
+})
+
 // ── Logique partagée de génération ────────────────────────────────────────────
 
 async function genererBulletinsMois(
@@ -572,11 +694,12 @@ async function genererBulletinsMois(
 ): Promise<{
   bulletins:     ReturnType<typeof mapBulletinDb>[]
   pdfs?:         Array<{ employe_nom: string; pdf_url: string | null }>
-  recapitulatif: { masse_salariale_nette_xaf: number; cout_total_employeur_xaf: number; total_irpp_xaf: number; total_cnps_xaf: number }
+  recapitulatif: { masse_salariale_nette_xaf: number; cout_total_employeur_xaf: number; total_irpp_xaf: number; total_cnps_xaf: number; total_avances_deduites_xaf: number; total_retenues_deduites_xaf: number }
 }> {
   type EmpRow = { id: string; nom: string; poste: string; departement: string; type_contrat: string; cnps: string | null; salaire_base_xaf: number; statut: string }
   type PresRow = { employe_id: string; heures: number; statut: string }
-  type BulRow  = { employe_id: string; statut: string }
+  type AvanceRow = { id: string; employe_id: string; montant_xaf: number; statut: string }
+  type RetenueRow = { id: string; employe_id: string; montant_xaf: number; statut: string }
 
   // ── 1 requête : tous les employés actifs ──────────────────────────────────
   const { data: employes, error: empErr } = await db
@@ -587,7 +710,7 @@ async function genererBulletinsMois(
 
   if (empErr) throw new Error(empErr.message)
   const empList = (employes ?? []) as EmpRow[]
-  if (empList.length === 0) return { bulletins: [], recapitulatif: { masse_salariale_nette_xaf: 0, cout_total_employeur_xaf: 0, total_irpp_xaf: 0, total_cnps_xaf: 0 } }
+  if (empList.length === 0) return { bulletins: [], recapitulatif: { masse_salariale_nette_xaf: 0, cout_total_employeur_xaf: 0, total_irpp_xaf: 0, total_cnps_xaf: 0, total_avances_deduites_xaf: 0, total_retenues_deduites_xaf: 0 } }
 
   const empIds = empList.map(e => e.id)
 
@@ -605,6 +728,34 @@ async function genererBulletinsMois(
     const arr = presencesParEmp.get(p.employe_id) ?? []
     arr.push(p)
     presencesParEmp.set(p.employe_id, arr)
+  }
+
+  const { data: avancesSalaire } = await db
+    .from('avances_salaire')
+    .select('id, employe_id, montant_xaf, statut')
+    .in('employe_id', empIds)
+    .eq('mois_deduction', moisStr)
+    .in('statut', ['payee', 'deduite'])
+
+  const avancesParEmp = new Map<string, AvanceRow[]>()
+  for (const a of (avancesSalaire ?? []) as AvanceRow[]) {
+    const arr = avancesParEmp.get(a.employe_id) ?? []
+    arr.push(a)
+    avancesParEmp.set(a.employe_id, arr)
+  }
+
+  const { data: retenuesSalaire } = await db
+    .from('retenues_salaire')
+    .select('id, employe_id, montant_xaf, statut')
+    .in('employe_id', empIds)
+    .eq('mois_deduction', moisStr)
+    .in('statut', ['active', 'deduite'])
+
+  const retenuesParEmp = new Map<string, RetenueRow[]>()
+  for (const r of (retenuesSalaire ?? []) as RetenueRow[]) {
+    const arr = retenuesParEmp.get(r.employe_id) ?? []
+    arr.push(r)
+    retenuesParEmp.set(r.employe_id, arr)
   }
 
   // ── 1 requête : bulletins existants pour ce mois (id + statut) ───────────
@@ -646,8 +797,13 @@ async function genererBulletinsMois(
     const joursMaladie      = rows.filter(p => p.statut === 'maladie').length
     const salaireJournalier = emp.salaire_base_xaf / 26
     const deduction_maladie = Math.round(joursMaladie * salaireJournalier * 0.5)
+    const avancesEmp = avancesParEmp.get(emp.id) ?? []
+    const avance_deduite_xaf = Math.round(avancesEmp.reduce((s, a) => s + Number(a.montant_xaf ?? 0), 0))
+    const retenuesEmp = retenuesParEmp.get(emp.id) ?? []
+    const retenue_deduite_xaf = Math.round(retenuesEmp.reduce((s, r) => s + Number(r.montant_xaf ?? 0), 0))
+    const deductions_xaf = deduction_maladie + avance_deduite_xaf + retenue_deduite_xaf
 
-    const bulletin = calculerBulletin(emp, moisStr, heures_sup_xaf, 0, deduction_maladie)
+    const bulletin = calculerBulletin(emp, moisStr, heures_sup_xaf, 0, deductions_xaf, avance_deduite_xaf, retenue_deduite_xaf)
     bulletinsCalc.push(bulletin)
 
     const payload = {
@@ -660,6 +816,8 @@ async function genererBulletinsMois(
       cotisation_cnps_xaf: bulletin.cotisation_cnps_xaf,
       cnps_employeur_xaf:  bulletin.cnps_employeur_xaf,
       irpp_xaf:            bulletin.irpp_xaf,
+      avance_deduite_xaf:  bulletin.avance_deduite_xaf,
+      retenue_deduite_xaf: bulletin.retenue_deduite_xaf,
       net_xaf:             bulletin.net_xaf,
       cout_employeur_xaf:  bulletin.cout_employeur_xaf,
       statut:              'en_attente',
@@ -686,6 +844,42 @@ async function genererBulletinsMois(
     ),
   ])
 
+  const avancesADeduire = ((avancesSalaire ?? []) as AvanceRow[])
+    .filter(a => a.statut === 'payee')
+    .map(a => ({
+      id: a.id,
+      montant: Math.round(Number(a.montant_xaf ?? 0)),
+    }))
+
+  await Promise.all(avancesADeduire.map(a =>
+    db.from('avances_salaire')
+      .update({
+        statut:             'deduite',
+        montant_deduit_xaf: a.montant,
+        updated_at:         new Date().toISOString(),
+      })
+      .eq('id', a.id)
+      .then(({ error }) => { if (error) throw new Error(error.message) }),
+  ))
+
+  const retenuesADeduire = ((retenuesSalaire ?? []) as RetenueRow[])
+    .filter(r => r.statut === 'active')
+    .map(r => ({
+      id: r.id,
+      montant: Math.round(Number(r.montant_xaf ?? 0)),
+    }))
+
+  await Promise.all(retenuesADeduire.map(r =>
+    db.from('retenues_salaire')
+      .update({
+        statut:             'deduite',
+        montant_deduit_xaf: r.montant,
+        updated_at:         new Date().toISOString(),
+      })
+      .eq('id', r.id)
+      .then(({ error }) => { if (error) throw new Error(error.message) }),
+  ))
+
   // PDF optionnel (en parallèle)
   if (genererPdf && bulletinsCalc.length > 0) {
     await Promise.all(bulletinsCalc.map(async (b) => {
@@ -694,6 +888,10 @@ async function genererBulletinsMois(
         const path = `bulletins/${moisStr}/${b.employe_id}.pdf`
         await db.storage.from('paie').upload(path, buf, { contentType: 'application/pdf', upsert: true })
         const { data: { publicUrl } } = db.storage.from('paie').getPublicUrl(path)
+        await db.from('bulletins_paie')
+          .update({ pdf_url: publicUrl, pdf_generated_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq('employe_id', b.employe_id)
+          .eq('mois', moisStr)
         pdfs.push({ employe_nom: b.employe_nom, pdf_url: publicUrl })
       } catch {
         pdfs.push({ employe_nom: b.employe_nom, pdf_url: null })
@@ -713,6 +911,8 @@ async function genererBulletinsMois(
   const totalEmployeur = bulletinsCalc.reduce((s, b) => s + b.cout_employeur_xaf, 0)
   const totalIRPP      = bulletinsCalc.reduce((s, b) => s + b.irpp_xaf, 0)
   const totalCNPS      = bulletinsCalc.reduce((s, b) => s + b.cotisation_cnps_xaf + b.cnps_employeur_xaf, 0)
+  const totalAvances   = bulletinsCalc.reduce((s, b) => s + b.avance_deduite_xaf, 0)
+  const totalRetenues  = bulletinsCalc.reduce((s, b) => s + b.retenue_deduite_xaf, 0)
 
   return {
     bulletins,
@@ -722,11 +922,686 @@ async function genererBulletinsMois(
       cout_total_employeur_xaf:  Math.round(totalEmployeur),
       total_irpp_xaf:            Math.round(totalIRPP),
       total_cnps_xaf:            Math.round(totalCNPS),
+      total_avances_deduites_xaf: Math.round(totalAvances),
+      total_retenues_deduites_xaf: Math.round(totalRetenues),
     },
   }
 }
 
 // ── GET /rh/paie?mois=YYYY-MM  — lecture des bulletins existants ───────────────
+
+router.get('/rh/avances-salaire', requireRole(['admin', 'superviseur']), async (c) => {
+  const { mois, employe_id, statut } = c.req.query()
+
+  let q = db
+    .from('avances_salaire')
+    .select('*, employes(nom, poste, departement)', { count: 'exact' })
+
+  if (mois) q = q.eq('mois_deduction', mois)
+  if (employe_id) q = q.eq('employe_id', employe_id)
+  if (statut) q = q.eq('statut', statut)
+
+  const { data, count, error } = await q
+    .order('date_avance', { ascending: false })
+    .order('created_at', { ascending: false })
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  const avances = (data ?? []).map(mapAvanceSalaireDb)
+  return c.json({
+    data: avances,
+    total: count ?? avances.length,
+    total_xaf: avances.reduce((s, a) => s + Number(a.montant_xaf ?? 0), 0),
+  })
+})
+
+router.post('/rh/avances-salaire', requireRole(['admin']), zValidator('json', avanceSalaireSchema), async (c) => {
+  const user = c.get('user')
+  const body = c.req.valid('json')
+  const compteTresorerie = body.compte_tresorerie ?? compteTresorerieAttendu(body.mode_paiement)
+
+  if (!compteTresorerie || compteTresorerie !== compteTresorerieAttendu(body.mode_paiement)) {
+    return c.json({ error: 'Compte de tresorerie incoherent avec le mode de paiement', code: 'COMPTE_TRESORERIE_INVALIDE' }, 422)
+  }
+
+  const { data: employe, error: employeError } = await db
+    .from('employes')
+    .select('id, nom, poste, departement, statut')
+    .eq('id', body.employe_id)
+    .single()
+
+  if (employeError || !employe) return c.json({ error: 'Employe introuvable', code: 'EMPLOYE_NOT_FOUND' }, 404)
+
+  const emp = employe as { id: string; nom: string; poste: string; departement: string; statut: string }
+  if (!['actif', 'conge', 'essai'].includes(emp.statut)) {
+    return c.json({ error: 'Une avance ne peut etre enregistree que pour un employe actif, en conge ou en essai', code: 'EMPLOYE_INACTIF' }, 422)
+  }
+
+  const numeroSortie = await genererNumeroRh('sorties_tresorerie', 'SOR')
+  const { data: sortie, error: sortieError } = await db
+    .from('sorties_tresorerie')
+    .insert({
+      numero:              numeroSortie,
+      charge_id:           null,
+      date_sortie:         body.date_avance,
+      beneficiaire:        emp.nom,
+      motif:               body.motif || `Avance sur salaire - ${emp.nom}`,
+      montant_xaf:         Math.round(body.montant_xaf),
+      mode_paiement:       body.mode_paiement,
+      compte_tresorerie:   compteTresorerie,
+      reference_paiement:  body.reference_paiement ?? null,
+      statut:              'validee',
+      justificatif_statut: 'non_requis',
+      notes:               body.notes ?? null,
+      created_by:          user.id,
+      sync_status:         'synced',
+    })
+    .select()
+    .single()
+
+  if (sortieError || !sortie) return c.json({ error: sortieError?.message ?? 'Sortie de tresorerie non creee' }, 400)
+
+  const sortieRow = sortie as {
+    id: string; numero: string; date_sortie: string; beneficiaire: string; motif: string
+    montant_xaf: number; compte_tresorerie: string; charge_id?: string | null; created_by?: string
+  }
+
+  const compta = await genererEcritureSortieTresorerie({ ...sortieRow, compte_debit: '422' })
+  if (!compta.ok) {
+    await db.from('sorties_tresorerie').update({ statut: 'annulee', updated_at: new Date().toISOString() }).eq('id', sortieRow.id)
+    return c.json({ error: compta.error ?? 'Ecriture comptable non creee', code: 'COMPTA_FAILED' }, 400)
+  }
+
+  const { data, error } = await db
+    .from('avances_salaire')
+    .insert({
+      employe_id:          body.employe_id,
+      sortie_id:           sortieRow.id,
+      date_avance:         body.date_avance,
+      mois_deduction:      body.mois_deduction,
+      montant_xaf:         Math.round(body.montant_xaf),
+      montant_deduit_xaf:  0,
+      statut:              'payee',
+      mode_paiement:       body.mode_paiement,
+      compte_tresorerie:   compteTresorerie,
+      reference_paiement:  body.reference_paiement ?? null,
+      motif:               body.motif ?? null,
+      notes:               body.notes ?? null,
+      created_by:          user.id,
+      sync_status:         'synced',
+    })
+    .select('*, employes(nom, poste, departement)')
+    .single()
+
+  if (error || !data) return c.json({ error: error?.message ?? 'Avance non creee' }, 400)
+  return c.json(mapAvanceSalaireDb(data), 201)
+})
+
+router.patch('/rh/avances-salaire/:id/annuler', requireRole(['admin']), async (c) => {
+  const { id } = c.req.param()
+  const user = c.get('user')
+
+  const { data: existing, error } = await db
+    .from('avances_salaire')
+    .select('*, sorties_tresorerie(numero)')
+    .eq('id', id)
+    .single()
+
+  if (error || !existing) return c.json({ error: 'Avance introuvable', code: 'NOT_FOUND' }, 404)
+
+  const avance = existing as {
+    statut: string
+    sortie_id: string | null
+    sorties_tresorerie?: { numero?: string } | null
+  }
+
+  if (avance.statut === 'deduite') {
+    return c.json({ error: 'Avance deja deduite sur un bulletin. Annulation impossible sans corriger la paie.', code: 'AVANCE_DEDUITE' }, 422)
+  }
+  if (avance.statut === 'annulee') return c.json(mapAvanceSalaireDb(existing))
+
+  await db.from('avances_salaire')
+    .update({ statut: 'annulee', updated_at: new Date().toISOString() })
+    .eq('id', id)
+
+  if (avance.sortie_id) {
+    await db.from('sorties_tresorerie')
+      .update({ statut: 'annulee', updated_at: new Date().toISOString() })
+      .eq('id', avance.sortie_id)
+
+    const numero = avance.sorties_tresorerie?.numero
+    if (numero) {
+      await annulerEcrituresReference({
+        reference_doc: `SOR-${numero}`,
+        date:          new Date().toISOString().slice(0, 10),
+        created_by:    user.id,
+      })
+    }
+  }
+
+  const { data } = await db
+    .from('avances_salaire')
+    .select('*, employes(nom, poste, departement)')
+    .eq('id', id)
+    .single()
+
+  return c.json(mapAvanceSalaireDb(data))
+})
+
+router.get('/rh/retenues-salaire', requireRole(['admin', 'superviseur']), async (c) => {
+  const { mois, employe_id, statut } = c.req.query()
+
+  let q = db
+    .from('retenues_salaire')
+    .select('*, employes(nom, poste, departement)', { count: 'exact' })
+
+  if (mois) q = q.eq('mois_deduction', mois)
+  if (employe_id) q = q.eq('employe_id', employe_id)
+  if (statut) q = q.eq('statut', statut)
+
+  const { data, count, error } = await q
+    .order('created_at', { ascending: false })
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  const retenues = (data ?? []).map(mapRetenueSalaireDb)
+  return c.json({
+    data: retenues,
+    total: count ?? retenues.length,
+    total_xaf: retenues.reduce((s, r) => s + Number(r.montant_xaf ?? 0), 0),
+  })
+})
+
+router.post('/rh/retenues-salaire', requireRole(['admin']), zValidator('json', retenueSalaireSchema), async (c) => {
+  const user = c.get('user')
+  const body = c.req.valid('json')
+
+  const { data: employe, error: employeError } = await db
+    .from('employes')
+    .select('id, statut')
+    .eq('id', body.employe_id)
+    .single()
+
+  if (employeError || !employe) return c.json({ error: 'Employe introuvable', code: 'EMPLOYE_NOT_FOUND' }, 404)
+  if (!['actif', 'conge', 'essai'].includes((employe as { statut: string }).statut)) {
+    return c.json({ error: 'Une retenue ne peut etre enregistree que pour un employe actif, en conge ou en essai', code: 'EMPLOYE_INACTIF' }, 422)
+  }
+
+  const { data, error } = await db
+    .from('retenues_salaire')
+    .insert({
+      employe_id:          body.employe_id,
+      mois_deduction:      body.mois_deduction,
+      type:                body.type,
+      libelle:             body.libelle,
+      montant_xaf:         Math.round(body.montant_xaf),
+      montant_deduit_xaf:  0,
+      statut:              'active',
+      notes:               body.notes ?? null,
+      created_by:          user.id,
+      sync_status:         'synced',
+    })
+    .select('*, employes(nom, poste, departement)')
+    .single()
+
+  if (error || !data) return c.json({ error: error?.message ?? 'Retenue non creee' }, 400)
+  return c.json(mapRetenueSalaireDb(data), 201)
+})
+
+router.patch('/rh/retenues-salaire/:id/annuler', requireRole(['admin']), async (c) => {
+  const { id } = c.req.param()
+
+  const { data: existing, error } = await db
+    .from('retenues_salaire')
+    .select('*')
+    .eq('id', id)
+    .single()
+
+  if (error || !existing) return c.json({ error: 'Retenue introuvable', code: 'NOT_FOUND' }, 404)
+
+  const retenue = existing as { statut: string }
+  if (retenue.statut === 'deduite') {
+    return c.json({ error: 'Retenue deja deduite sur un bulletin. Annulation impossible sans corriger la paie.', code: 'RETENUE_DEDUITE' }, 422)
+  }
+  if (retenue.statut === 'annulee') return c.json(mapRetenueSalaireDb(existing))
+
+  const { data } = await db
+    .from('retenues_salaire')
+    .update({ statut: 'annulee', updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select('*, employes(nom, poste, departement)')
+    .single()
+
+  return c.json(mapRetenueSalaireDb(data))
+})
+
+async function calculerCotisationsMois(mois: string, userId?: string) {
+  const { data: bulletins, error } = await db
+    .from('bulletins_paie')
+    .select('*')
+    .eq('mois', mois)
+
+  if (error) throw new Error(error.message)
+
+  const rows = (bulletins ?? []) as Array<{
+    salaire_base_xaf?: number; heures_sup_xaf?: number; primes_xaf?: number
+    cotisation_cnps_xaf?: number; cnps_employeur_xaf?: number; irpp_xaf?: number
+    avance_deduite_xaf?: number; retenue_deduite_xaf?: number
+    net_xaf?: number; cout_employeur_xaf?: number
+  }>
+
+  const totalBrut = rows.reduce((s, b) => s + Number(b.salaire_base_xaf ?? 0) + Number(b.heures_sup_xaf ?? 0) + Number(b.primes_xaf ?? 0), 0)
+  const cnpsSalarie = rows.reduce((s, b) => s + Number(b.cotisation_cnps_xaf ?? 0), 0)
+  const cnpsEmployeur = rows.reduce((s, b) => s + Number(b.cnps_employeur_xaf ?? 0), 0)
+
+  return {
+    mois,
+    nb_bulletins: rows.length,
+    total_brut_xaf: Math.round(totalBrut),
+    cnps_salarie_xaf: Math.round(cnpsSalarie),
+    cnps_employeur_xaf: Math.round(cnpsEmployeur),
+    total_cnps_xaf: Math.round(cnpsSalarie + cnpsEmployeur),
+    irpp_xaf: Math.round(rows.reduce((s, b) => s + Number(b.irpp_xaf ?? 0), 0)),
+    total_avances_deduites_xaf: Math.round(rows.reduce((s, b) => s + Number(b.avance_deduite_xaf ?? 0), 0)),
+    total_retenues_deduites_xaf: Math.round(rows.reduce((s, b) => s + Number(b.retenue_deduite_xaf ?? 0), 0)),
+    net_a_payer_xaf: Math.round(rows.reduce((s, b) => s + Number(b.net_xaf ?? 0), 0)),
+    cout_total_employeur_xaf: Math.round(rows.reduce((s, b) => s + Number(b.cout_employeur_xaf ?? 0), 0)),
+    statut: 'calculee',
+    created_by: userId,
+    sync_status: 'synced',
+  }
+}
+
+async function calculerPeriodePaie(mois: string, userId?: string) {
+  const { data: bulletins, error } = await db
+    .from('bulletins_paie')
+    .select('*')
+    .eq('mois', mois)
+
+  if (error) throw new Error(error.message)
+
+  const rows = (bulletins ?? []) as Array<{
+    salaire_base_xaf?: number; heures_sup_xaf?: number; primes_xaf?: number
+    cotisation_cnps_xaf?: number; cnps_employeur_xaf?: number; irpp_xaf?: number
+    avance_deduite_xaf?: number; retenue_deduite_xaf?: number; deductions_xaf?: number
+    net_xaf?: number; cout_employeur_xaf?: number
+  }>
+
+  const totalBrut = rows.reduce((s, b) => s + Number(b.salaire_base_xaf ?? 0) + Number(b.heures_sup_xaf ?? 0) + Number(b.primes_xaf ?? 0), 0)
+  const cnpsSalarie = rows.reduce((s, b) => s + Number(b.cotisation_cnps_xaf ?? 0), 0)
+  const cnpsEmployeur = rows.reduce((s, b) => s + Number(b.cnps_employeur_xaf ?? 0), 0)
+  const irpp = rows.reduce((s, b) => s + Number(b.irpp_xaf ?? 0), 0)
+  const avances = rows.reduce((s, b) => s + Number(b.avance_deduite_xaf ?? 0), 0)
+  const retenues = rows.reduce((s, b) => s + Number(b.retenue_deduite_xaf ?? 0), 0)
+  const totalDeductions = rows.reduce((s, b) => s + Number(b.deductions_xaf ?? 0), 0)
+  const autresDeductions = Math.max(0, totalDeductions - avances - retenues)
+
+  return {
+    mois,
+    nb_bulletins: rows.length,
+    total_brut_xaf: Math.round(totalBrut),
+    cnps_salarie_xaf: Math.round(cnpsSalarie),
+    cnps_employeur_xaf: Math.round(cnpsEmployeur),
+    irpp_xaf: Math.round(irpp),
+    total_avances_deduites_xaf: Math.round(avances),
+    total_retenues_deduites_xaf: Math.round(retenues),
+    total_autres_deductions_xaf: Math.round(autresDeductions),
+    net_a_payer_xaf: Math.round(rows.reduce((s, b) => s + Number(b.net_xaf ?? 0), 0)),
+    cout_total_employeur_xaf: Math.round(rows.reduce((s, b) => s + Number(b.cout_employeur_xaf ?? 0), 0)),
+    created_by: userId,
+    sync_status: 'synced',
+  }
+}
+
+router.get('/rh/cotisations-sociales', requireRole(['admin', 'superviseur']), async (c) => {
+  const mois = c.req.query('mois')
+  if (!mois || !/^\d{4}-\d{2}$/.test(mois)) {
+    return c.json({ error: 'Parametre mois requis (ex : 2024-05)', code: 'MISSING_MOIS' }, 400)
+  }
+
+  const { data, error } = await db
+    .from('cotisations_sociales')
+    .select('*')
+    .eq('mois', mois)
+    .maybeSingle()
+
+  if (error) return c.json({ error: error.message }, 500)
+  if (data) return c.json(data)
+
+  try {
+    return c.json(await calculerCotisationsMois(mois))
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500)
+  }
+})
+
+router.post('/rh/cotisations-sociales', requireRole(['admin']), zValidator('json', cotisationsSocialesSchema), async (c) => {
+  const user = c.get('user')
+  const { mois } = c.req.valid('json')
+
+  try {
+    const payload = await calculerCotisationsMois(mois, user.id)
+    const { data, error } = await db
+      .from('cotisations_sociales')
+      .upsert({ ...payload, updated_at: new Date().toISOString() }, { onConflict: 'mois' })
+      .select()
+      .single()
+
+    if (error) return c.json({ error: error.message }, 400)
+    return c.json(data, 201)
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500)
+  }
+})
+
+router.patch('/rh/cotisations-sociales/:id/statut', requireRole(['admin']), zValidator('json', z.object({
+  statut: z.enum(['validee', 'payee']),
+})), async (c) => {
+  const user = c.get('user')
+  const { id } = c.req.param()
+  const { statut } = c.req.valid('json')
+
+  const { data: existing } = await db.from('cotisations_sociales').select('statut').eq('id', id).single()
+  if (!existing) return c.json({ error: 'Cotisation introuvable', code: 'NOT_FOUND' }, 404)
+
+  const ex = existing as { statut: string }
+  const allowed: Record<string, string[]> = { calculee: ['validee'], validee: ['payee'], payee: [] }
+  if (!(allowed[ex.statut] ?? []).includes(statut)) {
+    return c.json({ error: `Transition "${ex.statut}" vers "${statut}" non autorisee`, code: 'INVALID_TRANSITION' }, 422)
+  }
+
+  const update = statut === 'validee'
+    ? { statut, validated_by: user.id, validated_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    : { statut, paid_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+
+  const { data, error } = await db.from('cotisations_sociales').update(update).eq('id', id).select().single()
+  if (error) return c.json({ error: error.message }, 400)
+  return c.json(data)
+})
+
+router.get('/rh/paie-periodes', requireRole(['admin', 'superviseur']), async (c) => {
+  const mois = c.req.query('mois')
+
+  let q = db.from('paie_periodes').select('*', { count: 'exact' })
+  if (mois) q = q.eq('mois', mois)
+
+  const { data, count, error } = await q.order('mois', { ascending: false })
+  if (error) return c.json({ error: error.message }, 500)
+
+  return c.json({
+    data: data ?? [],
+    total: count ?? (data ?? []).length,
+  })
+})
+
+router.post('/rh/paie/:mois/valider', requireRole(['admin']), async (c) => {
+  const user = c.get('user')
+  const { mois } = c.req.param()
+  if (!/^\d{4}-\d{2}$/.test(mois)) {
+    return c.json({ error: 'Format mois requis : YYYY-MM', code: 'INVALID_MOIS' }, 400)
+  }
+
+  try {
+    const periode = await calculerPeriodePaie(mois, user.id)
+    if (periode.nb_bulletins === 0) {
+      return c.json({ error: 'Aucun bulletin a valider pour ce mois', code: 'NO_BULLETINS' }, 422)
+    }
+
+    const { data: dejaVires } = await db
+      .from('bulletins_paie')
+      .select('id')
+      .eq('mois', mois)
+      .eq('statut', 'vire')
+      .limit(1)
+
+    if ((dejaVires ?? []).length > 0) {
+      return c.json({ error: 'La paie de ce mois contient deja des bulletins vires', code: 'PAIE_DEJA_VIREE' }, 422)
+    }
+
+    await db.from('bulletins_paie')
+      .update({ statut: 'valide', validated_by: user.id, validated_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq('mois', mois)
+      .eq('statut', 'en_attente')
+
+    const compta = await genererEcrituresPaieValidation(periode)
+    if (!compta.ok) return c.json({ error: compta.error ?? 'Ecritures de paie non creees', code: 'COMPTA_FAILED' }, 400)
+
+    const { data, error } = await db.from('paie_periodes')
+      .upsert({
+        ...periode,
+        statut:       'validee',
+        validated_by: user.id,
+        validated_at: new Date().toISOString(),
+        updated_at:   new Date().toISOString(),
+      }, { onConflict: 'mois' })
+      .select()
+      .single()
+
+    if (error) return c.json({ error: error.message }, 400)
+
+    const cotisationsPayload = await calculerCotisationsMois(mois, user.id)
+    await db.from('cotisations_sociales')
+      .upsert({ ...cotisationsPayload, updated_at: new Date().toISOString() }, { onConflict: 'mois' })
+
+    return c.json(data, 201)
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500)
+  }
+})
+
+router.post('/rh/paie/:mois/virer', requireRole(['admin']), zValidator('json', paiementPaieSchema), async (c) => {
+  const user = c.get('user')
+  const { mois } = c.req.param()
+  const body = c.req.valid('json')
+  if (!/^\d{4}-\d{2}$/.test(mois)) {
+    return c.json({ error: 'Format mois requis : YYYY-MM', code: 'INVALID_MOIS' }, 400)
+  }
+
+  const compteTresorerie = body.compte_tresorerie ?? compteTresorerieAttendu(body.mode_paiement)
+  if (!compteTresorerie || compteTresorerie !== compteTresorerieAttendu(body.mode_paiement)) {
+    return c.json({ error: 'Compte de tresorerie incoherent avec le mode de paiement', code: 'COMPTE_TRESORERIE_INVALIDE' }, 422)
+  }
+
+  const { data: periodeExistante } = await db
+    .from('paie_periodes')
+    .select('*')
+    .eq('mois', mois)
+    .maybeSingle()
+
+  if (!periodeExistante || (periodeExistante as { statut: string }).statut !== 'validee') {
+    return c.json({ error: 'La paie doit etre validee avant le paiement', code: 'PAIE_NON_VALIDEE' }, 422)
+  }
+
+  const periode = periodeExistante as { id: string; net_a_payer_xaf: number; statut: string }
+  const datePaiement = body.date_paiement ?? new Date().toISOString().slice(0, 10)
+  const numeroSortie = await genererNumeroRh('sorties_tresorerie', 'SOR')
+
+  const { data: sortie, error: sortieError } = await db.from('sorties_tresorerie')
+    .insert({
+      numero:              numeroSortie,
+      charge_id:           null,
+      date_sortie:         datePaiement,
+      beneficiaire:        'Personnel TAFDIL',
+      motif:               `Paiement salaires - ${mois}`,
+      montant_xaf:         Math.round(Number(periode.net_a_payer_xaf ?? 0)),
+      mode_paiement:       body.mode_paiement,
+      compte_tresorerie:   compteTresorerie,
+      reference_paiement:  body.reference_paiement ?? null,
+      statut:              'validee',
+      justificatif_statut: 'non_requis',
+      notes:               body.notes ?? null,
+      created_by:          user.id,
+      sync_status:         'synced',
+    })
+    .select()
+    .single()
+
+  if (sortieError || !sortie) return c.json({ error: sortieError?.message ?? 'Sortie de tresorerie non creee' }, 400)
+
+  const compta = await genererEcrituresPaiePaiement({
+    mois,
+    date:              datePaiement,
+    montant_xaf:       Math.round(Number(periode.net_a_payer_xaf ?? 0)),
+    compte_tresorerie: compteTresorerie,
+    created_by:        user.id,
+  })
+
+  if (!compta.ok) {
+    await db.from('sorties_tresorerie').update({ statut: 'annulee', updated_at: new Date().toISOString() }).eq('id', (sortie as { id: string }).id)
+    return c.json({ error: compta.error ?? 'Ecritures de paiement non creees', code: 'COMPTA_FAILED' }, 400)
+  }
+
+  await db.from('bulletins_paie')
+    .update({ statut: 'vire', paid_by: user.id, paid_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('mois', mois)
+    .eq('statut', 'valide')
+
+  const { data, error } = await db.from('paie_periodes')
+    .update({
+      statut:              'viree',
+      sortie_id:           (sortie as { id: string }).id,
+      mode_paiement:       body.mode_paiement,
+      compte_tresorerie:   compteTresorerie,
+      reference_paiement:  body.reference_paiement ?? null,
+      paid_by:             user.id,
+      paid_at:             new Date().toISOString(),
+      updated_at:          new Date().toISOString(),
+    })
+    .eq('id', periode.id)
+    .select()
+    .single()
+
+  if (error) return c.json({ error: error.message }, 400)
+  return c.json(data)
+})
+
+router.get('/rh/paie/:mois/controle', requireRole(['admin', 'superviseur']), async (c) => {
+  const { mois } = c.req.param()
+  if (!/^\d{4}-\d{2}$/.test(mois)) {
+    return c.json({ error: 'Format mois requis : YYYY-MM', code: 'INVALID_MOIS' }, 400)
+  }
+
+  try {
+    const calc = await calculerPeriodePaie(mois)
+    const controles: Array<{ code: string; niveau: 'ok' | 'warning' | 'error'; message: string; attendu?: number; observe?: number }> = []
+
+    const { data: periode } = await db.from('paie_periodes').select('*').eq('mois', mois).maybeSingle()
+    const { data: cotisations } = await db.from('cotisations_sociales').select('*').eq('mois', mois).maybeSingle()
+    const { data: actifsAvances } = await db.from('avances_salaire').select('id').eq('mois_deduction', mois).eq('statut', 'payee')
+    const { data: activesRetenues } = await db.from('retenues_salaire').select('id').eq('mois_deduction', mois).eq('statut', 'active')
+    const { data: ecrituresPaie } = await db.from('ecritures_comptables').select('debit_xaf, credit_xaf').eq('reference_doc', `PAIE-${mois}`)
+    const { data: ecrituresPaiement } = await db.from('ecritures_comptables').select('debit_xaf, credit_xaf').eq('reference_doc', `PAY-PAIE-${mois}`)
+
+    controles.push(calc.nb_bulletins > 0
+      ? { code: 'BULLETINS_PRESENTS', niveau: 'ok', message: `${calc.nb_bulletins} bulletin(s) trouve(s)` }
+      : { code: 'BULLETINS_ABSENTS', niveau: 'error', message: 'Aucun bulletin genere pour ce mois' })
+
+    if (periode) {
+      const p = periode as { net_a_payer_xaf?: number; total_brut_xaf?: number; statut?: string }
+      const netOk = Math.round(Number(p.net_a_payer_xaf ?? 0)) === calc.net_a_payer_xaf
+      const brutOk = Math.round(Number(p.total_brut_xaf ?? 0)) === calc.total_brut_xaf
+      controles.push(netOk && brutOk
+        ? { code: 'PERIODE_SYNC', niveau: 'ok', message: 'Periode de paie coherente avec les bulletins' }
+        : { code: 'PERIODE_ECART', niveau: 'error', message: 'Periode de paie en ecart avec les bulletins', attendu: calc.net_a_payer_xaf, observe: Math.round(Number(p.net_a_payer_xaf ?? 0)) })
+      if (p.statut === 'validee' || p.statut === 'viree') {
+        controles.push((ecrituresPaie ?? []).length > 0
+          ? { code: 'ECRITURES_PAIE_PRESENTES', niveau: 'ok', message: 'Ecritures de validation paie presentes' }
+          : { code: 'ECRITURES_PAIE_ABSENTES', niveau: 'error', message: 'Paie validee sans ecritures comptables de validation' })
+      }
+      if (p.statut === 'viree') {
+        controles.push((ecrituresPaiement ?? []).length > 0
+          ? { code: 'ECRITURES_PAIEMENT_PRESENTES', niveau: 'ok', message: 'Ecritures de paiement paie presentes' }
+          : { code: 'ECRITURES_PAIEMENT_ABSENTES', niveau: 'error', message: 'Paie viree sans ecritures de paiement' })
+      }
+    } else {
+      controles.push({ code: 'PERIODE_ABSENTE', niveau: calc.nb_bulletins > 0 ? 'warning' : 'ok', message: 'Periode de paie non encore validee' })
+    }
+
+    if (cotisations) {
+      const co = cotisations as { total_cnps_xaf?: number; irpp_xaf?: number }
+      const totalCnps = calc.cnps_salarie_xaf + calc.cnps_employeur_xaf
+      controles.push(Math.round(Number(co.total_cnps_xaf ?? 0)) === totalCnps && Math.round(Number(co.irpp_xaf ?? 0)) === calc.irpp_xaf
+        ? { code: 'COTISATIONS_SYNC', niveau: 'ok', message: 'Cotisations coherentes avec les bulletins' }
+        : { code: 'COTISATIONS_ECART', niveau: 'error', message: 'Cotisations en ecart avec les bulletins', attendu: totalCnps, observe: Math.round(Number(co.total_cnps_xaf ?? 0)) })
+    } else {
+      controles.push({ code: 'COTISATIONS_ABSENTES', niveau: calc.nb_bulletins > 0 ? 'warning' : 'ok', message: 'Cotisations mensuelles non persistees' })
+    }
+
+    controles.push((actifsAvances ?? []).length === 0
+      ? { code: 'AVANCES_TRAITEES', niveau: 'ok', message: 'Aucune avance payee en attente de deduction' }
+      : { code: 'AVANCES_NON_DEDUITES', niveau: 'warning', message: `${(actifsAvances ?? []).length} avance(s) payee(s) encore non deduite(s)` })
+
+    controles.push((activesRetenues ?? []).length === 0
+      ? { code: 'RETENUES_TRAITEES', niveau: 'ok', message: 'Aucune retenue active en attente de deduction' }
+      : { code: 'RETENUES_NON_DEDUITES', niveau: 'warning', message: `${(activesRetenues ?? []).length} retenue(s) active(s) encore non deduite(s)` })
+
+    const balance = (rows: Array<{ debit_xaf?: number; credit_xaf?: number }> | null | undefined) => {
+      const debit = (rows ?? []).reduce((s, e) => s + Number(e.debit_xaf ?? 0), 0)
+      const credit = (rows ?? []).reduce((s, e) => s + Number(e.credit_xaf ?? 0), 0)
+      return { debit: Math.round(debit), credit: Math.round(credit), ok: Math.round(debit) === Math.round(credit) }
+    }
+
+    const bPaie = balance(ecrituresPaie as Array<{ debit_xaf?: number; credit_xaf?: number }> | null)
+    if ((ecrituresPaie ?? []).length > 0) {
+      controles.push(bPaie.ok
+        ? { code: 'BALANCE_PAIE_OK', niveau: 'ok', message: 'Ecritures de validation equilibrees' }
+        : { code: 'BALANCE_PAIE_KO', niveau: 'error', message: 'Ecritures de validation desequilibrees', attendu: bPaie.debit, observe: bPaie.credit })
+    }
+
+    const bPay = balance(ecrituresPaiement as Array<{ debit_xaf?: number; credit_xaf?: number }> | null)
+    if ((ecrituresPaiement ?? []).length > 0) {
+      controles.push(bPay.ok
+        ? { code: 'BALANCE_PAIEMENT_OK', niveau: 'ok', message: 'Ecritures de paiement equilibrees' }
+        : { code: 'BALANCE_PAIEMENT_KO', niveau: 'error', message: 'Ecritures de paiement desequilibrees', attendu: bPay.debit, observe: bPay.credit })
+    }
+
+    const hasError = controles.some(x => x.niveau === 'error')
+    const hasWarning = controles.some(x => x.niveau === 'warning')
+    return c.json({
+      mois,
+      statut_global: hasError ? 'error' : hasWarning ? 'warning' : 'ok',
+      totaux: calc,
+      controles,
+    })
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500)
+  }
+})
+
+router.get('/rh/paie/:mois/export', requireRole(['admin', 'superviseur']), async (c) => {
+  const { mois } = c.req.param()
+  if (!/^\d{4}-\d{2}$/.test(mois)) {
+    return c.json({ error: 'Format mois requis : YYYY-MM', code: 'INVALID_MOIS' }, 400)
+  }
+
+  const { data, error } = await db
+    .from('bulletins_paie')
+    .select('*, employes(nom, poste, departement)')
+    .eq('mois', mois)
+    .order('employe_id')
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  const rows = (data ?? []).map(mapBulletinDb)
+  const headers = [
+    'Mois', 'Employe', 'Poste', 'Departement', 'Base', 'Heures sup', 'Primes', 'Brut',
+    'CNPS salarie', 'CNPS employeur', 'IRPP', 'Avances deduites', 'Retenues deduites',
+    'Deductions totales', 'Net a payer', 'Cout employeur', 'Statut',
+  ]
+  const csv = [
+    headers.map(csvCell).join(';'),
+    ...rows.map(r => [
+      r.mois, r.employe_nom, r.poste, r.departement, r.salaire_base_xaf, r.heures_sup_xaf,
+      r.primes_xaf, r.salaire_brut_xaf, r.cnps_salarie_xaf, r.cnps_employeur_xaf,
+      r.irpp_xaf, r.avance_deduite_xaf, r.retenue_deduite_xaf, r.deductions_xaf,
+      r.salaire_net_xaf, r.cout_employeur_xaf, r.statut,
+    ].map(csvCell).join(';')),
+  ].join('\n')
+
+  c.header('Content-Type', 'text/csv; charset=utf-8')
+  c.header('Content-Disposition', `attachment; filename="paie-${mois}.csv"`)
+  return c.text(`\uFEFF${csv}`)
+})
 
 router.get('/rh/paie', requireRole(['admin', 'superviseur']), async (c) => {
   const mois = c.req.query('mois')
@@ -749,6 +1624,8 @@ router.get('/rh/paie', requireRole(['admin', 'superviseur']), async (c) => {
     total:                     count ?? 0,
     mois,
     masse_salariale_nette_xaf: bulletins.reduce((s, b) => s + b.salaire_net_xaf, 0),
+    avances_deduites_xaf:      bulletins.reduce((s, b) => s + b.avance_deduite_xaf, 0),
+    retenues_deduites_xaf:     bulletins.reduce((s, b) => s + b.retenue_deduite_xaf, 0),
     deja_genere:               (count ?? 0) > 0,
   })
 })
@@ -807,6 +1684,7 @@ router.patch('/rh/paie/:id/statut', requireRole(['admin']), zValidator('json', z
 })), async (c) => {
   const { id }  = c.req.param()
   const { statut } = c.req.valid('json')
+  const user = c.get('user')
 
   const { data: existing } = await db
     .from('bulletins_paie')
@@ -833,9 +1711,13 @@ router.patch('/rh/paie/:id/statut', requireRole(['admin']), zValidator('json', z
     }, 422)
   }
 
+  const update = statut === 'valide'
+    ? { statut, validated_by: user.id, validated_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    : { statut, paid_by: user.id, paid_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+
   const { data, error } = await db
     .from('bulletins_paie')
-    .update({ statut, updated_at: new Date().toISOString() })
+    .update(update)
     .eq('id', id)
     .select().single()
 
@@ -862,6 +1744,8 @@ router.get('/rh/paie/:id/pdf', requireRole(['admin', 'superviseur']), async (c) 
     mois: string; salaire_base_xaf: number; heures_sup_xaf: number; primes_xaf: number
     deductions_xaf: number; cotisation_cnps_xaf: number; cnps_employeur_xaf: number
     irpp_xaf: number; net_xaf: number; cout_employeur_xaf: number
+    avance_deduite_xaf?: number
+    retenue_deduite_xaf?: number
     employes: { id: string; nom: string; poste: string; departement: string; type_contrat: string; cnps: string | null; salaire_base_xaf: number } | null
   }
 
@@ -883,6 +1767,8 @@ router.get('/rh/paie/:id/pdf', requireRole(['admin', 'superviseur']), async (c) 
     cotisation_cnps_xaf: row.cotisation_cnps_xaf ?? 0,
     cnps_employeur_xaf:  row.cnps_employeur_xaf ?? 0,
     irpp_xaf:            row.irpp_xaf ?? 0,
+    avance_deduite_xaf:  row.avance_deduite_xaf ?? 0,
+    retenue_deduite_xaf: row.retenue_deduite_xaf ?? 0,
     net_xaf:             row.net_xaf ?? 0,
     cout_employeur_xaf:  row.cout_employeur_xaf ?? 0,
   }

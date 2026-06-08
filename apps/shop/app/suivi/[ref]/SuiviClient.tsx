@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   CheckCircle2, Circle, Clock, Package, Truck, Star,
-  MessageCircle, ChevronLeft, Share2, Copy, Check,
+  MessageCircle, ChevronLeft, Share2, Copy, Check, Loader2,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
 
@@ -26,6 +26,13 @@ export interface CommandeSuivi {
   created_at:       string
   updated_at:       string
   photos_livraison: string[] | null
+}
+
+type SmsStatus = {
+  ok: boolean
+  message: string
+  skipped?: boolean
+  retry_after_seconds?: number
 }
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
@@ -190,6 +197,10 @@ export function SuiviClient({ commandeRef, initialCommande }: {
 }) {
   const [commande, setCommande] = useState<CommandeSuivi>(initialCommande)
   const [flash,    setFlash]    = useState(false)
+  const [smsPhone, setSmsPhone] = useState('')
+  const [smsNotice, setSmsNotice] = useState<SmsStatus | null>(null)
+  const [smsLoading, setSmsLoading] = useState(false)
+  const [smsCooldown, setSmsCooldown] = useState(0)
   const prevStatut = useRef(initialCommande.statut_commande)
 
   // ── Realtime subscription ──────────────────────────────────────────────────
@@ -220,6 +231,42 @@ export function SuiviClient({ commandeRef, initialCommande }: {
 
     return () => { void sb.removeChannel(channel) }
   }, [commandeRef])
+
+  useEffect(() => {
+    if (smsCooldown <= 0) return
+    const timer = window.setInterval(() => {
+      setSmsCooldown((value) => Math.max(0, value - 1))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [smsCooldown])
+
+  const handleResendSms = async () => {
+    setSmsLoading(true)
+    try {
+      const res = await fetch(`/api/shop/commandes/${commandeRef}/sms/renvoyer`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ telephone: smsPhone }),
+      })
+      const payload = await res.json().catch(() => ({})) as {
+        sms?: SmsStatus
+        error?: string
+        retry_after_seconds?: number
+      }
+      const nextNotice = payload.sms ?? {
+        ok: false,
+        message: payload.error ?? 'SMS non envoyé. Réessayez plus tard.',
+        retry_after_seconds: payload.retry_after_seconds ?? 120,
+      }
+      setSmsNotice(nextNotice)
+      setSmsCooldown(nextNotice.retry_after_seconds ?? (nextNotice.ok ? 120 : 0))
+    } catch {
+      setSmsNotice({ ok: false, message: 'Connexion impossible au service SMS.', retry_after_seconds: 120 })
+      setSmsCooldown(120)
+    } finally {
+      setSmsLoading(false)
+    }
+  }
 
   const lignesHt = commande.lignes.reduce((s, l) => s + (l.total_ht ?? l.quantite * l.prix_unitaire), 0)
   const montant_ht = Math.round(Number(commande.montant_ht ?? lignesHt))
@@ -412,6 +459,33 @@ export function SuiviClient({ commandeRef, initialCommande }: {
 
       {/* ── Contact ── */}
       <div className="space-y-3">
+        <div className="rounded-2xl border border-gray-100 bg-white p-4 text-left">
+          <p className="text-sm font-black text-forge-dark">Recevoir le lien de suivi par SMS</p>
+          <p className="mt-0.5 text-xs text-forge-steel">Saisissez le téléphone utilisé lors de la commande.</p>
+          <div className="mt-3 flex gap-2">
+            <input
+              value={smsPhone}
+              onChange={(e) => setSmsPhone(e.target.value)}
+              placeholder="+237 677 123 456"
+              className="min-w-0 flex-1 rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none transition focus:border-forge-red focus:ring-2 focus:ring-forge-red/10"
+            />
+            <button
+              type="button"
+              onClick={handleResendSms}
+              disabled={smsLoading || smsCooldown > 0 || smsPhone.replace(/\D/g, '').length < 8}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-forge-red px-4 py-2 text-sm font-bold text-white transition hover:bg-forge-red-dark disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {smsLoading && <Loader2 size={14} className="animate-spin" />}
+              {smsCooldown > 0 ? `${smsCooldown}s` : 'Renvoyer'}
+            </button>
+          </div>
+          {smsNotice && (
+            <p className={`mt-2 text-xs font-semibold ${smsNotice.ok ? 'text-green-600' : 'text-amber-700'}`}>
+              {smsNotice.message}
+            </p>
+          )}
+        </div>
+
         <a
           href={waUrl}
           target="_blank"

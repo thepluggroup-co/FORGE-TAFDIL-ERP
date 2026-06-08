@@ -6,7 +6,14 @@ import { supabaseAdmin } from '@forge/db'
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import { generateFacturePDF, generateRecuPDF, uploadPDF } from '../services/pdf.service'
-import { genererEcritureVente, genererEcritureEncaissement, planComptable } from '../services/comptabilite.service'
+import {
+  genererEcritureVente,
+  genererEcritureEncaissement,
+  genererEcritureCharge,
+  genererEcritureSortieTresorerie,
+  annulerEcrituresReference,
+  planComptable,
+} from '../services/comptabilite.service'
 import { getFacturesLocal, getCreditsLocal, localCreateFacture, localCreateCredit, localRembourser } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
 import type { HonoVariables } from '../types'
@@ -14,6 +21,46 @@ import type { HonoVariables } from '../types'
 const router = new Hono<{ Variables: HonoVariables }>()
 type FinanceContext = Context<{ Variables: HonoVariables }>
 const TVA_RATE = 0.1925
+
+const chargeSchema = z.object({
+  fournisseur_nom:     z.string().min(1),
+  categorie:           z.string().min(1),
+  compte_charge:       z.string().min(2),
+  date_charge:         z.string(),
+  date_echeance:       z.string().optional(),
+  montant_ht_xaf:      z.number().min(0),
+  tva_xaf:             z.number().min(0).default(0),
+  mode_paiement:       z.enum(['caisse', 'banque', 'mobile_money', 'credit_fournisseur']).optional(),
+  compte_tresorerie:   z.string().optional(),
+  reference_paiement:  z.string().optional(),
+  justificatif_statut: z.enum(['manquant', 'recu', 'non_requis']).default('manquant'),
+  description:         z.string().optional(),
+  notes:               z.string().optional(),
+  commande_id:         z.string().optional(),
+  projet_id:           z.string().optional(),
+  equipement_id:       z.string().optional(),
+})
+
+const chargeUpdateSchema = chargeSchema.partial().extend({
+  statut: z.enum(['brouillon', 'a_valider', 'validee', 'payee', 'annulee']).optional(),
+})
+
+const sortieTresorerieSchema = z.object({
+  charge_id:           z.string().optional(),
+  date_sortie:         z.string(),
+  beneficiaire:        z.string().min(1),
+  motif:               z.string().min(1),
+  montant_xaf:         z.number().positive(),
+  mode_paiement:       z.enum(['caisse', 'banque', 'mobile_money']),
+  compte_tresorerie:   z.string().min(2),
+  reference_paiement:  z.string().optional(),
+  justificatif_statut: z.enum(['manquant', 'recu', 'non_requis']).default('manquant'),
+  notes:               z.string().optional(),
+})
+
+const sortieUpdateSchema = sortieTresorerieSchema.partial().extend({
+  statut: z.enum(['brouillon', 'validee', 'annulee']).optional(),
+})
 
 function xaf(n: number): string {
   return n.toLocaleString('fr-FR') + ' XAF'
@@ -186,6 +233,77 @@ function validateDebitCredit(debit: number, credit: number) {
   return !((debit <= 0 && credit <= 0) || (debit > 0 && credit > 0))
 }
 
+async function genererNumeroFinance(table: string, prefix: string) {
+  const year = new Date().getFullYear()
+  const { count } = await db
+    .from(table)
+    .select('*', { count: 'exact', head: true })
+    .gte('created_at', `${year}-01-01T00:00:00.000Z`)
+  return `${prefix}-${year}-${String((count ?? 0) + 1).padStart(4, '0')}`
+}
+
+function compteTresorerieAttendu(mode: string) {
+  if (mode === 'caisse') return '571'
+  if (mode === 'banque') return '521'
+  if (mode === 'mobile_money') return '521'
+  return undefined
+}
+
+function validerCompteCharge(compte: string) {
+  const plan = findCompte(compte)
+  if (!plan) return { ok: false, error: 'Compte charge inexistant dans le plan comptable' }
+  if (!compte.startsWith('6')) return { ok: false, error: 'Le compte charge doit etre un compte de classe 6' }
+  return { ok: true, compte: plan }
+}
+
+function validerMontantsCharge(ht: number, tva: number) {
+  const total = Math.round(Number(ht ?? 0) + Number(tva ?? 0))
+  if (tva > total) return { ok: false, total, error: 'La TVA ne peut pas etre superieure au montant TTC' }
+  return { ok: true, total }
+}
+
+async function refreshChargePaiement(chargeId: string) {
+  const { data: sorties, error: sortiesError } = await db
+    .from('sorties_tresorerie')
+    .select('montant_xaf')
+    .eq('charge_id', chargeId)
+    .neq('statut', 'annulee')
+
+  if (sortiesError) throw sortiesError
+
+  const montantPaye = ((sorties ?? []) as { montant_xaf: number }[])
+    .reduce((sum, sortie) => sum + Number(sortie.montant_xaf ?? 0), 0)
+
+  const { data: charge, error: chargeError } = await db
+    .from('charges')
+    .select('montant_ttc_xaf, statut')
+    .eq('id', chargeId)
+    .single()
+
+  if (chargeError) throw chargeError
+
+  const c = charge as { montant_ttc_xaf: number; statut: string }
+  const nextStatut = c.statut === 'annulee'
+    ? 'annulee'
+    : montantPaye >= Number(c.montant_ttc_xaf ?? 0)
+      ? 'payee'
+      : c.statut === 'payee'
+        ? 'validee'
+        : c.statut
+
+  const { error: updateError } = await db
+    .from('charges')
+    .update({
+      montant_paye_xaf: Math.round(montantPaye),
+      statut: nextStatut,
+      updated_at: new Date().toISOString(),
+      sync_status: 'synced',
+    })
+    .eq('id', chargeId)
+
+  if (updateError) throw updateError
+}
+
 function periodeRange(periode: string) {
   const [year, month] = periode.split('-').map(Number)
   const start = `${year}-${String(month).padStart(2, '0')}-01`
@@ -257,6 +375,61 @@ async function getFacturesPeriode(from: string, to: string) {
   }>
 }
 
+async function getChargesPeriode(from: string, to: string) {
+  const { data, error } = await db
+    .from('charges')
+    .select('id, numero, fournisseur_nom, categorie, compte_charge, compte_charge_label, date_charge, date_echeance, statut, montant_ht_xaf, tva_xaf, montant_ttc_xaf, montant_paye_xaf, justificatif_statut, description')
+    .neq('statut', 'annulee')
+    .gte('date_charge', from)
+    .lte('date_charge', to)
+    .order('date_charge', { ascending: true })
+
+  if (error) throw new Error(error.message)
+  return (data ?? []) as Array<{
+    id: string
+    numero: string
+    fournisseur_nom: string
+    categorie: string
+    compte_charge: string
+    compte_charge_label: string
+    date_charge: string
+    date_echeance?: string | null
+    statut: string
+    montant_ht_xaf: number
+    tva_xaf: number
+    montant_ttc_xaf: number
+    montant_paye_xaf: number
+    justificatif_statut: string
+    description?: string | null
+  }>
+}
+
+async function getSortiesPeriode(from: string, to: string) {
+  const { data, error } = await db
+    .from('sorties_tresorerie')
+    .select('id, numero, charge_id, date_sortie, beneficiaire, motif, montant_xaf, mode_paiement, compte_tresorerie, reference_paiement, statut, justificatif_statut')
+    .neq('statut', 'annulee')
+    .gte('date_sortie', from)
+    .lte('date_sortie', to)
+    .order('date_sortie', { ascending: true })
+
+  if (error) throw new Error(error.message)
+  return (data ?? []) as Array<{
+    id: string
+    numero: string
+    charge_id?: string | null
+    date_sortie: string
+    beneficiaire: string
+    motif: string
+    montant_xaf: number
+    mode_paiement: string
+    compte_tresorerie: string
+    reference_paiement?: string | null
+    statut: string
+    justificatif_statut: string
+  }>
+}
+
 function calculerIndicateursFinance(factures: Awaited<ReturnType<typeof getFacturesPeriode>>) {
   const today = new Date().toISOString().slice(0, 10)
   const caFacture = factures.reduce((s, f) => s + Number(f.total_ttc_xaf ?? 0), 0)
@@ -274,6 +447,15 @@ function calculerIndicateursFinance(factures: Awaited<ReturnType<typeof getFactu
     reste_a_encaisser_xaf: Math.round(reste),
     factures_en_retard: enRetard.length,
     montant_retard_xaf: Math.round(enRetard.reduce((s, f) => s + Math.max(0, Number(f.total_ttc_xaf ?? 0) - Number(f.montant_paye_xaf ?? 0)), 0)),
+  }
+}
+
+function calculerTvaDeductibleCharges(charges: Awaited<ReturnType<typeof getChargesPeriode>>) {
+  const chargesValidees = charges.filter((charge) => ['validee', 'payee'].includes(charge.statut))
+  return {
+    charges_validees: chargesValidees.length,
+    tva_deductible_xaf: Math.round(chargesValidees.reduce((s, charge) => s + Number(charge.tva_xaf ?? 0), 0)),
+    base_charges_ht_xaf: Math.round(chargesValidees.reduce((s, charge) => s + Number(charge.montant_ht_xaf ?? 0), 0)),
   }
 }
 
@@ -404,8 +586,13 @@ router.post('/declarations-fiscales/tva/preparer', requireRole(['admin']), zVali
   const echeance = new Date(Date.UTC(month === 12 ? year + 1 : year, month === 12 ? 0 : month, 15)).toISOString().slice(0, 10)
 
   try {
-    const factures = await getFacturesPeriode(start, end)
-    const montantTva = Math.round(factures.reduce((s, f) => s + Number(f.tva_xaf ?? 0), 0))
+    const [factures, charges] = await Promise.all([
+      getFacturesPeriode(start, end),
+      getChargesPeriode(start, end),
+    ])
+    const tvaCollectee = Math.round(factures.reduce((s, f) => s + Number(f.tva_xaf ?? 0), 0))
+    const tvaCharges = calculerTvaDeductibleCharges(charges)
+    const montantTva = Math.round(tvaCollectee - tvaCharges.tva_deductible_xaf)
     const indicateurs = calculerIndicateursFinance(factures)
 
     const { data, error } = await db
@@ -416,7 +603,7 @@ router.post('/declarations-fiscales/tva/preparer', requireRole(['admin']), zVali
         statut:      'a_declarer',
         montant_xaf: montantTva,
         echeance,
-        notes:       body.notes ?? `TVA calculee sur ${factures.length} facture(s), du ${start} au ${end}.`,
+        notes:       body.notes ?? `TVA nette du ${start} au ${end} : collectee ${tvaCollectee} XAF - deductible ${tvaCharges.tva_deductible_xaf} XAF sur ${tvaCharges.charges_validees} charge(s) validee(s). Livraison client hors base TVA.`,
         updated_at:  new Date().toISOString(),
         sync_status: 'synced',
       }, { onConflict: 'type,periode' })
@@ -424,7 +611,18 @@ router.post('/declarations-fiscales/tva/preparer', requireRole(['admin']), zVali
       .single()
 
     if (error) return c.json({ error: error.message }, 500)
-    return c.json({ data, periode: { from: start, to: end }, indicateurs }, 201)
+    return c.json({
+      data,
+      periode: { from: start, to: end },
+      indicateurs,
+      tva: {
+        tva_collectee_xaf: tvaCollectee,
+        tva_deductible_xaf: tvaCharges.tva_deductible_xaf,
+        tva_nette_xaf: montantTva,
+        credit_tva_xaf: montantTva < 0 ? Math.abs(montantTva) : 0,
+        tva_a_payer_xaf: montantTva > 0 ? montantTva : 0,
+      },
+    }, 201)
   } catch (error) {
     return c.json({ error: (error as Error).message }, 500)
   }
@@ -502,11 +700,17 @@ router.get('/finance/exports/tva.xls', requireRole(['admin', 'superviseur']), as
   const periode = c.req.query('periode') ?? new Date().toISOString().slice(0, 7)
   const { start, end } = periodeRange(periode)
   try {
-    const factures = await getFacturesPeriode(start, end)
+    const [factures, charges] = await Promise.all([
+      getFacturesPeriode(start, end),
+      getChargesPeriode(start, end),
+    ])
     const totalHt = Math.round(factures.reduce((s, f) => s + Number(f.total_ht_xaf ?? 0), 0))
-    const totalTva = Math.round(factures.reduce((s, f) => s + Number(f.tva_xaf ?? 0), 0))
+    const totalTvaCollectee = Math.round(factures.reduce((s, f) => s + Number(f.tva_xaf ?? 0), 0))
     const totalLivraison = Math.round(factures.reduce((s, f) => s + Number(f.frais_livraison_xaf ?? 0), 0))
     const totalTtc = Math.round(factures.reduce((s, f) => s + Number(f.total_ttc_xaf ?? 0), 0))
+    const tvaCharges = calculerTvaDeductibleCharges(charges)
+    const tvaNette = Math.round(totalTvaCollectee - tvaCharges.tva_deductible_xaf)
+    const chargesValidees = charges.filter((charge) => ['validee', 'payee'].includes(charge.statut))
 
     const html = `
       <html><head><meta charset="utf-8" /></head><body>
@@ -514,7 +718,12 @@ router.get('/finance/exports/tva.xls', requireRole(['admin', 'superviseur']), as
         <p>Periode fiscale : ${escapeXml(periode)} | Du ${escapeXml(start)} au ${escapeXml(end)} | Taux : 19,25 %</p>
         ${tableHtml('Resume TVA', ['Rubrique', 'Annotation', 'Montant XAF'], [
           ['Base taxable HT', 'Somme des produits/prestations HT factures', totalHt],
-          ['TVA collectee', 'TVA calculee uniquement sur la base taxable HT', totalTva],
+          ['TVA collectee', 'TVA calculee uniquement sur la base taxable HT', totalTvaCollectee],
+          ['Base charges HT validees', 'Charges validees/payees ouvrant droit a deduction', tvaCharges.base_charges_ht_xaf],
+          ['TVA deductible', 'TVA deductible issue des charges validees/payees', tvaCharges.tva_deductible_xaf],
+          ['TVA nette', 'TVA collectee moins TVA deductible', tvaNette],
+          ['TVA a payer', 'Montant positif de TVA nette', Math.max(0, tvaNette)],
+          ['Credit TVA', 'Montant a reporter si TVA nette negative', Math.max(0, -tvaNette)],
           ['Livraison hors TVA', 'Frais de livraison ajoutes apres TVA', totalLivraison],
           ['Total TTC facture', 'HT + TVA + livraison', totalTtc],
         ])}
@@ -527,6 +736,15 @@ router.get('/finance/exports/tva.xls', requireRole(['admin', 'superviseur']), as
           Math.round(Number(f.tva_xaf ?? 0)),
           Math.round(Number(f.frais_livraison_xaf ?? 0)),
           Math.round(Number(f.total_ttc_xaf ?? 0)),
+        ]))}
+        ${tableHtml('Detail TVA deductible par charge', ['Numero', 'Fournisseur', 'Date', 'Statut', 'Compte', 'Base HT charge', 'TVA deductible'], chargesValidees.map((charge) => [
+          charge.numero,
+          charge.fournisseur_nom,
+          charge.date_charge,
+          charge.statut,
+          charge.compte_charge,
+          Math.round(Number(charge.montant_ht_xaf ?? 0)),
+          Math.round(Number(charge.tva_xaf ?? 0)),
         ]))}
       </body></html>
     `
@@ -854,6 +1072,86 @@ router.post('/factures/:id/whatsapp', requireRole(['admin']), zValidator('json',
   }
 })
 
+router.get('/finance/exports/charges.xls', requireRole(['admin', 'superviseur']), async (c) => {
+  const { from, to } = defaultDateRange(c)
+  try {
+    const [charges, sorties] = await Promise.all([
+      getChargesPeriode(from, to),
+      getSortiesPeriode(from, to),
+    ])
+
+    const totalHt = Math.round(charges.reduce((s, charge) => s + Number(charge.montant_ht_xaf ?? 0), 0))
+    const totalTva = Math.round(charges.reduce((s, charge) => s + Number(charge.tva_xaf ?? 0), 0))
+    const totalTtc = Math.round(charges.reduce((s, charge) => s + Number(charge.montant_ttc_xaf ?? 0), 0))
+    const totalPaye = Math.round(charges.reduce((s, charge) => s + Number(charge.montant_paye_xaf ?? 0), 0))
+    const totalSorties = Math.round(sorties.reduce((s, sortie) => s + Number(sortie.montant_xaf ?? 0), 0))
+    const justificatifsManquants = charges.filter((charge) => charge.justificatif_statut === 'manquant').length +
+      sorties.filter((sortie) => sortie.justificatif_statut === 'manquant').length
+
+    const chargeRows = charges.map((charge) => {
+      const solde = Math.max(0, Number(charge.montant_ttc_xaf ?? 0) - Number(charge.montant_paye_xaf ?? 0))
+      return [
+        charge.numero,
+        charge.date_charge,
+        charge.date_echeance ?? '',
+        charge.fournisseur_nom,
+        charge.categorie,
+        charge.compte_charge,
+        charge.compte_charge_label,
+        charge.statut,
+        Math.round(Number(charge.montant_ht_xaf ?? 0)),
+        Math.round(Number(charge.tva_xaf ?? 0)),
+        Math.round(Number(charge.montant_ttc_xaf ?? 0)),
+        Math.round(Number(charge.montant_paye_xaf ?? 0)),
+        Math.round(solde),
+        charge.justificatif_statut,
+        charge.description ?? '',
+      ]
+    })
+
+    const sortieRows = sorties.map((sortie) => [
+      sortie.numero,
+      sortie.date_sortie,
+      sortie.beneficiaire,
+      sortie.motif,
+      Math.round(Number(sortie.montant_xaf ?? 0)),
+      sortie.mode_paiement,
+      sortie.compte_tresorerie,
+      sortie.reference_paiement ?? '',
+      sortie.statut,
+      sortie.justificatif_statut,
+      sortie.charge_id ?? '',
+    ])
+
+    const html = `
+      <html><head><meta charset="utf-8" /></head><body>
+        <h1>Rapport Charges et sorties de tresorerie</h1>
+        <p>Periode : ${escapeXml(from)} au ${escapeXml(to)} | Devise : XAF | Genere le : ${escapeXml(new Date().toISOString().slice(0, 10))}</p>
+        ${tableHtml('Regle de coherence', ['Point', 'Regle appliquee'], [
+          ['Livraison client', 'Les frais de livraison factures au client ne sont pas enregistres comme charges comptables.'],
+          ['Charges', 'Une charge validee alimente les comptes de classe 6, TVA deductible 4432 et fournisseur 401.'],
+          ['Sorties', 'Une sortie rattachee a une charge solde le fournisseur et credite la tresorerie.'],
+        ])}
+        ${tableHtml('Resume charges', ['Indicateur', 'Annotation', 'Valeur'], [
+          ['Charges HT', 'Base des charges hors TVA', totalHt],
+          ['TVA deductible', 'TVA des charges saisies', totalTva],
+          ['Charges TTC', 'HT + TVA deductible', totalTtc],
+          ['Charges payees', 'Montant paye rattache aux charges', totalPaye],
+          ['Reste a payer', 'Charges TTC moins montant paye', Math.max(0, totalTtc - totalPaye)],
+          ['Sorties argent', 'Sorties de tresorerie non annulees', totalSorties],
+          ['Justificatifs manquants', 'Charges et sorties sans justificatif', justificatifsManquants],
+        ])}
+        ${tableHtml('Detail charges', ['Numero', 'Date', 'Echeance', 'Fournisseur', 'Categorie', 'Compte', 'Libelle compte', 'Statut', 'HT', 'TVA deductible', 'TTC', 'Paye', 'Solde', 'Justificatif', 'Description'], chargeRows)}
+        ${tableHtml('Detail sorties', ['Numero', 'Date', 'Beneficiaire', 'Motif', 'Montant', 'Mode', 'Compte tresorerie', 'Reference paiement', 'Statut', 'Justificatif', 'Charge ID'], sortieRows)}
+      </body></html>
+    `
+
+    return xlsResponse(c, `rapport-charges-${from}-${to}.xls`, html)
+  } catch (error) {
+    return c.json({ error: (error as Error).message }, 500)
+  }
+})
+
 // ══════════════════════════════════════════════════════════════════════════════
 // CRÉDITS
 // ══════════════════════════════════════════════════════════════════════════════
@@ -912,6 +1210,433 @@ router.post('/factures/:id/relance', requireRole(['admin', 'superviseur']), zVal
   if (relanceError) console.error('[finance] relance facture:', relanceError)
 
   return c.json({ url: waUrl, telephone, message, solde_restant_xaf: Math.round(solde) })
+})
+
+// Charges entreprise et sorties d'argent
+router.get('/charges', requireRole(['admin', 'superviseur']), async (c) => {
+  const { statut, categorie, fournisseur, from, to, justificatif } = c.req.query()
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1'))
+  const perPage = Math.min(200, parseInt(c.req.query('per_page') ?? '100'))
+  const start = (page - 1) * perPage
+
+  let q = db.from('charges').select('*, charges_justificatifs(id, nom_fichier, type_mime, storage_path, created_at)', { count: 'exact' })
+  if (statut) q = q.eq('statut', statut)
+  if (categorie) q = q.eq('categorie', categorie)
+  if (justificatif) q = q.eq('justificatif_statut', justificatif)
+  if (fournisseur) q = q.ilike('fournisseur_nom', `%${fournisseur}%`)
+  if (from) q = q.gte('date_charge', from)
+  if (to) q = q.lte('date_charge', to)
+
+  const { data, count, error } = await q.order('date_charge', { ascending: false }).range(start, start + perPage - 1)
+  if (error) return c.json({ error: error.message }, 500)
+
+  return c.json({
+    data: (data ?? []).map((row) => ({
+      ...row,
+      solde_restant_xaf: Math.max(0, Number((row as { montant_ttc_xaf?: number }).montant_ttc_xaf ?? 0) - Number((row as { montant_paye_xaf?: number }).montant_paye_xaf ?? 0)),
+    })),
+    total: count ?? 0,
+    page,
+    per_page: perPage,
+    total_pages: Math.ceil((count ?? 0) / perPage),
+  })
+})
+
+router.post('/charges', requireRole(['admin', 'superviseur']), zValidator('json', chargeSchema), async (c) => {
+  const user = c.get('user')
+  const body = c.req.valid('json')
+  const compte = validerCompteCharge(body.compte_charge)
+  if (!compte.ok || !compte.compte) return c.json({ error: compte.error, code: 'INVALID_ACCOUNT' }, 422)
+
+  const montants = validerMontantsCharge(body.montant_ht_xaf, body.tva_xaf)
+  if (!montants.ok) return c.json({ error: montants.error, code: 'INVALID_AMOUNT' }, 422)
+
+  if (body.mode_paiement && body.mode_paiement !== 'credit_fournisseur') {
+    const attendu = compteTresorerieAttendu(body.mode_paiement)
+    if (!body.compte_tresorerie || !body.compte_tresorerie.startsWith(attendu ?? '')) {
+      return c.json({ error: 'Compte de tresorerie incoherent avec le mode de paiement', code: 'INVALID_TREASURY_ACCOUNT' }, 422)
+    }
+  }
+
+  const numero = await genererNumeroFinance('charges', 'CHG')
+  const { data, error } = await db
+    .from('charges')
+    .insert({
+      ...body,
+      numero,
+      compte_charge_label: compte.compte.libelle,
+      montant_ttc_xaf: montants.total,
+      montant_paye_xaf: 0,
+      statut: 'brouillon',
+      created_by: user.id,
+      sync_status: 'synced',
+    })
+    .select()
+    .single()
+
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+  return c.json(data, 201)
+})
+
+router.get('/charges/dashboard', requireRole(['admin', 'superviseur']), async (c) => {
+  const { from, to } = defaultDateRange(c)
+
+  const [chargesRes, sortiesRes] = await Promise.all([
+    db
+      .from('charges')
+      .select('id, numero, fournisseur_nom, categorie, compte_charge, compte_charge_label, date_charge, statut, montant_ht_xaf, tva_xaf, montant_ttc_xaf, montant_paye_xaf, justificatif_statut')
+      .neq('statut', 'annulee')
+      .gte('date_charge', from)
+      .lte('date_charge', to)
+      .order('date_charge', { ascending: false }),
+    db
+      .from('sorties_tresorerie')
+      .select('id, numero, charge_id, date_sortie, beneficiaire, motif, montant_xaf, mode_paiement, compte_tresorerie, statut, justificatif_statut')
+      .neq('statut', 'annulee')
+      .gte('date_sortie', from)
+      .lte('date_sortie', to)
+      .order('date_sortie', { ascending: false }),
+  ])
+
+  if (chargesRes.error) return c.json({ error: chargesRes.error.message }, 500)
+  if (sortiesRes.error) return c.json({ error: sortiesRes.error.message }, 500)
+
+  type ChargeDash = {
+    id: string
+    numero: string
+    fournisseur_nom: string
+    categorie: string
+    compte_charge: string
+    compte_charge_label: string
+    date_charge: string
+    statut: string
+    montant_ht_xaf: number
+    tva_xaf: number
+    montant_ttc_xaf: number
+    montant_paye_xaf: number
+    justificatif_statut: string
+  }
+  type SortieDash = {
+    id: string
+    numero: string
+    charge_id?: string | null
+    date_sortie: string
+    beneficiaire: string
+    motif: string
+    montant_xaf: number
+    mode_paiement: string
+    compte_tresorerie: string
+    statut: string
+    justificatif_statut: string
+  }
+
+  const charges = (chargesRes.data ?? []) as ChargeDash[]
+  const sorties = (sortiesRes.data ?? []) as SortieDash[]
+  const totalCharges = charges.reduce((sum, charge) => sum + Number(charge.montant_ttc_xaf ?? 0), 0)
+  const totalPaye = charges.reduce((sum, charge) => sum + Number(charge.montant_paye_xaf ?? 0), 0)
+  const totalSorties = sorties.reduce((sum, sortie) => sum + Number(sortie.montant_xaf ?? 0), 0)
+  const totalTva = charges.reduce((sum, charge) => sum + Number(charge.tva_xaf ?? 0), 0)
+
+  const categories = new Map<string, { categorie: string; total_xaf: number; count: number }>()
+  const fournisseurs = new Map<string, { fournisseur_nom: string; total_xaf: number; count: number }>()
+  for (const charge of charges) {
+    const montant = Number(charge.montant_ttc_xaf ?? 0)
+    const cat = categories.get(charge.categorie) ?? { categorie: charge.categorie, total_xaf: 0, count: 0 }
+    cat.total_xaf += montant
+    cat.count += 1
+    categories.set(charge.categorie, cat)
+
+    const fournisseur = fournisseurs.get(charge.fournisseur_nom) ?? { fournisseur_nom: charge.fournisseur_nom, total_xaf: 0, count: 0 }
+    fournisseur.total_xaf += montant
+    fournisseur.count += 1
+    fournisseurs.set(charge.fournisseur_nom, fournisseur)
+  }
+
+  return c.json({
+    periode: { from, to },
+    kpis: {
+      total_charges_xaf: Math.round(totalCharges),
+      charges_payees_xaf: Math.round(totalPaye),
+      charges_a_payer_xaf: Math.round(Math.max(0, totalCharges - totalPaye)),
+      sorties_xaf: Math.round(totalSorties),
+      tva_deductible_xaf: Math.round(totalTva),
+      charges_a_valider: charges.filter((charge) => charge.statut === 'a_valider').length,
+      justificatifs_manquants: [
+        ...charges.filter((charge) => charge.justificatif_statut === 'manquant'),
+        ...sorties.filter((sortie) => sortie.justificatif_statut === 'manquant'),
+      ].length,
+    },
+    repartition_categories: [...categories.values()]
+      .map((row) => ({ ...row, total_xaf: Math.round(row.total_xaf) }))
+      .sort((a, b) => b.total_xaf - a.total_xaf),
+    top_fournisseurs: [...fournisseurs.values()]
+      .map((row) => ({ ...row, total_xaf: Math.round(row.total_xaf) }))
+      .sort((a, b) => b.total_xaf - a.total_xaf)
+      .slice(0, 8),
+    dernieres_charges: charges.slice(0, 8).map((charge) => ({
+      ...charge,
+      solde_restant_xaf: Math.max(0, Number(charge.montant_ttc_xaf ?? 0) - Number(charge.montant_paye_xaf ?? 0)),
+    })),
+    dernieres_sorties: sorties.slice(0, 8),
+  })
+})
+
+router.get('/charges/:id', requireRole(['admin', 'superviseur']), async (c) => {
+  const { id } = c.req.param()
+  const { data, error } = await db
+    .from('charges')
+    .select('*, sorties_tresorerie(*), charges_justificatifs(*)')
+    .eq('id', id)
+    .single()
+
+  if (error) return c.json({ error: error.message }, 404)
+  return c.json({
+    ...data,
+    solde_restant_xaf: Math.max(0, Number((data as { montant_ttc_xaf?: number }).montant_ttc_xaf ?? 0) - Number((data as { montant_paye_xaf?: number }).montant_paye_xaf ?? 0)),
+  })
+})
+
+router.put('/charges/:id', requireRole(['admin', 'superviseur']), zValidator('json', chargeUpdateSchema), async (c) => {
+  const { id } = c.req.param()
+  const body = c.req.valid('json')
+
+  const { data: existing, error: existingError } = await db.from('charges').select('statut').eq('id', id).single()
+  if (existingError || !existing) return c.json({ error: 'Charge introuvable', code: 'NOT_FOUND' }, 404)
+  if (!['brouillon', 'a_valider'].includes((existing as { statut: string }).statut)) {
+    return c.json({ error: 'Seules les charges brouillon ou a valider peuvent etre modifiees', code: 'LOCKED_CHARGE' }, 422)
+  }
+
+  const update: Record<string, unknown> = { ...body, updated_at: new Date().toISOString(), sync_status: 'synced' }
+
+  if (body.compte_charge) {
+    const compte = validerCompteCharge(body.compte_charge)
+    if (!compte.ok || !compte.compte) return c.json({ error: compte.error, code: 'INVALID_ACCOUNT' }, 422)
+    update.compte_charge_label = compte.compte.libelle
+  }
+
+  if (body.montant_ht_xaf !== undefined || body.tva_xaf !== undefined) {
+    const { data: charge } = await db.from('charges').select('montant_ht_xaf, tva_xaf').eq('id', id).single()
+    const current = charge as { montant_ht_xaf: number; tva_xaf: number }
+    const ht = body.montant_ht_xaf ?? Number(current?.montant_ht_xaf ?? 0)
+    const tva = body.tva_xaf ?? Number(current?.tva_xaf ?? 0)
+    const montants = validerMontantsCharge(ht, tva)
+    if (!montants.ok) return c.json({ error: montants.error, code: 'INVALID_AMOUNT' }, 422)
+    update.montant_ttc_xaf = montants.total
+  }
+
+  const { data, error } = await db.from('charges').update(update).eq('id', id).select().single()
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+  return c.json(data)
+})
+
+router.patch('/charges/:id/statut', requireRole(['admin', 'superviseur']), zValidator('json', z.object({
+  statut: z.enum(['a_valider', 'validee', 'annulee']),
+  notes: z.string().optional(),
+})), async (c) => {
+  const { id } = c.req.param()
+  const user = c.get('user')
+  const body = c.req.valid('json')
+
+  const { data: charge, error: chargeError } = await db.from('charges').select('statut, montant_paye_xaf').eq('id', id).single()
+  if (chargeError || !charge) return c.json({ error: 'Charge introuvable', code: 'NOT_FOUND' }, 404)
+
+  const statutActuel = (charge as { statut: string; montant_paye_xaf?: number }).statut
+  if (statutActuel === 'annulee' || statutActuel === 'payee') return c.json({ error: 'Statut de charge verrouille', code: 'LOCKED_CHARGE' }, 422)
+  if (body.statut === 'a_valider' && statutActuel !== 'brouillon') return c.json({ error: 'Seule une charge brouillon peut etre soumise', code: 'INVALID_TRANSITION' }, 422)
+  if (body.statut === 'validee' && !['brouillon', 'a_valider'].includes(statutActuel)) return c.json({ error: 'Transition de statut invalide', code: 'INVALID_TRANSITION' }, 422)
+  if (body.statut === 'annulee' && Number((charge as { montant_paye_xaf?: number }).montant_paye_xaf ?? 0) > 0) {
+    return c.json({ error: 'Annulez d abord les sorties rattachees avant d annuler cette charge', code: 'CHARGE_HAS_OUTFLOWS' }, 422)
+  }
+
+  const patch: Record<string, unknown> = { statut: body.statut, notes: body.notes, updated_at: new Date().toISOString(), sync_status: 'synced' }
+  if (body.statut === 'validee') {
+    patch.validated_by = user.id
+    patch.validated_at = new Date().toISOString()
+  }
+
+  const { data, error } = await db.from('charges').update(patch).eq('id', id).select().single()
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+  if (body.statut === 'validee') {
+    const compta = await genererEcritureCharge(data as {
+      id: string
+      numero: string
+      date_charge: string
+      fournisseur_nom: string
+      compte_charge: string
+      compte_charge_label: string
+      montant_ht_xaf: number
+      tva_xaf?: number
+      montant_ttc_xaf: number
+      created_by?: string
+    })
+    if (!compta.ok) return c.json({ error: compta.error, code: 'ACCOUNTING_ERROR' }, 500)
+  }
+  if (body.statut === 'annulee') {
+    const annulation = await annulerEcrituresReference({
+      reference_doc: `CHG-${(data as { numero: string }).numero}`,
+      date: new Date().toISOString().slice(0, 10),
+      created_by: user.id,
+    })
+    if (!annulation.ok) return c.json({ error: annulation.error, code: 'ACCOUNTING_CANCEL_ERROR' }, 500)
+  }
+  return c.json(data)
+})
+
+router.get('/sorties-tresorerie', requireRole(['admin', 'superviseur']), async (c) => {
+  const { charge_id, mode_paiement, statut, justificatif, from, to } = c.req.query()
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1'))
+  const perPage = Math.min(200, parseInt(c.req.query('per_page') ?? '100'))
+  const start = (page - 1) * perPage
+
+  let q = db.from('sorties_tresorerie').select('*, charges(numero, fournisseur_nom), charges_justificatifs(id, nom_fichier, type_mime, storage_path, created_at)', { count: 'exact' })
+  if (charge_id) q = q.eq('charge_id', charge_id)
+  if (mode_paiement) q = q.eq('mode_paiement', mode_paiement)
+  if (statut) q = q.eq('statut', statut)
+  if (justificatif) q = q.eq('justificatif_statut', justificatif)
+  if (from) q = q.gte('date_sortie', from)
+  if (to) q = q.lte('date_sortie', to)
+
+  const { data, count, error } = await q.order('date_sortie', { ascending: false }).range(start, start + perPage - 1)
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage, total_pages: Math.ceil((count ?? 0) / perPage) })
+})
+
+router.post('/sorties-tresorerie', requireRole(['admin', 'superviseur']), zValidator('json', sortieTresorerieSchema), async (c) => {
+  const user = c.get('user')
+  const body = c.req.valid('json')
+  const attendu = compteTresorerieAttendu(body.mode_paiement)
+  if (!body.compte_tresorerie.startsWith(attendu ?? '')) return c.json({ error: 'Compte de tresorerie incoherent avec le mode de paiement', code: 'INVALID_TREASURY_ACCOUNT' }, 422)
+
+  if (body.charge_id) {
+    const { data: charge, error: chargeError } = await db.from('charges').select('id, statut, montant_ttc_xaf, montant_paye_xaf').eq('id', body.charge_id).single()
+    if (chargeError || !charge) return c.json({ error: 'Charge introuvable', code: 'NOT_FOUND' }, 404)
+    const ch = charge as { statut: string; montant_ttc_xaf: number; montant_paye_xaf: number }
+    if (ch.statut === 'annulee') return c.json({ error: 'Charge annulee', code: 'LOCKED_CHARGE' }, 422)
+    if (!['validee', 'payee'].includes(ch.statut)) return c.json({ error: 'La charge doit etre validee avant une sortie rattachee', code: 'CHARGE_NOT_VALIDATED' }, 422)
+    const solde = Math.max(0, Number(ch.montant_ttc_xaf ?? 0) - Number(ch.montant_paye_xaf ?? 0))
+    if (body.montant_xaf > solde) return c.json({ error: 'La sortie depasse le solde restant de la charge', code: 'AMOUNT_EXCEEDED' }, 422)
+  }
+
+  const numero = await genererNumeroFinance('sorties_tresorerie', 'SOR')
+  const { data, error } = await db.from('sorties_tresorerie').insert({ ...body, numero, statut: 'validee', created_by: user.id, sync_status: 'synced' }).select().single()
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+  const compta = await genererEcritureSortieTresorerie(data as {
+    id: string
+    numero: string
+    date_sortie: string
+    beneficiaire: string
+    motif: string
+    montant_xaf: number
+    compte_tresorerie: string
+    charge_id?: string | null
+    created_by?: string
+  })
+  if (!compta.ok) return c.json({ error: compta.error, code: 'ACCOUNTING_ERROR' }, 500)
+  if (body.charge_id) await refreshChargePaiement(body.charge_id)
+  return c.json(data, 201)
+})
+
+router.put('/sorties-tresorerie/:id', requireRole(['admin', 'superviseur']), zValidator('json', sortieUpdateSchema), async (c) => {
+  const { id } = c.req.param()
+  const body = c.req.valid('json')
+  const { data: existing, error: existingError } = await db.from('sorties_tresorerie').select('statut, charge_id').eq('id', id).single()
+  if (existingError || !existing) return c.json({ error: 'Sortie introuvable', code: 'NOT_FOUND' }, 404)
+  if ((existing as { statut: string }).statut === 'annulee') return c.json({ error: 'Sortie annulee verrouillee', code: 'LOCKED_OUTFLOW' }, 422)
+  if ((existing as { statut: string }).statut === 'validee') return c.json({ error: 'Une sortie validee doit etre annulee puis recreee pour correction', code: 'LOCKED_ACCOUNTED_OUTFLOW' }, 422)
+
+  if (body.mode_paiement && body.compte_tresorerie) {
+    const attendu = compteTresorerieAttendu(body.mode_paiement)
+    if (!body.compte_tresorerie.startsWith(attendu ?? '')) return c.json({ error: 'Compte de tresorerie incoherent avec le mode de paiement', code: 'INVALID_TREASURY_ACCOUNT' }, 422)
+  }
+
+  const { data, error } = await db.from('sorties_tresorerie').update({ ...body, updated_at: new Date().toISOString(), sync_status: 'synced' }).eq('id', id).select().single()
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+
+  const oldChargeId = (existing as { charge_id?: string | null }).charge_id
+  if (oldChargeId) await refreshChargePaiement(oldChargeId)
+  if (body.charge_id && body.charge_id !== oldChargeId) await refreshChargePaiement(body.charge_id)
+  return c.json(data)
+})
+
+router.patch('/sorties-tresorerie/:id/annuler', requireRole(['admin', 'superviseur']), async (c) => {
+  const { id } = c.req.param()
+  const user = c.get('user')
+  const { data: existing, error: existingError } = await db.from('sorties_tresorerie').select('charge_id, numero, statut').eq('id', id).single()
+  if (existingError || !existing) return c.json({ error: 'Sortie introuvable', code: 'NOT_FOUND' }, 404)
+  if ((existing as { statut: string }).statut === 'annulee') return c.json({ error: 'Sortie deja annulee', code: 'LOCKED_OUTFLOW' }, 422)
+
+  const { data, error } = await db.from('sorties_tresorerie').update({ statut: 'annulee', updated_at: new Date().toISOString(), sync_status: 'synced' }).eq('id', id).select().single()
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+
+  const annulation = await annulerEcrituresReference({
+    reference_doc: `SOR-${(existing as { numero: string }).numero}`,
+    date: new Date().toISOString().slice(0, 10),
+    created_by: user.id,
+  })
+  if (!annulation.ok) return c.json({ error: annulation.error, code: 'ACCOUNTING_CANCEL_ERROR' }, 500)
+
+  const chargeId = (existing as { charge_id?: string | null }).charge_id
+  if (chargeId) await refreshChargePaiement(chargeId)
+  return c.json(data)
+})
+
+async function uploadJustificatif(c: FinanceContext, parent: { chargeId?: string; sortieId?: string }) {
+  const user = c.get('user')
+  const formData = await c.req.formData()
+  const file = formData.get('file') as File | null
+  const description = formData.get('description')?.toString()
+  if (!file) return c.json({ error: 'Fichier requis', code: 'MISSING_FILE' }, 400)
+  if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return c.json({ error: 'Seuls PDF, JPG, PNG et WEBP sont acceptes', code: 'INVALID_FILE_TYPE' }, 422)
+
+  const ext = file.name.split('.').pop() ?? 'bin'
+  const owner = parent.chargeId ? `charges/${parent.chargeId}` : `sorties/${parent.sortieId}`
+  const path = `${owner}/${Date.now()}.${ext}`
+  const buf = Buffer.from(await file.arrayBuffer())
+
+  const { error: upErr } = await db.storage.from('charges-justificatifs').upload(path, buf, { contentType: file.type, upsert: false })
+  if (upErr) return c.json({ error: upErr.message }, 500)
+
+  const { data, error } = await db.from('charges_justificatifs').insert({
+    charge_id: parent.chargeId ?? null,
+    sortie_id: parent.sortieId ?? null,
+    nom_fichier: file.name,
+    type_mime: file.type,
+    storage_path: path,
+    taille_bytes: buf.length,
+    description,
+    created_by: user.id,
+  }).select().single()
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+
+  if (parent.chargeId) await db.from('charges').update({ justificatif_statut: 'recu', updated_at: new Date().toISOString() }).eq('id', parent.chargeId)
+  if (parent.sortieId) await db.from('sorties_tresorerie').update({ justificatif_statut: 'recu', updated_at: new Date().toISOString() }).eq('id', parent.sortieId)
+
+  const url = db.storage.from('charges-justificatifs').getPublicUrl(path).data.publicUrl
+  return c.json({ ...data, url }, 201)
+}
+
+router.get('/charges/:id/justificatifs', requireRole(['admin', 'superviseur']), async (c) => {
+  const { id } = c.req.param()
+  const { data, error } = await db.from('charges_justificatifs').select('*').eq('charge_id', id).order('created_at', { ascending: false })
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data: (data ?? []).map((doc) => ({ ...doc, url: db.storage.from('charges-justificatifs').getPublicUrl((doc as { storage_path: string }).storage_path).data.publicUrl })) })
+})
+
+router.post('/charges/:id/justificatifs', requireRole(['admin', 'superviseur']), async (c) => {
+  const { id } = c.req.param()
+  return uploadJustificatif(c, { chargeId: id })
+})
+
+router.get('/sorties-tresorerie/:id/justificatifs', requireRole(['admin', 'superviseur']), async (c) => {
+  const { id } = c.req.param()
+  const { data, error } = await db.from('charges_justificatifs').select('*').eq('sortie_id', id).order('created_at', { ascending: false })
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data: (data ?? []).map((doc) => ({ ...doc, url: db.storage.from('charges-justificatifs').getPublicUrl((doc as { storage_path: string }).storage_path).data.publicUrl })) })
+})
+
+router.post('/sorties-tresorerie/:id/justificatifs', requireRole(['admin', 'superviseur']), async (c) => {
+  const { id } = c.req.param()
+  return uploadJustificatif(c, { sortieId: id })
 })
 
 router.get('/credits/alertes', async (c) => {

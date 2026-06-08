@@ -13,10 +13,15 @@ import {
   useCreateEmploye, usePresenceBatch,
   useConges, useCreateConge, useApprouverConge, useSoldesConges,
   useUpdateStatutBulletin, useBulletinPdf,
+  useAvancesSalaire, useCreateAvanceSalaire, useAnnulerAvanceSalaire,
+  useRetenuesSalaire, useCreateRetenueSalaire, useAnnulerRetenueSalaire,
+  useCotisationsSociales, useGenererCotisationsSociales, useUpdateStatutCotisationsSociales,
+  usePaiePeriode, useValiderPaieMois, useVirerPaieMois,
+  useControlePaie, useExportPaie,
 } from '@/hooks/useRH'
 import type {
   Employe as EmployeApi, Presence as PresenceApi, BulletinPaie,
-  Conge, SoldeConge,
+  Conge, SoldeConge, AvanceSalaire, RetenueSalaire,
 } from '@/hooks/useRH'
 import { useAuth } from '@/context/AuthContext'
 
@@ -26,6 +31,8 @@ type EmployeRecord  = EmployeApi  & Record<string, unknown>
 type PresenceRecord = PresenceApi & Record<string, unknown>
 type BulletinRecord = BulletinPaie & Record<string, unknown>
 type CongeRecord    = Conge & Record<string, unknown>
+type AvanceRecord   = AvanceSalaire & Record<string, unknown>
+type RetenueRecord  = RetenueSalaire & Record<string, unknown>
 
 // ── Tabs ───────────────────────────────────────────────────────────────────────
 
@@ -66,6 +73,36 @@ const PAIE_MAP: Record<string, { label: string; color: string; bg: string }> = {
   paye:       { label: 'Payé',       color: '#1d4ed8', bg: '#dbeafe' },
 }
 
+const AVANCE_MAP: Record<string, { label: string; color: string; bg: string }> = {
+  payee:   { label: 'Payée',   color: '#1d4ed8', bg: '#dbeafe' },
+  deduite: { label: 'Déduite', color: '#15803d', bg: '#dcfce7' },
+  annulee: { label: 'Annulée', color: '#6b7280', bg: '#f3f4f6' },
+}
+
+const RETENUE_MAP: Record<string, { label: string; color: string; bg: string }> = {
+  active:  { label: 'Active',  color: '#d97706', bg: '#fef3c7' },
+  deduite: { label: 'Déduite', color: '#15803d', bg: '#dcfce7' },
+  annulee: { label: 'Annulée', color: '#6b7280', bg: '#f3f4f6' },
+}
+
+const COTISATION_MAP: Record<string, { label: string; color: string; bg: string }> = {
+  calculee: { label: 'Calculée', color: '#d97706', bg: '#fef3c7' },
+  validee:  { label: 'Validée',  color: '#15803d', bg: '#dcfce7' },
+  payee:    { label: 'Payée',    color: '#1d4ed8', bg: '#dbeafe' },
+}
+
+const PAIE_PERIODE_MAP: Record<string, { label: string; color: string; bg: string }> = {
+  calculee: { label: 'Calculée', color: '#d97706', bg: '#fef3c7' },
+  validee:  { label: 'Validée',  color: '#15803d', bg: '#dcfce7' },
+  viree:    { label: 'Virée',    color: '#1d4ed8', bg: '#dbeafe' },
+}
+
+const CONTROLE_PAIE_MAP: Record<string, { label: string; color: string; bg: string }> = {
+  ok:      { label: 'OK',        color: '#15803d', bg: '#dcfce7' },
+  warning: { label: 'Attention', color: '#d97706', bg: '#fef3c7' },
+  error:   { label: 'Erreur',    color: '#dc2626', bg: '#fee2e2' },
+}
+
 function SmallBadge({ statut, map }: { statut: string; map: Record<string, { label: string; color: string; bg: string }> }) {
   const s = map[statut] ?? { label: statut, color: '#6b7280', bg: '#f3f4f6' }
   return (
@@ -96,6 +133,37 @@ const DEFAULT_EMP: NouvelEmployeForm = {
   salaire_base_xaf: 0, telephone: '', cnps: '',
 }
 const DEPARTEMENTS = ['Atelier soudure', 'Atelier découpe', 'Atelier CNC', 'Pliage', 'Logistique', 'Administration']
+
+interface AvanceSalaireForm {
+  employe_id: string; date_avance: string; mois_deduction: string; montant_xaf: number
+  mode_paiement: 'caisse' | 'banque' | 'mobile_money'
+  reference_paiement: string; motif: string; notes: string
+}
+interface RetenueSalaireForm {
+  employe_id: string; mois_deduction: string
+  type: 'absence' | 'materiel' | 'pret_interne' | 'discipline' | 'autre'
+  libelle: string; montant_xaf: number; notes: string
+}
+
+const createDefaultAvance = (mois: string): AvanceSalaireForm => ({
+  employe_id: '',
+  date_avance: new Date().toISOString().split('T')[0],
+  mois_deduction: mois,
+  montant_xaf: 0,
+  mode_paiement: 'caisse',
+  reference_paiement: '',
+  motif: '',
+  notes: '',
+})
+
+const createDefaultRetenue = (mois: string): RetenueSalaireForm => ({
+  employe_id: '',
+  mois_deduction: mois,
+  type: 'autre',
+  libelle: '',
+  montant_xaf: 0,
+  notes: '',
+})
 
 // ── Composant Pointage rapide ───────────────────────────────────────────────────
 
@@ -564,25 +632,57 @@ export default function RH() {
   const [moisPaie, setMoisPaie]        = useState(new Date().toISOString().slice(0, 7))
   const [empSlide, setEmpSlide]        = useState(false)
   const [empForm, setEmpForm]          = useState<NouvelEmployeForm>(DEFAULT_EMP)
+  const [avanceSlide, setAvanceSlide]  = useState(false)
+  const [avanceForm, setAvanceForm]    = useState<AvanceSalaireForm>(() => createDefaultAvance(new Date().toISOString().slice(0, 7)))
+  const [retenueSlide, setRetenueSlide] = useState(false)
+  const [retenueForm, setRetenueForm]   = useState<RetenueSalaireForm>(() => createDefaultRetenue(new Date().toISOString().slice(0, 7)))
+  const [paieReference, setPaieReference] = useState('')
   const [pdfModal, setPdfModal]        = useState<{ url: string; filename: string } | null>(null)
 
   const { data: empData,       isLoading: empLoading }       = useEmployes({ statut: 'actif' })
   const { data: presData,      isLoading: presLoading }      = usePresences({ date: presenceDate })
   const { data: bulletinsData, isLoading: bulletinsLoading } = useBulletinsPaie({ mois: moisPaie })
+  const { data: avancesData,   isLoading: avancesLoading }   = useAvancesSalaire({ mois: moisPaie })
+  const { data: retenuesData,  isLoading: retenuesLoading }  = useRetenuesSalaire({ mois: moisPaie })
+  const { data: cotisations }                                = useCotisationsSociales(moisPaie)
+  const { data: paiePeriode }                                = usePaiePeriode(moisPaie)
+  const { data: controlePaie }                               = useControlePaie(moisPaie)
 
   const genererPaie      = useGenererPaie()
   const createEmploye    = useCreateEmploye()
   const updateStatut     = useUpdateStatutBulletin()
   const bulletinPdf      = useBulletinPdf()
+  const createAvance     = useCreateAvanceSalaire()
+  const annulerAvance    = useAnnulerAvanceSalaire()
+  const createRetenue    = useCreateRetenueSalaire()
+  const annulerRetenue   = useAnnulerRetenueSalaire()
+  const genererCotisations = useGenererCotisationsSociales()
+  const updateCotisations  = useUpdateStatutCotisationsSociales()
+  const validerPaieMois    = useValiderPaieMois()
+  const virerPaieMois      = useVirerPaieMois()
+  const exportPaie         = useExportPaie()
 
   const employes  = (empData?.data ?? []) as EmployeApi[]
   const presences = (presData?.data ?? []) as PresenceRecord[]
   const bulletins = (bulletinsData?.data ?? []) as BulletinRecord[]
+  const avances   = (avancesData?.data ?? []) as AvanceRecord[]
+  const retenues  = (retenuesData?.data ?? []) as RetenueRecord[]
 
   const totalMasseSalariale = bulletins.reduce((s, b) => s + (b.salaire_net_xaf as number), 0)
   const totalBrut           = bulletins.reduce((s, b) => s + (b.salaire_brut_xaf as number), 0)
   const totalCNPS           = bulletins.reduce((s, b) => s + (b.cnps_salarie_xaf as number), 0)
   const totalIRPP           = bulletins.reduce((s, b) => s + (b.irpp_xaf as number), 0)
+  const totalAvances        = bulletins.reduce((s, b) => s + ((b.avance_deduite_xaf as number) || 0), 0)
+  const totalRetenues       = bulletins.reduce((s, b) => s + ((b.retenue_deduite_xaf as number) || 0), 0)
+  const totalCoutEmployeur  = bulletins.reduce((s, b) => s + ((b.cout_employeur_xaf as number) || 0), 0)
+  const bulletinsEnAttente  = bulletins.filter(b => b.statut === 'en_attente').length
+  const bulletinsValides    = bulletins.filter(b => b.statut === 'valide').length
+  const bulletinsVires      = bulletins.filter(b => b.statut === 'vire').length
+  const avancesEnAttente    = avances.filter(a => a.statut === 'payee').length
+  const retenuesEnAttente   = retenues.filter(r => r.statut === 'active').length
+  const controlesErreur     = controlePaie?.controles.filter(c => c.niveau === 'error').length ?? 0
+  const controlesAttention  = controlePaie?.controles.filter(c => c.niveau === 'warning').length ?? 0
+  const tauxNetSurBrut      = totalBrut > 0 ? Math.round((totalMasseSalariale / totalBrut) * 100) : 0
 
   // Colonnes employés
   const employeColumns: Column<EmployeRecord>[] = [
@@ -625,6 +725,8 @@ export default function RH() {
     { id: 'brut',    header: 'Brut',    accessor: 'salaire_brut_xaf',  render: v => <span className="text-sm">{formatXAF(v as number)}</span> },
     { id: 'cnps',    header: 'CNPS salarié', accessor: 'cnps_salarie_xaf', render: v => <span className="text-sm text-[#dc2626]">−{formatXAF(v as number)}</span> },
     { id: 'irpp',    header: 'IRPP',    accessor: 'irpp_xaf',    render: v => <span className="text-sm text-[#dc2626]">−{formatXAF(v as number)}</span> },
+    { id: 'avance',  header: 'Avance',  accessor: 'avance_deduite_xaf', render: v => Number(v ?? 0) > 0 ? <span className="text-sm text-[#dc2626]">−{formatXAF(v as number)}</span> : <span className="text-xs text-gray-400">-</span> },
+    { id: 'retenue', header: 'Retenue', accessor: 'retenue_deduite_xaf', render: v => Number(v ?? 0) > 0 ? <span className="text-sm text-[#dc2626]">−{formatXAF(v as number)}</span> : <span className="text-xs text-gray-400">-</span> },
     { id: 'net',     header: 'Net à payer', accessor: 'salaire_net_xaf', render: v => <span className="text-sm font-bold text-[#15803d]">{formatXAF(v as number)}</span> },
     {
       id: 'statut', header: 'Statut', accessor: 'statut',
@@ -680,6 +782,92 @@ export default function RH() {
     },
   ]
 
+  const avanceColumns: Column<AvanceRecord>[] = [
+    { id: 'employe', header: 'Employé', accessor: 'employe_nom', render: v => <span className="text-sm font-semibold">{v as string}</span> },
+    { id: 'date', header: 'Date', accessor: 'date_avance', render: v => <span className="text-sm text-gray-500">{formatDate(v as string)}</span> },
+    { id: 'montant', header: 'Montant', accessor: 'montant_xaf', render: v => <span className="text-sm font-semibold">{formatXAF(v as number)}</span> },
+    { id: 'mois', header: 'Déduction', accessor: 'mois_deduction', render: v => <span className="text-sm font-mono text-gray-500">{v as string}</span> },
+    { id: 'mode', header: 'Paiement', accessor: 'mode_paiement', render: v => <span className="text-xs uppercase text-gray-500">{(v as string).replace('_', ' ')}</span> },
+    { id: 'statut', header: 'Statut', accessor: 'statut', render: v => <SmallBadge statut={v as string} map={AVANCE_MAP} /> },
+    {
+      id: 'actions', header: '', accessor: 'id', sortable: false,
+      render: (v, row) => row.statut !== 'payee' ? null : (
+        <button
+          onClick={() => annulerAvance.mutate(v as string)}
+          disabled={annulerAvance.isPending}
+          className="text-xs text-[#dc2626] font-medium hover:underline disabled:opacity-50"
+        >
+          Annuler
+        </button>
+      ),
+    },
+  ]
+
+  const retenueColumns: Column<RetenueRecord>[] = [
+    { id: 'employe', header: 'Employé', accessor: 'employe_nom', render: v => <span className="text-sm font-semibold">{v as string}</span> },
+    { id: 'libelle', header: 'Libellé', accessor: 'libelle', render: (v, row) => (
+      <div>
+        <div className="text-sm font-medium text-[#212121]">{v as string}</div>
+        <div className="text-xs text-gray-400">{row.type as string}</div>
+      </div>
+    ) },
+    { id: 'montant', header: 'Montant', accessor: 'montant_xaf', render: v => <span className="text-sm font-semibold">{formatXAF(v as number)}</span> },
+    { id: 'mois', header: 'Déduction', accessor: 'mois_deduction', render: v => <span className="text-sm font-mono text-gray-500">{v as string}</span> },
+    { id: 'statut', header: 'Statut', accessor: 'statut', render: v => <SmallBadge statut={v as string} map={RETENUE_MAP} /> },
+    {
+      id: 'actions', header: '', accessor: 'id', sortable: false,
+      render: (v, row) => row.statut !== 'active' ? null : (
+        <button
+          onClick={() => annulerRetenue.mutate(v as string)}
+          disabled={annulerRetenue.isPending}
+          className="text-xs text-[#dc2626] font-medium hover:underline disabled:opacity-50"
+        >
+          Annuler
+        </button>
+      ),
+    },
+  ]
+
+  const submitAvance = () => {
+    createAvance.mutate(
+      {
+        employe_id: avanceForm.employe_id,
+        date_avance: avanceForm.date_avance,
+        mois_deduction: avanceForm.mois_deduction,
+        montant_xaf: avanceForm.montant_xaf,
+        mode_paiement: avanceForm.mode_paiement,
+        reference_paiement: avanceForm.reference_paiement || undefined,
+        motif: avanceForm.motif || undefined,
+        notes: avanceForm.notes || undefined,
+      },
+      {
+        onSuccess: () => {
+          setAvanceSlide(false)
+          setAvanceForm(createDefaultAvance(moisPaie))
+        },
+      },
+    )
+  }
+
+  const submitRetenue = () => {
+    createRetenue.mutate(
+      {
+        employe_id: retenueForm.employe_id,
+        mois_deduction: retenueForm.mois_deduction,
+        type: retenueForm.type,
+        libelle: retenueForm.libelle,
+        montant_xaf: retenueForm.montant_xaf,
+        notes: retenueForm.notes || undefined,
+      },
+      {
+        onSuccess: () => {
+          setRetenueSlide(false)
+          setRetenueForm(createDefaultRetenue(moisPaie))
+        },
+      },
+    )
+  }
+
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} className="space-y-6">
       <PageHeader
@@ -692,10 +880,21 @@ export default function RH() {
               <Plus className="h-3.5 w-3.5" /> Nouvel employé
             </Button>
           ) : activeTab === 'Paie' ? (
-            <Button size="sm" disabled={genererPaie.isPending} onClick={() => genererPaie.mutate({ mois: moisPaie })}>
-              <FileText className="h-3.5 w-3.5" />
-              {genererPaie.isPending ? 'Génération…' : 'Générer les bulletins'}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="secondary" onClick={() => { setAvanceForm(createDefaultAvance(moisPaie)); setAvanceSlide(true) }}>
+                <Plus className="h-3.5 w-3.5" /> Nouvelle avance
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => { setRetenueForm(createDefaultRetenue(moisPaie)); setRetenueSlide(true) }}>
+                <Plus className="h-3.5 w-3.5" /> Nouvelle retenue
+              </Button>
+              <Button size="sm" variant="ghost" disabled={exportPaie.isPending || bulletins.length === 0} onClick={() => exportPaie.mutate(moisPaie)}>
+                <Download className="h-3.5 w-3.5" /> Export
+              </Button>
+              <Button size="sm" disabled={genererPaie.isPending} onClick={() => genererPaie.mutate({ mois: moisPaie })}>
+                <FileText className="h-3.5 w-3.5" />
+                {genererPaie.isPending ? 'Génération…' : 'Générer les bulletins'}
+              </Button>
+            </div>
           ) : undefined
         }
       />
@@ -767,7 +966,11 @@ export default function RH() {
                   <div className="flex items-center gap-3 flex-wrap">
                     <input
                       type="month" value={moisPaie}
-                      onChange={e => setMoisPaie(e.target.value)}
+                      onChange={e => {
+                        setMoisPaie(e.target.value)
+                        setAvanceForm(f => ({ ...f, mois_deduction: e.target.value }))
+                        setRetenueForm(f => ({ ...f, mois_deduction: e.target.value }))
+                      }}
                       className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30"
                     />
                     <span className="text-sm text-gray-500">
@@ -785,6 +988,77 @@ export default function RH() {
                     <span className="text-sm text-gray-500">
                       IRPP : <span className="font-semibold text-[#dc2626]">{formatXAF(totalIRPP)}</span>
                     </span>
+                    <span className="text-sm text-gray-400">|</span>
+                    <span className="text-sm text-gray-500">
+                      Avances : <span className="font-semibold text-[#dc2626]">{formatXAF(totalAvances)}</span>
+                    </span>
+                    <span className="text-sm text-gray-400">|</span>
+                    <span className="text-sm text-gray-500">
+                      Retenues : <span className="font-semibold text-[#dc2626]">{formatXAF(totalRetenues)}</span>
+                    </span>
+                  </div>
+
+                  <div className="border border-gray-100 rounded-lg overflow-hidden">
+                    <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 border-b border-gray-100">
+                      <div>
+                        <h3 className="text-sm font-semibold text-[#212121]">Dashboard Paie</h3>
+                        <p className="text-xs text-gray-500">Vue mensuelle de la masse salariale, des statuts et des contrôles.</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {paiePeriode && <SmallBadge statut={paiePeriode.statut} map={PAIE_PERIODE_MAP} />}
+                        {controlePaie && <SmallBadge statut={controlePaie.statut_global} map={CONTROLE_PAIE_MAP} />}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 lg:grid-cols-4">
+                      <div className="p-4 border-r border-b border-gray-100 min-h-[96px]">
+                        <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase">
+                          <DollarSign className="h-3.5 w-3.5 text-[#15803d]" /> Net à payer
+                        </div>
+                        <div className="mt-2 text-lg font-bold text-[#212121]">{formatXAF(paiePeriode?.net_a_payer_xaf ?? totalMasseSalariale)}</div>
+                        <div className="mt-1 text-xs text-gray-400">{tauxNetSurBrut}% du brut calculé</div>
+                      </div>
+                      <div className="p-4 border-r border-b border-gray-100 min-h-[96px]">
+                        <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase">
+                          <Briefcase className="h-3.5 w-3.5 text-[#37474F]" /> Coût employeur
+                        </div>
+                        <div className="mt-2 text-lg font-bold text-[#212121]">{formatXAF(paiePeriode?.cout_total_employeur_xaf ?? totalCoutEmployeur)}</div>
+                        <div className="mt-1 text-xs text-gray-400">Brut + charges patronales</div>
+                      </div>
+                      <div className="p-4 border-r border-b border-gray-100 min-h-[96px]">
+                        <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase">
+                          <FileText className="h-3.5 w-3.5 text-[#C62828]" /> Bulletins
+                        </div>
+                        <div className="mt-2 text-lg font-bold text-[#212121]">{bulletins.length}</div>
+                        <div className="mt-1 text-xs text-gray-400">{bulletinsEnAttente} attente · {bulletinsValides} validés · {bulletinsVires} virés</div>
+                      </div>
+                      <div className="p-4 border-b border-gray-100 min-h-[96px]">
+                        <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase">
+                          <AlertCircle className="h-3.5 w-3.5 text-[#d97706]" /> Contrôles
+                        </div>
+                        <div className="mt-2 text-lg font-bold text-[#212121]">{controlesErreur + controlesAttention}</div>
+                        <div className="mt-1 text-xs text-gray-400">{controlesErreur} erreur(s) · {controlesAttention} attention(s)</div>
+                      </div>
+                      <div className="p-4 border-r border-gray-100 min-h-[96px]">
+                        <div className="text-xs font-semibold text-gray-500 uppercase">Cotisations</div>
+                        <div className="mt-2 text-sm font-bold text-[#212121]">{formatXAF((cotisations?.total_cnps_xaf ?? totalCNPS) + (cotisations?.irpp_xaf ?? totalIRPP))}</div>
+                        <div className="mt-1 text-xs text-gray-400">CNPS + IRPP</div>
+                      </div>
+                      <div className="p-4 border-r border-gray-100 min-h-[96px]">
+                        <div className="text-xs font-semibold text-gray-500 uppercase">Avances à traiter</div>
+                        <div className="mt-2 text-sm font-bold text-[#212121]">{avancesEnAttente}</div>
+                        <div className="mt-1 text-xs text-gray-400">{formatXAF(avancesData?.total_xaf ?? 0)} sur le mois</div>
+                      </div>
+                      <div className="p-4 border-r border-gray-100 min-h-[96px]">
+                        <div className="text-xs font-semibold text-gray-500 uppercase">Retenues actives</div>
+                        <div className="mt-2 text-sm font-bold text-[#212121]">{retenuesEnAttente}</div>
+                        <div className="mt-1 text-xs text-gray-400">{formatXAF(retenuesData?.total_xaf ?? 0)} sur le mois</div>
+                      </div>
+                      <div className="p-4 min-h-[96px]">
+                        <div className="text-xs font-semibold text-gray-500 uppercase">Statut période</div>
+                        <div className="mt-2">{paiePeriode ? <SmallBadge statut={paiePeriode.statut} map={PAIE_PERIODE_MAP} /> : <SmallBadge statut="calculee" map={PAIE_PERIODE_MAP} />}</div>
+                        <div className="mt-1 text-xs text-gray-400">{paiePeriode?.reference_paiement ? `Réf. ${paiePeriode.reference_paiement}` : 'Aucune référence paiement'}</div>
+                      </div>
+                    </div>
                   </div>
 
                   {bulletins.length === 0 && !bulletinsLoading && (
@@ -796,6 +1070,116 @@ export default function RH() {
                 </div>
 
                 <DataTable<BulletinRecord> columns={paieColumns} data={bulletins} keyField="id" loading={bulletinsLoading} />
+
+                <div className="border-t border-gray-100 px-5 py-4">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <h3 className="text-sm font-semibold text-[#212121]">Validation paie mensuelle</h3>
+                      <p className="text-xs text-gray-500">La validation verrouille les bulletins et génère les écritures comptables de paie.</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {paiePeriode && <SmallBadge statut={paiePeriode.statut} map={PAIE_PERIODE_MAP} />}
+                      {(!paiePeriode || paiePeriode.statut === 'calculee') && (
+                        <Button size="sm" disabled={validerPaieMois.isPending || bulletins.length === 0} onClick={() => validerPaieMois.mutate(moisPaie)}>
+                          {validerPaieMois.isPending ? 'Validation…' : 'Valider le mois'}
+                        </Button>
+                      )}
+                      {paiePeriode?.statut === 'validee' && (
+                        <>
+                          <input
+                            value={paieReference}
+                            onChange={e => setPaieReference(e.target.value)}
+                            placeholder="Réf. paiement"
+                            className="w-36 px-2.5 py-1.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-[#C62828]/30"
+                          />
+                          <Button
+                            size="sm"
+                            disabled={virerPaieMois.isPending}
+                            onClick={() => virerPaieMois.mutate({ mois: moisPaie, mode_paiement: 'banque', reference_paiement: paieReference || undefined })}
+                          >
+                            {virerPaieMois.isPending ? 'Paiement…' : 'Virer la paie'}
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+                    <div><div className="text-xs text-gray-400">Net à payer</div><div className="text-sm font-semibold">{formatXAF(paiePeriode?.net_a_payer_xaf ?? totalMasseSalariale)}</div></div>
+                    <div><div className="text-xs text-gray-400">Brut</div><div className="text-sm font-semibold">{formatXAF(paiePeriode?.total_brut_xaf ?? totalBrut)}</div></div>
+                    <div><div className="text-xs text-gray-400">Avances + retenues</div><div className="text-sm font-semibold">{formatXAF((paiePeriode?.total_avances_deduites_xaf ?? totalAvances) + (paiePeriode?.total_retenues_deduites_xaf ?? totalRetenues))}</div></div>
+                    <div><div className="text-xs text-gray-400">Coût employeur</div><div className="text-sm font-semibold">{formatXAF(paiePeriode?.cout_total_employeur_xaf ?? bulletins.reduce((s, b) => s + ((b.cout_employeur_xaf as number) || 0), 0))}</div></div>
+                  </div>
+                  {controlePaie && (
+                    <div className="mt-4 rounded-lg border border-gray-100 overflow-hidden">
+                      <div className="flex items-center justify-between gap-3 px-3 py-2 bg-gray-50">
+                        <div className="text-xs font-semibold text-gray-600">Contrôles de cohérence</div>
+                        <SmallBadge statut={controlePaie.statut_global} map={CONTROLE_PAIE_MAP} />
+                      </div>
+                      <div className="divide-y divide-gray-100">
+                        {controlePaie.controles.slice(0, 6).map(ctrl => (
+                          <div key={ctrl.code} className="flex items-center justify-between gap-3 px-3 py-2">
+                            <span className="text-xs text-gray-600">{ctrl.message}</span>
+                            <SmallBadge statut={ctrl.niveau} map={CONTROLE_PAIE_MAP} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-gray-100 px-5 py-4">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <h3 className="text-sm font-semibold text-[#212121]">Cotisations sociales</h3>
+                      <p className="text-xs text-gray-500">Synthèse mensuelle calculée depuis les bulletins du mois.</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {cotisations && <SmallBadge statut={cotisations.statut} map={COTISATION_MAP} />}
+                      <Button size="sm" variant="ghost" disabled={genererCotisations.isPending} onClick={() => genererCotisations.mutate(moisPaie)}>
+                        {genererCotisations.isPending ? 'Calcul…' : 'Calculer'}
+                      </Button>
+                      {cotisations?.id && cotisations.statut === 'calculee' && (
+                        <Button size="sm" disabled={updateCotisations.isPending} onClick={() => updateCotisations.mutate({ id: cotisations.id!, statut: 'validee' })}>
+                          Valider
+                        </Button>
+                      )}
+                      {cotisations?.id && cotisations.statut === 'validee' && (
+                        <Button size="sm" disabled={updateCotisations.isPending} onClick={() => updateCotisations.mutate({ id: cotisations.id!, statut: 'payee' })}>
+                          Marquer payé
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4">
+                    <div><div className="text-xs text-gray-400">Bulletins</div><div className="text-sm font-semibold">{cotisations?.nb_bulletins ?? 0}</div></div>
+                    <div><div className="text-xs text-gray-400">CNPS salarié</div><div className="text-sm font-semibold">{formatXAF(cotisations?.cnps_salarie_xaf ?? 0)}</div></div>
+                    <div><div className="text-xs text-gray-400">CNPS employeur</div><div className="text-sm font-semibold">{formatXAF(cotisations?.cnps_employeur_xaf ?? 0)}</div></div>
+                    <div><div className="text-xs text-gray-400">IRPP</div><div className="text-sm font-semibold">{formatXAF(cotisations?.irpp_xaf ?? 0)}</div></div>
+                    <div><div className="text-xs text-gray-400">Coût employeur</div><div className="text-sm font-semibold">{formatXAF(cotisations?.cout_total_employeur_xaf ?? 0)}</div></div>
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-100">
+                  <div className="px-5 pt-5 pb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-[#212121]">Avances sur salaire</h3>
+                      <p className="text-xs text-gray-500">Les avances payées sont déduites lors de la génération de la paie du mois.</p>
+                    </div>
+                    <span className="text-sm font-semibold text-[#212121]">{formatXAF(avancesData?.total_xaf ?? 0)}</span>
+                  </div>
+                  <DataTable<AvanceRecord> columns={avanceColumns} data={avances} keyField="id" loading={avancesLoading} />
+                </div>
+
+                <div className="border-t border-gray-100">
+                  <div className="px-5 pt-5 pb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-[#212121]">Retenues salariales</h3>
+                      <p className="text-xs text-gray-500">Les retenues actives seront déduites lors de la génération de la paie.</p>
+                    </div>
+                    <span className="text-sm font-semibold text-[#212121]">{formatXAF(retenuesData?.total_xaf ?? 0)}</span>
+                  </div>
+                  <DataTable<RetenueRecord> columns={retenueColumns} data={retenues} keyField="id" loading={retenuesLoading} />
+                </div>
               </div>
             )}
 
@@ -882,6 +1266,193 @@ export default function RH() {
               }}
             >
               {createEmploye.isPending ? 'Enregistrement…' : 'Créer le dossier'}
+            </Button>
+          </div>
+        </div>
+      </SlideOver>
+
+      <SlideOver isOpen={avanceSlide} onClose={() => setAvanceSlide(false)} title="Nouvelle avance sur salaire" width="md">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Employé *</label>
+            <select
+              value={avanceForm.employe_id}
+              onChange={e => setAvanceForm(f => ({ ...f, employe_id: e.target.value }))}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            >
+              <option value="">Sélectionner un employé</option>
+              {employes.map(e => <option key={e.id} value={e.id}>{e.nom} - {e.poste}</option>)}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Date avance *</label>
+              <input
+                type="date"
+                value={avanceForm.date_avance}
+                onChange={e => setAvanceForm(f => ({ ...f, date_avance: e.target.value }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Mois déduction *</label>
+              <input
+                type="month"
+                value={avanceForm.mois_deduction}
+                onChange={e => setAvanceForm(f => ({ ...f, mois_deduction: e.target.value }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant (XAF) *</label>
+            <input
+              type="number"
+              min="1"
+              value={avanceForm.montant_xaf}
+              onChange={e => setAvanceForm(f => ({ ...f, montant_xaf: Number(e.target.value) }))}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Mode paiement</label>
+              <select
+                value={avanceForm.mode_paiement}
+                onChange={e => setAvanceForm(f => ({ ...f, mode_paiement: e.target.value as AvanceSalaireForm['mode_paiement'] }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+              >
+                <option value="caisse">Caisse</option>
+                <option value="banque">Banque</option>
+                <option value="mobile_money">Mobile money</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Référence</label>
+              <input
+                value={avanceForm.reference_paiement}
+                onChange={e => setAvanceForm(f => ({ ...f, reference_paiement: e.target.value }))}
+                placeholder="Reçu, transaction..."
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Motif</label>
+            <input
+              value={avanceForm.motif}
+              onChange={e => setAvanceForm(f => ({ ...f, motif: e.target.value }))}
+              placeholder="Avance exceptionnelle, urgence..."
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Notes</label>
+            <textarea
+              rows={2}
+              value={avanceForm.notes}
+              onChange={e => setAvanceForm(f => ({ ...f, notes: e.target.value }))}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828] resize-none"
+            />
+          </div>
+
+          <div className="flex gap-3 pt-2 border-t border-gray-100">
+            <Button variant="ghost" className="flex-1" onClick={() => setAvanceSlide(false)}>Annuler</Button>
+            <Button
+              className="flex-1"
+              disabled={!avanceForm.employe_id || !avanceForm.date_avance || !avanceForm.mois_deduction || avanceForm.montant_xaf <= 0 || createAvance.isPending}
+              onClick={submitAvance}
+            >
+              {createAvance.isPending ? 'Enregistrement…' : 'Enregistrer'}
+            </Button>
+          </div>
+        </div>
+      </SlideOver>
+
+      <SlideOver isOpen={retenueSlide} onClose={() => setRetenueSlide(false)} title="Nouvelle retenue salariale" width="md">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Employé *</label>
+            <select
+              value={retenueForm.employe_id}
+              onChange={e => setRetenueForm(f => ({ ...f, employe_id: e.target.value }))}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            >
+              <option value="">Sélectionner un employé</option>
+              {employes.map(e => <option key={e.id} value={e.id}>{e.nom} - {e.poste}</option>)}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Mois déduction *</label>
+              <input
+                type="month"
+                value={retenueForm.mois_deduction}
+                onChange={e => setRetenueForm(f => ({ ...f, mois_deduction: e.target.value }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Type</label>
+              <select
+                value={retenueForm.type}
+                onChange={e => setRetenueForm(f => ({ ...f, type: e.target.value as RetenueSalaireForm['type'] }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+              >
+                <option value="absence">Absence</option>
+                <option value="materiel">Matériel</option>
+                <option value="pret_interne">Prêt interne</option>
+                <option value="discipline">Discipline</option>
+                <option value="autre">Autre</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Libellé *</label>
+            <input
+              value={retenueForm.libelle}
+              onChange={e => setRetenueForm(f => ({ ...f, libelle: e.target.value }))}
+              placeholder="ex. Retenue matériel endommagé"
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant (XAF) *</label>
+            <input
+              type="number"
+              min="1"
+              value={retenueForm.montant_xaf}
+              onChange={e => setRetenueForm(f => ({ ...f, montant_xaf: Number(e.target.value) }))}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Notes</label>
+            <textarea
+              rows={2}
+              value={retenueForm.notes}
+              onChange={e => setRetenueForm(f => ({ ...f, notes: e.target.value }))}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828] resize-none"
+            />
+          </div>
+
+          <div className="flex gap-3 pt-2 border-t border-gray-100">
+            <Button variant="ghost" className="flex-1" onClick={() => setRetenueSlide(false)}>Annuler</Button>
+            <Button
+              className="flex-1"
+              disabled={!retenueForm.employe_id || !retenueForm.mois_deduction || !retenueForm.libelle || retenueForm.montant_xaf <= 0 || createRetenue.isPending}
+              onClick={submitRetenue}
+            >
+              {createRetenue.isPending ? 'Enregistrement…' : 'Enregistrer'}
             </Button>
           </div>
         </div>
