@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Minus, RotateCcw, FileOutput, PackagePlus } from 'lucide-react'
-import { PageHeader, DataTable, StatusBadge, StockLevel, SlideOver, Button } from '@forge/ui'
+import { Plus, Minus, RotateCcw, FileOutput, ShoppingCart } from 'lucide-react'
+import { PageHeader, DataTable, StatusBadge, StockLevel, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF } from '@/lib/utils'
 import { KpiCard } from '@forge/ui'
@@ -10,6 +10,7 @@ import { Package, AlertTriangle, TrendingDown, DollarSign } from 'lucide-react'
 import { toast } from 'sonner'
 import { useStocks, useMouvement, useCreateProduit } from '@/hooks/useStocks'
 import { useBonsEnAttente } from '@/hooks/useBons'
+import { useBonsApproBrouillonCount, useCreerApproManuel } from '@/hooks/useBonsAppro'
 import type { StockProduit, CreateProduitPayload } from '@/hooks/useStocks'
 
 // ── Types (alignés sur l'API) ─────────────────────────────────────────────────
@@ -30,7 +31,11 @@ const DEFAULT_PRODUIT: CreateProduitPayload = {
 
 // ── Columns ────────────────────────────────────────────────────────────────────
 
-const buildColumns = (onEntree: (p: Product) => void, onSortie: (p: Product) => void): Column<Product>[] => [
+const buildColumns = (
+  onEntree: (p: Product) => void,
+  onSortie:  (p: Product) => void,
+  onAppro:   (p: Product) => void,
+): Column<Product>[] => [
   {
     id: 'reference',
     header: 'Réf.',
@@ -99,28 +104,22 @@ const buildColumns = (onEntree: (p: Product) => void, onSortie: (p: Product) => 
     csvSkip: true,   // action buttons make no sense in CSV
     render: (_, row) => (
       <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-        {/* Entrée — green, clearly labelled */}
-        <button
-          onClick={() => onEntree(row)}
-          title="Entrée stock"
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg
-            bg-green-600 text-white hover:bg-green-700
-            transition-colors text-xs font-semibold shadow-sm"
-        >
-          <Plus className="h-3.5 w-3.5" />
+        <Button size="xs" onClick={() => onEntree(row)} title="Entrée stock"
+          className="bg-green-600 hover:bg-green-700 text-white focus:ring-green-600">
+          <Plus className="h-3 w-3" />
           Entrée
-        </button>
-        {/* Sortie — red, clearly labelled */}
-        <button
-          onClick={() => onSortie(row)}
-          title="Sortie stock"
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg
-            bg-[#C62828] text-white hover:bg-[#B71C1C]
-            transition-colors text-xs font-semibold shadow-sm"
-        >
-          <Minus className="h-3.5 w-3.5" />
+        </Button>
+        <Button size="xs" variant="primary" onClick={() => onSortie(row)} title="Sortie stock">
+          <Minus className="h-3 w-3" />
           Sortie
-        </button>
+        </Button>
+        {['alerte', 'critique', 'rupture'].includes(row.statut as string) && (
+          <Button size="xs" onClick={() => onAppro(row)} title="Demander approvisionnement"
+            className="bg-orange-500 hover:bg-orange-600 text-white focus:ring-orange-500">
+            <AlertTriangle className="h-3 w-3" />
+            Appro
+          </Button>
+        )}
       </div>
     ),
   },
@@ -137,6 +136,18 @@ interface MvtForm {
 }
 
 const DEFAULT_FORM: MvtForm = { type: 'entree', produitId: '', quantite: 1, reference: '', motif: '' }
+
+interface ApproForm {
+  produitId:              string
+  quantite:               number
+  fournisseurNom:         string
+  dateLivraisonSouhaitee: string
+  notes:                  string
+}
+
+const DEFAULT_APPRO: ApproForm = {
+  produitId: '', quantite: 1, fournisseurNom: '', dateLivraisonSouhaitee: '', notes: '',
+}
 
 // ── Page component ─────────────────────────────────────────────────────────────
 
@@ -161,7 +172,12 @@ export default function Stocks() {
   const { data, isLoading, isError } = useStocks({ search: debouncedSearch, categorie, statut: statusFilter })
   const mouvement = useMouvement()
   const createProduit = useCreateProduit()
+  const [approOpen, setApproOpen]   = useState(false)
+  const [approForm, setApproForm]   = useState<ApproForm>(DEFAULT_APPRO)
+
   const { data: bonsEnAttenteCount = 0 } = useBonsEnAttente()
+  const { data: approBrouillonCount = 0 } = useBonsApproBrouillonCount()
+  const creerAppro = useCreerApproManuel()
 
   const produits = (data?.data ?? []) as Product[]
   const categories = useMemo(() => [...new Set(produits.map((p) => p.categorie as string))], [produits])
@@ -176,6 +192,19 @@ export default function Stocks() {
     setSlideOpen(true)
   }, [])
 
+  const openAppro = useCallback((p?: Product) => {
+    const qteDefaut = p
+      ? Math.max(1, Math.ceil((p.stock_min as number) - (p.stock_actuel as number)))
+      : 1
+    setApproForm({
+      ...DEFAULT_APPRO,
+      produitId:      p?.id ?? '',
+      quantite:       qteDefaut,
+      fournisseurNom: (p?.fournisseur as string | undefined) ?? '',
+    })
+    setApproOpen(true)
+  }, [])
+
   const selectedProduct = produits.find((p) => p.id === form.produitId)
   const sortieError = form.type === 'sortie' && selectedProduct && form.quantite > (selectedProduct.stock_actuel as number)
     ? `Stock insuffisant (disponible : ${selectedProduct.stock_actuel} ${selectedProduct.unite})`
@@ -186,7 +215,7 @@ export default function Stocks() {
   const alertes      = useMemo(() => produits.filter((p) => p.statut === 'alerte').length, [produits])
   const valeurTotale = useMemo(() => produits.reduce((sum, p) => sum + (p.stock_actuel as number) * (p.prix_unitaire_xaf as number), 0), [produits])
 
-  const columns = useMemo(() => buildColumns(openEntree, openSortie), [openEntree, openSortie])
+  const columns = useMemo(() => buildColumns(openEntree, openSortie, openAppro), [openEntree, openSortie, openAppro])
 
   return (
     <motion.div
@@ -202,26 +231,27 @@ export default function Stocks() {
         breadcrumbs={[{ label: 'FORGE', href: '/' }, { label: 'Stocks' }]}
         actions={
           <>
-            <Button variant="secondary" size="sm" onClick={() => navigate('/stocks/bons-sortie')} className="relative">
+            <Button size="sm" onClick={() => { setNewProduit(DEFAULT_PRODUIT); setCreateError(null); setCreateDone(false); setNewProduitOpen(true) }}>
+              <Plus className="h-3.5 w-3.5" />
+              Nouveau produit
+            </Button>
+            <Button size="sm" onClick={() => navigate('/stocks/bons-sortie')} className="relative">
               <FileOutput className="h-3.5 w-3.5" />
               Bons de sortie
               {bonsEnAttenteCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-[#C62828] px-1 text-[10px] font-bold text-white">
+                <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-white px-1 text-[10px] font-bold text-[#C62828]">
                   {bonsEnAttenteCount > 99 ? '99+' : bonsEnAttenteCount}
                 </span>
               )}
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => openSortie()}>
-              <Minus className="h-3.5 w-3.5" />
-              Sortie
-            </Button>
-            <Button size="sm" onClick={() => openEntree()}>
-              <PackagePlus className="h-3.5 w-3.5" />
-              Entrée stock
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => { setNewProduit(DEFAULT_PRODUIT); setCreateError(null); setCreateDone(false); setNewProduitOpen(true) }}>
-              <Plus className="h-3.5 w-3.5" />
-              Nouveau produit
+            <Button size="sm" onClick={() => navigate('/stocks/approvisionnement')} className="relative">
+              <ShoppingCart className="h-3.5 w-3.5" />
+              Approvisionnement
+              {approBrouillonCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-white px-1 text-[10px] font-bold text-[#C62828]">
+                  {approBrouillonCount > 99 ? '99+' : approBrouillonCount}
+                </span>
+              )}
             </Button>
           </>
         }
@@ -601,6 +631,134 @@ export default function Stocks() {
           </div>
         </div>
       </SlideOver>
+
+      {/* ── Modal Demander approvisionnement ── */}
+      <Modal
+        isOpen={approOpen}
+        onClose={() => setApproOpen(false)}
+        title="Demander un approvisionnement"
+        size="md"
+      >
+        <div className="space-y-4">
+          {/* Sélecteur article */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Article *</label>
+            <select
+              value={approForm.produitId}
+              onChange={(e) => {
+                const p = produits.find(pr => pr.id === e.target.value)
+                setApproForm(f => ({
+                  ...f,
+                  produitId:      e.target.value,
+                  fournisseurNom: p ? (p.fournisseur as string | undefined) ?? '' : f.fournisseurNom,
+                  quantite:       p
+                    ? Math.max(1, Math.ceil((p.stock_min as number) - (p.stock_actuel as number)))
+                    : f.quantite,
+                }))
+              }}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400"
+            >
+              <option value="">Sélectionner un article…</option>
+              {produits.map((p) => (
+                <option key={p.id as string} value={p.id as string}>
+                  {p.designation as string}
+                  {['alerte','critique','rupture'].includes(p.statut as string) ? ' ⚠' : ''}
+                  {' — stock: '}{p.stock_actuel as number} {p.unite as string}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Quantité */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Quantité à commander *</label>
+            <input
+              type="number"
+              min={1}
+              value={approForm.quantite}
+              onChange={(e) => setApproForm(f => ({ ...f, quantite: Math.max(1, Number(e.target.value)) }))}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400"
+            />
+            {approForm.produitId && (() => {
+              const p = produits.find(pr => pr.id === approForm.produitId)
+              return p ? (
+                <p className="text-xs text-gray-400 mt-1">
+                  Stock actuel : {p.stock_actuel as number} — Seuil min : {p.stock_min as number} {p.unite as string}
+                </p>
+              ) : null
+            })()}
+          </div>
+
+          {/* Fournisseur */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Fournisseur</label>
+            <input
+              type="text"
+              placeholder="Nom du fournisseur"
+              value={approForm.fournisseurNom}
+              onChange={(e) => setApproForm(f => ({ ...f, fournisseurNom: e.target.value }))}
+              list="fournisseurs-list"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400"
+            />
+            <datalist id="fournisseurs-list">
+              {[...new Set(produits.map(p => p.fournisseur as string | undefined).filter(Boolean))]
+                .map(f => <option key={f} value={f} />)}
+            </datalist>
+          </div>
+
+          {/* Date livraison souhaitée */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Date de livraison souhaitée</label>
+            <input
+              type="date"
+              value={approForm.dateLivraisonSouhaitee}
+              min={new Date().toISOString().slice(0, 10)}
+              onChange={(e) => setApproForm(f => ({ ...f, dateLivraisonSouhaitee: e.target.value }))}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400"
+            />
+          </div>
+
+          {/* Notes */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+            <textarea
+              rows={2}
+              placeholder="Instructions particulières, urgence, etc."
+              value={approForm.notes}
+              onChange={(e) => setApproForm(f => ({ ...f, notes: e.target.value }))}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 resize-none"
+            />
+          </div>
+
+          {/* Actions */}
+          <div className="flex gap-3 pt-2 border-t border-gray-100">
+            <Button variant="ghost" className="flex-1" onClick={() => setApproOpen(false)}>
+              Annuler
+            </Button>
+            <Button
+              className="flex-1"
+              style={{ backgroundColor: '#f97316' }}
+              disabled={!approForm.produitId || approForm.quantite < 1 || creerAppro.isPending}
+              onClick={() => {
+                creerAppro.mutate(
+                  {
+                    produit_id:               approForm.produitId,
+                    quantite:                 approForm.quantite,
+                    fournisseur_nom:          approForm.fournisseurNom || undefined,
+                    date_livraison_souhaitee: approForm.dateLivraisonSouhaitee || undefined,
+                    notes:                    approForm.notes || undefined,
+                  },
+                  {
+                    onSuccess: () => { setApproOpen(false); setApproForm(DEFAULT_APPRO) },
+                  },
+                )
+              }}
+            >
+              {creerAppro.isPending ? 'Création…' : 'Créer le bon d\'appro'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </motion.div>
   )
 }

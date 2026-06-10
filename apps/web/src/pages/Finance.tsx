@@ -17,8 +17,9 @@ import {
   useBilanComptable, useResultatAnalytique,
   useSyntheseComptable, useControlesComptables,
   useClotureComptable,
+  useVersementsFacture, useEnregistrerVersement,
 } from '@/hooks/useFinance'
-import type { Facture as FactureApi, Credit as CreditApi, FactureLigne } from '@/hooks/useFinance'
+import type { Facture as FactureApi, Credit as CreditApi, FactureLigne, Versement } from '@/hooks/useFinance'
 import { useClients } from '@/hooks/useClients'
 import { useCommandes } from '@/hooks/useCommandes'
 import { API_BASE, apiClient } from '@/lib/api-client'
@@ -1141,6 +1142,148 @@ function OrderSelectorModal({ isOpen, onClose, onSelect }: {
   )
 }
 
+const MODE_VERSEMENT_LABELS: Record<Versement['mode_paiement'], string> = {
+  orange_money: 'Orange Money',
+  mtn_momo:     'MTN MoMo',
+  virement:     'Virement',
+  especes:      'Espèces',
+  cheque:       'Chèque',
+  autre:        'Autre',
+}
+
+function NouveauVersementModal({
+  isOpen,
+  onClose,
+  facture,
+}: {
+  isOpen:   boolean
+  onClose:  () => void
+  facture:  FactureRecord | null
+}) {
+  const [montant,    setMontant]    = useState('')
+  const [date,       setDate]       = useState(new Date().toISOString().split('T')[0])
+  const [mode,       setMode]       = useState<Versement['mode_paiement']>('orange_money')
+  const [reference,  setReference]  = useState('')
+  const [note,       setNote]       = useState('')
+  const enregistrer = useEnregistrerVersement()
+
+  useEffect(() => {
+    if (isOpen) {
+      setMontant('')
+      setDate(new Date().toISOString().split('T')[0])
+      setMode('orange_money')
+      setReference('')
+      setNote('')
+    }
+  }, [isOpen, facture?.id])
+
+  if (!facture) return null
+
+  const solde      = Number(facture.solde_restant_xaf ?? 0)
+  const montantNum = Number(montant)
+
+  const handleSubmit = () => {
+    enregistrer.mutate(
+      {
+        factureId:      facture.id as string,
+        montant_xaf:    montantNum,
+        date_versement: date,
+        mode_paiement:  mode,
+        reference:      reference || undefined,
+        note:           note || undefined,
+      },
+      { onSuccess: () => onClose() },
+    )
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Enregistrer un versement" size="sm">
+      <div className="space-y-4">
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+          <div className="text-sm font-semibold text-amber-800">
+            {facture.client?.nom as string} — {facture.numero as string}
+          </div>
+          <div className="text-xs text-amber-600 mt-0.5">
+            Solde restant : <span className="font-bold">{formatXAF(solde)}</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant (FCFA)</label>
+            <input
+              type="number"
+              value={montant}
+              onChange={e => setMontant(e.target.value)}
+              max={solde}
+              placeholder={`Max : ${solde.toLocaleString('fr-CM')}`}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Date</label>
+            <input
+              type="date"
+              value={date}
+              onChange={e => setDate(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Mode de paiement</label>
+          <select
+            value={mode}
+            onChange={e => setMode(e.target.value as Versement['mode_paiement'])}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30 bg-white"
+          >
+            {(Object.entries(MODE_VERSEMENT_LABELS) as [Versement['mode_paiement'], string][]).map(([val, label]) => (
+              <option key={val} value={val}>{label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">
+            Référence <span className="text-gray-400 font-normal normal-case">(optionnel)</span>
+          </label>
+          <input
+            type="text"
+            value={reference}
+            onChange={e => setReference(e.target.value)}
+            placeholder="Ex: MP260601123"
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">
+            Note <span className="text-gray-400 font-normal normal-case">(optionnel)</span>
+          </label>
+          <textarea
+            value={note}
+            onChange={e => setNote(e.target.value)}
+            rows={2}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30 resize-none"
+          />
+        </div>
+
+        <div className="flex gap-2 justify-end pt-2">
+          <Button variant="ghost" onClick={onClose}>Annuler</Button>
+          <Button
+            onClick={handleSubmit}
+            disabled={enregistrer.isPending || !montant || montantNum <= 0 || montantNum > solde || !date}
+          >
+            <CheckCircle className="h-3.5 w-3.5" />
+            {enregistrer.isPending ? 'Enregistrement…' : 'Enregistrer'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 export default function Finance() {
   const [activeTab, setActiveTab]         = useState<Tab>('Dashboard')
   const [creditSubTab, setCreditSubTab]   = useState<'tableau-de-bord' | 'creances' | 'plafonds'>('tableau-de-bord')
@@ -1155,6 +1298,7 @@ export default function Finance() {
   const [remboursementCredit, setRemboursementCredit] = useState<CreditRecord | null>(null)
   const [relanceCredit, setRelanceCredit] = useState<CreditRecord | null>(null)
   const [documentsCredit, setDocumentsCredit] = useState<CreditRecord | null>(null)
+  const [showNouveauVersement, setShowNouveauVersement] = useState(false)
   const [compteFilter, setCompteFilter]   = useState('')
   const [periodeFilter, setPeriodeFilter] = useState('')
   const [periodeTva, setPeriodeTva]       = useState(new Date().toISOString().slice(0, 7))
@@ -1162,6 +1306,10 @@ export default function Finance() {
   const [exerciceCompta, setExerciceCompta] = useState(exerciceCourant)
   const [grandLivreDebut, setGrandLivreDebut] = useState(`${exerciceCourant}-01-01`)
   const [grandLivreFin, setGrandLivreFin] = useState(`${exerciceCourant}-12-31`)
+
+  const { data: versementsData, isLoading: versementsLoading } = useVersementsFacture(
+    selectedFacture?.id as string ?? null,
+  )
 
   const { data: facturesData, isLoading: facturesLoading } = useFactures()
   const { data: creditsData,  isLoading: creditsLoading  } = useCredits()
@@ -1605,6 +1753,82 @@ export default function Finance() {
                     </div>
                   </div>
                   <InvoicePreview facture={selectedFacture as PreviewableFacture} />
+
+                  {/* ── Section versements ── */}
+                  <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+                    {/* KPIs encaissement */}
+                    <div className="p-4 border-b border-gray-50 grid grid-cols-3 gap-3">
+                      <div className="rounded-lg bg-gray-50 p-3 text-center">
+                        <div className="text-xs text-gray-400 mb-1">Total TTC</div>
+                        <div className="text-sm font-bold text-gray-800">{formatXAF(Number(selectedFacture.montant_ttc_xaf ?? 0))}</div>
+                      </div>
+                      <div className="rounded-lg bg-green-50 p-3 text-center">
+                        <div className="text-xs text-green-600 mb-1">Encaissé</div>
+                        <div className="text-sm font-bold text-green-700">{formatXAF(Number(selectedFacture.montant_paye_xaf ?? 0))}</div>
+                      </div>
+                      <div className="rounded-lg bg-amber-50 p-3 text-center">
+                        <div className="text-xs text-amber-600 mb-1">Solde restant</div>
+                        <div className="text-sm font-bold text-amber-700">{formatXAF(Number(selectedFacture.solde_restant_xaf ?? 0))}</div>
+                      </div>
+                    </div>
+
+                    {/* Header */}
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-50">
+                      <h3 className="text-sm font-bold text-[#212121]">Historique des versements</h3>
+                      {Number(selectedFacture.solde_restant_xaf ?? 0) > 0 && selectedFacture.statut !== 'annule' && (
+                        <Button size="sm" onClick={() => setShowNouveauVersement(true)}>
+                          <Plus className="h-3.5 w-3.5" /> Enregistrer un versement
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* Liste */}
+                    {versementsLoading ? (
+                      <div className="flex justify-center py-8">
+                        <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
+                      </div>
+                    ) : (versementsData ?? []).length === 0 ? (
+                      <div className="p-8 text-center">
+                        <ReceiptText className="h-7 w-7 text-gray-300 mx-auto mb-2" />
+                        <p className="text-sm text-gray-400">Aucun versement enregistré</p>
+                        <p className="text-xs text-gray-300 mt-0.5">Les paiements partiels apparaîtront ici</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-gray-50">
+                        {(versementsData ?? []).map((v) => (
+                          <div key={v.id} className="flex items-center justify-between px-4 py-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-green-50 shrink-0">
+                                <CheckCircle className="h-4 w-4 text-green-600" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-sm font-bold text-gray-800">+{formatXAF(v.montant_xaf)}</span>
+                                  <span className="text-xs px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">
+                                    {MODE_VERSEMENT_LABELS[v.mode_paiement]}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-gray-400 mt-0.5">
+                                  {formatDate(v.date_versement)}
+                                  {v.reference && (
+                                    <span className="ml-2 font-mono text-gray-500">Réf: {v.reference}</span>
+                                  )}
+                                </div>
+                                {v.note && (
+                                  <div className="text-xs text-gray-400 mt-0.5 italic truncate">{v.note}</div>
+                                )}
+                              </div>
+                            </div>
+                            {v.enregistre_par && (
+                              <div className="text-right text-xs text-gray-300 shrink-0 ml-4">
+                                {v.enregistre_par.split('@')[0]}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <>
@@ -2241,6 +2465,7 @@ export default function Finance() {
         onClose={() => setShowNewFacture(false)}
         factureeCommandeIds={factureeCommandeIds}
       />
+      <NouveauVersementModal isOpen={showNouveauVersement} onClose={() => setShowNouveauVersement(false)} facture={selectedFacture} />
       <PaiementFactureModal isOpen={!!paiementFacture} onClose={() => setPaiementFacture(null)} facture={paiementFacture} />
       <RelanceFactureModal isOpen={!!relanceFacture} onClose={() => setRelanceFacture(null)} facture={relanceFacture} />
       <RemboursementModal isOpen={!!remboursementCredit} onClose={() => setRemboursementCredit(null)} credit={remboursementCredit} />

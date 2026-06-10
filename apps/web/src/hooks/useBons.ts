@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import { dbGetBons, dbUpdateStatut, genererNumero } from '@/lib/db'
 import { useAuth } from '@/context/AuthContext'
+import { apiClient } from '@/lib/api-client'
 
 export interface BonLigne {
   produit_id?: string; designation: string; quantite: number
@@ -255,37 +256,45 @@ export function useValidateBon() {
   })
 }
 
+// ── Types pour la vérification de stock ──────────────────────────────────────
+
+export interface LigneStockCheck {
+  designation:       string
+  quantite_demandee: number
+  stock_disponible:  number | null
+  suffisant:         boolean
+  sans_produit:      boolean
+}
+
+export interface StockCheckResult {
+  bon_statut:    string
+  lignes:        LigneStockCheck[]
+  toutSuffisant: boolean
+}
+
+export function useVerifierStockBon(id: string | null) {
+  return useQuery({
+    queryKey:  ['bons', id, 'verifier-stock'],
+    queryFn:   () => apiClient.get<StockCheckResult>(`/api/bons/${id}/verifier-stock`),
+    enabled:   !!id,
+    staleTime: 0,
+  })
+}
+
 export function useExecuteBon() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, code_unique }: { id: string; code_unique: string }) => {
-      const { data: bon } = await supabase.from('bons_sortie')
-        .select('*, bons_sortie_lignes(*)').eq('id', id).single()
-      if (!bon) throw new Error('Bon introuvable')
-      const b = bon as { numero: string; statut: string; bons_sortie_lignes: Array<{ produit_id: string | null; quantite_demandee: number }> }
-      if (b.numero !== code_unique) throw new Error('Code unique invalide')
-      if (b.statut !== 'valide') throw new Error('Bon non validé')
-      // Déduire le stock pour chaque ligne avec produit_id
-      for (const ligne of b.bons_sortie_lignes) {
-        if (!ligne.produit_id) continue
-        const { data: p } = await supabase.from('produits').select('stock_actuel,stock_min,stock_critique').eq('id', ligne.produit_id).single()
-        if (!p) continue
-        const prod = p as { stock_actuel: number; stock_min: number; stock_critique: number }
-        if (prod.stock_actuel < ligne.quantite_demandee) throw new Error(`Stock insuffisant pour un produit`)
-        const nouvelleQte = prod.stock_actuel - ligne.quantite_demandee
-        const statut = nouvelleQte === 0 ? 'rupture' : nouvelleQte <= prod.stock_critique ? 'critique' : nouvelleQte <= prod.stock_min ? 'alerte' : 'normal'
-        await supabase.from('produits').update({ stock_actuel: nouvelleQte, statut, updated_at: new Date().toISOString() }).eq('id', ligne.produit_id)
-        await supabase.from('bons_sortie_lignes').update({ quantite_servie: ligne.quantite_demandee }).eq('bon_id', id).eq('produit_id', ligne.produit_id)
-      }
-      const { data, error } = await supabase.from('bons_sortie')
-        .update({ statut: 'execute', updated_at: new Date().toISOString() }).eq('id', id).select().single()
-      if (error) throw new Error(error.message)
-      return data!
-    },
-    onSuccess: () => {
+    mutationFn: ({ id, code_unique }: { id: string; code_unique: string; nb_articles?: number }) =>
+      apiClient.put<unknown>(`/api/bons/${id}/executer`, { code_unique }),
+    onSuccess: (_data, variables) => {
       void qc.invalidateQueries({ queryKey: ['bons'] })
       void qc.invalidateQueries({ queryKey: ['stocks'] })
-      toast.success('Bon exécuté — stocks mis à jour')
+      const nb = variables.nb_articles ?? 0
+      toast.success(
+        nb > 0
+          ? `Bon exécuté — stock mis à jour pour ${nb} article${nb > 1 ? 's' : ''}`
+          : 'Bon exécuté — stocks mis à jour',
+      )
     },
     onError: (err: Error) => toast.error(err.message),
   })

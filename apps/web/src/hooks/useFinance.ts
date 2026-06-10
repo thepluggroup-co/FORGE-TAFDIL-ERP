@@ -569,6 +569,61 @@ export function usePaiementFacture() {
   })
 }
 
+export interface Versement {
+  id: string
+  facture_id: string
+  montant_xaf: number
+  date_versement: string
+  mode_paiement: 'orange_money' | 'mtn_momo' | 'virement' | 'especes' | 'cheque' | 'autre'
+  reference: string | null
+  note: string | null
+  enregistre_par: string | null
+  created_at: string
+}
+
+export function useVersementsFacture(factureId: string | null) {
+  return useQuery({
+    queryKey: ['versements-facture', factureId],
+    queryFn:  () =>
+      apiClient
+        .get<{ data: Versement[] }>(`/api/factures/${factureId}/versements`)
+        .then(r => r.data ?? []),
+    enabled:   Boolean(factureId),
+    staleTime: 15_000,
+  })
+}
+
+export function useEnregistrerVersement() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: {
+      factureId:      string
+      montant_xaf:    number
+      date_versement: string
+      mode_paiement:  Versement['mode_paiement']
+      reference?:     string
+      note?:          string
+    }) =>
+      apiClient.post<{ versement: Versement; facture: Facture; solde_restant_xaf: number }>(
+        `/api/factures/${payload.factureId}/versements`,
+        {
+          montant_xaf:    payload.montant_xaf,
+          date_versement: payload.date_versement,
+          mode_paiement:  payload.mode_paiement,
+          reference:      payload.reference,
+          note:           payload.note,
+        },
+      ),
+    onSuccess: (_, variables) => {
+      void qc.invalidateQueries({ queryKey: ['factures'] })
+      void qc.invalidateQueries({ queryKey: ['versements-facture', variables.factureId] })
+      void qc.invalidateQueries({ queryKey: ['ecritures'] })
+      toast.success('Versement enregistré')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
 export function useRelanceFacture() {
   return useMutation({
     mutationFn: (payload: { id: string; message?: string }) =>

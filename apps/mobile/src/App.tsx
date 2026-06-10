@@ -7,6 +7,7 @@ import { DashboardPage } from './pages/DashboardPage'
 import { OrdersPage } from './pages/OrdersPage'
 import { ProductsPage } from './pages/ProductsPage'
 import { ProfilePage } from './pages/ProfilePage'
+import { ApprobationPage } from './pages/ApprobationPage'
 
 function AuthenticatedApp() {
   return (
@@ -16,6 +17,7 @@ function AuthenticatedApp() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/orders" element={<OrdersPage />} />
+          <Route path="/approbation" element={<ApprobationPage />} />
           <Route path="/products" element={<ProductsPage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

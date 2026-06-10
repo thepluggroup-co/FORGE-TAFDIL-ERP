@@ -59,6 +59,7 @@ const Login        = lazy(() => import('@/pages/Login'))
 const Dashboard    = lazy(() => import('@/pages/Dashboard'))
 const Stocks       = lazy(() => import('@/pages/Stocks'))
 const BonsSortie   = lazy(() => import('@/pages/stocks/BonsSortie'))
+const BonsAppro    = lazy(() => import('@/pages/stocks/BonsAppro'))
 const Commandes    = lazy(() => import('@/pages/Commandes'))
 const Devis        = lazy(() => import('@/pages/Devis'))
 const Clients      = lazy(() => import('@/pages/Clients'))
@@ -79,6 +80,7 @@ const Account           = lazy(() => import('@/pages/Account'))
 const AdminSettings     = lazy(() => import('@/pages/AdminSettings'))
 const Equipements       = lazy(() => import('@/pages/Equipements'))
 const ApprouverDevis    = lazy(() => import('@/pages/devis/ApprouverDevis'))
+const Fournisseurs      = lazy(() => import('@/pages/Fournisseurs'))
 
 function PageLoader() {
   return (
@@ -165,7 +167,8 @@ function AppRoutes() {
 
           {/* Stocks + sous-routes */}
           <Route path="/stocks" element={<Shell><Stocks /></Shell>} />
-          <Route path="/stocks/bons-sortie" element={<Shell><BonsSortie /></Shell>} />
+          <Route path="/stocks/bons-sortie"        element={<Shell><BonsSortie /></Shell>} />
+          <Route path="/stocks/approvisionnement" element={<Shell><BonsAppro /></Shell>} />
 
           {/* Module commercial */}
           <Route path="/commandes" element={<Shell><Commandes /></Shell>} />
@@ -188,6 +191,9 @@ function AppRoutes() {
 
           {/* Équipements */}
           <Route path="/equipements" element={<Shell><Equipements /></Shell>} />
+
+          {/* Fournisseurs */}
+          <Route path="/fournisseurs" element={<Shell><Fournisseurs /></Shell>} />
 
           {/* Account / settings */}
           <Route path="/account" element={<Shell><Account /></Shell>} />

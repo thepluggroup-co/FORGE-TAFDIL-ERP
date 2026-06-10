@@ -821,6 +821,108 @@ router.post(
   }
 )
 
+// ── Historique des versements par facture ─────────────────────────────────────
+
+const versementSchema = z.object({
+  montant_xaf:    z.number().int().positive(),
+  date_versement: z.string(),
+  mode_paiement:  z.enum(['orange_money', 'mtn_momo', 'virement', 'especes', 'cheque', 'autre']),
+  reference:      z.string().optional(),
+  note:           z.string().optional(),
+})
+
+router.get('/factures/:id/versements', async (c) => {
+  const { id } = c.req.param()
+  const { data, error } = await db
+    .from('versements_factures')
+    .select('*')
+    .eq('facture_id', id)
+    .order('date_versement', { ascending: false })
+
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data: data ?? [] })
+})
+
+router.post(
+  '/factures/:id/versements',
+  requireRole(['admin']),
+  zValidator('json', versementSchema),
+  async (c) => {
+    const { id } = c.req.param()
+    const user   = c.get('user')
+    const body   = c.req.valid('json')
+
+    const { data: facture } = await db
+      .from('factures')
+      .select('statut, total_ttc_xaf, montant_paye_xaf, numero, client_nom, client_id')
+      .eq('id', id)
+      .single()
+
+    if (!facture) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
+
+    const f = facture as {
+      statut: string; total_ttc_xaf: number; montant_paye_xaf: number
+      numero: string; client_nom: string; client_id: string | null
+    }
+
+    if (f.statut === 'annule') {
+      return c.json({ error: 'Facture annulée — versements bloqués', code: 'ANNULE_IMMUTABLE' }, 422)
+    }
+
+    const soldeActuel = Math.max(0, f.total_ttc_xaf - f.montant_paye_xaf)
+    if (body.montant_xaf > soldeActuel) {
+      return c.json({
+        error: `Montant (${xaf(body.montant_xaf)}) dépasse le solde restant (${xaf(soldeActuel)})`,
+        code:  'AMOUNT_EXCEEDED',
+      }, 422)
+    }
+
+    const { data: versement, error: vErr } = await db
+      .from('versements_factures')
+      .insert({
+        facture_id:     id,
+        montant_xaf:    body.montant_xaf,
+        date_versement: body.date_versement,
+        mode_paiement:  body.mode_paiement,
+        reference:      body.reference ?? null,
+        note:           body.note ?? null,
+        enregistre_par: user.email,
+      })
+      .select()
+      .single()
+
+    if (vErr) return c.json({ error: vErr.message }, 500)
+
+    const nouveauPaye   = Math.round(f.montant_paye_xaf + body.montant_xaf)
+    const nouveauSolde  = Math.max(0, f.total_ttc_xaf - nouveauPaye)
+    const nouveauStatut = nouveauSolde <= 0 ? 'paye' : (f.statut === 'valide' || f.statut === 'envoye' ? f.statut : 'envoye')
+
+    const { data: factureUpdated, error: fErr } = await db
+      .from('factures')
+      .update({ montant_paye_xaf: nouveauPaye, statut: nouveauStatut, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (fErr) return c.json({ error: fErr.message }, 500)
+
+    const modeCompta = ['virement', 'cheque'].includes(body.mode_paiement) ? 'banque' : 'caisse'
+    const refLabel   = [f.numero, body.mode_paiement, body.reference].filter(Boolean).join(' — ')
+
+    genererEcritureEncaissement({
+      facture_id:  id,
+      reference:   refLabel,
+      date:        body.date_versement,
+      montant_xaf: body.montant_xaf,
+      client_nom:  f.client_nom,
+      mode:        modeCompta as 'banque' | 'caisse',
+      created_by:  user.id,
+    }).catch(e => console.error('[compta] versement facture:', e))
+
+    return c.json({ versement, facture: enrichirFacture(factureUpdated), solde_restant_xaf: nouveauSolde }, 201)
+  },
+)
+
 router.post('/factures/:id/whatsapp', requireRole(['admin']), zValidator('json', whatsappSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')

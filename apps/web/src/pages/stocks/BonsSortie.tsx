@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Plus, Check, ChevronRight, RefreshCw } from 'lucide-react'
-import { PageHeader, DataTable, StatusBadge, SlideOver, Button, EmptyState } from '@forge/ui'
+import { Plus, Check, ChevronRight, RefreshCw, AlertTriangle, CheckCircle2, Minus } from 'lucide-react'
+import { PageHeader, DataTable, StatusBadge, SlideOver, Modal, Button, EmptyState } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDateTime } from '@/lib/utils'
-import { useBons, useCreateBon, useValidateBon, useExecuteBon, useBackfillBons } from '@/hooks/useBons'
+import { useBons, useCreateBon, useValidateBon, useExecuteBon, useBackfillBons, useVerifierStockBon } from '@/hooks/useBons'
 import { useStocks } from '@/hooks/useStocks'
 import { useEmployes } from '@/hooks/useRH'
 import type { BonSortie as BonApi, BonLigne } from '@/hooks/useBons'
@@ -52,14 +52,39 @@ function WorkflowStepper({ status }: { status: string }) {
 
 export default function BonsSortie() {
   const [nouveauOpen, setNouveauOpen] = useState(false)
+  const [execBonId, setExecBonId]       = useState<string | null>(null)
+  const [execBonNumero, setExecBonNumero] = useState('')
+  const [codeInput, setCodeInput]       = useState('')
 
   const { data, isLoading } = useBons()
   const validateBon  = useValidateBon()
   const executeBon   = useExecuteBon()
   const backfillBons = useBackfillBons()
+  const { data: stockCheck, isLoading: stockCheckLoading } = useVerifierStockBon(execBonId)
 
   const bons = (data?.data ?? []) as BonRecord[]
   const enAttente = bons.filter((b) => b.statut === 'soumis' || b.statut === 'en_attente').length
+
+  function ouvrirExecution(id: string, numero: string) {
+    setExecBonId(id)
+    setExecBonNumero(numero)
+    setCodeInput('')
+  }
+
+  function fermerExecution() {
+    setExecBonId(null)
+    setExecBonNumero('')
+    setCodeInput('')
+  }
+
+  function confirmerExecution() {
+    if (!execBonId || !codeInput) return
+    const nbArticles = stockCheck?.lignes.filter((l) => !l.sans_produit).length ?? 0
+    executeBon.mutate(
+      { id: execBonId, code_unique: codeInput, nb_articles: nbArticles },
+      { onSuccess: fermerExecution },
+    )
+  }
 
   const COLUMNS: Column<BonRecord>[] = [
     {
@@ -153,10 +178,7 @@ export default function BonsSortie() {
           {v === 'valide' && (
             <button
               disabled={executeBon.isPending}
-              onClick={() => {
-                const code = window.prompt(`Entrez le code unique du bon ${row.numero as string} :`)
-                if (code) executeBon.mutate({ id: row.id as string, code_unique: code })
-              }}
+              onClick={() => ouvrirExecution(row.id as string, row.numero as string)}
               className="px-2 py-1 text-xs font-medium rounded-lg bg-green-50 text-green-700 hover:bg-green-100 transition-colors disabled:opacity-50"
             >
               Exécuter
@@ -211,6 +233,100 @@ export default function BonsSortie() {
       />
 
       {nouveauOpen && <NouveauBonSlideOver open={nouveauOpen} onClose={() => setNouveauOpen(false)} />}
+
+      {/* Modal d'exécution avec vérification de stock */}
+      <Modal
+        isOpen={!!execBonId}
+        onClose={fermerExecution}
+        title={`Exécuter le bon ${execBonNumero}`}
+      >
+        <div className="space-y-4">
+          {/* Tableau de vérification des stocks */}
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Vérification des stocks</p>
+            {stockCheckLoading ? (
+              <div className="flex items-center justify-center py-6 text-gray-400 text-sm">
+                Vérification en cours…
+              </div>
+            ) : stockCheck ? (
+              <div className="border border-gray-100 rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500">Article</th>
+                      <th className="text-right px-3 py-2 text-xs font-semibold text-gray-500">Demandé</th>
+                      <th className="text-right px-3 py-2 text-xs font-semibold text-gray-500">Disponible</th>
+                      <th className="text-center px-3 py-2 text-xs font-semibold text-gray-500">État</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {stockCheck.lignes.map((ligne, i) => (
+                      <tr key={i} className={!ligne.suffisant ? 'bg-red-50' : ''}>
+                        <td className="px-3 py-2 text-xs text-gray-700 font-medium">{ligne.designation}</td>
+                        <td className="px-3 py-2 text-xs text-right text-gray-600">{ligne.quantite_demandee}</td>
+                        <td className="px-3 py-2 text-xs text-right">
+                          {ligne.sans_produit
+                            ? <span className="text-gray-400">—</span>
+                            : <span className={ligne.suffisant ? 'text-green-700' : 'text-red-600 font-semibold'}>{ligne.stock_disponible}</span>
+                          }
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          {ligne.sans_produit
+                            ? <Minus className="h-3.5 w-3.5 text-gray-300 mx-auto" />
+                            : ligne.suffisant
+                              ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 mx-auto" />
+                              : <AlertTriangle className="h-3.5 w-3.5 text-red-500 mx-auto" />
+                          }
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            {/* Avertissement stock insuffisant */}
+            {stockCheck && !stockCheck.toutSuffisant && (
+              <div className="mt-2 flex items-start gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-lg">
+                <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-700">
+                  Stock insuffisant pour {stockCheck.lignes.filter((l) => !l.suffisant).length} article(s).
+                  L'exécution risque d'échouer.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Saisie du code unique */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">
+              Code unique du bon <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={codeInput}
+              onChange={(e) => setCodeInput(e.target.value)}
+              placeholder={execBonNumero}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828] font-mono"
+            />
+            <p className="mt-1 text-xs text-gray-400">Saisir le numéro exact du bon pour confirmer</p>
+          </div>
+
+          {/* Boutons */}
+          <div className="flex gap-3 pt-2 border-t border-gray-100">
+            <Button variant="ghost" className="flex-1" onClick={fermerExecution} disabled={executeBon.isPending}>
+              Annuler
+            </Button>
+            <Button
+              className="flex-1"
+              disabled={!codeInput || executeBon.isPending || stockCheckLoading}
+              onClick={confirmerExecution}
+            >
+              {executeBon.isPending ? 'Exécution…' : 'Confirmer l\'exécution'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </motion.div>
   )
 }

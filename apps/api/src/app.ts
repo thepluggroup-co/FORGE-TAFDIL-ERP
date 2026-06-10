@@ -20,6 +20,7 @@ import { adminRouter } from './routes/admin'
 import { equipementsRouter } from './routes/equipements'
 import { creditRouter } from './routes/credit'
 import { profileRouter } from './routes/profile'
+import { fournisseursRouter } from './routes/fournisseurs'
 import { demarrerCronRelances } from './services/relances-cron.service'
 import { checkOverdueInstallments } from './services/creditService'
 import { sendUpcomingReminders } from './services/notificationService'
@@ -118,8 +119,9 @@ api.route('/shop-erp', shopErpRouter)
 api.route('/',         operationsRouter)
 api.route('/',         equipementsRouter)
 api.route('/admin',    adminRouter)
-api.route('/credit',   creditRouter)
-api.route('/profile',  profileRouter)
+api.route('/credit',       creditRouter)
+api.route('/profile',      profileRouter)
+api.route('/fournisseurs', fournisseursRouter)
 
 app.route('/api', api)
 

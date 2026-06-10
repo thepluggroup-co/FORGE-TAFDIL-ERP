@@ -305,6 +305,23 @@ export const facturesLignes = sqliteTable('factures_lignes', {
 export type FactureLigne       = typeof facturesLignes.$inferSelect
 export type NouvelleFactureLigne = typeof facturesLignes.$inferInsert
 
+export const versementsFactures = sqliteTable('versements_factures', {
+  id:            id(),
+  factureId:     text('facture_id').notNull().references(() => factures.id),
+  montantXaf:    real('montant_xaf').notNull(),
+  dateVersement: text('date_versement').notNull(),
+  modePaiement:  text('mode_paiement', {
+    enum: ['orange_money', 'mtn_momo', 'virement', 'especes', 'cheque', 'autre'],
+  }),
+  reference:     text('reference'),
+  note:          text('note'),
+  enregistrePar: text('enregistre_par'),
+  createdAt:     ts('created_at'),
+})
+
+export type VersementFacture        = typeof versementsFactures.$inferSelect
+export type NouveauVersementFacture = typeof versementsFactures.$inferInsert
+
 // ══════════════════════════════════════════════════════════════════════════════
 // FINANCE — CRÉDITS
 // ══════════════════════════════════════════════════════════════════════════════

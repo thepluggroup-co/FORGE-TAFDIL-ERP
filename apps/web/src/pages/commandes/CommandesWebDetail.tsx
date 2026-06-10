@@ -1,11 +1,11 @@
 import React, { useState } from 'react'
 import {
   Phone, Mail, MapPin, ExternalLink, MessageCircle,
-  Loader2, AlertTriangle, CheckCircle, Package, Truck,
+  Loader2, AlertTriangle, CheckCircle, Package, Truck, CreditCard, XCircle,
 } from 'lucide-react'
-import { SlideOver, Button, StatusBadge } from '@forge/ui'
+import { SlideOver, Button, StatusBadge, Modal } from '@forge/ui'
 import { formatXAF, formatDateTime } from '@/lib/utils'
-import { useStatutCommandeShop } from '@/hooks/useCommandesShop'
+import { useStatutCommandeShop, useAnnulerCommandeShop } from '@/hooks/useCommandesShop'
 import type { CommandeShop, StatutCommandeShop } from '@/hooks/useCommandesShop'
 
 // ── Labels ──────────────────────────────────────────────────────────────────────
@@ -56,58 +56,83 @@ interface Action {
   icon: React.ElementType
   nextStatut: StatutCommandeShop
   nextPaiement?: 'paye'
-  variant?: 'primary' | 'secondary'
+  requiresRef?: boolean
+  variant?: 'primary' | 'secondary' | 'danger'
   confirmText?: string
 }
 
+const PAIEMENT_EN_LIGNE: string[] = ['mtn_momo', 'orange_money']
+
 function getActions(commande: CommandeShop): Action[] {
-  const { statut_commande, statut_paiement } = commande
+  const { statut_commande, statut_paiement, mode_paiement } = commande
   const actions: Action[] = []
+  const paiementEnLigne = PAIEMENT_EN_LIGNE.includes(mode_paiement)
 
   if (statut_commande === 'recue') {
     if (statut_paiement === 'en_attente') {
+      if (paiementEnLigne) {
+        actions.push({
+          label:       'Paiement reçu — Lancer la préparation',
+          icon:        CreditCard,
+          nextStatut:  'en_preparation',
+          nextPaiement: 'paye',
+          requiresRef: true,
+          variant:     'primary',
+        })
+      }
       actions.push({
-        label: 'Confirmer sans paiement',
-        icon: CheckCircle,
-        nextStatut: 'confirmee',
-        variant: 'secondary',
+        label:       'Confirmer sans paiement',
+        icon:        CheckCircle,
+        nextStatut:  'confirmee',
+        variant:     'secondary',
         confirmText: 'Confirmer la commande sans paiement reçu ?',
       })
     }
     if (statut_paiement === 'paye') {
       actions.push({
-        label: 'Lancer la préparation',
-        icon: Package,
+        label:      'Lancer la préparation',
+        icon:       Package,
         nextStatut: 'en_preparation',
-        variant: 'primary',
+        variant:    'primary',
       })
     }
   }
 
   if (statut_commande === 'confirmee') {
+    if (statut_paiement === 'en_attente' && paiementEnLigne) {
+      actions.push({
+        label:        'Confirmer paiement reçu',
+        icon:         CreditCard,
+        nextStatut:   'confirmee',
+        nextPaiement: 'paye',
+        requiresRef:  true,
+        variant:      'primary',
+      })
+    }
     actions.push({
-      label: 'Lancer la préparation',
-      icon: Package,
+      label:      'Lancer la préparation',
+      icon:       Package,
       nextStatut: 'en_preparation',
-      variant: 'primary',
+      variant:    statut_paiement === 'paye' ? 'primary' : 'secondary',
     })
   }
 
   if (statut_commande === 'en_preparation') {
     actions.push({
-      label: 'Marquer comme prête',
-      icon: CheckCircle,
+      label:      'Marquer comme prête — Expédier',
+      icon:       CheckCircle,
       nextStatut: 'expediee',
-      variant: 'primary',
+      variant:    'primary',
     })
   }
 
   if (statut_commande === 'expediee') {
     actions.push({
-      label: 'Confirmer la livraison',
-      icon: Truck,
-      nextStatut: 'livree',
-      variant: 'primary',
+      label:        'Confirmer la livraison',
+      icon:         Truck,
+      nextStatut:   'livree',
+      nextPaiement: mode_paiement === 'livraison' ? 'paye' : undefined,
+      variant:      'primary',
     })
   }
 
@@ -121,28 +146,43 @@ interface Props {
   onClose: () => void
 }
 
+const MOTIFS_ANNULATION = [
+  'Rupture de stock',
+  'Demande client',
+  'Erreur de commande',
+  'Autre',
+]
+
 export function CommandesWebDetail({ commande, onClose }: Props) {
-  const [confirming, setConfirming] = useState<Action | null>(null)
-  const statutMutation = useStatutCommandeShop()
+  const [confirming, setConfirming]         = useState<Action | null>(null)
+  const [paymentRef, setPaymentRef]         = useState('')
+  const [showAnnuler, setShowAnnuler]       = useState(false)
+  const [motifAnnulation, setMotifAnnulation] = useState(MOTIFS_ANNULATION[0])
+  const statutMutation  = useStatutCommandeShop()
+  const annulerMutation = useAnnulerCommandeShop()
+
+  const peutAnnuler = commande.statut_commande !== 'livree' && commande.statut_commande !== 'annulee'
 
   const actions = getActions(commande)
 
   const handleAction = (action: Action) => {
-    if (action.confirmText) {
+    if (action.requiresRef || action.confirmText) {
       setConfirming(action)
+      setPaymentRef('')
     } else {
-      executeAction(action)
+      executeAction(action, '')
     }
   }
 
-  const executeAction = (action: Action) => {
+  const executeAction = (action: Action, ref: string) => {
     statutMutation.mutate(
       {
-        id:              commande.id,
-        statut_commande: action.nextStatut,
-        statut_paiement: action.nextPaiement,
+        id:                commande.id,
+        statut_commande:   action.nextStatut,
+        statut_paiement:   action.nextPaiement,
+        payment_reference: ref || undefined,
       },
-      { onSuccess: () => { setConfirming(null); onClose() } }
+      { onSuccess: () => { setConfirming(null); setPaymentRef(''); onClose() } }
     )
   }
 
@@ -151,6 +191,7 @@ export function CommandesWebDetail({ commande, onClose }: Props) {
   const ttc     = commande.montant_ttc ?? 0
 
   return (
+    <>
     <SlideOver isOpen={true} onClose={onClose} title={`Commande ${commande.ref}`} width="lg">
       <div className="space-y-6">
 
@@ -283,18 +324,34 @@ export function CommandesWebDetail({ commande, onClose }: Props) {
           <span>Mise à jour {formatDateTime(commande.updated_at)}</span>
         </div>
 
-        {/* Confirmation modale inline */}
+        {/* Confirmation / saisie référence paiement */}
         {confirming && (
-          <div className="rounded-xl border border-orange-200 bg-orange-50 p-4">
-            <div className="mb-3 flex items-center gap-2">
+          <div className="rounded-xl border border-orange-200 bg-orange-50 p-4 space-y-3">
+            <div className="flex items-center gap-2">
               <AlertTriangle size={16} className="text-orange-500" />
-              <p className="text-sm font-medium text-orange-800">{confirming.confirmText}</p>
+              <p className="text-sm font-medium text-orange-800">
+                {confirming.confirmText ?? `Confirmer : ${confirming.label} ?`}
+              </p>
             </div>
+            {confirming.requiresRef && (
+              <div>
+                <label className="mb-1 block text-xs font-medium text-orange-700">
+                  Référence paiement {PAIEMENT_EN_LIGNE.includes(commande.mode_paiement) ? '(MoMo / OM)' : ''} — optionnel
+                </label>
+                <input
+                  type="text"
+                  value={paymentRef}
+                  onChange={(e) => setPaymentRef(e.target.value)}
+                  placeholder="ex: CI240608001234"
+                  className="w-full rounded-lg border border-orange-200 bg-white px-3 py-1.5 text-sm font-mono outline-none focus:border-orange-400"
+                />
+              </div>
+            )}
             <div className="flex gap-2">
-              <Button size="sm" onClick={() => executeAction(confirming)} disabled={statutMutation.isPending}>
+              <Button size="sm" onClick={() => executeAction(confirming, paymentRef)} disabled={statutMutation.isPending}>
                 {statutMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : 'Confirmer'}
               </Button>
-              <Button size="sm" variant="secondary" onClick={() => setConfirming(null)}>Annuler</Button>
+              <Button size="sm" variant="secondary" onClick={() => { setConfirming(null); setPaymentRef('') }}>Annuler</Button>
             </div>
           </div>
         )}
@@ -303,11 +360,11 @@ export function CommandesWebDetail({ commande, onClose }: Props) {
         {actions.length > 0 && !confirming && (
           <div className="space-y-2">
             <h3 className="text-xs font-semibold uppercase text-gray-400">Actions</h3>
-            {actions.map((action) => {
+            {actions.map((action, i) => {
               const Icon = action.icon
               return (
                 <Button
-                  key={action.nextStatut}
+                  key={`${action.nextStatut}-${i}`}
                   variant={action.variant === 'secondary' ? 'secondary' : 'primary'}
                   className="w-full justify-center gap-2"
                   onClick={() => handleAction(action)}
@@ -337,8 +394,78 @@ export function CommandesWebDetail({ commande, onClose }: Props) {
           </a>
         </div>
 
+        {/* Annulation */}
+        {peutAnnuler && (
+          <div className="border-t border-red-100 pt-4">
+            <button
+              onClick={() => { setMotifAnnulation(MOTIFS_ANNULATION[0]); setShowAnnuler(true) }}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-100"
+            >
+              <XCircle size={15} />
+              Annuler la commande
+            </button>
+          </div>
+        )}
+
         <Button variant="secondary" className="w-full" onClick={onClose}>Fermer</Button>
       </div>
     </SlideOver>
+
+    {/* Modal de confirmation d'annulation */}
+    <Modal
+      isOpen={showAnnuler}
+      onClose={() => setShowAnnuler(false)}
+      title="Annuler la commande"
+      size="sm"
+    >
+      <div className="space-y-4">
+        <p className="text-sm text-gray-700">
+          Confirmer l'annulation de la commande{' '}
+          <span className="font-mono font-semibold text-[#C62828]">#{commande.ref}</span> ?{' '}
+          Cette action est irréversible.
+        </p>
+
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">
+            Motif d'annulation
+          </label>
+          <select
+            value={motifAnnulation}
+            onChange={(e) => setMotifAnnulation(e.target.value)}
+            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#C62828] focus:ring-1 focus:ring-[#C62828]/20"
+          >
+            {MOTIFS_ANNULATION.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={() => setShowAnnuler(false)}
+            className="flex-1 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+          >
+            Conserver
+          </button>
+          <button
+            disabled={annulerMutation.isPending}
+            onClick={() =>
+              annulerMutation.mutate(
+                { id: commande.id, motif: motifAnnulation },
+                { onSuccess: () => { setShowAnnuler(false); onClose() } }
+              )
+            }
+            className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+          >
+            {annulerMutation.isPending
+              ? <Loader2 size={14} className="animate-spin" />
+              : <XCircle size={14} />
+            }
+            Annuler la commande
+          </button>
+        </div>
+      </div>
+    </Modal>
+    </>
   )
 }
