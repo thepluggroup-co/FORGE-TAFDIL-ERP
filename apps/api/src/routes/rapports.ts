@@ -202,6 +202,95 @@ async function financeAgregee(debut: string, fin: string) {
   })
 }
 
+async function chargesAgregees(debut: string, fin: string) {
+  const [chargesRes, sortiesRes, ecrituresRes] = await Promise.all([
+    db
+      .from('charges')
+      .select('id, numero, statut, montant_ht_xaf, tva_xaf, montant_paye_xaf, justificatif_statut')
+      .neq('statut', 'annulee')
+      .gte('date_charge', debut)
+      .lte('date_charge', fin),
+    db
+      .from('sorties_tresorerie')
+      .select('id, numero, charge_id, montant_xaf, justificatif_statut')
+      .neq('statut', 'annulee')
+      .gte('date_sortie', debut)
+      .lte('date_sortie', fin),
+    db
+      .from('ecritures_comptables')
+      .select('reference_doc, compte_syscohada, debit_xaf, credit_xaf')
+      .gte('date', debut)
+      .lte('date', fin),
+  ])
+
+  if (chargesRes.error) throw chargesRes.error
+  if (sortiesRes.error) throw sortiesRes.error
+  if (ecrituresRes.error) throw ecrituresRes.error
+
+  type Charge = {
+    id: string
+    numero: string
+    statut: string
+    montant_ht_xaf: number
+    tva_xaf: number
+    montant_paye_xaf: number
+    justificatif_statut: string
+  }
+  type Sortie = {
+    numero: string
+    charge_id?: string | null
+    montant_xaf: number
+    justificatif_statut: string
+  }
+  type EcritureControle = {
+    reference_doc?: string | null
+    compte_syscohada: string
+    debit_xaf: number
+    credit_xaf: number
+  }
+
+  const charges = (chargesRes.data ?? []) as Charge[]
+  const sorties = (sortiesRes.data ?? []) as Sortie[]
+  const ecritures = (ecrituresRes.data ?? []) as EcritureControle[]
+  const refs = new Set(ecritures.map((e) => e.reference_doc).filter(Boolean) as string[])
+  const sortiesParCharge = new Map<string, number>()
+  for (const sortie of sorties) {
+    if (!sortie.charge_id) continue
+    sortiesParCharge.set(sortie.charge_id, (sortiesParCharge.get(sortie.charge_id) ?? 0) + Number(sortie.montant_xaf ?? 0))
+  }
+
+  const chargesValidees = charges.filter((charge) => ['validee', 'payee'].includes(charge.statut))
+  const chargesHtValidees = chargesValidees.reduce((s, charge) => s + Number(charge.montant_ht_xaf ?? 0), 0)
+  const tvaDeductible = chargesValidees.reduce((s, charge) => s + Number(charge.tva_xaf ?? 0), 0)
+  const chargesComptables = ecritures
+    .filter((e) => e.compte_syscohada.startsWith('6'))
+    .reduce((s, e) => s + Number(e.debit_xaf ?? 0) - Number(e.credit_xaf ?? 0), 0)
+  const tvaDeductibleComptable = ecritures
+    .filter((e) => e.compte_syscohada.startsWith('4432'))
+    .reduce((s, e) => s + Number(e.debit_xaf ?? 0) - Number(e.credit_xaf ?? 0), 0)
+
+  return {
+    charges_total: charges.length,
+    charges_validees: chargesValidees.length,
+    sorties_total: sorties.length,
+    charges_ht_validees_xaf: Math.round(chargesHtValidees),
+    tva_deductible_xaf: Math.round(tvaDeductible),
+    charges_comptables_xaf: Math.round(chargesComptables),
+    tva_deductible_comptable_xaf: Math.round(tvaDeductibleComptable),
+    ecart_charges_ht_xaf: Math.round(chargesComptables - chargesHtValidees),
+    ecart_tva_deductible_xaf: Math.round(tvaDeductibleComptable - tvaDeductible),
+    charges_sans_ecriture: chargesValidees.filter((charge) => !refs.has(`CHG-${charge.numero}`)).map((charge) => charge.numero),
+    sorties_sans_ecriture: sorties.filter((sortie) => !refs.has(`SOR-${sortie.numero}`)).map((sortie) => sortie.numero),
+    paiements_incoherents: chargesValidees
+      .filter((charge) => Math.abs(Math.round(sortiesParCharge.get(charge.id) ?? 0) - Number(charge.montant_paye_xaf ?? 0)) > 1)
+      .map((charge) => charge.numero),
+    justificatifs_manquants: [
+      ...charges.filter((charge) => charge.justificatif_statut === 'manquant').map((charge) => charge.numero),
+      ...sorties.filter((sortie) => sortie.justificatif_statut === 'manquant').map((sortie) => sortie.numero),
+    ],
+  }
+}
+
 router.get('/grand-livre', requireRole(['admin', 'superviseur']), async (c) => {
   const { compte, debut, fin, exercice } = c.req.query()
 
@@ -620,6 +709,7 @@ router.get('/controles', requireRole(['admin', 'superviseur']), async (c) => {
     const comptes = await comptesAgreges(debut, fin)
     const resultat = resultatDepuisComptes(comptes)
     const finance = await financeAgregee(debut, fin)
+    const charges = await chargesAgregees(debut, fin)
     const planSet = new Set((planComptable as { compte: string }[]).map((p) => p.compte))
 
     const totalDebit = comptes.reduce((s, cpt) => s + cpt.total_debit_xaf, 0)
@@ -660,6 +750,56 @@ router.get('/controles', requireRole(['admin', 'superviseur']), async (c) => {
         details: `TVA comptable ${Math.round(tvaCollecteeComptable)} / TVA facturée ${Math.round(finance.tva_facturee_xaf)}`,
         ecart_xaf: ecartTva,
       },
+      {
+        code: 'CHARGES_ECRITURES',
+        label: 'Charges validées comptabilisées',
+        statut: charges.charges_sans_ecriture.length === 0 ? 'ok' : 'alerte',
+        details: charges.charges_sans_ecriture.length === 0
+          ? `${charges.charges_validees} charge(s) validée(s) rapprochée(s)`
+          : `${charges.charges_sans_ecriture.length} charge(s) validée(s) sans écriture : ${charges.charges_sans_ecriture.slice(0, 5).join(', ')}`,
+        ecart_xaf: charges.charges_sans_ecriture.length,
+      },
+      {
+        code: 'SORTIES_ECRITURES',
+        label: 'Sorties de trésorerie comptabilisées',
+        statut: charges.sorties_sans_ecriture.length === 0 ? 'ok' : 'alerte',
+        details: charges.sorties_sans_ecriture.length === 0
+          ? `${charges.sorties_total} sortie(s) rapprochée(s)`
+          : `${charges.sorties_sans_ecriture.length} sortie(s) sans écriture : ${charges.sorties_sans_ecriture.slice(0, 5).join(', ')}`,
+        ecart_xaf: charges.sorties_sans_ecriture.length,
+      },
+      {
+        code: 'CHARGES_METIER_COMPTA',
+        label: 'Charges métier vs comptes classe 6',
+        statut: Math.abs(charges.ecart_charges_ht_xaf) <= 1 ? 'ok' : 'attention',
+        details: `Charges HT validées ${charges.charges_ht_validees_xaf} / Comptes classe 6 ${charges.charges_comptables_xaf}`,
+        ecart_xaf: charges.ecart_charges_ht_xaf,
+      },
+      {
+        code: 'TVA_DEDUCTIBLE',
+        label: 'TVA déductible vs charges',
+        statut: Math.abs(charges.ecart_tva_deductible_xaf) <= 1 ? 'ok' : 'attention',
+        details: `TVA charges ${charges.tva_deductible_xaf} / TVA comptable 4432 ${charges.tva_deductible_comptable_xaf}`,
+        ecart_xaf: charges.ecart_tva_deductible_xaf,
+      },
+      {
+        code: 'JUSTIFICATIFS_CHARGES',
+        label: 'Justificatifs charges et sorties',
+        statut: charges.justificatifs_manquants.length === 0 ? 'ok' : 'attention',
+        details: charges.justificatifs_manquants.length === 0
+          ? 'Tous les justificatifs requis sont présents'
+          : `${charges.justificatifs_manquants.length} justificatif(s) manquant(s) : ${charges.justificatifs_manquants.slice(0, 5).join(', ')}`,
+        ecart_xaf: charges.justificatifs_manquants.length,
+      },
+      {
+        code: 'PAIEMENTS_CHARGES',
+        label: 'Montants payés des charges',
+        statut: charges.paiements_incoherents.length === 0 ? 'ok' : 'attention',
+        details: charges.paiements_incoherents.length === 0
+          ? 'Montants payés cohérents avec les sorties rattachées'
+          : `${charges.paiements_incoherents.length} charge(s) avec paiement à recalculer : ${charges.paiements_incoherents.slice(0, 5).join(', ')}`,
+        ecart_xaf: charges.paiements_incoherents.length,
+      },
     ]
 
     const alertes = controles.filter((controle) => controle.statut !== 'ok')
@@ -681,6 +821,7 @@ router.get('/controles', requireRole(['admin', 'superviseur']), async (c) => {
             'Vérifier les écritures manuelles et les comptes hors plan.',
             'Comparer les factures validées avec les écritures de vente générées.',
             'Contrôler la TVA collectée avant déclaration fiscale.',
+            'Rapprocher les charges validées, sorties de trésorerie et justificatifs.',
           ],
     })
   } catch (error) {
@@ -696,6 +837,7 @@ router.get('/cloture', requireRole(['admin', 'superviseur']), async (c) => {
     const comptes = await comptesAgreges(debut, fin)
     const resultat = resultatDepuisComptes(comptes)
     const finance = await financeAgregee(debut, fin)
+    const charges = await chargesAgregees(debut, fin)
     const planSet = new Set((planComptable as { compte: string }[]).map((p) => p.compte))
     const totalDebit = comptes.reduce((s, cpt) => s + cpt.total_debit_xaf, 0)
     const totalCredit = comptes.reduce((s, cpt) => s + cpt.total_credit_xaf, 0)
@@ -733,6 +875,22 @@ router.get('/cloture', requireRole(['admin', 'superviseur']), async (c) => {
         details: `Écart TVA ${ecartTva} XAF`,
       },
       {
+        code: 'CHARGES_RAPPROCHEES',
+        label: 'Charges et sorties rapprochées',
+        statut: charges.charges_sans_ecriture.length === 0 && charges.sorties_sans_ecriture.length === 0 ? 'ok' : 'bloquant',
+        details: charges.charges_sans_ecriture.length === 0 && charges.sorties_sans_ecriture.length === 0
+          ? `${charges.charges_validees} charge(s) et ${charges.sorties_total} sortie(s) rapprochée(s)`
+          : `${charges.charges_sans_ecriture.length} charge(s) / ${charges.sorties_sans_ecriture.length} sortie(s) sans écriture`,
+      },
+      {
+        code: 'JUSTIFICATIFS_CHARGES',
+        label: 'Justificatifs charges',
+        statut: charges.justificatifs_manquants.length === 0 ? 'ok' : 'a_revoir',
+        details: charges.justificatifs_manquants.length === 0
+          ? 'Aucun justificatif manquant'
+          : `${charges.justificatifs_manquants.length} justificatif(s) manquant(s)`,
+      },
+      {
         code: 'ETATS_GENERES',
         label: 'États annuels générés',
         statut: comptes.length > 0 ? 'ok' : 'a_revoir',
@@ -757,6 +915,8 @@ router.get('/cloture', requireRole(['admin', 'superviseur']), async (c) => {
         ca_facture_ht_xaf: Math.round(finance.ca_facture_ht_xaf),
         encaisse_xaf: Math.round(finance.encaisse_xaf),
         reste_a_encaisser_xaf: Math.round(finance.reste_a_encaisser_xaf),
+        charges_ht_validees_xaf: charges.charges_ht_validees_xaf,
+        tva_deductible_xaf: charges.tva_deductible_xaf,
       },
       actions_recommandees: bloquants.length > 0
         ? ['Corriger les éléments bloquants avant de valider la clôture.', 'Exporter le dossier uniquement après correction des écarts critiques.']

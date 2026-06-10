@@ -19,6 +19,12 @@ import { FRAIS_LIVRAISON } from '@forge/shared'
 type Step = 1 | 2 | 3 | 4
 type Ville = 'Douala' | 'Yaounde' | 'Bafoussam' | 'Autres'
 type ModePaiement = 'mtn' | 'orange' | 'livraison'
+type SmsStatus = {
+  ok: boolean
+  message: string
+  skipped?: boolean
+  retry_after_seconds?: number
+}
 
 interface ConditionOption {
   id: string
@@ -687,20 +693,63 @@ function StepPaiement({
 // ── ÉTAPE 4 — Confirmation ─────────────────────────────────────────────────────
 
 function StepConfirmation({
-  commandeRef, coordonnees, modePaiement, totals,
+  commandeRef, coordonnees, modePaiement, totals, smsStatus,
 }: {
   commandeRef: string
   coordonnees: Coordonnees
   modePaiement: ModePaiement | null
   totals: CartTotals
+  smsStatus: SmsStatus | null
 }) {
   const frais = FRAIS[coordonnees.ville]
   const total = grandTotal(totals, coordonnees.ville)
   const prenom = coordonnees.nom.split(' ')[0]
+  const [smsNotice, setSmsNotice] = useState<SmsStatus | null>(smsStatus)
+  const [resendLoading, setResendLoading] = useState(false)
+  const [cooldown, setCooldown] = useState(smsStatus?.ok ? 0 : smsStatus?.retry_after_seconds ?? 0)
 
   const whatsappUrl = `https://wa.me/${(process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '').replace(/\D/g, '')}?text=${encodeURIComponent(
     `Bonjour TAFDIL, je viens de passer la commande *${commandeRef}*.\nPouvez-vous me confirmer la livraison ?`
   )}`
+
+  useEffect(() => {
+    if (cooldown <= 0) return
+    const timer = window.setInterval(() => {
+      setCooldown((value) => Math.max(0, value - 1))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [cooldown])
+
+  const handleResendSms = async () => {
+    setResendLoading(true)
+    try {
+      const res = await fetch(`/api/shop/commandes/${commandeRef}/sms/renvoyer`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ telephone: coordonnees.telephone }),
+      })
+      const payload = await res.json().catch(() => ({})) as {
+        sms?: SmsStatus
+        error?: string
+        retry_after_seconds?: number
+      }
+      const nextNotice = payload.sms ?? {
+        ok: false,
+        message: payload.error ?? 'SMS non envoyé. Réessayez plus tard.',
+        retry_after_seconds: payload.retry_after_seconds ?? 120,
+      }
+      setSmsNotice(nextNotice)
+      setCooldown(nextNotice.retry_after_seconds ?? (nextNotice.ok ? 120 : 0))
+      if (nextNotice.ok) toast.success(nextNotice.message)
+      else toast.error(nextNotice.message)
+    } catch {
+      setSmsNotice({ ok: false, message: 'Connexion impossible au service SMS.', retry_after_seconds: 120 })
+      setCooldown(120)
+      toast.error('Connexion impossible au service SMS.')
+    } finally {
+      setResendLoading(false)
+    }
+  }
 
   return (
     <div className="space-y-6 text-center">
@@ -729,6 +778,28 @@ function StepConfirmation({
           Votre commande a bien été reçue. Notre équipe vous contactera sous 24h pour confirmer la livraison.
         </p>
       </motion.div>
+
+      {smsNotice && (
+        <div className={`rounded-2xl border px-4 py-3 text-left text-sm ${
+          smsNotice.ok
+            ? 'border-green-200 bg-green-50 text-green-700'
+            : 'border-amber-200 bg-amber-50 text-amber-800'
+        }`}>
+          <p className="font-bold">{smsNotice.ok ? 'SMS de suivi envoyé' : 'SMS de suivi non confirmé'}</p>
+          <p className="mt-0.5 text-xs opacity-80">{smsNotice.message}</p>
+          {!smsNotice.ok && (
+            <button
+              type="button"
+              onClick={handleResendSms}
+              disabled={resendLoading || cooldown > 0}
+              className="mt-3 inline-flex items-center justify-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-bold text-amber-800 ring-1 ring-amber-200 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {resendLoading && <Loader2 size={13} className="animate-spin" />}
+              {cooldown > 0 ? `Renvoyer dans ${cooldown}s` : 'Renvoyer le SMS'}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Récap commande */}
       <motion.div
@@ -824,6 +895,7 @@ export function CheckoutClient() {
   const [modePaiement, setModePaiement] = useState<ModePaiement | null>(null)
   const [numeroPaiement, setNumeroPaiement] = useState('')
   const [commandeRef, setCommandeRef] = useState('')
+  const [smsStatus, setSmsStatus] = useState<SmsStatus | null>(null)
   const [loading, setLoading] = useState(false)
   // Snapshot taken before clearCart() so StepConfirmation still has the correct totals.
   const [confirmedTotals, setConfirmedTotals] = useState<CartTotals | null>(null)
@@ -905,8 +977,9 @@ export function CheckoutClient() {
         return
       }
 
-      const orderJson = await orderRes.json() as { ref: string }
+      const orderJson = await orderRes.json() as { ref: string; sms?: SmsStatus }
       const ref = orderJson.ref
+      setSmsStatus(orderJson.sms ?? null)
 
       // ── 2. Paiement à la livraison → confirmation directe ────────────────────
       if (modePaiement === 'livraison') {
@@ -1017,6 +1090,7 @@ export function CheckoutClient() {
               coordonnees={coordonnees}
               modePaiement={modePaiement}
               totals={confirmedTotals ?? totals}
+              smsStatus={smsStatus}
             />
           )}
         </motion.div>

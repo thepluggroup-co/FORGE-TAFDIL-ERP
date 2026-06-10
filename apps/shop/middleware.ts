@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { verifyToken, COOKIE_NAME } from './lib/auth'
 
 export const config = {
-  matcher: ['/compte/((?!login).*)'],
+  matcher: ['/compte/((?!login$).*)'],
 }
 
 export async function middleware(req: NextRequest) {

@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { apiClient } from '@/lib/api-client'
 import {
   dbGetApprenants, dbCreateApprenant,
-  dbGetFormationSessions, dbUpdateStatut,
+  dbGetFormationSessions,
 } from '@/lib/db'
 import { useAuth } from '@/context/AuthContext'
 
@@ -24,9 +24,68 @@ export interface Presence {
 }
 export interface BulletinPaie {
   id: string; employe_id: string; employe_nom: string; poste: string; departement: string; mois: string
-  salaire_brut_xaf: number; cnps_salarie_xaf: number; irpp_xaf: number
+  salaire_base_xaf: number; heures_sup_xaf: number; primes_xaf: number; deductions_xaf: number
+  avance_deduite_xaf: number; retenue_deduite_xaf: number; salaire_brut_xaf: number; cnps_salarie_xaf: number; cnps_employeur_xaf: number; irpp_xaf: number
   salaire_net_xaf: number; cout_employeur_xaf: number
-  statut: 'en_attente' | 'brouillon' | 'valide' | 'paye'
+  pdf_url?: string | null; pdf_generated_at?: string | null
+  statut: 'en_attente' | 'valide' | 'vire'
+}
+export interface AvanceSalaire {
+  id: string; employe_id: string; employe_nom: string; poste: string; departement: string
+  sortie_id: string | null; date_avance: string; mois_deduction: string
+  montant_xaf: number; montant_deduit_xaf: number
+  statut: 'payee' | 'deduite' | 'annulee'
+  mode_paiement: 'caisse' | 'banque' | 'mobile_money'
+  compte_tresorerie: '571' | '521'
+  reference_paiement?: string | null; motif?: string | null; notes?: string | null; created_at: string
+}
+export interface RetenueSalaire {
+  id: string; employe_id: string; employe_nom: string; poste: string; departement: string
+  mois_deduction: string; type: 'absence' | 'materiel' | 'pret_interne' | 'discipline' | 'autre'
+  libelle: string; montant_xaf: number; montant_deduit_xaf: number
+  statut: 'active' | 'deduite' | 'annulee'
+  notes?: string | null; created_at: string
+}
+export interface CotisationSociale {
+  id?: string; mois: string; nb_bulletins: number
+  total_brut_xaf: number; cnps_salarie_xaf: number; cnps_employeur_xaf: number; total_cnps_xaf: number
+  irpp_xaf: number; total_avances_deduites_xaf: number; total_retenues_deduites_xaf: number
+  net_a_payer_xaf: number; cout_total_employeur_xaf: number
+  statut: 'calculee' | 'validee' | 'payee'
+}
+export interface PaiePeriode {
+  id: string; mois: string; sortie_id?: string | null
+  statut: 'calculee' | 'validee' | 'viree'
+  nb_bulletins: number; total_brut_xaf: number
+  cnps_salarie_xaf: number; cnps_employeur_xaf: number; irpp_xaf: number
+  total_avances_deduites_xaf: number; total_retenues_deduites_xaf: number; total_autres_deductions_xaf: number
+  net_a_payer_xaf: number; cout_total_employeur_xaf: number
+  mode_paiement?: 'caisse' | 'banque' | 'mobile_money' | null
+  compte_tresorerie?: '571' | '521' | null
+  reference_paiement?: string | null
+}
+export interface ControlePaie {
+  mois: string
+  statut_global: 'ok' | 'warning' | 'error'
+  totaux: {
+    nb_bulletins: number
+    total_brut_xaf: number
+    cnps_salarie_xaf: number
+    cnps_employeur_xaf: number
+    irpp_xaf: number
+    total_avances_deduites_xaf: number
+    total_retenues_deduites_xaf: number
+    total_autres_deductions_xaf: number
+    net_a_payer_xaf: number
+    cout_total_employeur_xaf: number
+  }
+  controles: Array<{
+    code: string
+    niveau: 'ok' | 'warning' | 'error'
+    message: string
+    attendu?: number
+    observe?: number
+  }>
 }
 export interface Apprenant {
   id: string; nom: string; specialite: string; niveau: number; duree_mois: number
@@ -75,6 +134,17 @@ export interface RecruterPayload {
   type_contrat: 'CDI' | 'CDD' | 'stage' | 'freelance'
   date_entree: string; salaire_base_xaf: number; commentaire?: string
 }
+export interface CreateAvanceSalairePayload {
+  employe_id: string; date_avance: string; mois_deduction: string; montant_xaf: number
+  mode_paiement: 'caisse' | 'banque' | 'mobile_money'
+  compte_tresorerie?: '571' | '521'
+  reference_paiement?: string; motif?: string; notes?: string
+}
+export interface CreateRetenueSalairePayload {
+  employe_id: string; mois_deduction: string
+  type: 'absence' | 'materiel' | 'pret_interne' | 'discipline' | 'autre'
+  libelle: string; montant_xaf: number; notes?: string
+}
 
 export interface Conge {
   id: string; employe_id: string; type: string
@@ -97,6 +167,9 @@ export interface CreateCongePayload {
 interface EmployesResponse   { data: Employe[];          total: number }
 interface PresencesResponse  { data: Presence[];         total: number }
 interface BulletinsResponse  { data: BulletinPaie[];     total: number; mois: string; deja_genere?: boolean }
+interface AvancesSalaireResponse { data: AvanceSalaire[]; total: number; total_xaf: number }
+interface RetenuesSalaireResponse { data: RetenueSalaire[]; total: number; total_xaf: number }
+interface PaiePeriodesResponse { data: PaiePeriode[]; total: number }
 interface ApprenantsResponse { data: Apprenant[];        total: number }
 interface SessionsResponse   { data: FormationSession[]; total: number }
 interface CongesResponse     { data: Conge[];            total: number }
@@ -187,6 +260,7 @@ export function useGenererPaie() {
     onSuccess: (_, { mois }) => {
       void qc.invalidateQueries({ queryKey: ['bulletins', { mois }] })
       void qc.invalidateQueries({ queryKey: ['bulletins'] })
+      void qc.invalidateQueries({ queryKey: ['controle-paie', mois] })
       toast.success('Bulletins de paie générés')
     },
     onError: (err: Error) => toast.error(err.message),
@@ -197,9 +271,205 @@ export function useUpdateStatutBulletin() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ id, statut }: { id: string; statut: 'valide' | 'vire' }) =>
-      dbUpdateStatut('bulletins_paie', id, statut),
+      apiClient.patch<BulletinPaie>(`/api/rh/paie/${id}/statut`, { statut }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['bulletins'] }); toast.success('Bulletin mis à jour') },
     onError:   (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useAvancesSalaire(params?: { mois?: string; employe_id?: string; statut?: string }) {
+  return useQuery({
+    queryKey: ['avances-salaire', params],
+    queryFn:  () => {
+      const entries = Object.entries(params ?? {}).filter(([, v]) => v) as [string, string][]
+      const qs = entries.length ? '?' + new URLSearchParams(entries).toString() : ''
+      return apiClient.get<AvancesSalaireResponse>(`/api/rh/avances-salaire${qs}`)
+    },
+    staleTime: 60_000,
+  })
+}
+
+export function useCreateAvanceSalaire() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateAvanceSalairePayload) =>
+      apiClient.post<AvanceSalaire>('/api/rh/avances-salaire', payload),
+    onSuccess: (_, payload) => {
+      void qc.invalidateQueries({ queryKey: ['avances-salaire'] })
+      void qc.invalidateQueries({ queryKey: ['bulletins', { mois: payload.mois_deduction }] })
+      void qc.invalidateQueries({ queryKey: ['bulletins'] })
+      void qc.invalidateQueries({ queryKey: ['controle-paie', payload.mois_deduction] })
+      toast.success('Avance sur salaire enregistrée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useAnnulerAvanceSalaire() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiClient.patch<AvanceSalaire>(`/api/rh/avances-salaire/${id}/annuler`, {}),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['avances-salaire'] })
+      void qc.invalidateQueries({ queryKey: ['bulletins'] })
+      void qc.invalidateQueries({ queryKey: ['controle-paie'] })
+      toast.success('Avance annulée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useRetenuesSalaire(params?: { mois?: string; employe_id?: string; statut?: string }) {
+  return useQuery({
+    queryKey: ['retenues-salaire', params],
+    queryFn:  () => {
+      const entries = Object.entries(params ?? {}).filter(([, v]) => v) as [string, string][]
+      const qs = entries.length ? '?' + new URLSearchParams(entries).toString() : ''
+      return apiClient.get<RetenuesSalaireResponse>(`/api/rh/retenues-salaire${qs}`)
+    },
+    staleTime: 60_000,
+  })
+}
+
+export function useCreateRetenueSalaire() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateRetenueSalairePayload) =>
+      apiClient.post<RetenueSalaire>('/api/rh/retenues-salaire', payload),
+    onSuccess: (_, payload) => {
+      void qc.invalidateQueries({ queryKey: ['retenues-salaire'] })
+      void qc.invalidateQueries({ queryKey: ['bulletins', { mois: payload.mois_deduction }] })
+      void qc.invalidateQueries({ queryKey: ['bulletins'] })
+      void qc.invalidateQueries({ queryKey: ['controle-paie', payload.mois_deduction] })
+      toast.success('Retenue salariale enregistrée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useAnnulerRetenueSalaire() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiClient.patch<RetenueSalaire>(`/api/rh/retenues-salaire/${id}/annuler`, {}),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['retenues-salaire'] })
+      void qc.invalidateQueries({ queryKey: ['bulletins'] })
+      void qc.invalidateQueries({ queryKey: ['controle-paie'] })
+      toast.success('Retenue annulée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useCotisationsSociales(mois?: string) {
+  return useQuery({
+    queryKey: ['cotisations-sociales', mois],
+    queryFn:  () => apiClient.get<CotisationSociale>(`/api/rh/cotisations-sociales?mois=${mois ?? ''}`),
+    enabled:  !!mois,
+    staleTime: 60_000,
+  })
+}
+
+export function useGenererCotisationsSociales() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (mois: string) =>
+      apiClient.post<CotisationSociale>('/api/rh/cotisations-sociales', { mois }),
+    onSuccess: (_, mois) => {
+      void qc.invalidateQueries({ queryKey: ['cotisations-sociales', mois] })
+      toast.success('Cotisations sociales calculées')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateStatutCotisationsSociales() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, statut }: { id: string; statut: 'validee' | 'payee' }) =>
+      apiClient.patch<CotisationSociale>(`/api/rh/cotisations-sociales/${id}/statut`, { statut }),
+    onSuccess: (data) => {
+      void qc.invalidateQueries({ queryKey: ['cotisations-sociales', data.mois] })
+      toast.success('Cotisations mises à jour')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function usePaiePeriode(mois?: string) {
+  return useQuery({
+    queryKey: ['paie-periodes', mois],
+    queryFn:  async () => {
+      const res = await apiClient.get<PaiePeriodesResponse>(`/api/rh/paie-periodes?mois=${mois ?? ''}`)
+      return res.data[0] ?? null
+    },
+    enabled: !!mois,
+    staleTime: 60_000,
+  })
+}
+
+export function useValiderPaieMois() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (mois: string) =>
+      apiClient.post<PaiePeriode>(`/api/rh/paie/${mois}/valider`, {}),
+    onSuccess: (_, mois) => {
+      void qc.invalidateQueries({ queryKey: ['paie-periodes', mois] })
+      void qc.invalidateQueries({ queryKey: ['bulletins', { mois }] })
+      void qc.invalidateQueries({ queryKey: ['bulletins'] })
+      void qc.invalidateQueries({ queryKey: ['cotisations-sociales', mois] })
+      void qc.invalidateQueries({ queryKey: ['controle-paie', mois] })
+      toast.success('Paie mensuelle validée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useVirerPaieMois() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ mois, mode_paiement, reference_paiement }: {
+      mois: string
+      mode_paiement: 'caisse' | 'banque' | 'mobile_money'
+      reference_paiement?: string
+    }) =>
+      apiClient.post<PaiePeriode>(`/api/rh/paie/${mois}/virer`, { mode_paiement, reference_paiement }),
+    onSuccess: (_, payload) => {
+      void qc.invalidateQueries({ queryKey: ['paie-periodes', payload.mois] })
+      void qc.invalidateQueries({ queryKey: ['bulletins', { mois: payload.mois }] })
+      void qc.invalidateQueries({ queryKey: ['bulletins'] })
+      void qc.invalidateQueries({ queryKey: ['controle-paie', payload.mois] })
+      toast.success('Paiement de paie enregistré')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useControlePaie(mois?: string) {
+  return useQuery({
+    queryKey: ['controle-paie', mois],
+    queryFn:  () => apiClient.get<ControlePaie>(`/api/rh/paie/${mois ?? ''}/controle`),
+    enabled:  !!mois,
+    staleTime: 30_000,
+  })
+}
+
+export function useExportPaie() {
+  return useMutation({
+    mutationFn: async (mois: string) => {
+      const blob = await apiClient.getBlob(`/api/rh/paie/${mois}/export`)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `paie-${mois}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+      return mois
+    },
+    onSuccess: () => toast.success('Export paie téléchargé'),
+    onError: (err: Error) => toast.error(err.message),
   })
 }
 
