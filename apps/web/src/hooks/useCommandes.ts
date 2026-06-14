@@ -8,6 +8,10 @@ export interface ConditionPaiement {
   id: string; code: string; libelle: string
   acompte_pct: number; delai_solde_jours: number
 }
+export interface ConditionPaiementEligible extends ConditionPaiement {
+  eligible: boolean
+  raison: string | null
+}
 export interface CommandeLigne {
   designation: string; quantite: number; prix_unitaire_ht_xaf: number; unite?: string
 }
@@ -64,6 +68,25 @@ export function useConditionsPaiement() {
     queryKey:  ['conditions-paiement'],
     queryFn:   () => apiClient.get<{ data: ConditionPaiement[] }>('/api/conditions-paiement').then(r => r.data ?? []),
     staleTime: 5 * 60_000,
+  })
+}
+
+export function useConditionsPaiementEligibles(
+  clientId: string | undefined,
+  montant: number,
+  type: 'web' | 'devis' | 'projet' = 'devis',
+) {
+  return useQuery({
+    queryKey: ['conditions-paiement-eligibles', clientId ?? null, Math.round(Math.max(0, montant)), type],
+    queryFn: () => {
+      const params = new URLSearchParams({ montant: String(Math.round(Math.max(0, montant))), type })
+      if (clientId) params.set('client_id', clientId)
+      return apiClient
+        .get<{ data: ConditionPaiementEligible[] }>(`/api/conditions-paiement/eligibles?${params}`)
+        .then((r) => r.data ?? [])
+    },
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
   })
 }
 

@@ -25,6 +25,34 @@ export function setupRealtime(queryClient: QueryClient): () => void {
     .on('broadcast', { event: 'bon-validated' }, () => { inv(['bons']) })
     .subscribe()
 
+  const stock = supabase
+    .channel('forge-stock')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'bons_approvisionnement' }, () => {
+      inv(['bons-appro'])
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'bons_approvisionnement_lignes' }, () => {
+      inv(['bons-appro'])
+    })
+    .on('broadcast', { event: 'alerte_appro' }, (payload) => {
+      inv(['bons-appro'])
+      // Toast de notification — importé dynamiquement pour éviter le couplage
+      import('sonner').then(({ toast }) => {
+        const p = payload.payload as { numero?: string; nb_produits?: number } | undefined
+        const nb = p?.nb_produits ?? 1
+        toast.warning(
+          `Alerte stock — ${nb} produit${nb > 1 ? 's' : ''} sous seuil`,
+          {
+            description: p?.numero
+              ? `Bon d'approvisionnement ${p.numero} créé automatiquement`
+              : 'Vérifier les bons d\'approvisionnement',
+            action: { label: 'Voir', onClick: () => { window.location.href = '/stocks/approvisionnement' } },
+            duration: 8_000,
+          },
+        )
+      }).catch(() => undefined)
+    })
+    .subscribe()
+
   const commandes = supabase
     .channel('forge-commandes')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'commandes' }, () => {
@@ -111,6 +139,7 @@ export function setupRealtime(queryClient: QueryClient): () => void {
   return () => {
     void supabase.removeChannel(produits)
     void supabase.removeChannel(bons)
+    void supabase.removeChannel(stock)
     void supabase.removeChannel(commandes)
     void supabase.removeChannel(commandesShop)
     void supabase.removeChannel(clients)

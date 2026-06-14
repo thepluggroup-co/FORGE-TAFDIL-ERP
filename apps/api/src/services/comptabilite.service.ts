@@ -283,4 +283,278 @@ export async function genererEcritureAchat(bon: {
 // EXPORT plan comptable (pour les routes de rapports)
 // ══════════════════════════════════════════════════════════════════════════════
 
+export async function genererEcritureCharge(charge: {
+  id:                  string
+  numero:              string
+  date_charge:         string
+  fournisseur_nom:     string
+  compte_charge:       string
+  compte_charge_label: string
+  montant_ht_xaf:      number
+  tva_xaf?:            number
+  montant_ttc_xaf:     number
+  created_by?:         string
+}): Promise<ComptaResult> {
+  const refDoc = `CHG-${charge.numero}`
+  if (await ecrituresExistent('reference_doc', refDoc)) return { ok: true, inserts: 0 }
+
+  const date = charge.date_charge.slice(0, 10)
+  const libelle = `Charge - ${charge.numero} - ${charge.fournisseur_nom}`
+  const tva = Math.round(Number(charge.tva_xaf ?? 0))
+  const ecritures: EcritureInsert[] = [
+    {
+      date,
+      libelle,
+      compte_syscohada: charge.compte_charge,
+      compte_label:     charge.compte_charge_label,
+      debit_xaf:        Math.round(Number(charge.montant_ht_xaf ?? 0)),
+      credit_xaf:       0,
+      reference_doc:    refDoc,
+      created_by:       charge.created_by,
+    },
+  ]
+
+  if (tva > 0) {
+    ecritures.push({
+      date,
+      libelle:          `TVA deductible - ${charge.numero}`,
+      compte_syscohada: '4432',
+      compte_label:     libelleCompte('4432'),
+      debit_xaf:        tva,
+      credit_xaf:       0,
+      reference_doc:    refDoc,
+      created_by:       charge.created_by,
+    })
+  }
+
+  ecritures.push({
+    date,
+    libelle,
+    compte_syscohada: '401',
+    compte_label:     libelleCompte('401'),
+    debit_xaf:        0,
+    credit_xaf:       Math.round(Number(charge.montant_ttc_xaf ?? 0)),
+    reference_doc:    refDoc,
+    created_by:       charge.created_by,
+  })
+
+  return insertEcritures(ecritures)
+}
+
+export async function genererEcritureSortieTresorerie(sortie: {
+  id:                string
+  numero:            string
+  date_sortie:       string
+  beneficiaire:      string
+  motif:             string
+  montant_xaf:       number
+  compte_tresorerie: string
+  charge_id?:        string | null
+  compte_debit?:     string
+  created_by?:       string
+}): Promise<ComptaResult> {
+  const refDoc = `SOR-${sortie.numero}`
+  if (await ecrituresExistent('reference_doc', refDoc)) return { ok: true, inserts: 0 }
+
+  const date = sortie.date_sortie.slice(0, 10)
+  const libelle = `Sortie d'argent - ${sortie.numero} - ${sortie.beneficiaire}`
+  const compteDebit = sortie.compte_debit ?? (sortie.charge_id ? '401' : '471')
+
+  return insertEcritures([
+    {
+      date,
+      libelle,
+      compte_syscohada: compteDebit,
+      compte_label:     libelleCompte(compteDebit),
+      debit_xaf:        Math.round(Number(sortie.montant_xaf ?? 0)),
+      credit_xaf:       0,
+      reference_doc:    refDoc,
+      created_by:       sortie.created_by,
+    },
+    {
+      date,
+      libelle,
+      compte_syscohada: sortie.compte_tresorerie,
+      compte_label:     libelleCompte(sortie.compte_tresorerie),
+      debit_xaf:        0,
+      credit_xaf:       Math.round(Number(sortie.montant_xaf ?? 0)),
+      reference_doc:    refDoc,
+      created_by:       sortie.created_by,
+    },
+  ])
+}
+
+export async function genererEcrituresPaieValidation(paie: {
+  mois: string
+  total_brut_xaf: number
+  cnps_salarie_xaf: number
+  cnps_employeur_xaf: number
+  irpp_xaf: number
+  total_avances_deduites_xaf: number
+  total_retenues_deduites_xaf: number
+  total_autres_deductions_xaf: number
+  net_a_payer_xaf: number
+  created_by?: string
+}): Promise<ComptaResult> {
+  const refDoc = `PAIE-${paie.mois}`
+  if (await ecrituresExistent('reference_doc', refDoc)) return { ok: true, inserts: 0 }
+
+  const date = `${paie.mois}-28`
+  const libelle = `Paie mensuelle - ${paie.mois}`
+  const ecritures: EcritureInsert[] = [
+    {
+      date,
+      libelle,
+      compte_syscohada: '641',
+      compte_label:     libelleCompte('641'),
+      debit_xaf:        Math.round(Number(paie.total_brut_xaf ?? 0)),
+      credit_xaf:       0,
+      reference_doc:    refDoc,
+      created_by:       paie.created_by,
+    },
+    {
+      date,
+      libelle:          `Charges sociales employeur - ${paie.mois}`,
+      compte_syscohada: '645',
+      compte_label:     libelleCompte('645'),
+      debit_xaf:        Math.round(Number(paie.cnps_employeur_xaf ?? 0)),
+      credit_xaf:       0,
+      reference_doc:    refDoc,
+      created_by:       paie.created_by,
+    },
+    {
+      date,
+      libelle,
+      compte_syscohada: '421',
+      compte_label:     libelleCompte('421'),
+      debit_xaf:        0,
+      credit_xaf:       Math.round(Number(paie.net_a_payer_xaf ?? 0)),
+      reference_doc:    refDoc,
+      created_by:       paie.created_by,
+    },
+    {
+      date,
+      libelle:          `CNPS a reverser - ${paie.mois}`,
+      compte_syscohada: '431',
+      compte_label:     libelleCompte('431'),
+      debit_xaf:        0,
+      credit_xaf:       Math.round(Number(paie.cnps_salarie_xaf ?? 0) + Number(paie.cnps_employeur_xaf ?? 0)),
+      reference_doc:    refDoc,
+      created_by:       paie.created_by,
+    },
+    {
+      date,
+      libelle:          `IRPP a reverser - ${paie.mois}`,
+      compte_syscohada: '447',
+      compte_label:     libelleCompte('447'),
+      debit_xaf:        0,
+      credit_xaf:       Math.round(Number(paie.irpp_xaf ?? 0)),
+      reference_doc:    refDoc,
+      created_by:       paie.created_by,
+    },
+  ]
+
+  if (paie.total_avances_deduites_xaf > 0) {
+    ecritures.push({
+      date,
+      libelle:          `Avances deduites - ${paie.mois}`,
+      compte_syscohada: '422',
+      compte_label:     libelleCompte('422'),
+      debit_xaf:        0,
+      credit_xaf:       Math.round(Number(paie.total_avances_deduites_xaf ?? 0)),
+      reference_doc:    refDoc,
+      created_by:       paie.created_by,
+    })
+  }
+
+  const autresRetenues = Math.round(Number(paie.total_retenues_deduites_xaf ?? 0) + Number(paie.total_autres_deductions_xaf ?? 0))
+  if (autresRetenues > 0) {
+    ecritures.push({
+      date,
+      libelle:          `Retenues salariales - ${paie.mois}`,
+      compte_syscohada: '472',
+      compte_label:     libelleCompte('472'),
+      debit_xaf:        0,
+      credit_xaf:       autresRetenues,
+      reference_doc:    refDoc,
+      created_by:       paie.created_by,
+    })
+  }
+
+  return insertEcritures(ecritures)
+}
+
+export async function genererEcrituresPaiePaiement(paiement: {
+  mois: string
+  date: string
+  montant_xaf: number
+  compte_tresorerie: string
+  created_by?: string
+}): Promise<ComptaResult> {
+  const refDoc = `PAY-PAIE-${paiement.mois}`
+  if (await ecrituresExistent('reference_doc', refDoc)) return { ok: true, inserts: 0 }
+
+  const date = paiement.date.slice(0, 10)
+  const libelle = `Paiement salaires - ${paiement.mois}`
+  return insertEcritures([
+    {
+      date,
+      libelle,
+      compte_syscohada: '421',
+      compte_label:     libelleCompte('421'),
+      debit_xaf:        Math.round(Number(paiement.montant_xaf ?? 0)),
+      credit_xaf:       0,
+      reference_doc:    refDoc,
+      created_by:       paiement.created_by,
+    },
+    {
+      date,
+      libelle,
+      compte_syscohada: paiement.compte_tresorerie,
+      compte_label:     libelleCompte(paiement.compte_tresorerie),
+      debit_xaf:        0,
+      credit_xaf:       Math.round(Number(paiement.montant_xaf ?? 0)),
+      reference_doc:    refDoc,
+      created_by:       paiement.created_by,
+    },
+  ])
+}
+
+export async function annulerEcrituresReference(params: {
+  reference_doc: string
+  date: string
+  created_by?: string
+}): Promise<ComptaResult> {
+  const refAnnulation = `ANN-${params.reference_doc}`
+  if (await ecrituresExistent('reference_doc', refAnnulation)) return { ok: true, inserts: 0 }
+
+  const { data, error } = await db
+    .from('ecritures_comptables')
+    .select('libelle, compte_syscohada, compte_label, debit_xaf, credit_xaf')
+    .eq('reference_doc', params.reference_doc)
+
+  if (error) return { ok: false, inserts: 0, error: error.message }
+
+  const originals = (data ?? []) as Array<{
+    libelle: string
+    compte_syscohada: string
+    compte_label: string
+    debit_xaf: number
+    credit_xaf: number
+  }>
+
+  if (originals.length === 0) return { ok: true, inserts: 0 }
+
+  return insertEcritures(originals.map((e) => ({
+    date:             params.date.slice(0, 10),
+    libelle:          `Annulation - ${e.libelle}`,
+    compte_syscohada: e.compte_syscohada,
+    compte_label:     e.compte_label,
+    debit_xaf:        Math.round(Number(e.credit_xaf ?? 0)),
+    credit_xaf:       Math.round(Number(e.debit_xaf ?? 0)),
+    reference_doc:    refAnnulation,
+    created_by:       params.created_by,
+  })))
+}
+
 export { PLAN_RAW as planComptable, libelleCompte }

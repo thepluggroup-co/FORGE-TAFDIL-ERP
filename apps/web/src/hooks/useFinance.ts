@@ -206,6 +206,8 @@ export interface ClotureComptableResponse {
     ca_facture_ht_xaf: number
     encaisse_xaf: number
     reste_a_encaisser_xaf: number
+    charges_ht_validees_xaf?: number
+    tva_deductible_xaf?: number
   }
   actions_recommandees: string[]
 }
@@ -260,6 +262,71 @@ export interface DeclarationFiscale {
 }
 
 interface DeclarationsResponse { data: DeclarationFiscale[]; total: number }
+
+export type ChargeStatut = 'brouillon' | 'a_valider' | 'validee' | 'payee' | 'annulee'
+export type JustificatifStatut = 'manquant' | 'recu' | 'non_requis'
+export type ModePaiementCharge = 'caisse' | 'banque' | 'mobile_money' | 'credit_fournisseur'
+export type ModePaiementSortie = 'caisse' | 'banque' | 'mobile_money'
+
+export interface Charge {
+  id: string
+  numero: string
+  fournisseur_nom: string
+  categorie: string
+  compte_charge: string
+  compte_charge_label: string
+  date_charge: string
+  date_echeance?: string | null
+  statut: ChargeStatut
+  montant_ht_xaf: number
+  tva_xaf: number
+  montant_ttc_xaf: number
+  montant_paye_xaf: number
+  solde_restant_xaf: number
+  mode_paiement?: ModePaiementCharge | null
+  compte_tresorerie?: string | null
+  reference_paiement?: string | null
+  justificatif_statut: JustificatifStatut
+  description?: string | null
+  notes?: string | null
+}
+
+export interface SortieTresorerie {
+  id: string
+  numero: string
+  charge_id?: string | null
+  date_sortie: string
+  beneficiaire: string
+  motif: string
+  montant_xaf: number
+  mode_paiement: ModePaiementSortie
+  compte_tresorerie: string
+  reference_paiement?: string | null
+  statut: 'brouillon' | 'validee' | 'annulee'
+  justificatif_statut: JustificatifStatut
+  notes?: string | null
+  charges?: { numero: string; fournisseur_nom: string } | null
+}
+
+export interface ChargesDashboard {
+  periode: { from: string; to: string }
+  kpis: {
+    total_charges_xaf: number
+    charges_payees_xaf: number
+    charges_a_payer_xaf: number
+    sorties_xaf: number
+    tva_deductible_xaf: number
+    charges_a_valider: number
+    justificatifs_manquants: number
+  }
+  repartition_categories: { categorie: string; total_xaf: number; count: number }[]
+  top_fournisseurs: { fournisseur_nom: string; total_xaf: number; count: number }[]
+  dernieres_charges: Charge[]
+  dernieres_sorties: SortieTresorerie[]
+}
+
+interface ChargesResponse { data: Charge[]; total: number }
+interface SortiesTresorerieResponse { data: SortieTresorerie[]; total: number }
 
 function queryString(params?: Record<string, string | undefined>) {
   const qs = new URLSearchParams()
@@ -503,6 +570,148 @@ export function useFinanceDashboard() {
   })
 }
 
+export function useCharges(params?: { statut?: string; categorie?: string; fournisseur?: string; from?: string; to?: string; justificatif?: string }) {
+  return useQuery({
+    queryKey: ['charges', params],
+    queryFn: () => apiClient.get<ChargesResponse>(`/api/charges${queryString(params)}`),
+    staleTime: 30_000,
+  })
+}
+
+export function useSortiesTresorerie(params?: { charge_id?: string; mode_paiement?: string; statut?: string; justificatif?: string; from?: string; to?: string }) {
+  return useQuery({
+    queryKey: ['sorties-tresorerie', params],
+    queryFn: () => apiClient.get<SortiesTresorerieResponse>(`/api/sorties-tresorerie${queryString(params)}`),
+    staleTime: 30_000,
+  })
+}
+
+export function useChargesDashboard(params?: { from?: string; to?: string }) {
+  return useQuery({
+    queryKey: ['charges-dashboard', params],
+    queryFn: () => apiClient.get<ChargesDashboard>(`/api/charges/dashboard${queryString(params)}`),
+    staleTime: 30_000,
+  })
+}
+
+function invalidateCharges(qc: ReturnType<typeof useQueryClient>) {
+  void qc.invalidateQueries({ queryKey: ['charges'] })
+  void qc.invalidateQueries({ queryKey: ['sorties-tresorerie'] })
+  void qc.invalidateQueries({ queryKey: ['charges-dashboard'] })
+  void qc.invalidateQueries({ queryKey: ['ecritures'] })
+  void qc.invalidateQueries({ queryKey: ['resultat-analytique'] })
+  void qc.invalidateQueries({ queryKey: ['synthese-comptable'] })
+  void qc.invalidateQueries({ queryKey: ['controles-comptables'] })
+}
+
+export function useCreerCharge() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: {
+      fournisseur_nom: string
+      categorie: string
+      compte_charge: string
+      date_charge: string
+      date_echeance?: string
+      montant_ht_xaf: number
+      tva_xaf: number
+      mode_paiement?: ModePaiementCharge
+      compte_tresorerie?: string
+      reference_paiement?: string
+      justificatif_statut?: JustificatifStatut
+      description?: string
+      notes?: string
+    }) => apiClient.post<Charge>('/api/charges', payload),
+    onSuccess: (charge) => {
+      invalidateCharges(qc)
+      toast.success(`Charge ${charge.numero ?? ''} creee`)
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateStatutCharge() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, statut, notes }: { id: string; statut: 'a_valider' | 'validee' | 'annulee'; notes?: string }) =>
+      apiClient.patch<Charge>(`/api/charges/${id}/statut`, { statut, notes }),
+    onSuccess: () => {
+      invalidateCharges(qc)
+      toast.success('Statut de charge mis a jour')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useCreerSortieTresorerie() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: {
+      charge_id?: string
+      date_sortie: string
+      beneficiaire: string
+      motif: string
+      montant_xaf: number
+      mode_paiement: ModePaiementSortie
+      compte_tresorerie: string
+      reference_paiement?: string
+      justificatif_statut?: JustificatifStatut
+      notes?: string
+    }) => apiClient.post<SortieTresorerie>('/api/sorties-tresorerie', payload),
+    onSuccess: (sortie) => {
+      invalidateCharges(qc)
+      toast.success(`Sortie ${sortie.numero ?? ''} enregistree`)
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useAnnulerSortieTresorerie() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => apiClient.patch<SortieTresorerie>(`/api/sorties-tresorerie/${id}/annuler`, {}),
+    onSuccess: () => {
+      invalidateCharges(qc)
+      toast.success('Sortie annulee')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUploadJustificatifCharge() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ chargeId, file, description }: { chargeId: string; file: File; description?: string }) => {
+      const form = new FormData()
+      form.append('file', file)
+      if (description) form.append('description', description)
+      return apiClient.postForm(`/api/charges/${chargeId}/justificatifs`, form)
+    },
+    onSuccess: () => {
+      invalidateCharges(qc)
+      toast.success('Justificatif ajoute')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUploadJustificatifSortie() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ sortieId, file, description }: { sortieId: string; file: File; description?: string }) => {
+      const form = new FormData()
+      form.append('file', file)
+      if (description) form.append('description', description)
+      return apiClient.postForm(`/api/sorties-tresorerie/${sortieId}/justificatifs`, form)
+    },
+    onSuccess: () => {
+      invalidateCharges(qc)
+      toast.success('Justificatif ajoute')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
 export function useDeclarationsFiscales(params?: { type?: string; statut?: string }) {
   return useQuery({
     queryKey: ['declarations-fiscales', params],
@@ -564,6 +773,61 @@ export function usePaiementFacture() {
       void qc.invalidateQueries({ queryKey: ['factures'] })
       void qc.invalidateQueries({ queryKey: ['ecritures'] })
       toast.success('Paiement facture enregistre')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export interface Versement {
+  id: string
+  facture_id: string
+  montant_xaf: number
+  date_versement: string
+  mode_paiement: 'orange_money' | 'mtn_momo' | 'virement' | 'especes' | 'cheque' | 'autre'
+  reference: string | null
+  note: string | null
+  enregistre_par: string | null
+  created_at: string
+}
+
+export function useVersementsFacture(factureId: string | null) {
+  return useQuery({
+    queryKey: ['versements-facture', factureId],
+    queryFn:  () =>
+      apiClient
+        .get<{ data: Versement[] }>(`/api/factures/${factureId}/versements`)
+        .then(r => r.data ?? []),
+    enabled:   Boolean(factureId),
+    staleTime: 15_000,
+  })
+}
+
+export function useEnregistrerVersement() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: {
+      factureId:      string
+      montant_xaf:    number
+      date_versement: string
+      mode_paiement:  Versement['mode_paiement']
+      reference?:     string
+      note?:          string
+    }) =>
+      apiClient.post<{ versement: Versement; facture: Facture; solde_restant_xaf: number }>(
+        `/api/factures/${payload.factureId}/versements`,
+        {
+          montant_xaf:    payload.montant_xaf,
+          date_versement: payload.date_versement,
+          mode_paiement:  payload.mode_paiement,
+          reference:      payload.reference,
+          note:           payload.note,
+        },
+      ),
+    onSuccess: (_, variables) => {
+      void qc.invalidateQueries({ queryKey: ['factures'] })
+      void qc.invalidateQueries({ queryKey: ['versements-facture', variables.factureId] })
+      void qc.invalidateQueries({ queryKey: ['ecritures'] })
+      toast.success('Versement enregistré')
     },
     onError: (err: Error) => toast.error(err.message),
   })

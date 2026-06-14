@@ -3,7 +3,7 @@ import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 
 type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost'
-type ButtonSize = 'sm' | 'md' | 'lg'
+type ButtonSize = 'xs' | 'sm' | 'md' | 'lg'
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant
@@ -27,6 +27,7 @@ const variants: Record<ButtonVariant, string> = {
 }
 
 const sizes: Record<ButtonSize, string> = {
+  xs: 'px-2.5 py-1 text-xs gap-1 h-7',
   sm: 'px-3 py-1.5 text-sm gap-1.5 h-8',
   md: 'px-4 py-2 text-sm gap-2 h-10',
   lg: 'px-6 py-2.5 text-base gap-2 h-12',
@@ -35,6 +36,7 @@ const sizes: Record<ButtonSize, string> = {
 const Spinner = ({ size }: { size: ButtonSize }) => (
   <svg
     className={clsx('animate-spin shrink-0', {
+      'h-3 w-3': size === 'xs',
       'h-3.5 w-3.5': size === 'sm',
       'h-4 w-4': size === 'md',
       'h-5 w-5': size === 'lg',

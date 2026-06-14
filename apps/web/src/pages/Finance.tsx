@@ -17,8 +17,12 @@ import {
   useBilanComptable, useResultatAnalytique,
   useSyntheseComptable, useControlesComptables,
   useClotureComptable,
+  useVersementsFacture, useEnregistrerVersement,
+  useCharges, useSortiesTresorerie, useChargesDashboard,
+  useCreerCharge, useUpdateStatutCharge, useCreerSortieTresorerie,
+  useAnnulerSortieTresorerie, useUploadJustificatifCharge, useUploadJustificatifSortie,
 } from '@/hooks/useFinance'
-import type { Facture as FactureApi, Credit as CreditApi, FactureLigne } from '@/hooks/useFinance'
+import type { Facture as FactureApi, Credit as CreditApi, FactureLigne, Versement, Charge, SortieTresorerie, ModePaiementSortie } from '@/hooks/useFinance'
 import { useClients } from '@/hooks/useClients'
 import { useCommandes } from '@/hooks/useCommandes'
 import { API_BASE, apiClient } from '@/lib/api-client'
@@ -33,6 +37,8 @@ import type { CreditLimitWithClient } from '@/hooks/useCredit'
 
 type FactureRecord = FactureApi & Record<string, unknown>
 type CreditRecord  = CreditApi  & Record<string, unknown>
+type ChargeRecord  = Charge     & Record<string, unknown>
+type SortieRecord  = SortieTresorerie & Record<string, unknown>
 
 // Local form ligne (matches API shape for simplicity)
 interface FormLigne { designation: string; quantite: number; prix_unitaire_ht_xaf: number }
@@ -74,6 +80,20 @@ const DECL_MAP: Record<string, { label: string; color: string; bg: string }> = {
   valide:     { label: 'Validée',    color: '#15803d', bg: '#dcfce7' },
 }
 
+const CHARGE_MAP: Record<string, { label: string; color: string; bg: string }> = {
+  brouillon: { label: 'Brouillon', color: '#6b7280', bg: '#f3f4f6' },
+  a_valider: { label: 'À valider', color: '#d97706', bg: '#fef3c7' },
+  validee:   { label: 'Validée',   color: '#1d4ed8', bg: '#dbeafe' },
+  payee:     { label: 'Payée',     color: '#15803d', bg: '#dcfce7' },
+  annulee:   { label: 'Annulée',   color: '#dc2626', bg: '#fee2e2' },
+}
+
+const JUSTIF_MAP: Record<string, { label: string; color: string; bg: string }> = {
+  manquant:   { label: 'Manquant', color: '#dc2626', bg: '#fee2e2' },
+  recu:       { label: 'Reçu',     color: '#15803d', bg: '#dcfce7' },
+  non_requis: { label: 'Non requis', color: '#6b7280', bg: '#f3f4f6' },
+}
+
 function Badge({ statut, map }: { statut: string; map: Record<string, { label: string; color: string; bg: string }> }) {
   const s = map[statut] ?? { label: statut, color: '#6b7280', bg: '#f3f4f6' }
   return (
@@ -85,7 +105,7 @@ function Badge({ statut, map }: { statut: string; map: Record<string, { label: s
 
 // ── Tabs ───────────────────────────────────────────────────────────────────────
 
-const TABS = ['Dashboard', 'Factures', 'Crédits', 'Comptabilité', 'Déclarations Fiscales'] as const
+const TABS = ['Dashboard', 'Factures', 'Crédits', 'Charges', 'Comptabilité', 'Déclarations Fiscales'] as const
 type Tab = typeof TABS[number]
 
 // ── PDF Preview ────────────────────────────────────────────────────────────────
@@ -103,6 +123,7 @@ interface PreviewableFacture {
 }
 
 function InvoicePreview({ facture }: { facture: PreviewableFacture }) {
+  const fraisLivraison = Number(facture.frais_livraison_xaf ?? 0)
   return (
     <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-inner" style={{ fontFamily: 'Georgia, serif' }}>
       <div className="p-8">
@@ -165,10 +186,10 @@ function InvoicePreview({ facture }: { facture: PreviewableFacture }) {
               <span className="text-gray-500">TVA 19,25 %</span>
               <span className="font-semibold text-gray-800">{formatXAF(facture.montant_tva_xaf)}</span>
             </div>
-            {facture.frais_livraison_xaf > 0 && (
+            {fraisLivraison > 0 && (
               <div className="flex justify-between text-sm py-1 border-b border-gray-100">
                 <span className="text-gray-500">Livraison</span>
-                <span className="font-semibold text-gray-800">{formatXAF(facture.frais_livraison_xaf)}</span>
+                <span className="font-semibold text-gray-800">{formatXAF(fraisLivraison)}</span>
               </div>
             )}
             <div className="flex justify-between text-sm pt-2 border-t-2 border-gray-800">
@@ -390,11 +411,11 @@ function NouvelleFactureSlideOver({
                         : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                     }`}
                   >
-                    <div>
-                      <div className="font-mono text-xs font-bold text-gray-600">{cmd.reference}</div>
-                      <div className="text-sm font-semibold text-gray-800 mt-0.5">{cmd.client.nom}</div>
-                      <div className="text-xs text-gray-400 mt-0.5">{formatDate(cmd.date_commande)}</div>
-                    </div>
+                      <div>
+                        <div className="font-mono text-xs font-bold text-gray-600">{cmd.reference}</div>
+                        <div className="text-sm font-semibold text-gray-800 mt-0.5">{cmd.client.nom}</div>
+                      <div className="text-xs text-gray-400 mt-0.5">{cmd.date_commande ? formatDate(cmd.date_commande) : '—'}</div>
+                      </div>
                     <div className="text-right shrink-0 ml-4">
                       <div className="text-sm font-bold text-gray-800">{formatXAF(cmd.montant_ttc_xaf)}</div>
                       <div className="text-xs text-gray-400 mt-0.5">
@@ -553,8 +574,8 @@ function RelanceModal({ isOpen, onClose, credit }: { isOpen: boolean; onClose: (
   useEffect(() => {
     if (!isOpen || !credit) return
     setLoading(true)
-    apiClient.get(`/finance/credits/${credit.id}/relance-url`)
-      .then((res: { url: string; message: string }) => {
+    apiClient.get<{ url: string; message: string }>(`/finance/credits/${credit.id}/relance-url`)
+      .then((res) => {
         setWaUrl(res.url)
         setMessage(res.message)
       })
@@ -614,8 +635,8 @@ function DocumentsModal({ isOpen, onClose, credit }: { isOpen: boolean; onClose:
   const loadDocs = () => {
     if (!credit) return
     setLoading(true)
-    apiClient.get(`/finance/credits/${credit.id}/documents`)
-      .then((res: { data: DocItem[] }) => setDocs(res.data ?? []))
+    apiClient.get<{ data: DocItem[] }>(`/finance/credits/${credit.id}/documents`)
+      .then((res) => setDocs(res.data ?? []))
       .catch(() => toast.error('Erreur lors du chargement des documents'))
       .finally(() => setLoading(false))
   }
@@ -1141,6 +1162,523 @@ function OrderSelectorModal({ isOpen, onClose, onSelect }: {
   )
 }
 
+const MODE_VERSEMENT_LABELS: Record<Versement['mode_paiement'], string> = {
+  orange_money: 'Orange Money',
+  mtn_momo:     'MTN MoMo',
+  virement:     'Virement',
+  especes:      'Espèces',
+  cheque:       'Chèque',
+  autre:        'Autre',
+}
+
+function NouveauVersementModal({
+  isOpen,
+  onClose,
+  facture,
+}: {
+  isOpen:   boolean
+  onClose:  () => void
+  facture:  FactureRecord | null
+}) {
+  const [montant,    setMontant]    = useState('')
+  const [date,       setDate]       = useState(new Date().toISOString().split('T')[0])
+  const [mode,       setMode]       = useState<Versement['mode_paiement']>('orange_money')
+  const [reference,  setReference]  = useState('')
+  const [note,       setNote]       = useState('')
+  const enregistrer = useEnregistrerVersement()
+
+  useEffect(() => {
+    if (isOpen) {
+      setMontant('')
+      setDate(new Date().toISOString().split('T')[0])
+      setMode('orange_money')
+      setReference('')
+      setNote('')
+    }
+  }, [isOpen, facture?.id])
+
+  if (!facture) return null
+
+  const solde      = Number(facture.solde_restant_xaf ?? 0)
+  const montantNum = Number(montant)
+
+  const handleSubmit = () => {
+    enregistrer.mutate(
+      {
+        factureId:      facture.id as string,
+        montant_xaf:    montantNum,
+        date_versement: date,
+        mode_paiement:  mode,
+        reference:      reference || undefined,
+        note:           note || undefined,
+      },
+      { onSuccess: () => onClose() },
+    )
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Enregistrer un versement" size="sm">
+      <div className="space-y-4">
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+          <div className="text-sm font-semibold text-amber-800">
+            {facture.client?.nom as string} — {facture.numero as string}
+          </div>
+          <div className="text-xs text-amber-600 mt-0.5">
+            Solde restant : <span className="font-bold">{formatXAF(solde)}</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant (FCFA)</label>
+            <input
+              type="number"
+              value={montant}
+              onChange={e => setMontant(e.target.value)}
+              max={solde}
+              placeholder={`Max : ${solde.toLocaleString('fr-CM')}`}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Date</label>
+            <input
+              type="date"
+              value={date}
+              onChange={e => setDate(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Mode de paiement</label>
+          <select
+            value={mode}
+            onChange={e => setMode(e.target.value as Versement['mode_paiement'])}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30 bg-white"
+          >
+            {(Object.entries(MODE_VERSEMENT_LABELS) as [Versement['mode_paiement'], string][]).map(([val, label]) => (
+              <option key={val} value={val}>{label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">
+            Référence <span className="text-gray-400 font-normal normal-case">(optionnel)</span>
+          </label>
+          <input
+            type="text"
+            value={reference}
+            onChange={e => setReference(e.target.value)}
+            placeholder="Ex: MP260601123"
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">
+            Note <span className="text-gray-400 font-normal normal-case">(optionnel)</span>
+          </label>
+          <textarea
+            value={note}
+            onChange={e => setNote(e.target.value)}
+            rows={2}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30 resize-none"
+          />
+        </div>
+
+        <div className="flex gap-2 justify-end pt-2">
+          <Button variant="ghost" onClick={onClose}>Annuler</Button>
+          <Button
+            onClick={handleSubmit}
+            disabled={enregistrer.isPending || !montant || montantNum <= 0 || montantNum > solde || !date}
+          >
+            <CheckCircle className="h-3.5 w-3.5" />
+            {enregistrer.isPending ? 'Enregistrement…' : 'Enregistrer'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function NouvelleChargeModal({
+  isOpen,
+  onClose,
+  comptesCharges,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  comptesCharges: Array<{ compte: string; libelle: string }>
+}) {
+  const creerCharge = useCreerCharge()
+  const today = new Date().toISOString().slice(0, 10)
+  const firstCompte = comptesCharges[0]?.compte ?? '601'
+  const [form, setForm] = useState({
+    fournisseur_nom: '',
+    categorie: 'Fournitures',
+    compte_charge: firstCompte,
+    date_charge: today,
+    date_echeance: '',
+    montant_ht_xaf: '',
+    tva_xaf: '0',
+    justificatif_statut: 'manquant' as const,
+    description: '',
+  })
+
+  useEffect(() => {
+    if (isOpen) {
+      setForm({
+        fournisseur_nom: '',
+        categorie: 'Fournitures',
+        compte_charge: firstCompte,
+        date_charge: today,
+        date_echeance: '',
+        montant_ht_xaf: '',
+        tva_xaf: '0',
+        justificatif_statut: 'manquant',
+        description: '',
+      })
+    }
+  }, [isOpen, firstCompte, today])
+
+  const ht = Number(form.montant_ht_xaf || 0)
+  const tva = Number(form.tva_xaf || 0)
+  const total = ht + tva
+
+  const handleSubmit = () => {
+    creerCharge.mutate({
+      fournisseur_nom: form.fournisseur_nom,
+      categorie: form.categorie,
+      compte_charge: form.compte_charge,
+      date_charge: form.date_charge,
+      date_echeance: form.date_echeance || undefined,
+      montant_ht_xaf: ht,
+      tva_xaf: tva,
+      justificatif_statut: form.justificatif_statut,
+      description: form.description || undefined,
+    }, { onSuccess: onClose })
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Nouvelle charge" size="md">
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Fournisseur</label>
+            <input value={form.fournisseur_nom} onChange={(e) => setForm({ ...form, fournisseur_nom: e.target.value })}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Catégorie</label>
+            <select value={form.categorie} onChange={(e) => setForm({ ...form, categorie: e.target.value })}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30">
+              {['Fournitures', 'Matières premières', 'Transport entreprise', 'Loyer', 'Énergie', 'Maintenance', 'Personnel', 'Services externes', 'Autres'].map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Compte charge</label>
+            <select value={form.compte_charge} onChange={(e) => setForm({ ...form, compte_charge: e.target.value })}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30">
+              {comptesCharges.map((compte) => (
+                <option key={compte.compte} value={compte.compte}>{compte.compte} - {compte.libelle}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Justificatif</label>
+            <select value={form.justificatif_statut} onChange={(e) => setForm({ ...form, justificatif_statut: e.target.value as typeof form.justificatif_statut })}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30">
+              <option value="manquant">Manquant</option>
+              <option value="recu">Reçu</option>
+              <option value="non_requis">Non requis</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Date charge</label>
+            <input type="date" value={form.date_charge} onChange={(e) => setForm({ ...form, date_charge: e.target.value })}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Échéance</label>
+            <input type="date" value={form.date_echeance} onChange={(e) => setForm({ ...form, date_echeance: e.target.value })}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Montant HT</label>
+            <input type="number" min="0" value={form.montant_ht_xaf} onChange={(e) => setForm({ ...form, montant_ht_xaf: e.target.value })}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">TVA déductible</label>
+            <input type="number" min="0" value={form.tva_xaf} onChange={(e) => setForm({ ...form, tva_xaf: e.target.value })}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+          </div>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Description</label>
+          <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}
+            className="min-h-[76px] w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+        </div>
+        <div className="flex items-center justify-between rounded-lg bg-gray-50 px-3 py-2 text-sm">
+          <span className="text-gray-500">Total TTC</span>
+          <span className="font-bold text-[#212121]">{formatXAF(total)}</span>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>Annuler</Button>
+          <Button onClick={handleSubmit} disabled={creerCharge.isPending || !form.fournisseur_nom || ht <= 0}>
+            {creerCharge.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+            Créer
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function NouvelleSortieModal({
+  isOpen,
+  onClose,
+  charges,
+  selectedCharge,
+}: {
+  isOpen: boolean
+  onClose: () => void
+  charges: ChargeRecord[]
+  selectedCharge: ChargeRecord | null
+}) {
+  const creerSortie = useCreerSortieTresorerie()
+  const today = new Date().toISOString().slice(0, 10)
+  const [form, setForm] = useState({
+    charge_id: '',
+    date_sortie: today,
+    beneficiaire: '',
+    motif: '',
+    montant_xaf: '',
+    mode_paiement: 'banque' as ModePaiementSortie,
+    compte_tresorerie: '521',
+    reference_paiement: '',
+    justificatif_statut: 'manquant' as const,
+  })
+
+  useEffect(() => {
+    if (isOpen) {
+      const charge = selectedCharge
+      setForm({
+        charge_id: charge?.id ?? '',
+        date_sortie: today,
+        beneficiaire: charge?.fournisseur_nom ?? '',
+        motif: charge ? `Paiement ${charge.numero}` : '',
+        montant_xaf: charge ? String(Math.max(0, Number(charge.solde_restant_xaf ?? 0))) : '',
+        mode_paiement: 'banque',
+        compte_tresorerie: '521',
+        reference_paiement: '',
+        justificatif_statut: 'manquant',
+      })
+    }
+  }, [isOpen, selectedCharge, today])
+
+  const handleModeChange = (mode: ModePaiementSortie) => {
+    setForm({ ...form, mode_paiement: mode, compte_tresorerie: mode === 'caisse' ? '571' : '521' })
+  }
+
+  const charge = charges.find((item) => item.id === form.charge_id)
+  const solde = charge ? Number(charge.solde_restant_xaf ?? 0) : null
+
+  const handleSubmit = () => {
+    creerSortie.mutate({
+      charge_id: form.charge_id || undefined,
+      date_sortie: form.date_sortie,
+      beneficiaire: form.beneficiaire,
+      motif: form.motif,
+      montant_xaf: Number(form.montant_xaf || 0),
+      mode_paiement: form.mode_paiement,
+      compte_tresorerie: form.compte_tresorerie,
+      reference_paiement: form.reference_paiement || undefined,
+      justificatif_statut: form.justificatif_statut,
+    }, { onSuccess: onClose })
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Sortie de trésorerie" size="md">
+      <div className="space-y-4">
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Charge rattachée</label>
+          <select value={form.charge_id} onChange={(e) => {
+            const next = charges.find((item) => item.id === e.target.value)
+            setForm({
+              ...form,
+              charge_id: e.target.value,
+              beneficiaire: next?.fournisseur_nom ?? form.beneficiaire,
+              motif: next ? `Paiement ${next.numero}` : form.motif,
+              montant_xaf: next ? String(Math.max(0, Number(next.solde_restant_xaf ?? 0))) : form.montant_xaf,
+            })
+          }}
+            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30">
+            <option value="">Sortie hors charge validée</option>
+            {charges.filter((item) => ['validee', 'payee'].includes(item.statut) && Number(item.solde_restant_xaf ?? 0) > 0).map((item) => (
+              <option key={item.id} value={item.id}>{item.numero} - {item.fournisseur_nom} - solde {formatXAF(item.solde_restant_xaf)}</option>
+            ))}
+          </select>
+        </div>
+        {solde !== null && (
+          <div className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">
+            Solde de la charge : <span className="font-bold">{formatXAF(solde)}</span>
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Bénéficiaire</label>
+            <input value={form.beneficiaire} onChange={(e) => setForm({ ...form, beneficiaire: e.target.value })}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Date sortie</label>
+            <input type="date" value={form.date_sortie} onChange={(e) => setForm({ ...form, date_sortie: e.target.value })}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Montant</label>
+            <input type="number" min="0" value={form.montant_xaf} onChange={(e) => setForm({ ...form, montant_xaf: e.target.value })}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Mode</label>
+            <select value={form.mode_paiement} onChange={(e) => handleModeChange(e.target.value as ModePaiementSortie)}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30">
+              <option value="banque">Banque</option>
+              <option value="mobile_money">Mobile Money</option>
+              <option value="caisse">Caisse</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Compte trésorerie</label>
+            <input value={form.compte_tresorerie} onChange={(e) => setForm({ ...form, compte_tresorerie: e.target.value })}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Référence paiement</label>
+            <input value={form.reference_paiement} onChange={(e) => setForm({ ...form, reference_paiement: e.target.value })}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+          </div>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Motif</label>
+          <input value={form.motif} onChange={(e) => setForm({ ...form, motif: e.target.value })}
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>Annuler</Button>
+          <Button onClick={handleSubmit} disabled={creerSortie.isPending || !form.beneficiaire || !form.motif || Number(form.montant_xaf || 0) <= 0}>
+            {creerSortie.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ReceiptText className="h-3.5 w-3.5" />}
+            Enregistrer
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function JustificatifChargeModal({ charge, onClose }: { charge: ChargeRecord | null; onClose: () => void }) {
+  const upload = useUploadJustificatifCharge()
+  const [file, setFile] = useState<File | null>(null)
+  const [description, setDescription] = useState('')
+
+  useEffect(() => {
+    if (charge) {
+      setFile(null)
+      setDescription('')
+    }
+  }, [charge?.id])
+
+  if (!charge) return null
+
+  const handleUpload = () => {
+    if (!file) return
+    upload.mutate({ chargeId: charge.id, file, description: description || undefined }, { onSuccess: onClose })
+  }
+
+  return (
+    <Modal isOpen={!!charge} onClose={onClose} title="Justificatif de charge" size="sm">
+      <div className="space-y-4">
+        <div className="rounded-lg bg-gray-50 p-3 text-sm">
+          <div className="font-semibold text-[#212121]">{charge.numero} - {charge.fournisseur_nom}</div>
+          <div className="mt-0.5 text-xs text-gray-500">{formatXAF(charge.montant_ttc_xaf)}</div>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Fichier PDF ou image</label>
+          <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-gray-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-gray-600" />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Description</label>
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)}
+            className="min-h-[76px] w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>Annuler</Button>
+          <Button onClick={handleUpload} disabled={upload.isPending || !file}>
+            {upload.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+            Téléverser
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function JustificatifSortieModal({ sortie, onClose }: { sortie: SortieRecord | null; onClose: () => void }) {
+  const upload = useUploadJustificatifSortie()
+  const [file, setFile] = useState<File | null>(null)
+  const [description, setDescription] = useState('')
+
+  useEffect(() => {
+    if (sortie) {
+      setFile(null)
+      setDescription('')
+    }
+  }, [sortie?.id])
+
+  if (!sortie) return null
+
+  const handleUpload = () => {
+    if (!file) return
+    upload.mutate({ sortieId: sortie.id, file, description: description || undefined }, { onSuccess: onClose })
+  }
+
+  return (
+    <Modal isOpen={!!sortie} onClose={onClose} title="Justificatif de sortie" size="sm">
+      <div className="space-y-4">
+        <div className="rounded-lg bg-gray-50 p-3 text-sm">
+          <div className="font-semibold text-[#212121]">{sortie.numero} - {sortie.beneficiaire}</div>
+          <div className="mt-0.5 text-xs text-gray-500">{formatXAF(sortie.montant_xaf)}</div>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Fichier PDF ou image</label>
+          <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-gray-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-gray-600" />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Description</label>
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)}
+            className="min-h-[76px] w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>Annuler</Button>
+          <Button onClick={handleUpload} disabled={upload.isPending || !file}>
+            {upload.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+            Téléverser
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 export default function Finance() {
   const [activeTab, setActiveTab]         = useState<Tab>('Dashboard')
   const [creditSubTab, setCreditSubTab]   = useState<'tableau-de-bord' | 'creances' | 'plafonds'>('tableau-de-bord')
@@ -1155,6 +1693,12 @@ export default function Finance() {
   const [remboursementCredit, setRemboursementCredit] = useState<CreditRecord | null>(null)
   const [relanceCredit, setRelanceCredit] = useState<CreditRecord | null>(null)
   const [documentsCredit, setDocumentsCredit] = useState<CreditRecord | null>(null)
+  const [showNouveauVersement, setShowNouveauVersement] = useState(false)
+  const [showNewCharge, setShowNewCharge] = useState(false)
+  const [showNewSortie, setShowNewSortie] = useState(false)
+  const [sortieCharge, setSortieCharge] = useState<ChargeRecord | null>(null)
+  const [documentsCharge, setDocumentsCharge] = useState<ChargeRecord | null>(null)
+  const [documentsSortie, setDocumentsSortie] = useState<SortieRecord | null>(null)
   const [compteFilter, setCompteFilter]   = useState('')
   const [periodeFilter, setPeriodeFilter] = useState('')
   const [periodeTva, setPeriodeTva]       = useState(new Date().toISOString().slice(0, 7))
@@ -1162,6 +1706,10 @@ export default function Finance() {
   const [exerciceCompta, setExerciceCompta] = useState(exerciceCourant)
   const [grandLivreDebut, setGrandLivreDebut] = useState(`${exerciceCourant}-01-01`)
   const [grandLivreFin, setGrandLivreFin] = useState(`${exerciceCourant}-12-31`)
+
+  const { data: versementsData, isLoading: versementsLoading } = useVersementsFacture(
+    selectedFacture?.id as string ?? null,
+  )
 
   const { data: facturesData, isLoading: facturesLoading } = useFactures()
   const { data: creditsData,  isLoading: creditsLoading  } = useCredits()
@@ -1183,14 +1731,21 @@ export default function Finance() {
   const { data: clotureComptableData } = useClotureComptable({ exercice: exerciceCompta })
   const { data: dashboardEcrituresData } = useEcritures()
   const { data: financeDashboardData } = useFinanceDashboard()
+  const { data: chargesData, isLoading: chargesLoading } = useCharges()
+  const { data: sortiesData, isLoading: sortiesLoading } = useSortiesTresorerie()
+  const { data: chargesDashboardData } = useChargesDashboard()
   const { data: declarationsData, isLoading: declarationsLoading } = useDeclarationsFiscales({ type: 'TVA' })
   const envoyerFacture = useEnvoyerFacture()
   const updateStatutFacture = useUpdateStatutFacture()
+  const updateStatutCharge = useUpdateStatutCharge()
+  const annulerSortie = useAnnulerSortieTresorerie()
   const preparerTva = usePreparerDeclarationTva()
   const updateStatutDeclaration = useUpdateStatutDeclaration()
 
   const factures  = (facturesData?.data  ?? []) as FactureRecord[]
   const credits   = (creditsData?.data   ?? []) as CreditRecord[]
+  const charges   = (chargesData?.data   ?? []) as ChargeRecord[]
+  const sortiesTresorerie = (sortiesData?.data ?? []) as SortieRecord[]
   const ecritures = ecrituresData?.data  ?? []
   const dashboardEcritures = dashboardEcrituresData?.data ?? []
   const declarations = declarationsData?.data ?? []
@@ -1204,6 +1759,7 @@ export default function Finance() {
     rubrique: 'Plan comptable',
   }))
   const compteSelectionne = comptesOptions.find((c) => c.compte === compteFilter)
+  const comptesCharges = comptesOptions.filter((c) => String(c.compte).startsWith('6'))
   const journaux = journauxData?.data ?? []
   const reglesComptables = journauxData?.regles ?? []
 
@@ -1364,7 +1920,7 @@ export default function Finance() {
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} className="space-y-6">
       <PageHeader
         title="Finance"
-        subtitle="Factures · Crédits · Comptabilité · Fiscalité"
+        subtitle="Factures · Crédits · Charges · Comptabilité · Fiscalité"
         breadcrumbs={[{ label: 'FORGE', href: '/' }, { label: 'Finance' }]}
         actions={activeTab === 'Dashboard' ? (
           <div className="flex items-center gap-2">
@@ -1386,6 +1942,23 @@ export default function Finance() {
           <Button size="sm" onClick={() => setShowNewFacture(true)}>
             <Plus className="h-3.5 w-3.5" /> Nouvelle facture
           </Button>
+        ) : activeTab === 'Charges' ? (
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={() => {
+              const now = new Date()
+              const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10)
+              const to = now.toISOString().slice(0, 10)
+              downloadFinanceExport(`/api/finance/exports/charges.xls?from=${from}&to=${to}`, `rapport-charges-${from}-${to}.xls`).catch((err: Error) => toast.error(err.message))
+            }}>
+              <Download className="h-3.5 w-3.5" /> Export
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => { setSortieCharge(null); setShowNewSortie(true) }}>
+              <ReceiptText className="h-3.5 w-3.5" /> Sortie
+            </Button>
+            <Button size="sm" onClick={() => setShowNewCharge(true)}>
+              <Plus className="h-3.5 w-3.5" /> Nouvelle charge
+            </Button>
+          </div>
         ) : undefined}
       />
 
@@ -1417,6 +1990,14 @@ export default function Finance() {
                 >
                   {echusCount}
                 </motion.span>
+              )}
+              {tab === 'Charges' && (chargesDashboardData?.kpis?.charges_a_valider ?? 0) > 0 && (
+                <span
+                  className="flex items-center justify-center w-5 h-5 rounded-full text-white text-[10px] font-bold"
+                  style={{ backgroundColor: '#d97706' }}
+                >
+                  {chargesDashboardData?.kpis?.charges_a_valider}
+                </span>
               )}
               {activeTab === tab && (
                 <motion.div layoutId="finance-tab" className="absolute bottom-0 inset-x-0 h-0.5 rounded-full" style={{ backgroundColor: '#C62828' }} />
@@ -1605,6 +2186,82 @@ export default function Finance() {
                     </div>
                   </div>
                   <InvoicePreview facture={selectedFacture as PreviewableFacture} />
+
+                  {/* ── Section versements ── */}
+                  <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+                    {/* KPIs encaissement */}
+                    <div className="p-4 border-b border-gray-50 grid grid-cols-3 gap-3">
+                      <div className="rounded-lg bg-gray-50 p-3 text-center">
+                        <div className="text-xs text-gray-400 mb-1">Total TTC</div>
+                        <div className="text-sm font-bold text-gray-800">{formatXAF(Number(selectedFacture.montant_ttc_xaf ?? 0))}</div>
+                      </div>
+                      <div className="rounded-lg bg-green-50 p-3 text-center">
+                        <div className="text-xs text-green-600 mb-1">Encaissé</div>
+                        <div className="text-sm font-bold text-green-700">{formatXAF(Number(selectedFacture.montant_paye_xaf ?? 0))}</div>
+                      </div>
+                      <div className="rounded-lg bg-amber-50 p-3 text-center">
+                        <div className="text-xs text-amber-600 mb-1">Solde restant</div>
+                        <div className="text-sm font-bold text-amber-700">{formatXAF(Number(selectedFacture.solde_restant_xaf ?? 0))}</div>
+                      </div>
+                    </div>
+
+                    {/* Header */}
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-50">
+                      <h3 className="text-sm font-bold text-[#212121]">Historique des versements</h3>
+                      {Number(selectedFacture.solde_restant_xaf ?? 0) > 0 && selectedFacture.statut !== 'annule' && (
+                        <Button size="sm" onClick={() => setShowNouveauVersement(true)}>
+                          <Plus className="h-3.5 w-3.5" /> Enregistrer un versement
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* Liste */}
+                    {versementsLoading ? (
+                      <div className="flex justify-center py-8">
+                        <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
+                      </div>
+                    ) : (versementsData ?? []).length === 0 ? (
+                      <div className="p-8 text-center">
+                        <ReceiptText className="h-7 w-7 text-gray-300 mx-auto mb-2" />
+                        <p className="text-sm text-gray-400">Aucun versement enregistré</p>
+                        <p className="text-xs text-gray-300 mt-0.5">Les paiements partiels apparaîtront ici</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-gray-50">
+                        {(versementsData ?? []).map((v) => (
+                          <div key={v.id} className="flex items-center justify-between px-4 py-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-green-50 shrink-0">
+                                <CheckCircle className="h-4 w-4 text-green-600" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-sm font-bold text-gray-800">+{formatXAF(v.montant_xaf)}</span>
+                                  <span className="text-xs px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">
+                                    {MODE_VERSEMENT_LABELS[v.mode_paiement]}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-gray-400 mt-0.5">
+                                  {formatDate(v.date_versement)}
+                                  {v.reference && (
+                                    <span className="ml-2 font-mono text-gray-500">Réf: {v.reference}</span>
+                                  )}
+                                </div>
+                                {v.note && (
+                                  <div className="text-xs text-gray-400 mt-0.5 italic truncate">{v.note}</div>
+                                )}
+                              </div>
+                            </div>
+                            {v.enregistre_par && (
+                              <div className="text-right text-xs text-gray-300 shrink-0 ml-4">
+                                {v.enregistre_par.split('@')[0]}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <>
@@ -1726,6 +2383,177 @@ export default function Finance() {
                     onCreated={() => setPlanOrder(null)}
                   />
                 )}
+              </div>
+            )}
+
+            {/* ── Charges ── */}
+            {activeTab === 'Charges' && (
+              <div className="p-5 space-y-5">
+                <div className="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <span className="font-semibold">Règle comptable :</span> les frais de livraison facturés au client restent hors charges. Seuls les frais réellement supportés par l'entreprise sont enregistrés ici.
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  {[
+                    { label: 'Charges période', value: formatXAF(chargesDashboardData?.kpis?.total_charges_xaf ?? 0), tone: '#C62828' },
+                    { label: 'Sorties argent', value: formatXAF(chargesDashboardData?.kpis?.sorties_xaf ?? 0), tone: '#1d4ed8' },
+                    { label: 'Reste à payer', value: formatXAF(chargesDashboardData?.kpis?.charges_a_payer_xaf ?? 0), tone: '#d97706' },
+                    { label: 'TVA déductible', value: formatXAF(chargesDashboardData?.kpis?.tva_deductible_xaf ?? 0), tone: '#15803d' },
+                  ].map((item) => (
+                    <div key={item.label} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                      <div className="text-xs font-semibold uppercase text-gray-400">{item.label}</div>
+                      <div className="mt-2 text-xl font-black" style={{ color: item.tone }}>{item.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_320px]">
+                  <div className="rounded-xl border border-gray-100 bg-white">
+                    <div className="flex flex-col gap-3 border-b border-gray-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h3 className="text-sm font-bold text-[#212121]">Charges entreprise</h3>
+                        <p className="mt-0.5 text-xs text-gray-500">Brouillon, validation, paiement et justificatif.</p>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-gray-500">
+                        <span>{charges.length} charge{charges.length !== 1 ? 's' : ''}</span>
+                        {(chargesDashboardData?.kpis?.justificatifs_manquants ?? 0) > 0 && (
+                          <span className="rounded-full bg-red-50 px-2 py-1 font-semibold text-red-700">
+                            {chargesDashboardData?.kpis?.justificatifs_manquants} justificatif{(chargesDashboardData?.kpis?.justificatifs_manquants ?? 0) > 1 ? 's' : ''} manquant{(chargesDashboardData?.kpis?.justificatifs_manquants ?? 0) > 1 ? 's' : ''}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-gray-100 bg-gray-50">
+                            {['Date', 'Numéro', 'Fournisseur', 'Compte', 'TTC', 'Payé', 'Statut', 'Justif.', ''].map((h) => (
+                              <th key={h} className="px-4 py-3 text-left text-xs font-semibold uppercase text-gray-500">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {chargesLoading && (
+                            <tr><td colSpan={9} className="px-4 py-10 text-center text-sm text-gray-400">Chargement des charges...</td></tr>
+                          )}
+                          {!chargesLoading && charges.map((charge) => (
+                            <tr key={charge.id} className="border-b border-gray-50 hover:bg-gray-50/60">
+                              <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{formatDate(charge.date_charge)}</td>
+                              <td className="px-4 py-3 font-mono text-xs font-semibold text-gray-700">{charge.numero}</td>
+                              <td className="px-4 py-3">
+                                <div className="font-semibold text-[#212121]">{charge.fournisseur_nom}</div>
+                                <div className="text-xs text-gray-400">{charge.categorie}</div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <span className="rounded bg-gray-100 px-2 py-0.5 font-mono text-xs text-gray-600">{charge.compte_charge}</span>
+                              </td>
+                              <td className="px-4 py-3 font-bold text-[#212121] whitespace-nowrap">{formatXAF(charge.montant_ttc_xaf)}</td>
+                              <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{formatXAF(charge.montant_paye_xaf)}</td>
+                              <td className="px-4 py-3"><Badge statut={charge.statut} map={CHARGE_MAP} /></td>
+                              <td className="px-4 py-3"><Badge statut={charge.justificatif_statut} map={JUSTIF_MAP} /></td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center justify-end gap-1">
+                                  {charge.statut === 'brouillon' && (
+                                    <button title="Soumettre"
+                                      onClick={() => updateStatutCharge.mutate({ id: charge.id, statut: 'a_valider' })}
+                                      disabled={updateStatutCharge.isPending}
+                                      className="p-1.5 rounded text-gray-400 transition-colors hover:bg-amber-50 hover:text-amber-600 disabled:opacity-50">
+                                      <ChevronRight className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                  {['brouillon', 'a_valider'].includes(charge.statut) && (
+                                    <button title="Valider"
+                                      onClick={() => updateStatutCharge.mutate({ id: charge.id, statut: 'validee' })}
+                                      disabled={updateStatutCharge.isPending}
+                                      className="p-1.5 rounded text-gray-400 transition-colors hover:bg-blue-50 hover:text-blue-600 disabled:opacity-50">
+                                      <CheckCircle className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                  {['validee', 'payee'].includes(charge.statut) && Number(charge.solde_restant_xaf ?? 0) > 0 && (
+                                    <button title="Enregistrer une sortie"
+                                      onClick={() => { setSortieCharge(charge); setShowNewSortie(true) }}
+                                      className="p-1.5 rounded text-gray-400 transition-colors hover:bg-green-50 hover:text-green-600">
+                                      <ReceiptText className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                  <button title="Justificatif"
+                                    onClick={() => setDocumentsCharge(charge)}
+                                    className="p-1.5 rounded text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700">
+                                    <Paperclip className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                          {!chargesLoading && charges.length === 0 && (
+                            <tr><td colSpan={9} className="px-4 py-10 text-center text-sm text-gray-400">Aucune charge enregistrée</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="rounded-xl border border-gray-100 bg-white p-4">
+                      <h3 className="text-sm font-bold text-[#212121]">Répartition</h3>
+                      <div className="mt-3 space-y-2">
+                        {(chargesDashboardData?.repartition_categories ?? []).slice(0, 6).map((row) => (
+                          <div key={row.categorie} className="rounded-lg bg-gray-50 p-3 text-xs">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-semibold text-gray-700">{row.categorie}</span>
+                              <span className="font-bold text-[#212121]">{formatXAF(row.total_xaf)}</span>
+                            </div>
+                            <div className="mt-0.5 text-gray-400">{row.count} charge{row.count !== 1 ? 's' : ''}</div>
+                          </div>
+                        ))}
+                        {(chargesDashboardData?.repartition_categories ?? []).length === 0 && (
+                          <div className="py-6 text-center text-sm text-gray-400">Aucune donnée</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-gray-100 bg-white p-4">
+                      <h3 className="text-sm font-bold text-[#212121]">Sorties récentes</h3>
+                      <div className="mt-3 divide-y divide-gray-50">
+                        {sortiesLoading && <div className="py-6 text-center text-sm text-gray-400">Chargement...</div>}
+                        {!sortiesLoading && sortiesTresorerie.slice(0, 6).map((sortie) => (
+                          <div key={sortie.id} className="py-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold text-[#212121]">{sortie.beneficiaire}</div>
+                                <div className="mt-0.5 text-xs text-gray-400">{sortie.numero} - {formatDate(sortie.date_sortie)}</div>
+                              </div>
+                              <div className="text-right text-sm font-bold text-[#C62828] whitespace-nowrap">{formatXAF(sortie.montant_xaf)}</div>
+                            </div>
+                            <div className="mt-2 flex items-center justify-between gap-2">
+                              <div className="min-w-0 text-xs text-gray-500">
+                                <div className="truncate">{sortie.motif}</div>
+                                <div className="mt-1"><Badge statut={sortie.justificatif_statut} map={JUSTIF_MAP} /></div>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <button title="Justificatif"
+                                  onClick={() => setDocumentsSortie(sortie)}
+                                  className="p-1.5 rounded text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700">
+                                  <Paperclip className="h-3.5 w-3.5" />
+                                </button>
+                                <button title="Annuler la sortie"
+                                  onClick={() => annulerSortie.mutate(sortie.id)}
+                                  disabled={annulerSortie.isPending}
+                                  className="p-1.5 rounded text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        {!sortiesLoading && sortiesTresorerie.length === 0 && (
+                          <div className="py-6 text-center text-sm text-gray-400">Aucune sortie enregistrée</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2160,7 +2988,7 @@ export default function Finance() {
                   <div>
                     <h3 className="text-sm font-bold text-[#212121]">TVA mensuelle</h3>
                     <p className="mt-1 text-xs text-gray-500">
-                      Prépare la déclaration à partir des factures non annulées. La livraison reste hors base TVA.
+                      Prépare la TVA nette à partir des factures non annulées et de la TVA déductible des charges validées. La livraison client reste hors base TVA.
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -2241,11 +3069,21 @@ export default function Finance() {
         onClose={() => setShowNewFacture(false)}
         factureeCommandeIds={factureeCommandeIds}
       />
+      <NouveauVersementModal isOpen={showNouveauVersement} onClose={() => setShowNouveauVersement(false)} facture={selectedFacture} />
       <PaiementFactureModal isOpen={!!paiementFacture} onClose={() => setPaiementFacture(null)} facture={paiementFacture} />
       <RelanceFactureModal isOpen={!!relanceFacture} onClose={() => setRelanceFacture(null)} facture={relanceFacture} />
       <RemboursementModal isOpen={!!remboursementCredit} onClose={() => setRemboursementCredit(null)} credit={remboursementCredit} />
       <RelanceModal isOpen={!!relanceCredit} onClose={() => setRelanceCredit(null)} credit={relanceCredit} />
       <DocumentsModal isOpen={!!documentsCredit} onClose={() => setDocumentsCredit(null)} credit={documentsCredit} />
+      <NouvelleChargeModal isOpen={showNewCharge} onClose={() => setShowNewCharge(false)} comptesCharges={comptesCharges} />
+      <NouvelleSortieModal
+        isOpen={showNewSortie}
+        onClose={() => { setShowNewSortie(false); setSortieCharge(null) }}
+        charges={charges}
+        selectedCharge={sortieCharge}
+      />
+      <JustificatifChargeModal charge={documentsCharge} onClose={() => setDocumentsCharge(null)} />
+      <JustificatifSortieModal sortie={documentsSortie} onClose={() => setDocumentsSortie(null)} />
     </motion.div>
   )
 }

@@ -10,8 +10,8 @@ import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal } from '@f
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import { toast } from 'sonner'
-import { useCommandes, useStatutCommande, useCreateCommande, useConditionsPaiement } from '@/hooks/useCommandes'
-import type { Commande, CommandeLigne, CommandeHistorique, ConditionPaiement } from '@/hooks/useCommandes'
+import { useCommandes, useStatutCommande, useCreateCommande, useConditionsPaiementEligibles } from '@/hooks/useCommandes'
+import type { Commande, CommandeLigne, CommandeHistorique, ConditionPaiement, ConditionPaiementEligible } from '@/hooks/useCommandes'
 import { useClients } from '@/hooks/useClients'
 import type { Client } from '@/hooks/useClients'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
@@ -594,11 +594,18 @@ export default function Commandes() {
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [clientDropdownOpen, setClientDropdownOpen] = useState(false)
 
+  // ── Totaux form (avant hooks pour les passer comme query key) ──────────────
+
+  const formTotalHT = cmdForm.lignes.reduce(
+    (s, l) => s + (l.quantite > 0 ? l.quantite * l.prix_unitaire_ht_xaf : 0), 0,
+  )
+  const formTTC = Math.round(formTotalHT * 1.1925)
+
   const { data, isLoading, isError } = useCommandes()
   const statutMutation  = useStatutCommande()
   const createCommande  = useCreateCommande()
-  const { data: conditionsData } = useConditionsPaiement()
-  const conditions = (conditionsData ?? []) as ConditionPaiement[]
+  const { data: conditionsData } = useConditionsPaiementEligibles(selectedClient?.id, formTTC, 'devis')
+  const conditions = (conditionsData ?? []) as ConditionPaiementEligible[]
   const { data: clientsData } = useClients()
 
   const { data: shopData } = useCommandesShop()
@@ -641,13 +648,6 @@ export default function Commandes() {
       return { ...f, lignes: [...f.lignes, newLigne] }
     })
   }
-
-  // ── Totaux form ────────────────────────────────────────────────────────────
-
-  const formTotalHT = cmdForm.lignes.reduce(
-    (s, l) => s + (l.quantite > 0 ? l.quantite * l.prix_unitaire_ht_xaf : 0), 0,
-  )
-  const formTTC = Math.round(formTotalHT * 1.1925)
 
   const canSubmit =
     !!cmdForm.client_nom.trim() &&
@@ -933,28 +933,37 @@ export default function Commandes() {
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                 {conditions.map((cp) => {
-                  const selected = cmdForm.condition_paiement_id === cp.id
+                  const selected  = cmdForm.condition_paiement_id === cp.id
+                  const eligible  = (cp as ConditionPaiementEligible).eligible !== false
+                  const raison    = (cp as ConditionPaiementEligible).raison ?? null
                   return (
                     <button
                       key={cp.id}
                       type="button"
-                      onClick={() => setCmdForm((f) => ({
+                      disabled={!eligible}
+                      title={!eligible ? (raison ?? 'Non éligible') : undefined}
+                      onClick={() => eligible && setCmdForm((f) => ({
                         ...f,
                         condition_paiement_id: selected ? '' : cp.id,
                       }))}
                       className={`text-left px-3 py-2.5 rounded-xl border-2 transition-all text-sm ${
-                        selected
+                        !eligible
+                          ? 'border-dashed border-gray-200 bg-gray-50 opacity-60 cursor-not-allowed'
+                          : selected
                           ? 'border-[#C62828] bg-[#FFEBEE]'
                           : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                       }`}
                     >
-                      <p className={`font-semibold text-xs ${selected ? 'text-[#C62828]' : 'text-[#212121]'}`}>
+                      <p className={`font-semibold text-xs ${selected ? 'text-[#C62828]' : eligible ? 'text-[#212121]' : 'text-gray-400'}`}>
                         {cp.libelle}
                       </p>
                       <p className="text-[11px] text-gray-400 mt-0.5">
                         {cp.acompte_pct > 0 ? `${cp.acompte_pct}% à la commande` : 'Sans acompte'}
                         {cp.delai_solde_jours > 0 ? ` · solde J+${cp.delai_solde_jours}` : ''}
                       </p>
+                      {!eligible && raison && (
+                        <p className="text-[10px] text-red-400 mt-1 line-clamp-2 leading-snug">{raison}</p>
+                      )}
                     </button>
                   )
                 })}

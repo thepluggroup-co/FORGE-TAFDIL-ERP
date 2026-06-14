@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto'
 import { supabaseAdmin } from '@forge/db'
 import { FRAIS_LIVRAISON } from '@forge/shared'
 import { notifyCommandeSms } from '../services/sms.service'
+import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
 
 const db = supabaseAdmin!
 import type { HonoVariables } from '../types'
@@ -14,6 +15,8 @@ import type { HonoVariables } from '../types'
 const TVA_RATE = 0.1925
 
 const TARIFS_LIVRAISON: Record<string, { tarif: number; delaiJours: number }> = FRAIS_LIVRAISON
+const SMS_RESEND_COOLDOWN_MS = 2 * 60 * 1000
+const smsResendAttempts = new Map<string, number>()
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -29,6 +32,32 @@ function disponibilite(stock: number, seuil: number): 'disponible' | 'stock_faib
   return 'disponible'
 }
 
+function smsStatusPayload(result: Awaited<ReturnType<typeof notifyCommandeSms>>) {
+  if (result.ok && !result.skipped) {
+    return { ok: true, message: 'SMS envoyé au client.' }
+  }
+  if (result.skipped) {
+    return {
+      ok: false,
+      skipped: true,
+      message: result.error ?? 'SMS non envoyé.',
+      retry_after_seconds: 120,
+    }
+  }
+  return {
+    ok: false,
+    message: result.error ? `SMS non envoyé : ${result.error}` : 'SMS non envoyé par Africa’s Talking.',
+    retry_after_seconds: 120,
+  }
+}
+
+function samePhone(a?: string | null, b?: string | null) {
+  const left = String(a ?? '').replace(/\D/g, '')
+  const right = String(b ?? '').replace(/\D/g, '')
+  if (!left || !right) return false
+  return left.endsWith(right) || right.endsWith(left)
+}
+
 // ── Schémas Zod ────────────────────────────────────────────────────────────────
 
 const ligneCommandeSchema = z.object({
@@ -39,15 +68,20 @@ const ligneCommandeSchema = z.object({
 })
 
 const commandeShopSchema = z.object({
-  client_nom:       z.string().min(2).max(200),
-  client_telephone: z.string().min(8).max(20),
-  client_email:     z.string().email().optional(),
-  client_adresse:   z.string().min(5),
-  client_ville:     z.string().optional(),
-  lignes:           z.array(ligneCommandeSchema).min(1),
-  mode_paiement:    z.enum(['mtn_momo', 'orange_money', 'livraison']),
-  notes_client:     z.string().max(500).optional(),
-  frais_livraison:  z.number().min(0).default(0),
+  client_nom:              z.string().min(2).max(200),
+  client_telephone:        z.string().min(8).max(20),
+  client_email:            z.string().email().optional(),
+  client_adresse:          z.string().min(5),
+  client_ville:            z.string().optional(),
+  lignes:                  z.array(ligneCommandeSchema).min(1),
+  mode_paiement:           z.enum(['mtn_momo', 'orange_money', 'livraison']),
+  notes_client:            z.string().max(500).optional(),
+  frais_livraison:         z.number().min(0).default(0),
+  condition_paiement_code: z.string().default('P100'),
+})
+
+const resendSmsSchema = z.object({
+  telephone: z.string().min(8).max(20),
 })
 
 const devisWebSchema = z.object({
@@ -238,16 +272,32 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     }
   }
 
-  // 2. Calculer montants : la livraison est ajoutee apres TVA.
+  // 2. Vérifier éligibilité crédit si condition ≠ P100
+  const condCode = body.condition_paiement_code ?? 'P100'
+  if (condCode !== 'P100') {
+    const montantEstime = Math.round(body.lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0))
+    const tvaEstimee    = Math.round(montantEstime * TVA_RATE)
+    const ttcEstime     = Math.round(montantEstime + tvaEstimee + body.frais_livraison)
+
+    const eligibilite = await verifierEligibiliteCredit(null, ttcEstime, 'web', condCode)
+    if (!eligibilite.eligible) {
+      return c.json({
+        error: eligibilite.raison ?? 'Condition de crédit non autorisée pour les commandes web',
+        code: 'CREDIT_NON_ELIGIBLE',
+      }, 422)
+    }
+  }
+
+  // 4. Calculer montants : la livraison est ajoutee apres TVA.
   const montant_ht       = Math.round(body.lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0))
   const frais_livraison  = Math.round(body.frais_livraison)
   const tva              = Math.round(montant_ht * TVA_RATE)
   const montant_ttc      = Math.round(montant_ht + tva + frais_livraison)
 
-  // 3. Générer référence unique
+  // 5. Générer référence unique
   const ref = genRef()
 
-  // 4. Lignes JSONB
+  // 6. Lignes JSONB
   const lignesJson = body.lignes.map((l) => ({
     product_id:     l.product_id,   // requis pour décréments stock webhook
     designation:    l.designation,
@@ -256,7 +306,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     total_ht:       Math.round(l.quantite * l.prix_unitaire),
   }))
 
-  // 5. Insérer commande_shop
+  // 7. Insérer commande_shop
   const { data: commandeShop, error: errShop } = await db
     .from('commandes_shop')
     .insert({
@@ -284,7 +334,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     return c.json({ error: 'Erreur création commande', code: 'DB_ERROR' }, 500)
   }
 
-  // 6. Créer la commande ERP en miroir (source web)
+  // 8. Créer la commande ERP en miroir (source web)
   const today = new Date().toISOString().split('T')[0]
   const { data: erpCommande } = await db
     .from('commandes')
@@ -302,7 +352,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     .select('id')
     .single()
 
-  // 7. Lier commande_shop → commande ERP
+  // 9. Lier commande_shop → commande ERP
   if (erpCommande?.id) {
     await db
       .from('commandes_shop')
@@ -322,21 +372,24 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     await db.from('commandes_lignes').insert(lignesErp)
   }
 
-  // 8. Notifier ERP via Realtime (broadcast sur canal dédié)
+  // 10. Notifier ERP via Realtime (broadcast sur canal dédié)
   await db.channel('commandes_web_nouvelles').send({
     type:    'broadcast',
     event:   'nouvelle_commande_web',
     payload: { ref, montant_ttc, client: body.client_nom },
   })
 
-  void notifyCommandeSms({
+  const smsResult = await notifyCommandeSms({
     numero:        ref,
     client_nom:    body.client_nom,
     telephone:     body.client_telephone,
     total_ttc_xaf: montant_ttc,
-  }, 'commande_recue').catch((e) => console.error('[sms] confirmation commande shop:', e))
+  }, 'commande_recue').catch((e) => {
+    console.error('[sms] confirmation commande shop:', e)
+    return { ok: false, provider: 'africastalking' as const, error: e instanceof Error ? e.message : String(e) }
+  })
 
-  return c.json({ ref, montant_ttc, statut: 'recue' }, 201)
+  return c.json({ ref, montant_ttc, statut: 'recue', sms: smsStatusPayload(smsResult) }, 201)
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -358,6 +411,61 @@ shopRouter.get('/commandes/:ref', async (c) => {
   }
 
   return c.json({ data })
+})
+
+shopRouter.post('/commandes/:ref/sms/renvoyer', zValidator('json', resendSmsSchema), async (c) => {
+  const ref = c.req.param('ref').toUpperCase()
+  const body = c.req.valid('json')
+  const cacheKey = `${ref}:${String(body.telephone ?? '').replace(/\D/g, '')}`
+  const lastAttempt = smsResendAttempts.get(cacheKey) ?? 0
+  const waitMs = SMS_RESEND_COOLDOWN_MS - (Date.now() - lastAttempt)
+
+  if (waitMs > 0) {
+    return c.json({
+      error: 'Renvoi SMS temporairement indisponible',
+      code: 'SMS_COOLDOWN',
+      retry_after_seconds: Math.ceil(waitMs / 1000),
+    }, 429)
+  }
+
+  const { data, error } = await db
+    .from('commandes_shop')
+    .select('ref, client_nom, client_telephone, montant_ttc')
+    .eq('ref', ref)
+    .single()
+
+  if (error || !data) {
+    return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
+  }
+
+  const commande = data as {
+    ref: string
+    client_nom: string
+    client_telephone: string | null
+    montant_ttc: number | null
+  }
+
+  if (body.telephone && !samePhone(body.telephone, commande.client_telephone)) {
+    return c.json({ error: 'Téléphone non associé à cette commande', code: 'PHONE_MISMATCH' }, 403)
+  }
+
+  smsResendAttempts.set(cacheKey, Date.now())
+  const smsResult = await notifyCommandeSms({
+    numero:        commande.ref,
+    client_nom:    commande.client_nom,
+    telephone:     commande.client_telephone,
+    total_ttc_xaf: commande.montant_ttc,
+  }, 'commande_recue').catch((e) => {
+    console.error('[sms] renvoi confirmation commande shop:', e)
+    return { ok: false, provider: 'africastalking' as const, error: e instanceof Error ? e.message : String(e) }
+  })
+
+  const sms = smsStatusPayload(smsResult)
+  if (!sms.ok) {
+    return c.json({ sms }, 502)
+  }
+
+  return c.json({ sms })
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -438,6 +546,35 @@ shopRouter.post('/devis', zValidator('json', devisWebSchema), async (c) => {
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
+// GET /api/shop/conditions-paiement?montant=<ttc>
+// Conditions de paiement web-compatibles avec éligibilité (pas d'auth requise)
+// Exclut PROJ-* (réservés aux contrats hors-boutique)
+// ══════════════════════════════════════════════════════════════════════════════
+
+shopRouter.get('/conditions-paiement', async (c) => {
+  const montantNum = Math.round(Math.max(0, parseFloat(c.req.query('montant') ?? '0') || 0))
+
+  const { data: conditions, error } = await db
+    .from('conditions_paiement')
+    .select('id, code, libelle, acompte_pct, delai_solde_jours')
+    .eq('actif', true)
+    .not('code', 'like', 'PROJ%')
+    .order('code')
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  const results = await Promise.all(
+    (conditions ?? []).map(async (cp: Record<string, unknown>) => {
+      const check = await verifierEligibiliteCredit(null, montantNum, 'web', cp.code as string)
+      return { ...cp, eligible: check.eligible, raison: check.raison ?? null }
+    }),
+  )
+
+  c.header('Cache-Control', 'no-store')
+  return c.json({ data: results })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
 // GET /api/shop/livraison/tarifs?ville=douala
 // Tarifs et délais de livraison par zone
 // ══════════════════════════════════════════════════════════════════════════════
@@ -486,6 +623,19 @@ shopRouter.get('/livraison/tarifs', (c) => {
       zones_connues:   Object.keys(TARIFS_LIVRAISON),
     },
   })
+})
+
+// ── TEST ONLY: remove before production ───────────────────────────────────────
+shopRouter.post('/test-sms', async (c) => {
+  if (process.env.NODE_ENV === 'production') return c.json({ error: 'Disabled in production' }, 403)
+  const { telephone } = await c.req.json<{ telephone: string }>()
+  const result = await notifyCommandeSms({
+    numero:        'WEB-2026-TEST',
+    client_nom:    'Client Test',
+    telephone,
+    total_ttc_xaf: 50000,
+  }, 'commande_recue')
+  return c.json(result)
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -859,55 +1009,164 @@ shopErpRouter.patch('/devis-web/:id/statut',
   }
 )
 
-shopErpRouter.post('/devis/:id/creer-erp', async (c) => {
-  const id = c.req.param('id')
-
-  const { data: devisWeb, error: errFetch } = await db
-    .from('demandes_devis_web')
-    .select('*')
-    .eq('id', id)
-    .single()
-
-  if (errFetch || !devisWeb) {
-    return c.json({ error: 'Demande introuvable', code: 'NOT_FOUND' }, 404)
-  }
-
-  if (devisWeb.erp_devis_id) {
-    return c.json({ error: 'Devis ERP déjà créé', code: 'ALREADY_EXISTS', devis_id: devisWeb.erp_devis_id }, 409)
-  }
-
-  const numero  = await genererNumeroDevis()
-  const today   = new Date().toISOString().split('T')[0]
-  const validite = new Date(Date.now() + 30 * 86_400_000).toISOString().split('T')[0]
-
-  const { data: erpDevis, error: errCreate } = await db
-    .from('devis')
-    .insert({
-      numero,
-      client_nom:          devisWeb.nom,
-      statut:              'brouillon',
-      date_emission:       today,
-      date_validite:       validite,
-      validite_jours:      30,
-      conditions_paiement: 'Virement bancaire',
-      notes:               `[SOURCE WEB] ${devisWeb.description}`,
-      total_ht_xaf:        0,
-      tva_xaf:             0,
-      total_ttc_xaf:       0,
-      sync_status:         'synced',
-    })
-    .select('id, numero')
-    .single()
-
-  if (errCreate || !erpDevis) {
-    console.error('[shop-erp] create devis:', errCreate)
-    return c.json({ error: 'Erreur création devis ERP', code: 'DB_ERROR' }, 500)
-  }
-
-  await db
-    .from('demandes_devis_web')
-    .update({ statut: 'traitee', erp_devis_id: erpDevis.id })
-    .eq('id', id)
-
-  return c.json({ data: erpDevis }, 201)
+const creerErpSchema = z.object({
+  montant_ht:              z.number().min(0).optional(),
+  date_validite:           z.string().optional(),
+  condition_paiement_code: z.string().optional(),
+  notes_commerciales:      z.string().optional(),
 })
+
+const CONDITIONS_PAIEMENT: Record<string, string> = {
+  'P100':    'Comptant intégral',
+  'P30-LIV': '30% commande + solde à livraison',
+  'P30-45':  '30% commande + crédit 45 jours',
+  'P30-60':  '30% commande + crédit 60 jours',
+  'PROJ-3T': '30% signature + 40% mi-chantier + 30% réception',
+  'PROJ-DG': 'Conditions spéciales — accord DG requis',
+}
+
+shopErpRouter.post('/devis/:id/creer-erp',
+  zValidator('json', creerErpSchema),
+  async (c) => {
+    const id   = c.req.param('id')
+    const body = c.req.valid('json')
+
+    const { data: devisWeb, error: errFetch } = await db
+      .from('demandes_devis_web')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (errFetch || !devisWeb) {
+      return c.json({ error: 'Demande introuvable', code: 'NOT_FOUND' }, 404)
+    }
+
+    if (devisWeb.erp_devis_id) {
+      return c.json({ error: 'Devis ERP déjà créé', code: 'ALREADY_EXISTS', devis_id: devisWeb.erp_devis_id }, 409)
+    }
+
+    const TVA        = 0.1925
+    const montant_ht = body.montant_ht ?? 0
+    const tva_xaf    = Math.round(montant_ht * TVA)
+
+    const today      = new Date().toISOString().split('T')[0]
+    const dateVal    = body.date_validite ?? new Date(Date.now() + 30 * 86_400_000).toISOString().split('T')[0]
+    const diffDays   = Math.ceil((new Date(dateVal).getTime() - Date.now()) / 86_400_000)
+    const validite_jours = Math.max(0, diffDays)
+
+    const condPaiement = body.condition_paiement_code
+      ? (CONDITIONS_PAIEMENT[body.condition_paiement_code] ?? body.condition_paiement_code)
+      : 'Virement bancaire'
+
+    const notesParts = [`[SOURCE WEB] ${devisWeb.description}`]
+    if (body.notes_commerciales?.trim()) notesParts.push(`\n--- Notes commerciales ---\n${body.notes_commerciales.trim()}`)
+
+    const numero = await genererNumeroDevis()
+
+    const { data: erpDevis, error: errCreate } = await db
+      .from('devis')
+      .insert({
+        numero,
+        client_nom:          devisWeb.nom,
+        statut:              'brouillon',
+        date_emission:       today,
+        date_validite:       dateVal,
+        validite_jours,
+        conditions_paiement: condPaiement,
+        notes:               notesParts.join(''),
+        total_ht_xaf:        montant_ht,
+        tva_xaf,
+        total_ttc_xaf:       montant_ht + tva_xaf,
+        sync_status:         'synced',
+      })
+      .select('id, numero')
+      .single()
+
+    if (errCreate || !erpDevis) {
+      console.error('[shop-erp] create devis:', errCreate)
+      return c.json({ error: 'Erreur création devis ERP', code: 'DB_ERROR' }, 500)
+    }
+
+    const { error: updateErr } = await db
+      .from('demandes_devis_web')
+      .update({ statut: 'traitee', erp_devis_id: erpDevis.id })
+      .eq('id', id)
+      .select('id, statut, erp_devis_id')
+      .single()
+
+    if (updateErr) {
+      console.error('[shop-erp] update demande_devis_web:', JSON.stringify(updateErr))
+    }
+
+    return c.json({ data: erpDevis }, 201)
+  }
+)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PATCH /api/shop-erp/commandes/:id/annuler
+// Annulation d'une commande web depuis le module ERP
+// ══════════════════════════════════════════════════════════════════════════════
+
+shopErpRouter.patch(
+  '/commandes/:id/annuler',
+  zValidator('json', z.object({ motif: z.string().min(1).max(200) })),
+  async (c) => {
+    const id            = c.req.param('id')
+    const { motif }     = c.req.valid('json')
+    const now           = new Date().toISOString()
+
+    // 1. Charger la commande shop
+    const { data: commande, error: fetchErr } = await db
+      .from('commandes_shop')
+      .select('id, ref, statut_commande, erp_commande_id, notes_client')
+      .eq('id', id)
+      .single()
+
+    if (fetchErr || !commande) {
+      return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
+    }
+
+    const cmd = commande as {
+      id: string; ref: string; statut_commande: string
+      erp_commande_id: string | null; notes_client: string | null
+    }
+
+    if (cmd.statut_commande === 'livree') {
+      return c.json({ error: 'Impossible d\'annuler une commande déjà livrée', code: 'INVALID_TRANSITION' }, 422)
+    }
+    if (cmd.statut_commande === 'annulee') {
+      return c.json({ error: 'Commande déjà annulée', code: 'ALREADY_CANCELLED' }, 409)
+    }
+
+    // 2. Mettre à jour commandes_shop
+    const notesAvecMotif = [cmd.notes_client, `[ANNULATION] ${motif}`].filter(Boolean).join('\n')
+
+    const { data: updated, error: updateErr } = await db
+      .from('commandes_shop')
+      .update({ statut_commande: 'annulee', notes_client: notesAvecMotif, updated_at: now })
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (updateErr || !updated) {
+      return c.json({ error: updateErr?.message ?? 'Erreur mise à jour', code: 'DB_ERROR' }, 500)
+    }
+
+    // 3. Annuler la commande ERP miroir + ses bons de sortie
+    if (cmd.erp_commande_id) {
+      await db
+        .from('commandes')
+        .update({ statut: 'cancelled', updated_at: now })
+        .eq('id', cmd.erp_commande_id)
+
+      // Annuler les bons de sortie liés non encore exécutés
+      await db
+        .from('bons_sortie')
+        .update({ statut: 'annule', updated_at: now })
+        .eq('commande_id', cmd.erp_commande_id)
+        .in('statut', ['soumis', 'en_attente', 'valide'])
+    }
+
+    return c.json(updated)
+  }
+)

@@ -12,8 +12,10 @@ import { localCreateDevis, localCreateCommande, getClientsLocal, getCommandesLoc
 import { withOfflineFallback } from '../services/offline-fallback'
 import { notifyStatutChange } from '../services/notifications'
 import { notifyCommandeSms } from '../services/sms.service'
-import { enregistrerPaiementCommande } from '../services/finance-core.service'
+import { enregistrerPaiementCommande, ensureFactureForCommande } from '../services/finance-core.service'
 import { enqueueEmail, notifyWhatsApp, sendEmailDirect } from '../services/email-queue.service'
+import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
+import type { TypeCommande } from '../services/credit-eligibility.service'
 import type { HonoVariables } from '../types'
 
 // ── TVA Cameroun ────────────────────────────────────────────────────────────────
@@ -54,7 +56,7 @@ const clientSchema = z.object({
   ville:            z.string().optional(),
   pays:             z.string().default('Cameroun'),
   statut:           z.enum(['actif', 'inactif', 'bloque']).default('actif'),
-  score_fiabilite:  z.number().int().min(0).max(100).default(50),
+  score_fiabilite:  z.enum(['nouveau', 'bon', 'tres_bon', 'vip', 'bloque']).optional(),
   notes:            z.string().optional(),
 })
 
@@ -102,8 +104,9 @@ const commandeSchema = z.object({
 })
 
 const statutCommandeSchema = z.object({
-  statut:      z.enum(['confirmed', 'in_production', 'pret', 'delivered', 'cancelled']),
-  commentaire: z.string().optional(),
+  statut:                z.enum(['confirmed', 'in_production', 'pret', 'delivered', 'cancelled']),
+  commentaire:           z.string().optional(),
+  condition_paiement_id: z.string().uuid().optional(),
 })
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -401,7 +404,12 @@ async function recalculerScoreFiabilite(clientId: string): Promise<void> {
     50 + livrees * 1 + payes * 2 - echues * 5
   ))
 
-  await db.from('clients').update({ score_fiabilite: score }).eq('id', clientId)
+  const label: string = score >= 80 ? 'vip'
+    : score >= 60 ? 'tres_bon'
+    : score >= 40 ? 'bon'
+    : 'nouveau'
+
+  await db.from('clients').update({ score_fiabilite: label }).eq('id', clientId)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1134,9 +1142,14 @@ publicDevisRouter.post('/devis/approuver/:token', async (c) => {
 })
 
 /** Transformer un devis en commande + réserver le stock */
+const transformerCommandeBodySchema = z.object({
+  condition_paiement_id: z.string().uuid().optional(),
+})
+
 router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseur', 'operateur']), async (c) => {
   const { id }   = c.req.param()
   const user     = c.get('user')
+  const body     = await c.req.json().then(j => transformerCommandeBodySchema.parse(j)).catch(() => ({}))
 
   const { data: devis, error: devisErr } = await db
     .from('devis')
@@ -1179,24 +1192,49 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
     return c.json({ error: blocageMsg, code: 'CLIENT_BLOQUE' }, 422)
   }
 
+  // Vérifier éligibilité crédit si une condition de paiement est fournie
+  let conditionPaiementIdFinal: string | null = null
+  if ((body as { condition_paiement_id?: string }).condition_paiement_id) {
+    const cpId = (body as { condition_paiement_id: string }).condition_paiement_id
+    const { data: cp } = await db
+      .from('conditions_paiement')
+      .select('code')
+      .eq('id', cpId)
+      .single()
+
+    if (cp) {
+      const eligibilite = await verifierEligibiliteCredit(
+        d.client_id,
+        d.total_ttc_xaf,
+        'devis',
+        (cp as { code: string }).code,
+      )
+      if (!eligibilite.eligible) {
+        return c.json({ error: eligibilite.raison ?? 'Condition de crédit non autorisée', code: 'CREDIT_NON_ELIGIBLE' }, 422)
+      }
+      conditionPaiementIdFinal = cpId
+    }
+  }
+
   const numeroCommande = await genererNumero('commandes', 'CMD')
 
   const { data: commande, error: cmdErr } = await db
     .from('commandes')
     .insert({
-      numero:           numeroCommande,
-      client_id:        d.client_id,
-      client_nom:       d.client_nom,
-      devis_id:         d.id,
-      statut:           'confirmed',
-      date_commande:    new Date().toISOString().slice(0, 10),
-      total_ht_xaf:     d.total_ht_xaf,
-      tva_xaf:          d.tva_xaf,
-      total_ttc_xaf:    d.total_ttc_xaf,
-      acompte_recu_xaf: Math.round(d.total_ttc_xaf * (d.acompte_pct / 100)),
-      notes:            d.notes,
-      created_by:       user.id,
-      sync_status:      'synced',
+      numero:                numeroCommande,
+      client_id:             d.client_id,
+      client_nom:            d.client_nom,
+      devis_id:              d.id,
+      statut:                'confirmed',
+      date_commande:         new Date().toISOString().slice(0, 10),
+      total_ht_xaf:          d.total_ht_xaf,
+      tva_xaf:               d.tva_xaf,
+      total_ttc_xaf:         d.total_ttc_xaf,
+      acompte_recu_xaf:      Math.round(d.total_ttc_xaf * (d.acompte_pct / 100)),
+      condition_paiement_id: conditionPaiementIdFinal,
+      notes:                 d.notes,
+      created_by:            user.id,
+      sync_status:           'synced',
     })
     .select()
     .single()
@@ -1235,6 +1273,34 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
 // ══════════════════════════════════════════════════════════════════════════════
 // CONDITIONS DE PAIEMENT
 // ══════════════════════════════════════════════════════════════════════════════
+
+router.get('/conditions-paiement/eligibles', async (c) => {
+  const { client_id, montant, type } = c.req.query()
+  const montantNum = Math.round(Math.max(0, parseFloat(montant ?? '0') || 0))
+  const typeCmd = (['web', 'devis', 'projet'].includes(type ?? '') ? type : 'devis') as TypeCommande
+
+  const { data: conditions, error } = await db
+    .from('conditions_paiement')
+    .select('id, code, libelle, acompte_pct, delai_solde_jours')
+    .eq('actif', true)
+    .order('code')
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  const results = await Promise.all(
+    (conditions ?? []).map(async (cp: Record<string, unknown>) => {
+      const check = await verifierEligibiliteCredit(
+        client_id || null,
+        montantNum,
+        typeCmd,
+        cp.code as string,
+      )
+      return { ...cp, eligible: check.eligible, raison: check.raison ?? null }
+    }),
+  )
+
+  return c.json({ data: results })
+})
 
 router.get('/conditions-paiement', async (c) => {
   const { data, error } = await db
@@ -1322,11 +1388,26 @@ router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zV
       if (body.condition_paiement_id) {
         const { data: cp } = await db
           .from('conditions_paiement')
-          .select('acompte_pct, delai_solde_jours')
+          .select('code, acompte_pct, delai_solde_jours')
           .eq('id', body.condition_paiement_id)
           .single()
 
         if (cp) {
+          // Vérifier éligibilité crédit avant toute insertion
+          const typeCmd: TypeCommande = body.devis_id ? 'devis' : 'devis'
+          const eligibilite = await verifierEligibiliteCredit(
+            body.client_id ?? null,
+            totaux.total_ttc_xaf,
+            typeCmd,
+            cp.code,
+          )
+          if (!eligibilite.eligible) {
+            throw Object.assign(new Error(eligibilite.raison ?? 'Condition de crédit non autorisée'), {
+              code: 'CREDIT_NON_ELIGIBLE',
+              httpStatus: 422,
+            })
+          }
+
           montantAcompte = Math.round(totaux.total_ttc_xaf * (cp.acompte_pct / 100))
 
           if (cp.delai_solde_jours > 0) {
@@ -1403,13 +1484,13 @@ router.patch(
 
     const { data: existing } = await db
       .from('commandes')
-      .select('statut, numero, client_id')
+      .select('statut, numero, client_id, total_ttc_xaf')
       .eq('id', id)
       .single()
 
     if (!existing) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
 
-    const ex = existing as { statut: string; numero: string; client_id: string | null }
+    const ex = existing as { statut: string; numero: string; client_id: string | null; total_ttc_xaf: number }
     const allowed  = TRANSITIONS_COMMANDE[ex.statut] ?? []
 
     if (!allowed.includes(body.statut)) {
@@ -1428,9 +1509,34 @@ router.patch(
       }
     }
 
+    // Vérifier éligibilité si la condition de paiement change
+    if (body.condition_paiement_id) {
+      const { data: cp } = await db
+        .from('conditions_paiement')
+        .select('code')
+        .eq('id', body.condition_paiement_id)
+        .single()
+
+      if (cp) {
+        const eligibilite = await verifierEligibiliteCredit(
+          ex.client_id,
+          ex.total_ttc_xaf,
+          'devis',
+          (cp as { code: string }).code,
+        )
+        if (!eligibilite.eligible) {
+          return c.json({ error: eligibilite.raison ?? 'Condition de crédit non autorisée', code: 'CREDIT_NON_ELIGIBLE' }, 422)
+        }
+      }
+    }
+
     const { error: updateErr } = await db
       .from('commandes')
-      .update({ statut: body.statut, updated_at: new Date().toISOString() })
+      .update({
+        statut: body.statut,
+        updated_at: new Date().toISOString(),
+        ...(body.condition_paiement_id ? { condition_paiement_id: body.condition_paiement_id } : {}),
+      })
       .eq('id', id)
 
     if (updateErr) return c.json({ error: updateErr.message }, 400)
@@ -1633,8 +1739,9 @@ publicRouter.get('/api/commandes/public/:ref', async (c) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 const statutCommandeWebSchema = z.object({
-  statut_commande: z.enum(['recue', 'confirmee', 'en_preparation', 'expediee', 'livree', 'annulee']),
-  statut_paiement: z.enum(['en_attente', 'paye', 'echec', 'rembourse']).optional(),
+  statut_commande:   z.enum(['recue', 'confirmee', 'en_preparation', 'expediee', 'livree', 'annulee']),
+  statut_paiement:   z.enum(['en_attente', 'paye', 'echec', 'rembourse']).optional(),
+  payment_reference: z.string().max(100).optional(),
 })
 
 router.patch(
@@ -1659,9 +1766,9 @@ router.patch(
     const cmd = commande as {
       id: string; ref: string; statut_commande: string; statut_paiement: string
       lignes: Array<{ designation: string; quantite: number; prix_unitaire: number }>
-      client_nom: string; client_telephone: string
+      client_nom: string; client_telephone: string; mode_paiement: string
       montant_ht: number; tva: number; montant_ttc: number; frais_livraison: number
-      erp_commande_id: string | null
+      erp_commande_id: string | null; payment_reference: string | null
     }
 
     if (body.statut_commande === 'en_preparation' &&
@@ -1681,32 +1788,44 @@ router.patch(
 
     if (body.statut_commande === 'livree' && cmd.statut_commande === 'expediee') {
       if (cmd.erp_commande_id) {
-        const today     = new Date().toISOString().split('T')[0]
-        const echeance  = new Date(Date.now() + 30 * 86400_000).toISOString().split('T')[0]
-        const numeroFact = await genererNumero('factures', 'FAC')
-
-        await db.from('factures').insert({
-          numero:          numeroFact,
-          commande_id:     cmd.erp_commande_id,
-          client_nom:      cmd.client_nom,
-          statut:          'valide',
-          date_emission:   today,
-          date_echeance:   echeance,
-          total_ht_xaf:    Math.round(cmd.montant_ht ?? 0),
-          tva_xaf:         Math.round(cmd.tva ?? 0),
-          frais_livraison_xaf: Math.round(cmd.frais_livraison ?? 0),
-          total_ttc_xaf:   Math.round(cmd.montant_ttc ?? 0),
-          montant_paye_xaf: cmd.statut_paiement === 'paye' ? cmd.montant_ttc : 0,
-          created_by:      user.id,
-        })
+        const dejaPayeXaf = (body.statut_paiement ?? cmd.statut_paiement) === 'paye'
+          ? Math.round(cmd.montant_ttc ?? 0)
+          : 0
+        ensureFactureForCommande({
+          commandeId:       cmd.erp_commande_id,
+          statut:           'valide',
+          montantPayeXaf:   dejaPayeXaf,
+          userId:           user.id,
+        }).catch((e) => console.error('[commerce/livree] ensureFacture:', e))
       }
+    }
+
+    // Quand le paiement est confirmé : enregistrer en Finance + sync ERP
+    if (body.statut_paiement === 'paye' && cmd.statut_paiement !== 'paye' && cmd.erp_commande_id) {
+      const methodeMap: Record<string, 'mobile_money' | 'especes'> = {
+        mtn_momo:     'mobile_money',
+        orange_money: 'mobile_money',
+        livraison:    'especes',
+      }
+      enregistrerPaiementCommande({
+        commandeId:     cmd.erp_commande_id,
+        montantXaf:     Math.round(cmd.montant_ttc ?? 0),
+        methode:        methodeMap[cmd.mode_paiement] ?? 'mobile_money',
+        referenceExt:   body.payment_reference ?? null,
+        datePaiement:   new Date().toISOString().split('T')[0],
+        notes:          `Paiement confirmé commande web ${cmd.ref}`,
+        userId:         user.id,
+        ensureFacture:  true,
+        factureStatutSiCreation: 'envoye',
+      }).catch((e) => console.error('[commerce/paiement] enregistrerPaiement:', e))
     }
 
     const updates: Record<string, string> = {
       statut_commande: body.statut_commande,
       updated_at:      new Date().toISOString(),
     }
-    if (body.statut_paiement) updates.statut_paiement = body.statut_paiement
+    if (body.statut_paiement)   updates.statut_paiement   = body.statut_paiement
+    if (body.payment_reference) updates.payment_reference = body.payment_reference
 
     const { data, error } = await db
       .from('commandes_shop')

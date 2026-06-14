@@ -109,9 +109,18 @@ export function useCommandesShop(params?: CommandesShopParams) {
 // ── Mutation : changer statut commande web (appelle l'API ERP) ─────────────────
 
 interface ChangerStatutPayload {
-  id:               string
-  statut_commande:  StatutCommandeShop
-  statut_paiement?: StatutPaiement
+  id:                string
+  statut_commande:   StatutCommandeShop
+  statut_paiement?:  StatutPaiement
+  payment_reference?: string
+}
+
+const LABELS_STATUT: Record<string, string> = {
+  confirmee:      'Commande confirmée',
+  en_preparation: 'Préparation lancée',
+  expediee:       'Commande expédiée',
+  livree:         'Livraison confirmée',
+  annulee:        'Commande annulée',
 }
 
 export function useStatutCommandeShop() {
@@ -119,11 +128,58 @@ export function useStatutCommandeShop() {
   return useMutation({
     mutationFn: (payload: ChangerStatutPayload) =>
       apiClient.patch<CommandeShop>(`/api/commandes/web/${payload.id}/statut`, {
-        statut_commande:  payload.statut_commande,
-        statut_paiement:  payload.statut_paiement,
+        statut_commande:   payload.statut_commande,
+        statut_paiement:   payload.statut_paiement,
+        payment_reference: payload.payment_reference,
       }),
-    onSuccess: () => {
+    onSuccess: (updated) => {
+      // Mise à jour immédiate du cache — pas d'attente de refetch
+      qc.setQueriesData<{ data: CommandeShop[]; stats: CommandesShopStats }>(
+        { queryKey: ['commandes-shop'] },
+        (old) => {
+          if (!old) return old
+          const newData = old.data.map((c) =>
+            c.id === updated.id ? { ...c, ...updated } : c
+          )
+          return { data: newData, stats: buildStats(newData) }
+        },
+      )
+      // Refetch en arrière-plan pour cohérence (filtres, stats complètes)
       void qc.invalidateQueries({ queryKey: ['commandes-shop'] })
+      const label = LABELS_STATUT[updated.statut_commande] ?? 'Statut mis à jour'
+      toast.success(label)
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+// ── Mutation : annuler une commande web ───────────────────────────────────────
+
+interface AnnulerCommandePayload {
+  id:    string
+  motif: string
+}
+
+export function useAnnulerCommandeShop() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: AnnulerCommandePayload) =>
+      apiClient.patch<CommandeShop>(`/api/shop-erp/commandes/${payload.id}/annuler`, {
+        motif: payload.motif,
+      }),
+    onSuccess: (updated) => {
+      qc.setQueriesData<{ data: CommandeShop[]; stats: CommandesShopStats }>(
+        { queryKey: ['commandes-shop'] },
+        (old) => {
+          if (!old) return old
+          const newData = old.data.map((c) =>
+            c.id === updated.id ? { ...c, ...updated } : c
+          )
+          return { data: newData, stats: buildStats(newData) }
+        },
+      )
+      void qc.invalidateQueries({ queryKey: ['commandes-shop'] })
+      toast.success('Commande annulée')
     },
     onError: (err: Error) => toast.error(err.message),
   })

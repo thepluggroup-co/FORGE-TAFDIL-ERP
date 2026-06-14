@@ -5,7 +5,7 @@ import { TafdilIcon } from '@/components/ui/Logo'
 import {
   LayoutDashboard, Wrench, Package, ShoppingCart, FileText, DollarSign, Users,
   GraduationCap, Kanban, Truck, Megaphone, Shield, Brain, Wifi,
-  Store, LogOut, ChevronLeft, ChevronRight, Settings, Crown, Hammer,
+  Store, LogOut, ChevronLeft, ChevronRight, Settings, Crown, Hammer, Building2,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
@@ -24,6 +24,7 @@ const NAV_ITEMS_BASE: NavItem[] = [
   { path: '/boutique',     label: 'Boutique',     icon: Store,          dynamicBadge: true },
   { path: '/production',   label: 'Production',   icon: Wrench },
   { path: '/stocks',       label: 'Stocks',       icon: Package },
+  { path: '/fournisseurs', label: 'Fournisseurs', icon: Building2 },
   { path: '/commandes',    label: 'Commandes',    icon: ShoppingCart },
   { path: '/devis',        label: 'Devis',        icon: FileText },
   { path: '/clients',      label: 'Clients',      icon: Users },

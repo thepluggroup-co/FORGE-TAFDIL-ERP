@@ -35,14 +35,29 @@ export function useDevisWeb(statut?: StatutDevisWeb) {
 
 // ── Mutation : créer devis ERP depuis demande web ──────────────────────────────
 
+export interface CreerDevisErpPayload {
+  id:                       string
+  montant_ht?:              number
+  date_validite?:           string
+  condition_paiement_code?: string
+  notes_commerciales?:      string
+}
+
 export function useCreerDevisErp() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) =>
-      apiClient.post<{ data: { id: string; numero: string } }>(`/api/shop-erp/devis/${id}/creer-erp`, {}),
-    onSuccess: (res) => {
-      void qc.invalidateQueries({ queryKey: ['devis-web'] })
-      toast.success(`Devis ERP ${res.data.numero} créé`)
+    mutationFn: ({ id, ...payload }: CreerDevisErpPayload) =>
+      apiClient.post<{ data: { id: string; numero: string } }>(`/api/shop-erp/devis/${id}/creer-erp`, payload),
+    onSuccess: (res, variables) => {
+      // Mise à jour synchrone du cache — pas de refetch immédiat pour éviter la race condition
+      qc.setQueryData<DevisWeb[]>(['devis-web', undefined], (old) => {
+        if (!Array.isArray(old)) return old
+        return old.map((d) =>
+          d.id === variables.id
+            ? { ...d, erp_devis_id: res.data.id, statut: 'traitee' as StatutDevisWeb }
+            : d,
+        )
+      })
     },
     onError: (err: Error) => toast.error(err.message),
   })
