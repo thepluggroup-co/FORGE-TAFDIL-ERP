@@ -10,6 +10,7 @@ import { withOfflineFallback } from '../services/offline-fallback'
 import { ensureFactureForCommande } from '../services/finance-core.service'
 import { creerBonApprovisionnementSiNecessaire } from '../services/stock-alerts.service'
 import { sendWhatsApp } from '../services/notifications'
+import { notifyWorkflow } from '../services/workflow-notifications.service'
 import type { HonoVariables } from '../types'
 
 async function notifyDgBonSoumis(numero: string, demandeur: string, motif: string, nbLignes: number) {
@@ -177,6 +178,16 @@ router.post(
         })
 
         void notifyDgBonSoumis(numero, body.demandeur, body.motif, body.lignes.length)
+        await notifyWorkflow({
+          event:   'stock.bon_sortie_a_valider',
+          module:  'stock',
+          severite:'warning',
+          titre:   'Bon de sortie a valider',
+          message: `Bon ${numero} soumis par ${body.demandeur}.`,
+          ref:     numero,
+          url:     '/stocks/bons-sortie',
+          data:    { bon_id: bonId, nb_lignes: body.lignes.length },
+        })
 
         return { ...bon, lignes: lignesData }
       },
@@ -290,7 +301,7 @@ router.put(
       // ── Online : Supabase ──────────────────────────────────────────────────
       async () => {
         const { data: existing } = await db
-          .from('bons_sortie').select('statut, demandeur, numero, created_by').eq('id', id).single()
+          .from('bons_sortie').select('statut, demandeur, numero, created_by, commande_id').eq('id', id).single()
 
         if (!existing) throw Object.assign(new Error('Bon introuvable'), { code: 'NOT_FOUND', httpStatus: 404 })
         if (!['en_attente', 'soumis'].includes((existing as { statut: string }).statut))
@@ -313,6 +324,36 @@ router.put(
           valide_par:  user.email,
           commentaire: body.commentaire ?? null,
         })
+
+        await notifyWorkflow({
+          event:   body.decision === 'valide' ? 'stock.bon_sortie_valide' : 'stock.bon_sortie_refuse',
+          module:  'stock',
+          severite:body.decision === 'valide' ? 'success' : 'warning',
+          titre:   body.decision === 'valide' ? 'Bon de sortie valide' : 'Bon de sortie refuse',
+          message: `Bon ${(existing as { numero: string }).numero} ${body.decision}.`,
+          ref:     (existing as { numero: string }).numero,
+          url:     '/stocks/bons-sortie',
+          data:    { bon_id: id, decision: body.decision },
+        })
+
+        if (body.decision === 'valide' && (existing as { commande_id?: string | null }).commande_id) {
+          await ensureFactureForCommande({
+            commandeId: (existing as { commande_id: string }).commande_id,
+            statut:    'brouillon',
+            userId:    user.id,
+            notes:     'Facture generee automatiquement apres validation du bon de sortie. Validation finance requise.',
+          }).catch((e) => console.error('[bons] ensure facture commande:', e))
+          await notifyWorkflow({
+            event:   'finance.facture_brouillon_a_valider',
+            module:  'finance',
+            severite:'warning',
+            titre:   'Facture a valider',
+            message: `Bon ${(existing as { numero: string }).numero} valide : facture brouillon generee pour Finance.`,
+            ref:     (existing as { numero: string }).numero,
+            url:     '/finance',
+            data:    { bon_id: id, commande_id: (existing as { commande_id: string }).commande_id },
+          })
+        }
 
         return data
       },
@@ -396,6 +437,20 @@ router.put(
       creerBonApprovisionnementSiNecessaire(id, produitIds, user.id)
         .catch(e => console.error('[bons/executer] appro auto:', e))
 
+      await broadcastBon('bon_execute', {
+        bon_id: id,
+        numero: b.numero,
+      })
+      await notifyWorkflow({
+        event:   'stock.bon_sortie_execute',
+        module:  'stock',
+        severite:'success',
+        titre:   'Bon de sortie execute',
+        message: `Bon ${b.numero} execute : le stock a ete mis a jour.`,
+        ref:     b.numero,
+        url:     '/stocks/bons-sortie',
+        data:    { bon_id: id },
+      })
       return c.json(rpcData ?? { success: true, bon_id: id, facture_triggered: !!b.commande_id })
     }
 

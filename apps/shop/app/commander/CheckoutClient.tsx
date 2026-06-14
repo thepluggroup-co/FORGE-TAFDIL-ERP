@@ -19,6 +19,7 @@ import { FRAIS_LIVRAISON } from '@forge/shared'
 type Step = 1 | 2 | 3 | 4
 type Ville = 'Douala' | 'Yaounde' | 'Bafoussam' | 'Autres'
 type ModePaiement = 'mtn' | 'orange' | 'livraison'
+type AdvancePct = 30 | 50 | 70
 type SmsStatus = {
   ok: boolean
   message: string
@@ -96,6 +97,12 @@ function fmt(n: number) {
 function grandTotal(totals: CartTotals, ville: Ville) {
   const frais = FRAIS[ville]
   return totals.ttc + (frais ?? 0)
+}
+
+function detectCanalMobileMoney(phone: string): 'cm.mtn' | 'cm.orange' {
+  const normalized = phone.replace(/\D/g, '')
+  const local = normalized.endsWith(normalized.slice(-9)) ? normalized.slice(-9) : normalized
+  return /^69[2-9]/.test(local) ? 'cm.orange' : 'cm.mtn'
 }
 
 // ── Stepper ────────────────────────────────────────────────────────────────────
@@ -507,7 +514,8 @@ function PaymentCard({
 
 function StepPaiement({
   coordonnees, modePaiement, numeroPaiement, setModePaiement,
-  setNumeroPaiement, onConfirm, onBack, totals, loading,
+  setNumeroPaiement, avanceLivraisonPct, setAvanceLivraisonPct,
+  onConfirm, onBack, totals, loading,
   conditionCode, setConditionCode, conditionOptions,
 }: {
   coordonnees: Coordonnees
@@ -515,6 +523,8 @@ function StepPaiement({
   numeroPaiement: string
   setModePaiement: (m: ModePaiement) => void
   setNumeroPaiement: (n: string) => void
+  avanceLivraisonPct: AdvancePct | null
+  setAvanceLivraisonPct: (pct: AdvancePct) => void
   onConfirm: () => void
   onBack: () => void
   totals: CartTotals
@@ -526,6 +536,7 @@ function StepPaiement({
   const frais = FRAIS[coordonnees.ville]
   const total = grandTotal(totals, coordonnees.ville)
   const isDouala = coordonnees.ville === 'Douala'
+  const avanceLivraison = avanceLivraisonPct ? Math.round(total * avanceLivraisonPct / 100) : 0
 
   const selectedCondition = conditionOptions.find(c => c.code === conditionCode)
   const acompte = selectedCondition && selectedCondition.acompte_pct < 100
@@ -534,7 +545,8 @@ function StepPaiement({
 
   const canPay =
     modePaiement !== null &&
-    (modePaiement === 'livraison' || numeroPaiement.replace(/\D/g, '').length >= 9)
+    numeroPaiement.replace(/\D/g, '').length >= 9 &&
+    (modePaiement !== 'livraison' || avanceLivraisonPct !== null)
 
   const showConditions = conditionOptions.length > 1
 
@@ -630,11 +642,45 @@ function StepPaiement({
           label="Paiement à la livraison"
           description={
             isDouala
-              ? 'Payez en espèces lors de la réception de votre commande'
+              ? 'Réservez avec une avance Mobile Money, solde à la livraison'
               : 'Disponible uniquement pour les livraisons à Douala'
           }
           disabled={!isDouala}
-        />
+        >
+          {modePaiement === 'livraison' && (
+            <div className="mt-3 space-y-3">
+              <div className="grid grid-cols-3 gap-2">
+                {([30, 50, 70] as AdvancePct[]).map((pct) => (
+                  <button
+                    key={pct}
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setAvanceLivraisonPct(pct) }}
+                    className={`rounded-xl border px-3 py-2 text-xs font-black transition ${
+                      avanceLivraisonPct === pct
+                        ? 'border-forge-red bg-forge-red text-white'
+                        : 'border-gray-200 bg-white text-forge-steel hover:border-forge-red hover:text-forge-red'
+                    }`}
+                  >
+                    {pct}%
+                  </button>
+                ))}
+              </div>
+              <input
+                type="tel"
+                value={numeroPaiement}
+                onChange={e => setNumeroPaiement(e.target.value)}
+                placeholder="Numero Mobile Money pour l'avance"
+                className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-forge-red focus:ring-2 focus:ring-forge-red/10"
+              />
+              <div className="rounded-xl bg-white px-3 py-2 text-xs text-forge-steel ring-1 ring-gray-100">
+                Avance à payer : <span className="font-black text-forge-dark">{fmt(avanceLivraison)}</span>
+                {avanceLivraisonPct && (
+                  <span> · Solde livraison : {fmt(total - avanceLivraison)}</span>
+                )}
+              </div>
+            </div>
+          )}
+        </PaymentCard>
       </div>
 
       {/* Récapitulatif final */}
@@ -668,7 +714,9 @@ function StepPaiement({
         >
           {loading
             ? <><Loader2 size={15} className="animate-spin" /> Traitement en cours…</>
-            : `Confirmer et Payer ${fmt(total)}`
+            : modePaiement === 'livraison'
+              ? `Confirmer et payer l'avance ${fmt(avanceLivraison)}`
+              : `Confirmer et Payer ${fmt(total)}`
           }
         </button>
 
@@ -894,6 +942,7 @@ export function CheckoutClient() {
   const [coordonnees, setCoordonnees] = useState<Coordonnees>(DEFAULT_COORDONNEES)
   const [modePaiement, setModePaiement] = useState<ModePaiement | null>(null)
   const [numeroPaiement, setNumeroPaiement] = useState('')
+  const [avanceLivraisonPct, setAvanceLivraisonPct] = useState<AdvancePct | null>(null)
   const [commandeRef, setCommandeRef] = useState('')
   const [smsStatus, setSmsStatus] = useState<SmsStatus | null>(null)
   const [loading, setLoading] = useState(false)
@@ -925,6 +974,9 @@ export function CheckoutClient() {
     setLoading(true)
     const frais = FRAIS[coordonnees.ville]
     const total = grandTotal(totals, coordonnees.ville)
+    const montantPaiement = modePaiement === 'livraison' && avanceLivraisonPct
+      ? Math.round(total * avanceLivraisonPct / 100)
+      : total
 
     // Mapper mode paiement vers valeurs API
     const modeApi =
@@ -956,6 +1008,7 @@ export function CheckoutClient() {
           frais_livraison:         frais ?? 0,
           mode_paiement:           modeApi,
           condition_paiement_code: conditionCode,
+          avance_livraison_pct: modePaiement === 'livraison' ? avanceLivraisonPct : undefined,
           lignes: items.map(i => ({
             product_id:    i.id,
             designation:   i.nom,
@@ -981,24 +1034,17 @@ export function CheckoutClient() {
       const ref = orderJson.ref
       setSmsStatus(orderJson.sms ?? null)
 
-      // ── 2. Paiement à la livraison → confirmation directe ────────────────────
-      if (modePaiement === 'livraison') {
-        setConfirmedTotals(totals)
-        clearCart()
-        setCommandeRef(ref)
-        goTo(4)
-        return
-      }
-
-      // ── 3. Mobile Money → initialiser le paiement Notchpay ──────────────────
+      // ── 2. Mobile Money → initialiser le paiement Notchpay ──────────────────
       const payRes = await fetch(`/api/paiements/initier`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           commande_ref: ref,
-          montant:      total,
+          montant:      montantPaiement,
           telephone:    `237${numeroPaiement.replace(/\D/g, '')}`,
-          canal:        modePaiement === 'mtn' ? 'cm.mtn' : 'cm.orange',
+          canal:        modePaiement === 'livraison'
+            ? detectCanalMobileMoney(numeroPaiement)
+            : modePaiement === 'mtn' ? 'cm.mtn' : 'cm.orange',
           email:        coordonnees.email || 'client@forge.cm',
         }),
       })
@@ -1022,6 +1068,8 @@ export function CheckoutClient() {
         canal:               modePaiement,
         client_nom:          coordonnees.nom,
         montant_total:       total,
+        montant_a_payer:     montantPaiement,
+        avance_livraison_pct: modePaiement === 'livraison' ? avanceLivraisonPct : undefined,
         adresse:             `${coordonnees.adresse}, ${coordonnees.ville}`,
         mode_paiement_label: MODE_LABEL[modePaiement!],
       }))
@@ -1073,8 +1121,10 @@ export function CheckoutClient() {
               coordonnees={coordonnees}
               modePaiement={modePaiement}
               numeroPaiement={numeroPaiement}
-              setModePaiement={m => { setModePaiement(m); setNumeroPaiement('') }}
+              setModePaiement={m => { setModePaiement(m); setNumeroPaiement(''); if (m !== 'livraison') setAvanceLivraisonPct(null) }}
               setNumeroPaiement={setNumeroPaiement}
+              avanceLivraisonPct={avanceLivraisonPct}
+              setAvanceLivraisonPct={setAvanceLivraisonPct}
               onConfirm={handleConfirm}
               onBack={() => goTo(2)}
               totals={totals}

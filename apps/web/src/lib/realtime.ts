@@ -1,5 +1,22 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { supabase } from './supabase'
+import { toast } from 'sonner'
+
+type WorkflowNotification = {
+  titre?: string
+  message?: string
+  module?: 'boutique' | 'commandes' | 'stock' | 'finance' | 'logistique' | 'production'
+  severite?: 'info' | 'success' | 'warning' | 'error'
+}
+
+const WORKFLOW_KEYS: Record<string, string[][]> = {
+  boutique:   [['commandes-shop'], ['shop-erp'], ['dashboard', 'kpis']],
+  commandes:  [['commandes'], ['dashboard', 'kpis']],
+  stock:      [['bons'], ['stocks'], ['dashboard', 'kpis']],
+  finance:    [['factures'], ['finance', 'dashboard'], ['dashboard', 'kpis']],
+  logistique: [['livraisons'], ['logistique', 'commandes-pretes'], ['commandes'], ['commandes-shop']],
+  production: [['jobs'], ['equipements'], ['equipements', 'dashboard'], ['commandes'], ['dashboard', 'kpis']],
+}
 
 export function setupRealtime(queryClient: QueryClient): () => void {
   const inv = (...keys: string[][]) => {
@@ -23,6 +40,9 @@ export function setupRealtime(queryClient: QueryClient): () => void {
     })
     .on('broadcast', { event: 'bon-created' }, () => { inv(['bons']) })
     .on('broadcast', { event: 'bon-validated' }, () => { inv(['bons']) })
+    .on('broadcast', { event: 'nouveau_bon' }, () => { inv(['bons'], ['dashboard', 'kpis']) })
+    .on('broadcast', { event: 'nouveau_bon_commande' }, () => { inv(['bons'], ['dashboard', 'kpis']) })
+    .on('broadcast', { event: 'nouveau_bon_commande_shop' }, () => { inv(['bons'], ['dashboard', 'kpis']) })
     .subscribe()
 
   const stock = supabase
@@ -134,6 +154,28 @@ export function setupRealtime(queryClient: QueryClient): () => void {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'incidents_securite' }, () => {
       inv(['incidents'])
     })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'equipements' }, () => {
+      inv(['equipements'], ['equipements', 'dashboard'])
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'maintenances_equipement' }, () => {
+      inv(['equipements'], ['equipements', 'dashboard'])
+    })
+    .subscribe()
+
+  const workflow = supabase
+    .channel('forge-workflow')
+    .on('broadcast', { event: 'workflow_notification' }, ({ payload }) => {
+      const n = payload as WorkflowNotification
+      const moduleKeys = n.module ? WORKFLOW_KEYS[n.module] ?? [] : []
+      inv(...moduleKeys)
+
+      const title = n.titre ?? 'Notification workflow'
+      const description = n.message
+      if (n.severite === 'success') toast.success(title, { description })
+      else if (n.severite === 'warning') toast.warning(title, { description })
+      else if (n.severite === 'error') toast.error(title, { description })
+      else toast.info(title, { description })
+    })
     .subscribe()
 
   return () => {
@@ -148,5 +190,6 @@ export function setupRealtime(queryClient: QueryClient): () => void {
     void supabase.removeChannel(rh)
     void supabase.removeChannel(formation)
     void supabase.removeChannel(operations)
+    void supabase.removeChannel(workflow)
   }
 }

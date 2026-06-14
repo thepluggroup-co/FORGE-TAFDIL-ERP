@@ -7,7 +7,8 @@ import { supabaseAdmin } from '@forge/db'
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import { notifyCommandeSms } from '../services/sms.service'
-import { ensureFactureForCommande } from '../services/finance-core.service'
+import { enregistrerPaiementCommande, ensureFactureForCommande, getFactureActiveByCommande } from '../services/finance-core.service'
+import { notifyWorkflow } from '../services/workflow-notifications.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
@@ -518,7 +519,19 @@ router.patch(
         await finaliserProductionStock({ ...ex, ...data }, c.get('user')?.id, body.quantite_produite)
         if (ex.commande_id) {
           const factureCreee = await ensureFactureCommande(ex.commande_id, c.get('user')?.id)
-          if (factureCreee) await notifyCommandeEvent(ex.commande_id, 'facture_emise')
+          if (factureCreee) {
+            await notifyCommandeEvent(ex.commande_id, 'facture_emise')
+            await notifyWorkflow({
+              event:   'finance.facture_production_generee',
+              module:  'finance',
+              severite:'warning',
+              titre:   'Facture production generee',
+              message: `Job ${ex.numero} termine : facture a controler dans Finance.`,
+              ref:     ex.numero,
+              url:     '/finance',
+              data:    { job_id: id, commande_id: ex.commande_id },
+            })
+          }
         }
       } catch (err) {
         const e = err as Error & { httpStatus?: number; code?: string }
@@ -562,8 +575,32 @@ router.patch(
               nouveau_statut: cStatut,
               commentaire:    `[Auto] Job ${ex.numero} passé à "${body.statut}"`,
             })
-            if (cStatut === 'in_production') await notifyCommandeEvent(ex.commande_id, 'commande_en_production')
-            if (cStatut === 'pret') await notifyCommandeEvent(ex.commande_id, 'commande_prete')
+            if (cStatut === 'in_production') {
+              await notifyCommandeEvent(ex.commande_id, 'commande_en_production')
+              await notifyWorkflow({
+                event:   'production.commande_en_production',
+                module:  'production',
+                severite:'info',
+                titre:   'Commande en production',
+                message: `Job ${ex.numero} demarre : la commande est en production.`,
+                ref:     ex.numero,
+                url:     '/production',
+                data:    { job_id: id, commande_id: ex.commande_id },
+              })
+            }
+            if (cStatut === 'pret') {
+              await notifyCommandeEvent(ex.commande_id, 'commande_prete')
+              await notifyWorkflow({
+                event:   'commandes.commande_prete_livraison',
+                module:  'commandes',
+                severite:'success',
+                titre:   'Commande prete',
+                message: `Job ${ex.numero} termine : la commande peut passer en livraison apres controle facture/bon.`,
+                ref:     ex.numero,
+                url:     '/commandes',
+                data:    { job_id: id, commande_id: ex.commande_id },
+              })
+            }
             if (cStatut === 'delivered') await notifyCommandeEvent(ex.commande_id, 'commande_livree')
           }
         }
@@ -640,7 +677,29 @@ router.patch(
         })
         const factureCreee = await ensureFactureCommande(ex.commande_id, c.get('user')?.id)
         await notifyCommandeEvent(ex.commande_id, 'commande_prete')
-        if (factureCreee) await notifyCommandeEvent(ex.commande_id, 'facture_emise')
+        await notifyWorkflow({
+          event:   'commandes.commande_prete_livraison',
+          module:  'commandes',
+          severite:'success',
+          titre:   'Commande prete',
+          message: `Job ${ex.numero} a 100% : la commande peut passer en livraison apres controle facture/bon.`,
+          ref:     ex.numero,
+          url:     '/commandes',
+          data:    { job_id: id, commande_id: ex.commande_id },
+        })
+        if (factureCreee) {
+          await notifyCommandeEvent(ex.commande_id, 'facture_emise')
+          await notifyWorkflow({
+            event:   'finance.facture_production_generee',
+            module:  'finance',
+            severite:'warning',
+            titre:   'Facture production generee',
+            message: `Job ${ex.numero} pret : facture a controler dans Finance.`,
+            ref:     ex.numero,
+            url:     '/finance',
+            data:    { job_id: id, commande_id: ex.commande_id },
+          })
+        }
       }
     }
 
@@ -1083,7 +1142,65 @@ const livraisonStatutSchema = z.object({
   statut:                z.enum(['planifiee', 'en_transit', 'livree', 'annulee']),
   date_livraison_reelle: z.string().optional(),
   notes:                 z.string().optional(),
+  paiement_livraison:    z.object({
+    montant_xaf:    z.number().min(0),
+    methode:        z.enum(['mobile_money', 'especes']),
+    reference_ext:  z.string().optional(),
+  }).optional(),
 })
+
+async function verifierCommandeLivrable(commandeId: string) {
+  const [bonRes, facture] = await Promise.all([
+    db.from('bons_sortie')
+      .select('id, numero, statut')
+      .eq('commande_id', commandeId)
+      .eq('statut', 'execute')
+      .limit(1)
+      .maybeSingle(),
+    getFactureActiveByCommande(commandeId),
+  ])
+
+  if (bonRes.error) throw new Error(bonRes.error.message)
+  if (!bonRes.data) {
+    return {
+      ok: false,
+      code: 'BON_SORTIE_NOT_EXECUTED',
+      error: 'Le bon de sortie doit etre execute avant la livraison.',
+    }
+  }
+
+  const f = facture as {
+    id?: string
+    numero?: string
+    statut?: string
+    total_ttc_xaf?: number
+    montant_paye_xaf?: number
+  } | null
+
+  if (!f) {
+    return {
+      ok: false,
+      code: 'FACTURE_MISSING',
+      error: 'La facture doit etre generee par Finance avant la livraison.',
+    }
+  }
+
+  if (!['valide', 'envoye', 'paye'].includes(String(f.statut))) {
+    return {
+      ok: false,
+      code: 'FACTURE_NOT_READY',
+      error: `La facture ${f.numero ?? ''} doit etre validee/envoyee avant la livraison.`,
+    }
+  }
+
+  const total = Number(f.total_ttc_xaf ?? 0)
+  const paye = Number(f.montant_paye_xaf ?? 0)
+  return {
+    ok: true,
+    facture: f,
+    solde_restant_xaf: Math.max(0, Math.round(total - paye)),
+  }
+}
 
 async function insertHistoriqueLivraison(params: {
   livraisonId: string
@@ -1140,10 +1257,26 @@ router.get('/logistique/livraisons', async (c) => {
     }
   }
 
-  const enrichedData = livraisons.map((livraison) => ({
-    ...livraison,
-    livraisons_historique: historiqueParLivraison.get(livraison.id) ?? [],
-  }))
+  const enrichedData = []
+  for (const livraison of livraisons) {
+    let soldeRestant = 0
+    let factureStatut: string | null = null
+    if (livraison.commande_id) {
+      const facture = await getFactureActiveByCommande(livraison.commande_id).catch(() => null) as {
+        statut?: string
+        total_ttc_xaf?: number
+        montant_paye_xaf?: number
+      } | null
+      factureStatut = facture?.statut ?? null
+      soldeRestant = Math.max(0, Math.round(Number(facture?.total_ttc_xaf ?? 0) - Number(facture?.montant_paye_xaf ?? 0)))
+    }
+    enrichedData.push({
+      ...livraison,
+      facture_statut: factureStatut,
+      solde_restant_xaf: soldeRestant,
+      livraisons_historique: historiqueParLivraison.get(livraison.id) ?? [],
+    })
+  }
 
   return c.json({ data: enrichedData, total: count ?? 0, page, per_page: perPage })
 })
@@ -1170,7 +1303,18 @@ router.get('/logistique/commandes-pretes', async (c) => {
 
   const { data, error } = await q.order('date_livraison_prevue', { ascending: true, nullsFirst: false })
   if (error) return c.json({ error: error.message }, 500)
-  return c.json({ data: data ?? [], total: data?.length ?? 0 })
+
+  const eligible = []
+  for (const commande of data ?? []) {
+    const check = await verifierCommandeLivrable(commande.id)
+    if (check.ok) eligible.push({
+      ...commande,
+      facture_statut: (check.facture as { statut?: string } | undefined)?.statut ?? null,
+      solde_restant_xaf: check.solde_restant_xaf ?? 0,
+    })
+  }
+
+  return c.json({ data: eligible, total: eligible.length })
 })
 
 router.post('/logistique/livraisons', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', livraisonSchema), async (c) => {
@@ -1193,6 +1337,14 @@ router.post('/logistique/livraisons', requireRole(['admin', 'superviseur', 'oper
       return c.json({
         error: `La commande ${cmd.numero} n'est pas prête à livrer`,
         code: 'COMMANDE_NOT_READY',
+      }, 422)
+    }
+
+    const readiness = await verifierCommandeLivrable(body.commande_id)
+    if (!readiness.ok) {
+      return c.json({
+        error: readiness.error,
+        code:  readiness.code,
       }, 422)
     }
 
@@ -1248,6 +1400,18 @@ router.post('/logistique/livraisons', requireRole(['admin', 'superviseur', 'oper
     commentaire: body.commande_id ? 'Livraison planifiée depuis une commande prête' : 'Livraison planifiée',
     userId: user.id,
   })
+  await notifyWorkflow({
+    event:   'logistique.livraison_planifiee',
+    module:  'logistique',
+    severite:'info',
+    titre:   'Livraison planifiee',
+    message: body.commande_id
+      ? `Livraison ${numero} planifiee pour la commande liee.`
+      : `Livraison ${numero} planifiee.`,
+    ref:     numero,
+    url:     '/logistique',
+    data:    { livraison_id: (data as { id: string }).id, commande_id: body.commande_id ?? null },
+  })
   return c.json(data, 201)
 })
 
@@ -1275,6 +1439,48 @@ router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'supervi
     }, 422)
   }
 
+  if (ex.commande_id && ['en_transit', 'livree'].includes(body.statut)) {
+    const readiness = await verifierCommandeLivrable(ex.commande_id)
+    if (!readiness.ok) {
+      return c.json({
+        error: readiness.error,
+        code:  readiness.code,
+      }, 422)
+    }
+
+    if (body.statut === 'livree') {
+      const solde = Number(readiness.solde_restant_xaf ?? 0)
+      const montantLivreur = Number(body.paiement_livraison?.montant_xaf ?? 0)
+      if (solde > 0 && !body.paiement_livraison) {
+        return c.json({
+          error: `Paiement livraison requis : solde restant ${Math.round(solde).toLocaleString('fr-CM')} XAF`,
+          code:  'DELIVERY_PAYMENT_REQUIRED',
+          solde_restant_xaf: Math.round(solde),
+        }, 422)
+      }
+      if (solde > 0 && Math.abs(montantLivreur - solde) > 1) {
+        return c.json({
+          error: `Montant encaisse incorrect. Solde attendu : ${Math.round(solde).toLocaleString('fr-CM')} XAF`,
+          code:  'INVALID_DELIVERY_PAYMENT_AMOUNT',
+          solde_restant_xaf: Math.round(solde),
+        }, 422)
+      }
+      if (body.paiement_livraison && body.paiement_livraison.montant_xaf > 0) {
+        await enregistrerPaiementCommande({
+          commandeId:              ex.commande_id,
+          montantXaf:              body.paiement_livraison.montant_xaf,
+          methode:                 body.paiement_livraison.methode,
+          referenceExt:            body.paiement_livraison.reference_ext ?? null,
+          datePaiement:            body.date_livraison_reelle ?? new Date().toISOString().slice(0, 10),
+          notes:                   `Paiement encaisse a la livraison ${id}`,
+          userId:                  user.id,
+          ensureFacture:           true,
+          factureStatutSiCreation: 'envoye',
+        })
+      }
+    }
+  }
+
   const updates: Record<string, unknown> = {
     statut:     body.statut,
     updated_at: new Date().toISOString(),
@@ -1299,6 +1505,22 @@ router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'supervi
     userId: user.id,
   })
 
+  if (body.statut === 'en_transit' && ex.commande_id) {
+    await db.from('commandes_shop')
+      .update({ statut_commande: 'expediee', updated_at: new Date().toISOString() })
+      .eq('erp_commande_id', ex.commande_id)
+    await notifyWorkflow({
+      event:   'logistique.livraison_en_transit',
+      module:  'logistique',
+      severite:'info',
+      titre:   'Livraison en transit',
+      message: 'Le livreur a demarre la livraison.',
+      ref:     id,
+      url:     '/logistique',
+      data:    { livraison_id: id, commande_id: ex.commande_id },
+    })
+  }
+
   if (body.statut === 'livree' && ex.commande_id) {
     const { data: commande } = await db
       .from('commandes').select('statut').eq('id', ex.commande_id).single()
@@ -1315,6 +1537,31 @@ router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'supervi
       })
       await notifyCommandeEvent(ex.commande_id, 'commande_livree')
     }
+
+    await db.from('commandes_shop')
+      .update({
+        statut_commande:  'livree',
+        statut_paiement:  'paye',
+        updated_at:       new Date().toISOString(),
+      })
+      .eq('erp_commande_id', ex.commande_id)
+
+    await notifyWorkflow({
+      event:   'logistique.livraison_terminee',
+      module:  'logistique',
+      severite:'success',
+      titre:   'Livraison terminee',
+      message: body.paiement_livraison && body.paiement_livraison.montant_xaf > 0
+        ? `Livraison confirmee avec encaissement de ${Math.round(body.paiement_livraison.montant_xaf).toLocaleString('fr-CM')} XAF.`
+        : 'Livraison confirmee.',
+      ref:     id,
+      url:     '/logistique',
+      data:    {
+        livraison_id: id,
+        commande_id: ex.commande_id,
+        paiement_livraison: body.paiement_livraison ?? null,
+      },
+    })
   }
 
   return c.json(data)

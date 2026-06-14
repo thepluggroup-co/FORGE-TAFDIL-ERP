@@ -16,6 +16,7 @@ import {
 } from '../services/comptabilite.service'
 import { getFacturesLocal, getCreditsLocal, localCreateFacture, localCreateCredit, localRembourser } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
+import { notifyWorkflow } from '../services/workflow-notifications.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
@@ -924,13 +925,21 @@ router.patch(
 
     const { data: existing } = await db
       .from('factures')
-      .select('statut, total_ttc_xaf, montant_paye_xaf, client_id')
+      .select('statut, total_ttc_xaf, montant_paye_xaf, client_id, numero, client_nom, commande_id')
       .eq('id', id)
       .single()
 
     if (!existing) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
 
-    const ex = existing as { statut: string; total_ttc_xaf: number; montant_paye_xaf: number; client_id: string | null }
+    const ex = existing as {
+      statut: string
+      total_ttc_xaf: number
+      montant_paye_xaf: number
+      client_id: string | null
+      numero?: string | null
+      client_nom?: string | null
+      commande_id?: string | null
+    }
 
     // Bloquer toute transition sur une facture annulée
     if (ex.statut === 'annule') {
@@ -958,6 +967,16 @@ router.patch(
       .single()
 
     if (error) return c.json({ error: error.message }, 400)
+    await notifyWorkflow({
+      event:   body.statut === 'paye' ? 'finance.facture_payee' : `finance.facture_${body.statut}`,
+      module:  'finance',
+      severite:body.statut === 'annule' ? 'warning' : body.statut === 'paye' ? 'success' : 'info',
+      titre:   `Facture ${body.statut}`,
+      message: `Facture ${ex.numero ?? ''} ${body.statut}${ex.client_nom ? ` - ${ex.client_nom}` : ''}.`,
+      ref:     ex.numero ?? id,
+      url:     '/finance',
+      data:    { facture_id: id, commande_id: ex.commande_id ?? null, statut: body.statut },
+    })
     return c.json(enrichirFacture(data))
   }
 )
@@ -1019,6 +1038,17 @@ router.post(
       .single()
 
     if (error) return c.json({ error: error.message }, 400)
+
+    await notifyWorkflow({
+      event:   nouveauSolde <= 0 ? 'finance.facture_soldee' : 'finance.paiement_facture_recu',
+      module:  'finance',
+      severite:'success',
+      titre:   nouveauSolde <= 0 ? 'Facture soldee' : 'Paiement facture recu',
+      message: `Paiement de ${xaf(body.montant_xaf)} enregistre sur ${f.numero}.`,
+      ref:     f.numero,
+      url:     '/finance',
+      data:    { facture_id: id, montant_xaf: body.montant_xaf, solde_restant_xaf: nouveauSolde },
+    })
 
     // Écriture comptable Dr 521/571 Banque/Caisse / Cr 411 Clients
     genererEcritureEncaissement({

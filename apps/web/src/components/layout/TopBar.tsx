@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext'
 import { OfflineBanner } from '@forge/ui'
 import { useAiAlertes } from '@/hooks/useAI'
 import { useStockAlertes } from '@/hooks/useStocks'
+import { useBonsEnAttente } from '@/hooks/useBons'
 import type { AlerteIA } from '@/hooks/useAI'
 
 const ROUTE_LABELS: Record<string, string> = {
@@ -36,9 +37,17 @@ const SEVERITE_STYLES = {
 function NotificationsPanel({ onClose }: { onClose: () => void }) {
   const { data: aiAlertesData, isLoading: aiLoading } = useAiAlertes()
   const { data: stockData,     isLoading: stockLoading } = useStockAlertes()
+  const { data: bonsEnAttente = 0, isLoading: bonsLoading } = useBonsEnAttente()
 
   // Build unified notification list
   const items: NotifItem[] = [
+    ...(bonsEnAttente > 0 ? [{
+      id:          'bons-sortie-attente',
+      titre:       `${bonsEnAttente} bon${bonsEnAttente > 1 ? 's' : ''} de sortie à préparer`,
+      description: 'Commande shop reçue : vérifier les articles et exécuter la sortie stock.',
+      severite:    'alerte' as const,
+      ts:          new Date().toLocaleString('fr-CM'),
+    }] : []),
     // AI alerts
     ...(aiAlertesData?.alertes ?? []).map((a: AlerteIA): NotifItem => ({
       id:          a.id,
@@ -60,7 +69,7 @@ function NotificationsPanel({ onClose }: { onClose: () => void }) {
       })),
   ]
 
-  const isLoading = aiLoading || stockLoading
+  const isLoading = aiLoading || stockLoading || bonsLoading
 
   return (
     <div
@@ -117,11 +126,11 @@ function NotificationsPanel({ onClose }: { onClose: () => void }) {
       {/* Footer */}
       <div className="px-4 py-2.5 border-t border-gray-100">
         <Link
-          to="/intelligence"
+          to={bonsEnAttente > 0 ? '/stocks/bons-sortie' : '/intelligence'}
           onClick={onClose}
           className="text-xs font-medium text-[#C62828] hover:underline"
         >
-          Voir toutes les alertes →
+          {bonsEnAttente > 0 ? 'Ouvrir les bons de sortie →' : 'Voir toutes les alertes →'}
         </Link>
       </div>
     </div>
@@ -198,12 +207,13 @@ export function TopBar({ onMobileMenuToggle, sidebarCollapsed, onSidebarToggle }
   // Fetch alert counts for badge
   const { data: aiAlertesData }  = useAiAlertes()
   const { data: stockAlertData } = useStockAlertes()
+  const { data: bonsEnAttente = 0 } = useBonsEnAttente()
 
   const aiCount    = aiAlertesData?.alertes?.length ?? 0
   const stockCount = (stockAlertData?.data ?? []).filter(
     (p) => p.statut === 'critique' || p.statut === 'rupture'
   ).length
-  const totalNotifications = aiCount + stockCount
+  const totalNotifications = aiCount + stockCount + bonsEnAttente
 
   React.useEffect(() => {
     const onOnline  = () => setIsOnline(true)

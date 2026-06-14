@@ -374,6 +374,8 @@ export interface CommandePreteLivraison {
   client_nom: string
   date_livraison_prevue: string | null
   total_ttc_xaf: number
+  solde_restant_xaf?: number
+  facture_statut?: string | null
   statut: 'pret'
 }
 
@@ -432,16 +434,23 @@ export function useCreateLivraison() {
 export function useUpdateLivraisonStatut() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, statut, date_livraison_reelle, notes }: {
+    mutationFn: ({ id, statut, date_livraison_reelle, notes, paiement_livraison }: {
       id: string
       statut: Livraison['statut']
       date_livraison_reelle?: string
       notes?: string
-    }) => apiClient.patch<Livraison>(`/api/logistique/livraisons/${id}/statut`, { statut, date_livraison_reelle, notes }),
+      paiement_livraison?: {
+        montant_xaf: number
+        methode: 'mobile_money' | 'especes'
+        reference_ext?: string
+      }
+    }) => apiClient.patch<Livraison>(`/api/logistique/livraisons/${id}/statut`, { statut, date_livraison_reelle, notes, paiement_livraison }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['livraisons'] })
       void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
       void qc.invalidateQueries({ queryKey: ['commandes'] })
+      void qc.invalidateQueries({ queryKey: ['commandes-shop'] })
+      void qc.invalidateQueries({ queryKey: ['factures'] })
     },
     onError: (err: Error) => toast.error(err.message),
   })

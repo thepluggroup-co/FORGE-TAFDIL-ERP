@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { createHmac } from 'crypto'
 import { supabaseAdmin } from '@forge/db'
 import { enregistrerPaiementCommande } from '../services/finance-core.service'
+import { notifyWorkflow } from '../services/workflow-notifications.service'
 
 const db = supabaseAdmin!
 
@@ -94,7 +95,7 @@ export const paiementsRouter = new Hono()
 // ══════════════════════════════════════════════════════════════════════════════
 
 paiementsRouter.post('/initier', async (c) => {
-  const { commande_ref, telephone, canal, email } = await c.req.json<{
+  const { commande_ref, montant, telephone, canal, email } = await c.req.json<{
     commande_ref: string
     montant?:     number
     telephone?:   string
@@ -120,7 +121,7 @@ paiementsRouter.post('/initier', async (c) => {
   // Vérifier que la commande existe et est en attente de paiement
   const { data: commande, error: errCommande } = await db
     .from('commandes_shop')
-    .select('id, ref, montant_ttc, statut_paiement, client_nom, client_email, client_telephone')
+    .select('id, ref, montant_ttc, statut_paiement, mode_paiement, client_nom, client_email, client_telephone')
     .eq('ref', commande_ref)
     .single()
 
@@ -131,14 +132,30 @@ paiementsRouter.post('/initier', async (c) => {
     return c.json({ error: 'Cette commande est déjà payée' }, 409)
   }
 
+  const totalCommande = Math.round(Number(commande.montant_ttc))
+  const montantDemande = Math.round(Number(montant ?? totalCommande))
+  const avancesLivraison = [30, 50, 70].map((pct) => Math.round(totalCommande * pct / 100))
+  const montantPaiement = commande.mode_paiement === 'livraison'
+    ? montantDemande
+    : totalCommande
+
+  if (commande.mode_paiement === 'livraison' && !avancesLivraison.some((m) => Math.abs(m - montantPaiement) <= 1)) {
+    return c.json({
+      error: 'Le paiement à la livraison exige une avance de 30%, 50% ou 70%',
+      code: 'INVALID_DELIVERY_ADVANCE',
+    }, 422)
+  }
+
   // Appel Notchpay
   const siteUrl = process.env.SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? 'https://shop.tafdil.cm'
   const payload: Record<string, unknown> = {
-    amount:      Math.round(Number(commande.montant_ttc)),
+    amount:      montantPaiement,
     currency:    'XAF',
     email:       email ?? commande.client_email ?? 'client@forge.cm',
     reference:   commande_ref,
-    description: `Commande FORGE Shop ${commande_ref}`,
+    description: commande.mode_paiement === 'livraison'
+      ? `Avance commande FORGE Shop ${commande_ref}`
+      : `Commande FORGE Shop ${commande_ref}`,
     callback:    `${siteUrl}/paiement-en-cours?commande_ref=${commande_ref}`,
     channel:     canal,
     channels:    [canal],
@@ -338,7 +355,7 @@ paiementsRouter.post('/webhook', async (c) => {
     // Récupérer la commande
     const { data: commande, error: errFetch } = await db
       .from('commandes_shop')
-      .select('id, ref, montant_ttc, client_nom, client_telephone, client_adresse, lignes, erp_commande_id')
+      .select('id, ref, montant_ttc, mode_paiement, client_nom, client_telephone, client_adresse, lignes, erp_commande_id')
       .eq('payment_reference', reference)
       .single()
 
@@ -347,8 +364,14 @@ paiementsRouter.post('/webhook', async (c) => {
       return c.json({ received: true }) // 200 pour éviter les retries Notchpay
     }
 
-    // Anti-fraude : vérifier le montant (tolérance 1 XAF pour arrondis)
-    if (Math.abs(amount - Number(commande.montant_ttc)) > 1) {
+    const totalCommande = Number(commande.montant_ttc)
+    const avancesLivraison = [30, 50, 70].map((pct) => Math.round(totalCommande * pct / 100))
+    const isAcompteLivraison = commande.mode_paiement === 'livraison' &&
+      avancesLivraison.some((m) => Math.abs(m - amount) <= 1)
+    const isPaiementTotal = Math.abs(amount - totalCommande) <= 1
+
+    // Anti-fraude : paiement total ou avance livraison autorisee uniquement.
+    if (!isPaiementTotal && !isAcompteLivraison) {
       console.error(`[fraude] ref=${reference} attendu=${commande.montant_ttc} reçu=${amount}`)
       return c.json({ received: true })
     }
@@ -357,7 +380,7 @@ paiementsRouter.post('/webhook', async (c) => {
     const { error: errUpdate } = await db
       .from('commandes_shop')
       .update({
-        statut_paiement: 'paye',
+        statut_paiement: isPaiementTotal ? 'paye' : 'en_attente',
         statut_commande: 'confirmee',
         updated_at:      new Date().toISOString(),
       })
@@ -373,62 +396,23 @@ paiementsRouter.post('/webhook', async (c) => {
       try {
         await enregistrerPaiementCommande({
           commandeId:               commande.erp_commande_id,
-          montantXaf:               Number(commande.montant_ttc),
+          montantXaf:               amount,
           methode:                  'notchpay',
           referenceExt:             reference,
           datePaiement:             new Date().toISOString().slice(0, 10),
-          notes:                    `Paiement NotchPay commande web ${commande.ref}`,
+          notes:                    isPaiementTotal
+            ? `Paiement NotchPay commande web ${commande.ref}`
+            : `Avance NotchPay commande web ${commande.ref}`,
           ensureFacture:            true,
-          factureStatutSiCreation:  'paye',
+          factureStatutSiCreation:  isPaiementTotal ? 'paye' : 'envoye',
         })
       } catch (e) {
         console.error('[webhook] sync finance commande ERP:', e)
       }
     }
 
-    // Décrémenter le stock pour chaque ligne
-    const lignes = (commande.lignes as Array<{
-      product_id?: string
-      quantite:    number
-      designation: string
-    }>) ?? []
-
-    for (const ligne of lignes) {
-      if (!ligne.product_id) continue
-      const { data: produit } = await db
-        .from('produits')
-        .select('stock_actuel')
-        .eq('id', ligne.product_id)
-        .single()
-
-      if (produit) {
-        const stockActuel = Number(produit.stock_actuel)
-        const quantite = Number(ligne.quantite)
-        if (stockActuel < quantite) {
-          console.error(
-            `[stock] insuffisant apres paiement commande=${commande.ref} produit=${ligne.product_id} stock=${stockActuel} requis=${quantite}`
-          )
-          continue
-        }
-
-        const newStock = stockActuel - quantite
-        await db
-          .from('produits')
-          .update({ stock_actuel: newStock })
-          .eq('id', ligne.product_id)
-
-        // Mouvement de stock (table optionnelle — ignorer si absente)
-        await db.from('mouvements_stock').insert({
-          produit_id:     ligne.product_id,
-          type:           'sortie',
-          quantite:       ligne.quantite,
-          motif:          `Commande web ${commande.ref}`,
-          reference_doc:  commande.ref,
-          source:         'web',
-          created_at:     new Date().toISOString(),
-        })
-      }
-    }
+    // Le paiement ne sort pas le stock. La sortie physique est faite uniquement
+    // par l'execution du bon de sortie par le magasinier.
 
     // Notifier l'ERP via Supabase Realtime
     await db.channel('erp-notifications').send({
@@ -440,6 +424,24 @@ paiementsRouter.post('/webhook', async (c) => {
         client_nom: commande.client_nom,
       },
     }).catch(() => {})
+
+    await notifyWorkflow({
+      event:   isPaiementTotal ? 'finance.paiement_shop_recu' : 'finance.avance_livraison_recue',
+      module:  'finance',
+      severite:'success',
+      titre:   isPaiementTotal ? 'Paiement shop recu' : 'Avance livraison recue',
+      message: isPaiementTotal
+        ? `Commande ${commande.ref} payee via NotchPay.`
+        : `Commande ${commande.ref} : avance recue, solde a encaisser a la livraison.`,
+      ref:     commande.ref,
+      url:     '/finance',
+      data:    {
+        montant_xaf: amount,
+        total_xaf: totalCommande,
+        mode_paiement: commande.mode_paiement,
+        erp_commande_id: commande.erp_commande_id,
+      },
+    })
 
     // WhatsApp — client
     const siteUrl = process.env.SITE_URL ?? 'https://shop.tafdil.cm'

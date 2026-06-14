@@ -6,6 +6,7 @@ import { supabaseAdmin } from '@forge/db'
 import { FRAIS_LIVRAISON } from '@forge/shared'
 import { notifyCommandeSms } from '../services/sms.service'
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
+import { notifyWorkflow } from '../services/workflow-notifications.service'
 
 const db = supabaseAdmin!
 import type { HonoVariables } from '../types'
@@ -24,6 +25,19 @@ function genRef(): string {
   const year = new Date().getFullYear()
   const seq  = String(Math.floor(Math.random() * 9000) + 1000) // simplifié — voir note ci-dessous
   return `WEB-${year}-${seq}`
+}
+
+async function genNumeroBon(): Promise<string> {
+  const today = new Date()
+  const yyyymmdd = today.toISOString().slice(0, 10).replace(/-/g, '')
+  const startOfDay = `${today.toISOString().slice(0, 10)}T00:00:00.000Z`
+
+  const { count } = await db
+    .from('bons_sortie')
+    .select('*', { count: 'exact', head: true })
+    .gte('created_at', startOfDay)
+
+  return `TAF-${yyyymmdd}-${String((count ?? 0) + 1).padStart(4, '0')}`
 }
 
 function disponibilite(stock: number, seuil: number): 'disponible' | 'stock_faible' | 'indisponible' {
@@ -58,6 +72,75 @@ function samePhone(a?: string | null, b?: string | null) {
   return left.endsWith(right) || right.endsWith(left)
 }
 
+async function creerBonSortieShop(args: {
+  commandeId: string
+  ref: string
+  clientNom: string
+  clientTelephone: string
+  montantTtc: number
+  lignes: Array<{ product_id: string; designation: string; quantite: number }>
+}) {
+  const { data: existing } = await db
+    .from('bons_sortie')
+    .select('id')
+    .eq('commande_id', args.commandeId)
+    .maybeSingle()
+
+  if (existing) return existing
+
+  const numero = await genNumeroBon()
+  const { data: bon, error: bonErr } = await db
+    .from('bons_sortie')
+    .insert({
+      numero,
+      statut:            'en_attente',
+      type:              'commande',
+      commande_id:       args.commandeId,
+      demandeur:         args.ref,
+      motif:             `Préparation commande shop ${args.ref}`,
+      montant_total_xaf: args.montantTtc,
+      notes:             `Commande shop à préparer — client : ${args.clientNom} (${args.clientTelephone})`,
+      sync_status:       'synced',
+    })
+    .select('id')
+    .single()
+
+  if (bonErr || !bon) {
+    throw new Error(bonErr?.message ?? 'Erreur création bon de sortie shop')
+  }
+
+  const bonId = (bon as { id: string }).id
+  const lignesBon = args.lignes.map((l) => ({
+    bon_id:            bonId,
+    produit_id:        l.product_id,
+    designation:       l.designation,
+    unite:             'unité',
+    quantite_demandee: l.quantite,
+    quantite_servie:   0,
+  }))
+
+  const { error: lignesErr } = await db.from('bons_sortie_lignes').insert(lignesBon)
+  if (lignesErr) {
+    await db.from('bons_sortie').delete().eq('id', bonId)
+    throw new Error(lignesErr.message)
+  }
+
+  await db.channel('forge-bons').send({
+    type:  'broadcast',
+    event: 'nouveau_bon_commande_shop',
+    payload: {
+      bon_id:       bonId,
+      numero,
+      commande_id:  args.commandeId,
+      commande_ref: args.ref,
+      client:       args.clientNom,
+      nb_lignes:    lignesBon.length,
+    },
+  }).catch(() => {})
+
+  return bon
+}
+
 // ── Schémas Zod ────────────────────────────────────────────────────────────────
 
 const ligneCommandeSchema = z.object({
@@ -75,6 +158,7 @@ const commandeShopSchema = z.object({
   client_ville:            z.string().optional(),
   lignes:                  z.array(ligneCommandeSchema).min(1),
   mode_paiement:           z.enum(['mtn_momo', 'orange_money', 'livraison']),
+  avance_livraison_pct:    z.enum(['30', '50', '70']).or(z.number().refine((v) => [30, 50, 70].includes(v))).optional(),
   notes_client:            z.string().max(500).optional(),
   frais_livraison:         z.number().min(0).default(0),
   condition_paiement_code: z.string().default('P100'),
@@ -242,6 +326,13 @@ shopRouter.get('/categories', async (c) => {
 shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) => {
   const body = c.req.valid('json')
 
+  if (body.mode_paiement === 'livraison' && !body.avance_livraison_pct) {
+    return c.json({
+      error: 'Le paiement à la livraison exige une avance de 30%, 50% ou 70%',
+      code: 'ACOMPTE_LIVRAISON_REQUIS',
+    }, 422)
+  }
+
   // 1. Vérifier disponibilité stock pour chaque ligne
   for (const ligne of body.lignes) {
     const { data: produit } = await db
@@ -299,7 +390,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
 
   // 6. Lignes JSONB
   const lignesJson = body.lignes.map((l) => ({
-    product_id:     l.product_id,   // requis pour décréments stock webhook
+    product_id:     l.product_id,
     designation:    l.designation,
     quantite:       l.quantite,
     prix_unitaire:  l.prix_unitaire,
@@ -370,6 +461,29 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
       ordre:                i,
     }))
     await db.from('commandes_lignes').insert(lignesErp)
+
+    try {
+      const bonSortie = await creerBonSortieShop({
+        commandeId:      erpCommande.id,
+        ref,
+        clientNom:       body.client_nom,
+        clientTelephone: body.client_telephone,
+        montantTtc:      montant_ttc,
+        lignes:          body.lignes,
+      })
+      await notifyWorkflow({
+        event:   'stock.bon_sortie_a_preparer',
+        module:  'stock',
+        severite:'warning',
+        titre:   'Bon de sortie a preparer',
+        message: `Commande shop ${ref} : verifier les articles et preparer la sortie stock.`,
+        ref,
+        url:     '/stocks/bons-sortie',
+        data:    { commande_id: erpCommande.id, bon_id: (bonSortie as { id?: string }).id },
+      })
+    } catch (e) {
+      console.error('[shop] auto bon sortie:', e)
+    }
   }
 
   // 10. Notifier ERP via Realtime (broadcast sur canal dédié)
@@ -377,6 +491,17 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     type:    'broadcast',
     event:   'nouvelle_commande_web',
     payload: { ref, montant_ttc, client: body.client_nom },
+  })
+
+  await notifyWorkflow({
+    event:   'boutique.commande_shop_recue',
+    module:  'boutique',
+    severite:'info',
+    titre:   'Nouvelle commande shop',
+    message: `${body.client_nom} a passe la commande ${ref}.`,
+    ref,
+    url:     '/boutique',
+    data:    { montant_ttc, mode_paiement: body.mode_paiement },
   })
 
   const smsResult = await notifyCommandeSms({

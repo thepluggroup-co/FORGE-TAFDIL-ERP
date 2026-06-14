@@ -13,6 +13,11 @@ import {
 import type { CommandePreteLivraison, Livraison } from '@/hooks/useOperations'
 
 type LivraisonRecord = Livraison & Record<string, unknown>
+type PaiementLivraison = {
+  montant_xaf: number
+  methode: 'mobile_money' | 'especes'
+  reference_ext?: string
+}
 
 const TRANSPORTEURS = ['TRANSIT CM', 'CAMTRANS', 'PORT EXPRESS', 'Auto-livraison', 'ELITE TRANSPORT']
 
@@ -115,7 +120,10 @@ export default function Logistique() {
         transporteur: form.transporteur,
         date_depart: form.dateDepart,
         date_livraison_prevue: form.dateLivraison,
-        notes: form.notes || undefined,
+        notes: [
+          form.notes,
+          `Solde à encaisser livraison : ${formatXAF(Number(selectedCommande.solde_restant_xaf ?? 0))}`,
+        ].filter(Boolean).join(' — ') || undefined,
       },
       {
         onSuccess: () => {
@@ -127,12 +135,36 @@ export default function Logistique() {
   }
 
   const handleStatut = (livraison: LivraisonRecord, statut: Livraison['statut']) => {
+    let paiement_livraison: PaiementLivraison | undefined
+    if (statut === 'livree') {
+      const solde = Number(livraison.solde_restant_xaf ?? 0)
+      if (solde > 0) {
+        const methodeInput = window.prompt(
+          `Solde à encaisser : ${formatXAF(solde)}\nMode de paiement : tapez "mobile_money" ou "especes"`,
+          'mobile_money',
+        )
+        if (!methodeInput) return
+        const methode = methodeInput === 'especes' ? 'especes' : 'mobile_money'
+        const ref = methode === 'mobile_money'
+          ? window.prompt('Référence Mobile Money ou numéro de transaction', '')
+          : ''
+        paiement_livraison = {
+          montant_xaf:   solde,
+          methode,
+          reference_ext: ref || undefined,
+        }
+      }
+    }
+
     updateStatut.mutate(
       {
         id: livraison.id,
         statut,
+        paiement_livraison,
         notes: statut === 'livree'
-          ? 'Livraison confirmée depuis le module logistique'
+          ? paiement_livraison
+            ? `Livraison confirmée avec paiement ${paiement_livraison.methode} de ${formatXAF(paiement_livraison.montant_xaf)}`
+            : 'Livraison confirmée depuis le module logistique'
           : `Statut mis à jour : ${STATUT_LABELS[statut]}`,
       },
       {
@@ -238,6 +270,9 @@ export default function Logistique() {
               {commandesPretes.map((commande: CommandePreteLivraison) => (
                 <option key={commande.id} value={commande.id}>
                   {commande.numero} - {commande.client_nom} - {formatXAF(Number(commande.total_ttc_xaf ?? 0))}
+                  {Number(commande.solde_restant_xaf ?? 0) > 0
+                    ? ` - solde ${formatXAF(Number(commande.solde_restant_xaf ?? 0))}`
+                    : ' - payée'}
                 </option>
               ))}
             </select>

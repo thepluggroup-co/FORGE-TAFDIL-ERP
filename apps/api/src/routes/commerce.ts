@@ -242,6 +242,14 @@ async function creerBonSortieCommande(
   commandeNumero: string,
   userId: string,
 ): Promise<boolean> {
+  const { data: existing } = await db
+    .from('bons_sortie')
+    .select('id')
+    .eq('commande_id', commandeId)
+    .maybeSingle()
+
+  if (existing) return true
+
   // 1. Récupérer les lignes de la commande
   const { data: lignes, error: lignesErr } = await db
     .from('commandes_lignes')
