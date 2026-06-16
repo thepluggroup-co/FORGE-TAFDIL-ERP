@@ -6,17 +6,18 @@ import { useAuth } from '@/context/AuthContext'
 import { apiClient } from '@/lib/api-client'
 
 export interface BonLigne {
-  produit_id?: string; designation: string; quantite: number
-  quantite_demandee?: number; unite: string
+  id?: string; produit_id?: string | null; designation: string; quantite?: number
+  quantite_demandee?: number; quantite_servie?: number; unite: string
 }
 export interface BonSortie {
   id: string; numero: string
   statut: 'en_attente' | 'soumis' | 'valide' | 'execute' | 'refuse'
   type?: 'commande' | 'devis' | 'manuel'
   commande_id?: string | null
+  devis_id?: string | null
   montant_total_xaf?: number | null
   demandeur: string; motif: string; notes?: string | null
-  lignes: BonLigne[]; created_at: string; code_unique?: string
+  lignes: BonLigne[]; bons_sortie_lignes?: BonLigne[]; created_at: string; updated_at?: string; code_unique?: string
 }
 interface BonsResponse { data: BonSortie[]; total: number }
 
@@ -36,7 +37,7 @@ export function useBonsEnAttente() {
       const { data, error } = await supabase
         .from('bons_sortie')
         .select('id', { count: 'exact', head: false })
-        .eq('statut', 'en_attente')
+        .in('statut', ['en_attente', 'soumis'])
       if (error) throw new Error(error.message)
       return (data ?? []).length
     },

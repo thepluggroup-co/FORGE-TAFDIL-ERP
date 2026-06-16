@@ -694,7 +694,13 @@ export async function dbGetBons(params?: { statut?: string }) {
   if (params?.statut) q = q.eq('statut', params.statut)
   const { data, count, error } = await q.order('created_at', { ascending: false })
   if (error) raise(error, 'bons sortie')
-  return { data: data ?? [], total: count ?? 0 }
+  return {
+    data: (data ?? []).map((row: Record<string, unknown>) => ({
+      ...row,
+      lignes: row.lignes ?? row.bons_sortie_lignes ?? [],
+    })),
+    total: count ?? 0,
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

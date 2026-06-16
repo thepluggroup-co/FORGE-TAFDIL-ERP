@@ -1773,7 +1773,7 @@ router.patch(
 
     const cmd = commande as {
       id: string; ref: string; statut_commande: string; statut_paiement: string
-      lignes: Array<{ designation: string; quantite: number; prix_unitaire: number }>
+      lignes: Array<{ product_id?: string; designation: string; quantite: number; prix_unitaire: number; unite?: string }>
       client_nom: string; client_telephone: string; mode_paiement: string
       montant_ht: number; tva: number; montant_ttc: number; frais_livraison: number
       erp_commande_id: string | null; payment_reference: string | null
@@ -1913,18 +1913,25 @@ if (erpStatut) {
           demandeur:   cmd.ref,
           motif:       `Préparation commande web ${cmd.ref}`,
           notes:       `Client : ${cmd.client_nom} — ${cmd.client_telephone}`,
+          montant_total_xaf: cmd.montant_ttc ?? null,
           created_by:  user.id,
           sync_status: 'synced',
         }).select('id').single()
 
         if (bon) {
-          const lignesJson = (cmd.lignes ?? []).map((l: { designation: string; quantite: number }) => ({
+          const productIds = [...new Set((cmd.lignes ?? []).map((l) => l.product_id).filter(Boolean))] as string[]
+          const { data: produitsBon } = productIds.length > 0
+            ? await db.from('produits').select('id, unite').in('id', productIds)
+            : { data: [] }
+          const uniteByProduit = new Map((produitsBon ?? []).map((p: { id: string; unite: string }) => [p.id, p.unite]))
+
+          const lignesJson = (cmd.lignes ?? []).map((l) => ({
             bon_id:            (bon as { id: string }).id,
-            produit_id:        null,
+            produit_id:        l.product_id ?? null,
             designation:       l.designation,
-            unite:             'unité',
+            unite:             (l.product_id ? uniteByProduit.get(l.product_id) : null) ?? l.unite ?? 'unité',
             quantite_demandee: l.quantite,
-              quantite_servie:   0,
+            quantite_servie:   0,
           }))
           if (lignesJson.length > 0) {
             await db.from('bons_sortie_lignes').insert(lignesJson)
@@ -2011,7 +2018,7 @@ router.get(
 
 // ── Backfill : bons de sortie pour commandes existantes en production ──────────
 
-type ShopLigne = { designation: string; quantite: number }
+type ShopLigne = { product_id?: string; designation: string; quantite: number; unite?: string }
 
 async function creerBonDepuisLignesJsonb(params: {
   commandeErpId:    string | null
@@ -2051,11 +2058,16 @@ async function creerBonDepuisLignesJsonb(params: {
   if (bonErr || !bon) return { ok: false, error: bonErr?.message ?? 'insert bon null' }
 
   const bonId    = (bon as { id: string }).id
+  const productIds = [...new Set(lignes.map((l) => l.product_id).filter(Boolean))] as string[]
+  const { data: produitsBon } = productIds.length > 0
+    ? await db.from('produits').select('id, unite').in('id', productIds)
+    : { data: [] }
+  const uniteByProduit = new Map((produitsBon ?? []).map((p: { id: string; unite: string }) => [p.id, p.unite]))
   const bonLignes = lignes.map((l) => ({
     bon_id:            bonId,
-    produit_id:        null,
+    produit_id:        l.product_id ?? null,
     designation:       l.designation,
-    unite:             'unité',
+    unite:             (l.product_id ? uniteByProduit.get(l.product_id) : null) ?? l.unite ?? 'unité',
     quantite_demandee: l.quantite,
     quantite_servie:   0,
   }))

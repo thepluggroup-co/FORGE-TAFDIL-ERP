@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { Plus, Check, ChevronRight, RefreshCw, AlertTriangle, CheckCircle2, Minus } from 'lucide-react'
-import { PageHeader, DataTable, StatusBadge, SlideOver, Modal, Button, EmptyState } from '@forge/ui'
+import { PageHeader, DataTable, StatusBadge, SlideOver, Modal, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDateTime } from '@/lib/utils'
 import { useBons, useCreateBon, useValidateBon, useExecuteBon, useBackfillBons, useVerifierStockBon } from '@/hooks/useBons'
@@ -18,6 +18,27 @@ type BonStatus = 'soumis' | 'valide' | 'execute'
 
 const STEP_LABELS: Record<BonStatus, string> = { soumis: 'En attente', valide: 'Validé', execute: 'Exécuté' }
 const STEPS: BonStatus[] = ['soumis', 'valide', 'execute']
+
+function lignesDuBon(bon: Partial<BonRecord> | null | undefined): BonLigne[] {
+  if (!bon) return []
+  const lignes = bon.lignes ?? bon.bons_sortie_lignes
+  return Array.isArray(lignes) ? (lignes as BonLigne[]) : []
+}
+
+function quantiteLigne(ligne: BonLigne) {
+  return ligne.quantite_demandee ?? ligne.quantite ?? 0
+}
+
+function quantiteServieLigne(ligne: BonLigne, statut: string) {
+  const servie = Number(ligne.quantite_servie ?? 0)
+  if (servie > 0) return servie
+  return statut === 'execute' ? quantiteLigne(ligne) : '-'
+}
+
+function commandeLabel(bon: BonRecord) {
+  if (bon.type === 'commande') return bon.demandeur || bon.commande_id || ''
+  return bon.commande_id ?? ''
+}
 
 // ── Stepper ────────────────────────────────────────────────────────────────────
 
@@ -52,6 +73,7 @@ function WorkflowStepper({ status }: { status: string }) {
 
 export default function BonsSortie() {
   const [nouveauOpen, setNouveauOpen] = useState(false)
+  const [selectedBon, setSelectedBon] = useState<BonRecord | null>(null)
   const [execBonId, setExecBonId]       = useState<string | null>(null)
   const [execBonNumero, setExecBonNumero] = useState('')
   const [codeInput, setCodeInput]       = useState('')
@@ -62,7 +84,13 @@ export default function BonsSortie() {
   const backfillBons = useBackfillBons()
   const { data: stockCheck, isLoading: stockCheckLoading } = useVerifierStockBon(execBonId)
 
-  const bons = (data?.data ?? []) as BonRecord[]
+  const bons = useMemo(
+    () => ((data?.data ?? []) as BonRecord[]).map((bon) => ({
+      ...bon,
+      lignes: lignesDuBon(bon),
+    })),
+    [data?.data],
+  )
   const enAttente = bons.filter((b) => b.statut === 'soumis' || b.statut === 'en_attente').length
 
   function ouvrirExecution(id: string, numero: string) {
@@ -139,7 +167,7 @@ export default function BonsSortie() {
               {lignes.length} article{lignes.length > 1 ? 's' : ''}
             </span>
             <div className="text-xs text-gray-400 truncate max-w-48 mt-0.5">
-              {lignes.map((l) => `${l.quantite_demandee ?? l.quantite ?? ''} × ${l.designation}`).join(' · ')}
+              {lignes.map((l) => `${quantiteLigne(l)} × ${l.designation}`).join(' · ')}
             </div>
           </div>
         )
@@ -230,9 +258,23 @@ export default function BonsSortie() {
         data={bons}
         keyField="id"
         loading={isLoading}
+        onRowClick={setSelectedBon}
       />
 
       {nouveauOpen && <NouveauBonSlideOver open={nouveauOpen} onClose={() => setNouveauOpen(false)} />}
+      {selectedBon && (
+        <BonDetailSlideOver
+          bon={selectedBon}
+          onClose={() => setSelectedBon(null)}
+          onValidate={(id) => validateBon.mutate(id)}
+          onExecute={(id, numero) => {
+            setSelectedBon(null)
+            ouvrirExecution(id, numero)
+          }}
+          validatePending={validateBon.isPending}
+          executePending={executeBon.isPending}
+        />
+      )}
 
       {/* Modal d'exécution avec vérification de stock */}
       <Modal
@@ -328,6 +370,130 @@ export default function BonsSortie() {
         </div>
       </Modal>
     </motion.div>
+  )
+}
+
+function BonDetailSlideOver({
+  bon,
+  onClose,
+  onValidate,
+  onExecute,
+  validatePending,
+  executePending,
+}: {
+  bon: BonRecord
+  onClose: () => void
+  onValidate: (id: string) => void
+  onExecute: (id: string, numero: string) => void
+  validatePending: boolean
+  executePending: boolean
+}) {
+  const lignes = lignesDuBon(bon)
+  const statut = bon.statut === 'en_attente' ? 'soumis' : bon.statut
+  const canValidate = bon.statut === 'soumis' || bon.statut === 'en_attente'
+  const canExecute = bon.statut === 'valide'
+
+  return (
+    <SlideOver isOpen={true} onClose={onClose} title={`Bon de sortie ${bon.numero}`} width="xl">
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 pb-4">
+          <div>
+            <p className="font-mono text-sm font-semibold text-[#212121]">{bon.numero}</p>
+            <p className="mt-1 text-xs text-gray-500">{formatDateTime(bon.created_at)}</p>
+          </div>
+          <StatusBadge status={statut} />
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <DetailItem label="Demandeur" value={bon.demandeur} />
+          <DetailItem label="Type" value={bon.type ?? 'manuel'} />
+          <DetailItem label="Commande" value={commandeLabel(bon)} />
+          <DetailItem
+            label="Montant"
+            value={bon.montant_total_xaf != null ? formatXAF(Number(bon.montant_total_xaf)) : 'Sur devis'}
+          />
+        </div>
+
+        <div>
+          <p className="text-xs font-semibold uppercase text-gray-500">Motif</p>
+          <p className="mt-1 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+            {bon.motif || 'Aucun motif renseigne'}
+          </p>
+        </div>
+
+        {bon.notes && (
+          <div>
+            <p className="text-xs font-semibold uppercase text-gray-500">Notes</p>
+            <p className="mt-1 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+              {bon.notes}
+            </p>
+          </div>
+        )}
+
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase text-gray-500">Articles</p>
+            <span className="text-xs text-gray-400">
+              {lignes.length} article{lignes.length > 1 ? 's' : ''}
+            </span>
+          </div>
+          <div className="overflow-hidden rounded-lg border border-gray-100">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500">Designation</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold text-gray-500">Demandee</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold text-gray-500">Servie</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500">Unite</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {lignes.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-3 py-6 text-center text-xs text-gray-400">
+                      Aucun article rattache a ce bon.
+                    </td>
+                  </tr>
+                ) : (
+                  lignes.map((ligne, index) => (
+                    <tr key={ligne.id ?? `${ligne.designation}-${index}`}>
+                      <td className="px-3 py-2 font-medium text-gray-700">{ligne.designation}</td>
+                      <td className="px-3 py-2 text-right text-gray-600">{quantiteLigne(ligne)}</td>
+                      <td className="px-3 py-2 text-right text-gray-600">{quantiteServieLigne(ligne, bon.statut)}</td>
+                      <td className="px-3 py-2 text-gray-500">{ligne.unite}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {(canValidate || canExecute) && (
+          <div className="flex gap-3 border-t border-gray-100 pt-4">
+            {canValidate && (
+              <Button className="flex-1" disabled={validatePending} onClick={() => onValidate(bon.id)}>
+                Valider le bon
+              </Button>
+            )}
+            {canExecute && (
+              <Button className="flex-1" disabled={executePending} onClick={() => onExecute(bon.id, bon.numero)}>
+                Executer le bon
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    </SlideOver>
+  )
+}
+
+function DetailItem({ label, value }: { label: string; value?: string | number | null }) {
+  return (
+    <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+      <p className="text-xs font-semibold uppercase text-gray-500">{label}</p>
+      <p className="mt-1 break-words text-sm font-medium text-[#212121]">{value || '-'}</p>
+    </div>
   )
 }
 

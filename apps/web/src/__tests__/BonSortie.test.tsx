@@ -27,11 +27,11 @@ vi.mock('@forge/ui', () => ({
       {actions}
     </div>
   ),
-  DataTable: ({ columns, data }: any) => (
+  DataTable: ({ columns, data, onRowClick }: any) => (
     <table>
       <tbody>
         {(data as Record<string, unknown>[]).map((row, i: number) => (
-          <tr key={i}>
+          <tr key={i} onClick={() => onRowClick?.(row)}>
             {(columns as { id: string; accessor: unknown; render?: (v: unknown, r: unknown) => unknown }[]).map((col) => {
               const val =
                 typeof col.accessor === 'function'
@@ -56,6 +56,13 @@ vi.mock('@forge/ui', () => ({
         {children}
       </div>
     ) : null,
+  Modal: ({ isOpen, children, title }: any) =>
+    isOpen ? (
+      <div data-testid="modal">
+        <h2>{title}</h2>
+        {children}
+      </div>
+    ) : null,
   Button: ({ children, onClick, disabled, variant, size, ...rest }: any) => (
     <button onClick={onClick} disabled={disabled} {...rest}>
       {children}
@@ -69,6 +76,8 @@ vi.mock('@/hooks/useBons', () => ({
   useCreateBon:   vi.fn(),
   useValidateBon: vi.fn(),
   useExecuteBon:  vi.fn(),
+  useBackfillBons: vi.fn(),
+  useVerifierStockBon: vi.fn(),
 }))
 
 vi.mock('@/hooks/useStocks', () => ({ useStocks:  vi.fn() }))
@@ -81,7 +90,7 @@ vi.mock('@/lib/utils', () => ({
 
 import React from 'react'
 import BonsSortie from '../pages/stocks/BonsSortie'
-import { useBons, useCreateBon, useValidateBon, useExecuteBon } from '@/hooks/useBons'
+import { useBons, useCreateBon, useValidateBon, useExecuteBon, useBackfillBons, useVerifierStockBon } from '@/hooks/useBons'
 import { useStocks } from '@/hooks/useStocks'
 import { useEmployes } from '@/hooks/useRH'
 
@@ -127,6 +136,8 @@ function setupDefaultMocks() {
   vi.mocked(useCreateBon).mockReturnValue({ mutate: vi.fn(), isPending: false } as any)
   vi.mocked(useValidateBon).mockReturnValue({ mutate: vi.fn(), isPending: false } as any)
   vi.mocked(useExecuteBon).mockReturnValue({ mutate: vi.fn(), isPending: false } as any)
+  vi.mocked(useBackfillBons).mockReturnValue({ mutate: vi.fn(), isPending: false } as any)
+  vi.mocked(useVerifierStockBon).mockReturnValue({ data: null, isLoading: false } as any)
   vi.mocked(useStocks).mockReturnValue({ data: STOCKS_DATA } as any)
   vi.mocked(useEmployes).mockReturnValue({ data: EMPLOYES_DATA } as any)
 }
@@ -242,7 +253,7 @@ describe('Test 11 — stepper affiche la bonne étape active selon le statut du 
     render(<BonsSortie />)
 
     // WorkflowStepper rend ces labels en inline style
-    expect(screen.getByText('Soumis')).toHaveStyle({ color: '#C62828' })
+    expect(screen.getByText('En attente')).toHaveStyle({ color: '#C62828' })
     expect(screen.getByText('Validé')).toHaveStyle({ color: '#9ca3af' })
     expect(screen.getByText('Exécuté')).toHaveStyle({ color: '#9ca3af' })
   })
@@ -254,7 +265,7 @@ describe('Test 11 — stepper affiche la bonne étape active selon le statut du 
 
     render(<BonsSortie />)
 
-    expect(screen.getByText('Soumis')).toHaveStyle({ color: '#C62828' })
+    expect(screen.getByText('En attente')).toHaveStyle({ color: '#C62828' })
     expect(screen.getByText('Validé')).toHaveStyle({ color: '#C62828' })
     expect(screen.getByText('Exécuté')).toHaveStyle({ color: '#9ca3af' })
   })
@@ -266,7 +277,7 @@ describe('Test 11 — stepper affiche la bonne étape active selon le statut du 
 
     render(<BonsSortie />)
 
-    expect(screen.getByText('Soumis')).toHaveStyle({ color: '#C62828' })
+    expect(screen.getByText('En attente')).toHaveStyle({ color: '#C62828' })
     expect(screen.getByText('Validé')).toHaveStyle({ color: '#C62828' })
     expect(screen.getByText('Exécuté')).toHaveStyle({ color: '#C62828' })
   })
