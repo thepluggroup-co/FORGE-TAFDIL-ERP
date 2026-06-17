@@ -90,6 +90,31 @@ async function broadcastBon(event: string, payload: Record<string, unknown>): Pr
 // ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
 
+async function resolveCommandeIdForBon(bon: {
+  id: string
+  commande_id?: string | null
+  demandeur?: string | null
+}) {
+  if (bon.commande_id) return bon.commande_id
+  const ref = String(bon.demandeur ?? '').trim()
+  if (!ref) return null
+
+  const { data: shopCmd } = await db
+    .from('commandes_shop')
+    .select('erp_commande_id')
+    .eq('ref', ref)
+    .not('erp_commande_id', 'is', null)
+    .maybeSingle()
+
+  const commandeId = (shopCmd as { erp_commande_id?: string | null } | null)?.erp_commande_id ?? null
+  if (commandeId) {
+    await db.from('bons_sortie')
+      .update({ commande_id: commandeId, updated_at: new Date().toISOString() })
+      .eq('id', bon.id)
+  }
+  return commandeId
+}
+
 /** Liste des bons avec filtres */
 router.get('/', async (c) => {
   const { statut, technicien, search } = c.req.query()
@@ -301,7 +326,7 @@ router.put(
       // ── Online : Supabase ──────────────────────────────────────────────────
       async () => {
         const { data: existing } = await db
-          .from('bons_sortie').select('statut, demandeur, numero, created_by, commande_id').eq('id', id).single()
+          .from('bons_sortie').select('id, statut, demandeur, numero, created_by, commande_id').eq('id', id).single()
 
         if (!existing) throw Object.assign(new Error('Bon introuvable'), { code: 'NOT_FOUND', httpStatus: 404 })
         if (!['en_attente', 'soumis'].includes((existing as { statut: string }).statut))
@@ -336,9 +361,15 @@ router.put(
           data:    { bon_id: id, decision: body.decision },
         })
 
-        if (body.decision === 'valide' && (existing as { commande_id?: string | null }).commande_id) {
+        const commandeId = await resolveCommandeIdForBon(existing as {
+          id: string
+          commande_id?: string | null
+          demandeur?: string | null
+        })
+
+        if (body.decision === 'valide' && commandeId) {
           await ensureFactureForCommande({
-            commandeId: (existing as { commande_id: string }).commande_id,
+            commandeId,
             statut:    'brouillon',
             userId:    user.id,
             notes:     'Facture generee automatiquement apres validation du bon de sortie. Validation finance requise.',
@@ -351,7 +382,7 @@ router.put(
             message: `Bon ${(existing as { numero: string }).numero} valide : facture brouillon generee pour Finance.`,
             ref:     (existing as { numero: string }).numero,
             url:     '/finance',
-            data:    { bon_id: id, commande_id: (existing as { commande_id: string }).commande_id },
+            data:    { bon_id: id, commande_id: commandeId },
           })
         }
 
@@ -394,7 +425,7 @@ router.put(
     if (fetchErr || !bon) return c.json({ error: 'Bon introuvable', code: 'NOT_FOUND' }, 404)
 
     const b = bon as {
-      id: string; numero: string; statut: string; commande_id: string | null
+      id: string; numero: string; statut: string; commande_id: string | null; demandeur?: string | null
       bons_sortie_lignes: Array<{
         id: string; produit_id: string | null
         designation: string; quantite_demandee: number
@@ -425,8 +456,9 @@ router.put(
 
     if (!rpcError) {
       // Si le bon est lié à une commande, garantir l'existence d'une facture Finance
-      if (b.commande_id) {
-        ensureFactureForCommande({ commandeId: b.commande_id, userId: user.id })
+      const commandeId = await resolveCommandeIdForBon(b)
+      if (commandeId) {
+        ensureFactureForCommande({ commandeId, userId: user.id })
           .catch(e => console.error('[bons/executer] ensureFacture:', e))
       }
 
@@ -451,7 +483,7 @@ router.put(
         url:     '/stocks/bons-sortie',
         data:    { bon_id: id },
       })
-      return c.json(rpcData ?? { success: true, bon_id: id, facture_triggered: !!b.commande_id })
+      return c.json(rpcData ?? { success: true, bon_id: id, facture_triggered: !!commandeId })
     }
 
     // Fonction absente — migration non appliquée

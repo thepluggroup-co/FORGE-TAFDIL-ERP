@@ -2154,11 +2154,43 @@ router.post(
       else errors.push(`ERP ${cmd.numero} (jsonb fallback): ${result.error}`)
     }
 
+    const { data: shopLieesErp, error: shopLieesErr } = await db
+      .from('commandes_shop')
+      .select('ref, client_nom, client_telephone, lignes, montant_ttc, erp_commande_id')
+      .neq('statut_commande', 'annulee')
+      .not('erp_commande_id', 'is', null)
+
+    if (shopLieesErr) errors.push(`shop ERP query: ${shopLieesErr.message}`)
+
+    for (const cmd of (shopLieesErp ?? []) as Array<{
+      ref: string; client_nom: string; client_telephone: string
+      lignes: ShopLigne[]; montant_ttc: number | null; erp_commande_id: string
+    }>) {
+      const { data: bonExist } = await db
+        .from('bons_sortie')
+        .select('id')
+        .or(`commande_id.eq.${cmd.erp_commande_id},demandeur.eq.${cmd.ref}`)
+        .maybeSingle()
+      if (bonExist) continue
+
+      const result = await creerBonDepuisLignesJsonb({
+        commandeErpId:   cmd.erp_commande_id,
+        ref:             cmd.ref,
+        clientNom:       cmd.client_nom,
+        clientTel:       cmd.client_telephone,
+        lignes:          cmd.lignes ?? [],
+        userId:          user.id,
+        montantTotalXaf: cmd.montant_ttc,
+      })
+      if (result.ok) created++
+      else errors.push(`Shop ERP ${cmd.ref}: ${result.error}`)
+    }
+
     // ── Branche 2 : commandes shop sans erp_commande_id ──────────────────────
     const { data: shopCommandes, error: shopErr } = await db
       .from('commandes_shop')
       .select('ref, client_nom, client_telephone, lignes, montant_ttc')
-      .eq('statut_commande', 'en_preparation')
+      .neq('statut_commande', 'annulee')
       .is('erp_commande_id', null)
 
     if (shopErr) errors.push(`shop query: ${shopErr.message}`)

@@ -48,88 +48,14 @@ export function useBonsEnAttente() {
 
 /** Crée les bons de sortie manquants pour les commandes web existantes — via Supabase direct */
 export function useBackfillBons() {
-  const qc   = useQueryClient()
-  const auth = useAuth()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: async () => {
-      let created = 0
-      const errors: string[] = []
-
-      // Toutes les commandes shop en_preparation
-      const { data: shopCommandes, error: shopErr } = await supabase
-        .from('commandes_shop')
-        .select('ref, client_nom, client_telephone, lignes, montant_ttc, erp_commande_id')
-        .eq('statut_commande', 'en_preparation')
-
-      if (shopErr) throw new Error(shopErr.message)
-
-      for (const cmd of (shopCommandes ?? []) as Array<{
-        ref: string; client_nom: string; client_telephone: string
-        lignes: Array<{ designation: string; quantite: number }> | null
-        montant_ttc: number | null; erp_commande_id: string | null
-      }>) {
-        // Vérifier si un bon existe déjà
-        const { data: existing } = await supabase
-          .from('bons_sortie')
-          .select('id')
-          .eq('demandeur', cmd.ref)
-          .maybeSingle()
-        if (existing) continue
-
-        const lignes = cmd.lignes ?? []
-        if (lignes.length === 0) { errors.push(`${cmd.ref}: lignes vides`); continue }
-
-        // Numéro de bon
-        const today    = new Date()
-        const yyyymmdd = today.toISOString().slice(0, 10).replace(/-/g, '')
-        const { count } = await supabase
-          .from('bons_sortie')
-          .select('*', { count: 'exact', head: true })
-          .gte('created_at', `${today.toISOString().slice(0, 10)}T00:00:00.000Z`)
-        const numero = `TAF-${yyyymmdd}-${String((count ?? 0) + 1 + created).padStart(4, '0')}`
-
-        // Créer le bon
-        const { data: bon, error: bonErr } = await supabase.from('bons_sortie').insert({
-          numero,
-          statut:            'en_attente',
-          type:              'commande',
-          demandeur:         cmd.ref,
-          motif:             `Préparation commande ${cmd.ref}`,
-          montant_total_xaf: cmd.montant_ttc ?? null,
-          notes:             `Client : ${cmd.client_nom} — ${cmd.client_telephone}`,
-          created_by:        auth.user?.id,
-          sync_status:       'synced',
-          ...(cmd.erp_commande_id ? { commande_id: cmd.erp_commande_id } : {}),
-        }).select('id').single()
-
-        if (bonErr || !bon) { errors.push(`${cmd.ref}: ${bonErr?.message ?? 'insert échoué'}`); continue }
-
-        // Créer les lignes
-        const bonId   = (bon as { id: string }).id
-        const bonLignes = lignes.map((l) => ({
-          bon_id:            bonId,
-          produit_id:        null,
-          designation:       l.designation,
-          unite:             'unité',
-          quantite_demandee: l.quantite,
-          quantite_servie:   0,
-        }))
-        const { error: ligErr } = await supabase.from('bons_sortie_lignes').insert(bonLignes)
-        if (ligErr) {
-          await supabase.from('bons_sortie').delete().eq('id', bonId)
-          errors.push(`${cmd.ref}: lignes - ${ligErr.message}`)
-          continue
-        }
-
-        created++
-      }
-
-      return { created, errors }
-    },
+    mutationFn: () =>
+      apiClient.post<{ created: number; errors: string[] }>('/api/commandes/backfill-bons', {}),
     onSuccess: (res) => {
       void qc.refetchQueries({ queryKey: ['bons'] })
       if (res.errors.length) res.errors.forEach((e) => console.error('[backfill]', e))
-      toast.success(res.created > 0 ? `${res.created} bon(s) créé(s)` : 'Tous les bons sont déjà à jour')
+      toast.success(res.created > 0 ? String(res.created) + ' bon(s) cree(s)' : 'Tous les bons sont deja a jour')
     },
     onError: (err: Error) => toast.error(err.message),
   })

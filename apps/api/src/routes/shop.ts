@@ -73,20 +73,35 @@ function samePhone(a?: string | null, b?: string | null) {
 }
 
 async function creerBonSortieShop(args: {
-  commandeId: string
+  commandeId?: string | null
   ref: string
   clientNom: string
   clientTelephone: string
   montantTtc: number
   lignes: Array<{ product_id: string; designation: string; quantite: number }>
 }) {
-  const { data: existing } = await db
+  let existingQuery = db
     .from('bons_sortie')
-    .select('id')
-    .eq('commande_id', args.commandeId)
-    .maybeSingle()
+    .select('id, commande_id')
 
-  if (existing) return existing
+  existingQuery = args.commandeId
+    ? existingQuery.or(`commande_id.eq.${args.commandeId},demandeur.eq.${args.ref}`)
+    : existingQuery.eq('demandeur', args.ref)
+
+  const { data: existing } = await existingQuery.maybeSingle()
+
+  if (existing) {
+    if (args.commandeId && !(existing as { commande_id?: string | null }).commande_id) {
+      await db.from('bons_sortie')
+        .update({
+          commande_id:       args.commandeId,
+          montant_total_xaf: args.montantTtc,
+          updated_at:        new Date().toISOString(),
+        })
+        .eq('id', (existing as { id: string }).id)
+    }
+    return existing
+  }
 
   const numero = await genNumeroBon()
   const { data: bon, error: bonErr } = await db
@@ -95,7 +110,7 @@ async function creerBonSortieShop(args: {
       numero,
       statut:            'en_attente',
       type:              'commande',
-      commande_id:       args.commandeId,
+      ...(args.commandeId ? { commande_id: args.commandeId } : {}),
       demandeur:         args.ref,
       motif:             `Préparation commande shop ${args.ref}`,
       montant_total_xaf: args.montantTtc,
@@ -427,7 +442,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
 
   // 8. Créer la commande ERP en miroir (source web)
   const today = new Date().toISOString().split('T')[0]
-  const { data: erpCommande } = await db
+  const { data: erpCommande, error: errErpCommande } = await db
     .from('commandes')
     .insert({
       numero:              ref,
@@ -442,6 +457,10 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     })
     .select('id')
     .single()
+
+  if (errErpCommande) {
+    console.error('[shop] insert commande ERP:', errErpCommande.message)
+  }
 
   // 9. Lier commande_shop → commande ERP
   if (erpCommande?.id) {
@@ -462,9 +481,48 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     }))
     await db.from('commandes_lignes').insert(lignesErp)
 
+    let bonSortie: unknown = null
+    try {
+      bonSortie = await creerBonSortieShop({
+        commandeId:      erpCommande.id,
+        ref,
+        clientNom:       body.client_nom,
+        clientTelephone: body.client_telephone,
+        montantTtc:      montant_ttc,
+        lignes:          body.lignes,
+      })
+    } catch (e) {
+      console.error('[shop] auto bon sortie:', e)
+      try {
+        bonSortie = await creerBonSortieShop({
+          commandeId:      null,
+          ref,
+          clientNom:       body.client_nom,
+          clientTelephone: body.client_telephone,
+          montantTtc:      montant_ttc,
+          lignes:          body.lignes,
+        })
+      } catch (fallbackError) {
+        console.error('[shop] auto bon sortie fallback:', fallbackError)
+      }
+    }
+
+    if (bonSortie) {
+      await notifyWorkflow({
+        event:   'stock.bon_sortie_a_preparer',
+        module:  'stock',
+        severite:'warning',
+        titre:   'Bon de sortie a preparer',
+        message: `Commande shop ${ref} : verifier les articles et preparer la sortie stock.`,
+        ref,
+        url:     '/stocks/bons-sortie',
+        data:    { commande_id: erpCommande.id, bon_id: (bonSortie as { id?: string }).id },
+      })
+    }
+  } else {
     try {
       const bonSortie = await creerBonSortieShop({
-        commandeId:      erpCommande.id,
+        commandeId:      null,
         ref,
         clientNom:       body.client_nom,
         clientTelephone: body.client_telephone,
@@ -479,10 +537,10 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
         message: `Commande shop ${ref} : verifier les articles et preparer la sortie stock.`,
         ref,
         url:     '/stocks/bons-sortie',
-        data:    { commande_id: erpCommande.id, bon_id: (bonSortie as { id?: string }).id },
+        data:    { commande_id: null, bon_id: (bonSortie as { id?: string }).id },
       })
     } catch (e) {
-      console.error('[shop] auto bon sortie:', e)
+      console.error('[shop] auto bon sortie fallback sans ERP:', e)
     }
   }
 

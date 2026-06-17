@@ -1687,6 +1687,7 @@ export default function Finance() {
   const [showOrderSelector, setShowOrderSelector]   = useState(false)
   const [planOrder, setPlanOrder]                   = useState<Commande | null>(null)
   const [showNewFacture, setShowNewFacture] = useState(false)
+  const [factureStatusSort, setFactureStatusSort] = useState<'recent' | 'workflow' | 'paid'>('recent')
   const [selectedFacture, setSelectedFacture] = useState<FactureRecord | null>(null)
   const [paiementFacture, setPaiementFacture] = useState<FactureRecord | null>(null)
   const [relanceFacture, setRelanceFacture] = useState<FactureRecord | null>(null)
@@ -1768,6 +1769,21 @@ export default function Finance() {
     () => new Set(factures.map((f) => f.commande_id as string).filter(Boolean)),
     [factures],
   )
+  const facturesTriees = useMemo(() => {
+    const order: Record<string, number> = factureStatusSort === 'paid'
+      ? { paye: 0, envoye: 1, valide: 2, brouillon: 3, annule: 4 }
+      : factureStatusSort === 'workflow'
+        ? { brouillon: 0, valide: 1, envoye: 2, paye: 3, annule: 4 }
+        : {}
+
+    if (factureStatusSort === 'recent') return factures
+    return [...factures].sort((a, b) => {
+      const left = order[String(a.statut ?? '')] ?? 99
+      const right = order[String(b.statut ?? '')] ?? 99
+      if (left !== right) return left - right
+      return String(b.date_emission ?? b.created_at ?? '').localeCompare(String(a.date_emission ?? a.created_at ?? ''))
+    })
+  }, [factureStatusSort, factures])
 
   const echusCount = credits.filter((c) => c.statut === 'echu').length
   const totalEchus = credits.filter((c) => c.statut === 'echu').reduce((s, c) => s + (c.solde_restant_xaf as number), 0)
@@ -2279,9 +2295,24 @@ export default function Finance() {
                       </div>
                     </div>
                   )}
+                  <div className="mx-4 mt-3 mb-1 flex items-center justify-end gap-2">
+                    <label className="text-xs font-semibold uppercase text-gray-400" htmlFor="facture-status-sort">
+                      Tri statut
+                    </label>
+                    <select
+                      id="facture-status-sort"
+                      value={factureStatusSort}
+                      onChange={(e) => setFactureStatusSort(e.target.value as typeof factureStatusSort)}
+                      className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                    >
+                      <option value="recent">Plus recentes</option>
+                      <option value="workflow">Brouillon vers paye</option>
+                      <option value="paid">Payees d'abord</option>
+                    </select>
+                  </div>
                   <DataTable<FactureRecord>
                     columns={factureColumns}
-                    data={factures}
+                    data={facturesTriees}
                     keyField="id"
                     onRowClick={setSelectedFacture}
                     loading={facturesLoading}
