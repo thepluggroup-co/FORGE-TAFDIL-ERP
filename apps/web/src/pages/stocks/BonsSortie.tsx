@@ -197,7 +197,7 @@ export default function BonsSortie() {
           {(v === 'soumis' || v === 'en_attente') && (
             <button
               disabled={validateBon.isPending}
-              onClick={() => validateBon.mutate(row.id as string)}
+              onClick={() => validateBon.mutate({ id: row.id as string })}
               className="px-2 py-1 text-xs font-medium rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors disabled:opacity-50"
             >
               Valider
@@ -266,7 +266,7 @@ export default function BonsSortie() {
         <BonDetailSlideOver
           bon={selectedBon}
           onClose={() => setSelectedBon(null)}
-          onValidate={(id) => validateBon.mutate(id)}
+          onValidate={(arg) => validateBon.mutate(arg)}
           onExecute={(id, numero) => {
             setSelectedBon(null)
             ouvrirExecution(id, numero)
@@ -383,7 +383,7 @@ function BonDetailSlideOver({
 }: {
   bon: BonRecord
   onClose: () => void
-  onValidate: (id: string) => void
+  onValidate: (arg: { id: string; nature_transaction?: 'comptant' | 'credit' | 'deduction_acompte'; imputation_payeur?: 'entreprise_tafdil' | 'atelier' | 'administration' }) => void
   onExecute: (id: string, numero: string) => void
   validatePending: boolean
   executePending: boolean
@@ -392,6 +392,26 @@ function BonDetailSlideOver({
   const statut = bon.statut === 'en_attente' ? 'soumis' : bon.statut
   const canValidate = bon.statut === 'soumis' || bon.statut === 'en_attente'
   const canExecute = bon.statut === 'valide'
+
+  const missingNature = canValidate && !bon.nature_transaction
+  const missingPayeur = canValidate && !bon.imputation_payeur
+
+  const [nature, setNature] = useState<'comptant' | 'credit' | 'deduction_acompte'>(
+    (bon.nature_transaction as 'comptant' | 'credit' | 'deduction_acompte') ?? 'comptant'
+  )
+  const [payeur, setPayeur] = useState<'entreprise_tafdil' | 'atelier' | 'administration'>(
+    (bon.imputation_payeur as 'entreprise_tafdil' | 'atelier' | 'administration') ?? 'atelier'
+  )
+
+  const selectCls = 'w-full px-3 py-2 text-sm border border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828] bg-amber-50'
+
+  function handleValidate() {
+    onValidate({
+      id: bon.id,
+      ...(missingNature ? { nature_transaction: nature } : {}),
+      ...(missingPayeur ? { imputation_payeur: payeur } : {}),
+    })
+  }
 
   return (
     <SlideOver isOpen={true} onClose={onClose} title={`Bon de sortie ${bon.numero}`} width="xl">
@@ -412,25 +432,57 @@ function BonDetailSlideOver({
             label="Montant"
             value={bon.montant_total_xaf != null ? formatXAF(Number(bon.montant_total_xaf)) : 'Sur devis'}
           />
-          <DetailItem
-            label="Nature transaction"
-            value={
-              bon.nature_transaction === 'comptant'           ? 'Comptant'
-              : bon.nature_transaction === 'credit'          ? 'Crédit'
-              : bon.nature_transaction === 'deduction_acompte' ? 'Déduction acompte'
-              : '—'
-            }
-          />
-          <DetailItem
-            label="Imputation payeur"
-            value={
-              bon.imputation_payeur === 'atelier'            ? 'Atelier'
-              : bon.imputation_payeur === 'entreprise_tafdil' ? 'Entreprise TAFDIL'
-              : bon.imputation_payeur === 'administration'    ? 'Administration'
-              : '—'
-            }
-          />
+          {!missingNature ? (
+            <DetailItem
+              label="Nature transaction"
+              value={
+                bon.nature_transaction === 'comptant'             ? 'Comptant'
+                : bon.nature_transaction === 'credit'            ? 'Crédit'
+                : bon.nature_transaction === 'deduction_acompte' ? 'Déduction acompte'
+                : '—'
+              }
+            />
+          ) : (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+              <p className="text-xs font-semibold uppercase text-amber-700 mb-1">Nature transaction <span className="text-red-500">*</span></p>
+              <select value={nature} onChange={(e) => setNature(e.target.value as typeof nature)} className={selectCls}>
+                <option value="comptant">Comptant</option>
+                <option value="credit">Crédit</option>
+                <option value="deduction_acompte">Déduction acompte</option>
+              </select>
+            </div>
+          )}
+          {!missingPayeur ? (
+            <DetailItem
+              label="Imputation payeur"
+              value={
+                bon.imputation_payeur === 'atelier'             ? 'Atelier'
+                : bon.imputation_payeur === 'entreprise_tafdil' ? 'Entreprise TAFDIL'
+                : bon.imputation_payeur === 'administration'    ? 'Administration'
+                : '—'
+              }
+            />
+          ) : (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+              <p className="text-xs font-semibold uppercase text-amber-700 mb-1">Imputation payeur <span className="text-red-500">*</span></p>
+              <select value={payeur} onChange={(e) => setPayeur(e.target.value as typeof payeur)} className={selectCls}>
+                <option value="atelier">Atelier</option>
+                <option value="entreprise_tafdil">Entreprise TAFDIL</option>
+                <option value="administration">Administration</option>
+              </select>
+            </div>
+          )}
         </div>
+
+        {(missingNature || missingPayeur) && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+            <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-700">
+              Ce bon a été créé sans nature de transaction ou imputation payeur.
+              Veuillez renseigner ces champs avant de valider.
+            </p>
+          </div>
+        )}
 
         <div>
           <p className="text-xs font-semibold uppercase text-gray-500">Motif</p>
@@ -490,7 +542,7 @@ function BonDetailSlideOver({
         {(canValidate || canExecute) && (
           <div className="flex gap-3 border-t border-gray-100 pt-4">
             {canValidate && (
-              <Button className="flex-1" disabled={validatePending} onClick={() => onValidate(bon.id)}>
+              <Button className="flex-1" disabled={validatePending} onClick={handleValidate}>
                 Valider le bon
               </Button>
             )}

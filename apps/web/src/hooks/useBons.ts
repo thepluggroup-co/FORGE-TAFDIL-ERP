@@ -110,22 +110,56 @@ export function useCreateBon() {
 }
 
 export function useValidateBon() {
-  const qc   = useQueryClient()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (arg: string | { id: string; decision: 'valide' | 'refuse'; commentaire?: string }) => {
+    mutationFn: async (arg: string | {
+      id: string
+      decision?: 'valide' | 'refuse'
+      commentaire?: string
+      nature_transaction?: 'comptant' | 'credit' | 'deduction_acompte'
+      imputation_payeur?: 'entreprise_tafdil' | 'atelier' | 'administration'
+    }) => {
       const id       = typeof arg === 'string' ? arg : arg.id
-      const decision = typeof arg === 'string' ? 'valide' : arg.decision
-      return apiClient.put<BonSortie>(`/api/bons/${id}/valider`, {
-        decision,
-        commentaire: typeof arg === 'string' ? undefined : arg.commentaire,
-      })
+      const decision = (typeof arg === 'string' ? 'valide' : (arg.decision ?? 'valide')) as 'valide' | 'refuse'
+      const nature   = typeof arg !== 'string' ? arg.nature_transaction : undefined
+      const payeur   = typeof arg !== 'string' ? arg.imputation_payeur  : undefined
+
+      // Lire le statut et les champs actuels
+      const { data: existing, error: fetchErr } = await supabase
+        .from('bons_sortie')
+        .select('statut, nature_transaction, imputation_payeur')
+        .eq('id', id).single()
+      if (fetchErr || !existing) throw new Error('Bon introuvable')
+
+      const ex = existing as { statut: string; nature_transaction: string | null; imputation_payeur: string | null }
+      if (!['en_attente', 'soumis'].includes(ex.statut))
+        throw new Error(`Impossible de valider un bon en statut "${ex.statut}"`)
+
+      const finalNature = nature ?? ex.nature_transaction
+      const finalPayeur = payeur ?? ex.imputation_payeur
+      if (!finalNature || !finalPayeur)
+        throw new Error('Nature de transaction et imputation payeur sont requis')
+
+      const { data, error } = await supabase
+        .from('bons_sortie')
+        .update({
+          statut:             decision,
+          nature_transaction: finalNature,
+          imputation_payeur:  finalPayeur,
+          updated_at:         new Date().toISOString(),
+          ...(decision === 'valide' ? { statut_preparation: 'a_preparer' } : {}),
+        })
+        .eq('id', id).select().single()
+
+      if (error) throw new Error(error.message)
+      return data as BonSortie
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['bons'] })
       void qc.invalidateQueries({ queryKey: ['factures'] })
       toast.success('Décision enregistrée')
     },
-    onError:   (err: Error) => toast.error(err.message),
+    onError: (err: Error) => toast.error(err.message),
   })
 }
 
