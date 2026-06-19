@@ -4,9 +4,11 @@ import { useAuth } from '../context/AuthContext'
 import { APP_NAME, COMPANY_NAME, COMPANY_LOCATION } from '@forge/shared'
 
 const roleLabel: Record<string, string> = {
-  admin: 'Administrateur',
-  operator: 'Opérateur',
-  viewer: 'Lecteur',
+  admin:       'Administrateur',
+  superviseur: 'Superviseur',
+  operateur:   'Opérateur',
+  apprenant:   'Apprenant',
+  livreur:     'Livreur',
 }
 
 export function ProfilePage() {

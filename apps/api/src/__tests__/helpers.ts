@@ -28,7 +28,7 @@ export function mkClient() {
 }
 
 export function makeToken(
-  role: 'admin' | 'superviseur' | 'operateur' | 'apprenant' = 'admin',
+  role: 'admin' | 'superviseur' | 'operateur' | 'apprenant' | 'livreur' = 'admin',
   userId = 'test-user-uid-001',
 ): string {
   return jwt.sign(
@@ -45,9 +45,10 @@ export function makeToken(
 
 export function authHeaders(
   role: Parameters<typeof makeToken>[0] = 'admin',
+  userId?: string,
 ): Record<string, string> {
   return {
-    Authorization: `Bearer ${makeToken(role)}`,
+    Authorization: `Bearer ${makeToken(role, userId)}`,
     'Content-Type': 'application/json',
   }
 }

@@ -18,13 +18,20 @@ import { FRAIS_LIVRAISON } from '@forge/shared'
 
 type Step = 1 | 2 | 3 | 4
 type Ville = 'Douala' | 'Yaounde' | 'Bafoussam' | 'Autres'
-type ModePaiement = 'mtn' | 'orange' | 'livraison'
+type ModePaiement = 'mtn' | 'orange' | 'livraison' | 'credit'
 type AdvancePct = 30 | 50 | 70
+type CreditInstallments = 2 | 3 | 4
 type SmsStatus = {
   ok: boolean
   message: string
   skipped?: boolean
   retry_after_seconds?: number
+}
+interface CreditEligibility {
+  eligible:        boolean
+  availableCredit: number
+  reason?:         string
+  loggedin:        boolean
 }
 
 interface ConditionOption {
@@ -52,9 +59,10 @@ const FRAIS: Record<Ville, number | null> = {
 }
 
 const MODE_LABEL: Record<ModePaiement, string> = {
-  mtn: 'MTN Mobile Money',
-  orange: 'Orange Money',
+  mtn:      'MTN Mobile Money',
+  orange:   'Orange Money',
   livraison: 'Paiement à la livraison',
+  credit:   'Paiement fractionné TAFDIL',
 }
 
 // ── Types formulaire ───────────────────────────────────────────────────────────
@@ -517,21 +525,26 @@ function StepPaiement({
   setNumeroPaiement, avanceLivraisonPct, setAvanceLivraisonPct,
   onConfirm, onBack, totals, loading,
   conditionCode, setConditionCode, conditionOptions,
+  creditInstallments, setCreditInstallments, creditEligibility, creditLoading,
 }: {
-  coordonnees: Coordonnees
-  modePaiement: ModePaiement | null
-  numeroPaiement: string
-  setModePaiement: (m: ModePaiement) => void
-  setNumeroPaiement: (n: string) => void
-  avanceLivraisonPct: AdvancePct | null
+  coordonnees:           Coordonnees
+  modePaiement:          ModePaiement | null
+  numeroPaiement:        string
+  setModePaiement:       (m: ModePaiement) => void
+  setNumeroPaiement:     (n: string) => void
+  avanceLivraisonPct:    AdvancePct | null
   setAvanceLivraisonPct: (pct: AdvancePct) => void
-  onConfirm: () => void
-  onBack: () => void
-  totals: CartTotals
-  loading: boolean
-  conditionCode: string
-  setConditionCode: (code: string) => void
-  conditionOptions: ConditionOption[]
+  onConfirm:             () => void
+  onBack:                () => void
+  totals:                CartTotals
+  loading:               boolean
+  conditionCode:         string
+  setConditionCode:      (code: string) => void
+  conditionOptions:      ConditionOption[]
+  creditInstallments:    CreditInstallments | null
+  setCreditInstallments: (n: CreditInstallments) => void
+  creditEligibility:     CreditEligibility | null
+  creditLoading:         boolean
 }) {
   const frais = FRAIS[coordonnees.ville]
   const total = grandTotal(totals, coordonnees.ville)
@@ -543,11 +556,16 @@ function StepPaiement({
     ? Math.round(total * selectedCondition.acompte_pct / 100)
     : null
 
-  const canPay =
-    modePaiement !== null &&
-    numeroPaiement.replace(/\D/g, '').length >= 9 &&
-    (modePaiement !== 'livraison' || avanceLivraisonPct !== null)
+  const canPay = modePaiement === 'credit'
+    ? creditInstallments !== null && (creditEligibility?.eligible ?? false)
+    : (
+        modePaiement !== null &&
+        numeroPaiement.replace(/\D/g, '').length >= 9 &&
+        (modePaiement !== 'livraison' || avanceLivraisonPct !== null)
+      )
 
+  const creditAcompte = Math.ceil(total * 0.30)
+  const creditSolde   = total - creditAcompte
   const showConditions = conditionOptions.length > 1
 
   return (
@@ -681,6 +699,64 @@ function StepPaiement({
             </div>
           )}
         </PaymentCard>
+
+        {/* Paiement fractionné TAFDIL */}
+        {creditLoading ? (
+          <div className="flex items-center gap-2 rounded-2xl border border-gray-100 bg-gray-50 p-4 text-sm text-forge-steel">
+            <Loader2 size={14} className="animate-spin" /> Vérification éligibilité crédit…
+          </div>
+        ) : creditEligibility !== null && (
+          <PaymentCard
+            selected={modePaiement === 'credit'}
+            onClick={() => setModePaiement('credit')}
+            emoji={!creditEligibility.loggedin ? '🔐' : creditEligibility.eligible ? '📋' : '🔒'}
+            label="Paiement fractionné TAFDIL"
+            description={
+              !creditEligibility.loggedin
+                ? 'Connectez-vous à votre espace client pour accéder au crédit TAFDIL'
+                : !creditEligibility.eligible
+                ? (creditEligibility.reason ?? 'Conditions non remplies')
+                : `Crédit disponible : ${fmt(creditEligibility.availableCredit)} — acompte 30 % maintenant`
+            }
+            disabled={!creditEligibility.eligible}
+          >
+            {modePaiement === 'credit' && creditEligibility.eligible && (
+              <div className="mt-3 space-y-3">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-forge-steel">Nombre de versements</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {([2, 3, 4] as CreditInstallments[]).map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setCreditInstallments(n) }}
+                      className={`rounded-xl border px-3 py-2 text-xs font-black transition ${
+                        creditInstallments === n
+                          ? 'border-forge-red bg-forge-red text-white'
+                          : 'border-gray-200 bg-white text-forge-steel hover:border-forge-red hover:text-forge-red'
+                      }`}
+                    >
+                      {n}×
+                    </button>
+                  ))}
+                </div>
+                {creditInstallments && (
+                  <div className="rounded-xl bg-white px-3 py-2 text-xs text-forge-steel ring-1 ring-gray-100 space-y-1">
+                    <div className="flex justify-between">
+                      <span>Acompte aujourd'hui (30 %)</span>
+                      <span className="font-black text-forge-dark">{fmt(creditAcompte)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>{creditInstallments - 1}× mensualité</span>
+                      <span className="font-black text-forge-dark">
+                        {fmt(Math.floor(creditSolde / (creditInstallments - 1)))} / mois
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </PaymentCard>
+        )}
       </div>
 
       {/* Récapitulatif final */}
@@ -716,6 +792,8 @@ function StepPaiement({
             ? <><Loader2 size={15} className="animate-spin" /> Traitement en cours…</>
             : modePaiement === 'livraison'
               ? `Confirmer et payer l'avance ${fmt(avanceLivraison)}`
+              : modePaiement === 'credit' && creditInstallments
+              ? `Créer le plan : acompte ${fmt(creditAcompte)} · ${creditInstallments - 1}× ${fmt(Math.floor(creditSolde / (creditInstallments - 1)))}/mois`
               : `Confirmer et Payer ${fmt(total)}`
           }
         </button>
@@ -741,13 +819,14 @@ function StepPaiement({
 // ── ÉTAPE 4 — Confirmation ─────────────────────────────────────────────────────
 
 function StepConfirmation({
-  commandeRef, coordonnees, modePaiement, totals, smsStatus,
+  commandeRef, coordonnees, modePaiement, totals, smsStatus, creditPlanId,
 }: {
-  commandeRef: string
-  coordonnees: Coordonnees
-  modePaiement: ModePaiement | null
-  totals: CartTotals
-  smsStatus: SmsStatus | null
+  commandeRef:   string
+  coordonnees:   Coordonnees
+  modePaiement:  ModePaiement | null
+  totals:        CartTotals
+  smsStatus:     SmsStatus | null
+  creditPlanId?: string | null
 }) {
   const frais = FRAIS[coordonnees.ville]
   const total = grandTotal(totals, coordonnees.ville)
@@ -823,11 +902,14 @@ function StepConfirmation({
           Merci, {prenom} !
         </h2>
         <p className="mt-2 text-sm text-forge-steel">
-          Votre commande a bien été reçue. Notre équipe vous contactera sous 24h pour confirmer la livraison.
+          {creditPlanId
+            ? 'Votre plan de crédit a été créé. Le premier versement (acompte 30 %) sera traité sous 24h par notre équipe.'
+            : 'Votre commande a bien été reçue. Notre équipe vous contactera sous 24h pour confirmer la livraison.'
+          }
         </p>
       </motion.div>
 
-      {smsNotice && (
+      {!creditPlanId && smsNotice && (
         <div className={`rounded-2xl border px-4 py-3 text-left text-sm ${
           smsNotice.ok
             ? 'border-green-200 bg-green-50 text-green-700'
@@ -898,12 +980,21 @@ function StepConfirmation({
         transition={{ delay: 0.65 }}
         className="space-y-3"
       >
-        <Link
-          href={`/suivi/${commandeRef}`}
-          className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-forge-red px-5 py-3 text-sm font-bold text-forge-red transition hover:bg-forge-red hover:text-white"
-        >
-          Suivre ma commande →
-        </Link>
+        {creditPlanId ? (
+          <Link
+            href={`/compte/dashboard?plan=${creditPlanId}&success=1`}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-forge-red px-5 py-3 text-sm font-bold text-forge-red transition hover:bg-forge-red hover:text-white"
+          >
+            Mon espace client →
+          </Link>
+        ) : (
+          <Link
+            href={`/suivi/${commandeRef}`}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-forge-red px-5 py-3 text-sm font-bold text-forge-red transition hover:bg-forge-red hover:text-white"
+          >
+            Suivre ma commande →
+          </Link>
+        )}
 
         <a
           href={whatsappUrl}
@@ -949,6 +1040,12 @@ export function CheckoutClient() {
   // Snapshot taken before clearCart() so StepConfirmation still has the correct totals.
   const [confirmedTotals, setConfirmedTotals] = useState<CartTotals | null>(null)
 
+  // Paiement fractionné TAFDIL — éligibilité chargée à l'étape 3
+  const [creditInstallments, setCreditInstallments] = useState<CreditInstallments | null>(null)
+  const [creditEligibility, setCreditEligibility]   = useState<CreditEligibility | null>(null)
+  const [creditLoading, setCreditLoading]           = useState(false)
+  const [creditPlanId, setCreditPlanId]             = useState<string | null>(null)
+
   // Conditions de paiement — fetchées une fois que le total est connu
   const [conditionCode, setConditionCode] = useState('P100')
   const [conditionOptions, setConditionOptions] = useState<ConditionOption[]>([])
@@ -964,6 +1061,19 @@ export function CheckoutClient() {
       .catch(() => {/* silencieux — P100 reste le défaut */})
   }, [totals.ttc, coordonnees.ville]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Éligibilité crédit — chargée une seule fois à l'arrivée sur l'étape Paiement
+  useEffect(() => {
+    if (step !== 3 || creditEligibility !== null || creditLoading) return
+    const ttc = grandTotal(totals, coordonnees.ville)
+    if (ttc <= 0) return
+    setCreditLoading(true)
+    fetch(`/api/shop/credit/eligibilite?montant=${Math.round(ttc)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((json: CreditEligibility | null) => { if (json) setCreditEligibility(json) })
+      .catch(() => {})
+      .finally(() => setCreditLoading(false))
+  }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const goTo = (next: Step) => {
     setDirection(next > step ? 1 : -1)
     setStep(next)
@@ -974,16 +1084,12 @@ export function CheckoutClient() {
     setLoading(true)
     const frais = FRAIS[coordonnees.ville]
     const total = grandTotal(totals, coordonnees.ville)
-    const montantPaiement = modePaiement === 'livraison' && avanceLivraisonPct
-      ? Math.round(total * avanceLivraisonPct / 100)
-      : total
 
-    // Mapper mode paiement vers valeurs API
     const modeApi =
       modePaiement === 'mtn'    ? 'mtn_momo' :
-      modePaiement === 'orange' ? 'orange_money' : 'livraison'
+      modePaiement === 'orange' ? 'orange_money' :
+      modePaiement === 'credit' ? 'credit' : 'livraison'
 
-    // Construire notes (inclure infos facture si demandée)
     const notesClient = [
       coordonnees.notes,
       coordonnees.veutFacture && coordonnees.niu
@@ -994,7 +1100,7 @@ export function CheckoutClient() {
     ].filter(Boolean).join(' — ') || undefined
 
     try {
-      // ── 1. Créer la commande ─────────────────────────────────────────────────
+      // ── 1. Créer la commande (tous modes) ───────────────────────────────────
       const orderRes = await fetch(`/api/shop/commandes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1030,11 +1136,45 @@ export function CheckoutClient() {
         return
       }
 
-      const orderJson = await orderRes.json() as { ref: string; sms?: SmsStatus }
+      const orderJson = await orderRes.json() as { ref: string; id?: string; sms?: SmsStatus }
       const ref = orderJson.ref
       setSmsStatus(orderJson.sms ?? null)
 
-      // ── 2. Mobile Money → initialiser le paiement Notchpay ──────────────────
+      // ── 2a. Crédit TAFDIL → créer le plan, aller à la confirmation ──────────
+      if (modePaiement === 'credit') {
+        if (!creditInstallments) return
+
+        const planRes = await fetch(`/api/shop/credit/plans`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            order_id:              orderJson.id ?? '',
+            total_amount:          total,
+            installments_count:    creditInstallments,
+            first_payment_percent: 30,
+          }),
+        })
+
+        if (!planRes.ok) {
+          const errJson = await planRes.json().catch(() => ({})) as { error?: string }
+          toast.error(errJson.error ?? 'Erreur lors de la création du plan de crédit. Réessayez.')
+          return
+        }
+
+        const planJson = await planRes.json() as { plan?: { id: string } }
+        setCommandeRef(ref)
+        setCreditPlanId(planJson.plan?.id ?? null)
+        setConfirmedTotals(totals)
+        clearCart()
+        goTo(4)
+        return
+      }
+
+      // ── 2b. Mobile Money → initier le paiement NotchPay ─────────────────────
+      const montantPaiement = modePaiement === 'livraison' && avanceLivraisonPct
+        ? Math.round(total * avanceLivraisonPct / 100)
+        : total
+
       const payRes = await fetch(`/api/paiements/initier`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1050,7 +1190,6 @@ export function CheckoutClient() {
       })
 
       if (!payRes.ok) {
-        // Commande créée mais paiement non initié → aller à la confirmation quand même
         toast.warning('Commande créée. Contactez-nous pour le paiement via WhatsApp.')
         setConfirmedTotals(totals)
         clearCart()
@@ -1061,7 +1200,6 @@ export function CheckoutClient() {
 
       const payJson = await payRes.json() as { payment_reference: string }
 
-      // ── 4. Stocker la session de paiement ────────────────────────────────────
       sessionStorage.setItem('forge-paiement', JSON.stringify({
         commande_ref:        ref,
         payment_reference:   payJson.payment_reference,
@@ -1074,10 +1212,15 @@ export function CheckoutClient() {
         mode_paiement_label: MODE_LABEL[modePaiement!],
       }))
 
-      // ── 5. Naviguer vers la page d'attente (panier gardé jusqu'à confirmation)
+      // BUG 1 FIX — passer le canal Mobile Money effectif, pas le mode de paiement
+      // (modePaiement === 'livraison' ne correspond à aucun Canal dans PaymentWaitClient)
+      const urlCanal: 'mtn' | 'orange' = modePaiement === 'livraison'
+        ? (detectCanalMobileMoney(numeroPaiement) === 'cm.mtn' ? 'mtn' : 'orange')
+        : (modePaiement as 'mtn' | 'orange')
+
       window.location.href =
         `/paiement-en-cours?payment_ref=${payJson.payment_reference}` +
-        `&commande_ref=${ref}&canal=${modePaiement}`
+        `&commande_ref=${ref}&canal=${urlCanal}`
 
     } catch {
       toast.error('Connexion impossible. Contactez-nous via WhatsApp.')
@@ -1132,6 +1275,10 @@ export function CheckoutClient() {
               conditionCode={conditionCode}
               setConditionCode={setConditionCode}
               conditionOptions={conditionOptions}
+              creditInstallments={creditInstallments}
+              setCreditInstallments={setCreditInstallments}
+              creditEligibility={creditEligibility}
+              creditLoading={creditLoading}
             />
           )}
           {step === 4 && (
@@ -1141,6 +1288,7 @@ export function CheckoutClient() {
               modePaiement={modePaiement}
               totals={confirmedTotals ?? totals}
               smsStatus={smsStatus}
+              creditPlanId={creditPlanId}
             />
           )}
         </motion.div>

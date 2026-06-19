@@ -8,8 +8,11 @@ import { OrdersPage } from './pages/OrdersPage'
 import { ProductsPage } from './pages/ProductsPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { ApprobationPage } from './pages/ApprobationPage'
+import { LivreurPage } from './pages/LivreurPage'
 
 function AuthenticatedApp() {
+  const { user } = useAuth()
+
   return (
     <div className="flex flex-col h-screen bg-gray-50 overflow-hidden">
       <main className="flex-1 overflow-y-auto pb-nav">
@@ -20,6 +23,9 @@ function AuthenticatedApp() {
           <Route path="/approbation" element={<ApprobationPage />} />
           <Route path="/products" element={<ProductsPage />} />
           <Route path="/profile" element={<ProfilePage />} />
+          {user?.role === 'livreur' && (
+            <Route path="/livraisons" element={<LivreurPage />} />
+          )}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </main>
@@ -29,7 +35,14 @@ function AuthenticatedApp() {
 }
 
 function AppRoutes() {
-  const { user } = useAuth()
+  const { user, loading } = useAuth()
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="w-8 h-8 border-2 border-[#C62828] border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
   return user ? <AuthenticatedApp /> : <LoginPage />
 }
 

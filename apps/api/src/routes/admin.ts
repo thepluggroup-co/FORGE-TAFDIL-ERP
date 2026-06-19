@@ -12,7 +12,7 @@ import {
 
 // ── Schémas Zod ───────────────────────────────────────────────────────────────
 
-const RBAC_ROLE_NAMES = ['SUPER_ADMIN','MANAGER','COMMERCIAL','CAISSIER','MAGASINIER','FORMATEUR','READONLY'] as const
+const RBAC_ROLE_NAMES = ['SUPER_ADMIN','MANAGER','COMMERCIAL','CAISSIER','MAGASINIER','FORMATEUR','READONLY','LIVREUR'] as const
 const RBAC_MODULES    = ['STOCK','COMMERCIAL','FINANCE','HR','PRODUCTION','LOGISTICS','ADMIN','REPORTS','RECEIVABLES'] as const
 const RBAC_ACTIONS    = ['READ','CREATE','UPDATE','DELETE','VALIDATE','CONFIGURE','EXPORT'] as const
 

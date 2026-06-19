@@ -1,10 +1,9 @@
 'use client'
 
-import { useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ShoppingCart, Trash2, Plus, Minus, ArrowLeft, MessageCircle, Package, CheckCircle2 } from 'lucide-react'
+import { ShoppingCart, Trash2, Plus, Minus, ArrowLeft, MessageCircle, Package } from 'lucide-react'
 import { toast } from 'sonner'
 import { useCartStore, computeTotal } from '@/lib/cart'
 import type { CartItem } from '@/lib/cart'
@@ -86,9 +85,7 @@ function CartRow({
 }
 
 export function PanierClient() {
-  const { items, updateQuantity, removeItem, clearCart, sessionId } = useCartStore()
-  const [loading, setLoading] = useState(false)
-  const [success, setSuccess] = useState(false)
+  const { items, updateQuantity, removeItem, clearCart } = useCartStore()
 
   const totals = computeTotal(items)
 
@@ -96,49 +93,6 @@ export function PanierClient() {
   const whatsappUrl = `https://wa.me/${(process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '').replace(/\D/g, '')}?text=${encodeURIComponent(
     `Bonjour TAFDIL, je souhaite commander :\n${whatsappItems}\n\nTotal estimé : ${fmt(totals.ttc)} TTC`
   )}`
-
-  const handleCommande = async () => {
-    setLoading(true)
-    try {
-      const res = await fetch(`/api/shop/commandes`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: sessionId,
-          lignes: items.map((i) => ({ produit_id: i.id, quantite: i.quantite, prix_unitaire: i.prix })),
-          montant_total: totals.ht,
-        }),
-      })
-      if (res.ok) {
-        setSuccess(true)
-        clearCart()
-      } else {
-        toast.error('Erreur lors de la commande. Essayez via WhatsApp.')
-      }
-    } catch {
-      toast.error('Connexion impossible. Essayez via WhatsApp.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  if (success) {
-    return (
-      <main className="mx-auto flex min-h-[60vh] max-w-lg flex-col items-center justify-center px-4 py-16 text-center">
-        <CheckCircle2 size={56} className="mb-4 text-green-500" />
-        <h1 className="text-2xl font-black text-forge-dark">Commande envoyée !</h1>
-        <p className="mt-2 text-sm text-forge-steel">
-          Notre équipe vous contactera sous 24h pour confirmer votre commande et les modalités de livraison.
-        </p>
-        <Link
-          href="/catalogue"
-          className="mt-6 rounded-xl bg-forge-red px-6 py-3 text-sm font-bold text-white transition hover:bg-forge-red-dark"
-        >
-          Continuer mes achats
-        </Link>
-      </main>
-    )
-  }
 
   if (items.length === 0) {
     return (

@@ -1205,6 +1205,25 @@ router.get('/logistique/livraisons', async (c) => {
   return c.json({ data: enrichedData, total: count ?? 0, page, per_page: perPage })
 })
 
+router.get('/logistique/livraisons/mes-livraisons', requireRole(['livreur']), async (c) => {
+  const user = c.get('user')
+  const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
+  const perPage = Math.min(50, parseInt(c.req.query('per_page') ?? '20'))
+  const from    = (page - 1) * perPage
+
+  const { data, count, error } = await db
+    .from('livraisons')
+    .select('*', { count: 'exact' })
+    .eq('livreur_id', user.id)
+    .not('statut', 'in', '("livree","annulee")')
+    .order('date_livraison_prevue', { ascending: true, nullsFirst: false })
+    .range(from, from + perPage - 1)
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  return c.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage })
+})
+
 router.get('/logistique/commandes-pretes', async (c) => {
   const { data: livraisonsActives } = await db
     .from('livraisons')
@@ -1365,7 +1384,7 @@ router.post('/logistique/livraisons', requireRole(['admin', 'superviseur', 'oper
   return c.json(data, 201)
 })
 
-router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', livraisonStatutSchema), async (c) => {
+router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'superviseur', 'operateur', 'livreur']), zValidator('json', livraisonStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
   const user   = c.get('user')

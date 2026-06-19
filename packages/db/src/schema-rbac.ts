@@ -26,7 +26,7 @@ export const RBAC_ACTIONS = [
 
 export const RBAC_ROLE_NAMES = [
   'SUPER_ADMIN', 'MANAGER', 'COMMERCIAL', 'CAISSIER',
-  'MAGASINIER', 'FORMATEUR', 'READONLY',
+  'MAGASINIER', 'FORMATEUR', 'READONLY', 'LIVREUR',
 ] as const
 
 export type RbacModule   = typeof RBAC_MODULES[number]

@@ -162,6 +162,7 @@ export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = a
     superviseur: 'superviseur',
     operateur:   'operateur',
     apprenant:   'apprenant',
+    livreur:     'livreur',
     directeur:   'admin',       // legacy
     viewer:      'apprenant',   // legacy
   }

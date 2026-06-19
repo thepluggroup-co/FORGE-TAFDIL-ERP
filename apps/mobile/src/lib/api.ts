@@ -19,6 +19,22 @@ export interface BonSortie {
   bons_sortie_lignes: BonLigne[]
 }
 
+export type LivraisonStatut = 'planifiee' | 'en_transit' | 'livree' | 'annulee'
+
+export interface Livraison {
+  id: string
+  numero: string
+  statut: LivraisonStatut
+  client_nom: string
+  client_id: string | null
+  commande_id: string | null
+  date_livraison_prevue: string | null
+  date_livraison_reelle: string | null
+  notes: string | null
+  livreur_id: string | null
+  created_at: string
+}
+
 let _token: string | null = null
 
 export function setApiToken(token: string | null) {
@@ -56,5 +72,21 @@ export async function validerBon(id: string, decision: 'valide' | 'refuse', comm
   return apiFetch<BonSortie>(`/api/bons/${id}/valider`, {
     method: 'PUT',
     body: JSON.stringify({ decision, commentaire }),
+  })
+}
+
+export async function fetchMesLivraisons(): Promise<Livraison[]> {
+  const res = await apiFetch<{ data: Livraison[] }>('/api/logistique/livraisons/mes-livraisons')
+  return res.data
+}
+
+export async function updateLivraisonStatut(
+  id: string,
+  statut: LivraisonStatut,
+  notes?: string,
+): Promise<Livraison> {
+  return apiFetch<Livraison>(`/api/logistique/livraisons/${id}/statut`, {
+    method: 'PATCH',
+    body: JSON.stringify({ statut, notes }),
   })
 }

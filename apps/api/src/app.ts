@@ -21,7 +21,9 @@ import { equipementsRouter } from './routes/equipements'
 import { creditRouter } from './routes/credit'
 import { profileRouter } from './routes/profile'
 import { fournisseursRouter } from './routes/fournisseurs'
+import { logistiqueRouter } from './routes/logistique'
 import { demarrerCronRelances } from './services/relances-cron.service'
+import { demarrerCronReappro } from './services/reappro-cron.service'
 import { checkOverdueInstallments } from './services/creditService'
 import { sendUpcomingReminders } from './services/notificationService'
 import { HTTPException } from 'hono/http-exception'
@@ -108,19 +110,20 @@ const api = new Hono<{ Variables: HonoVariables }>()
 api.use('*', authMiddleware)
 api.use('*', auditMiddleware)
 
-api.route('/stocks',   stocksRouter)
-api.route('/bons',     bonsRouter)
-api.route('/',         commerceRouter)
-api.route('/',         financeRouter)
-api.route('/',         rhRouter)
-api.route('/',         aiRouter)
-api.route('/rapports', rapportsRouter)
-api.route('/shop-erp', shopErpRouter)
-api.route('/',         operationsRouter)
-api.route('/',         equipementsRouter)
-api.route('/admin',    adminRouter)
-api.route('/credit',       creditRouter)
-api.route('/profile',      profileRouter)
+api.route('/stocks',      stocksRouter)
+api.route('/bons',        bonsRouter)
+api.route('/logistique',  logistiqueRouter)   // avant operationsRouter — évite que les routes /logistique/* soient capturées par le wildcard "/"
+api.route('/',            commerceRouter)
+api.route('/',            financeRouter)
+api.route('/',            rhRouter)
+api.route('/',            aiRouter)
+api.route('/rapports',    rapportsRouter)
+api.route('/shop-erp',    shopErpRouter)
+api.route('/',            operationsRouter)
+api.route('/',            equipementsRouter)
+api.route('/admin',       adminRouter)
+api.route('/credit',      creditRouter)
+api.route('/profile',     profileRouter)
 api.route('/fournisseurs', fournisseursRouter)
 
 app.route('/api', api)
@@ -154,6 +157,9 @@ app.notFound((c) =>
 
 // ── Cron relances automatiques WhatsApp (MOD-04 CDC) ──────────────────────────
 demarrerCronRelances()
+
+// ── Cron réapprovisionnement stock (quotidien, heure via REAPPRO_CRON_HOUR) ──
+demarrerCronReappro()
 
 // ── Cron Crédit : mark-overdue quotidien 06:00, rappels J-3 08:00 ─────────────
 ;(function startCreditCrons() {
