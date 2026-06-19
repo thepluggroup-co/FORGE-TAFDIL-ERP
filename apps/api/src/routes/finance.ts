@@ -78,17 +78,22 @@ interface FactureLignePdf {
 // ── Schémas Zod ────────────────────────────────────────────────────────────────
 
 const factureSchema = z.object({
-  client_id:     z.string().optional(),
-  client_nom:    z.string().min(1),
-  commande_id:   z.string().optional(),
-  date_emission: z.string(),
-  date_echeance: z.string(),
-  notes:         z.string().optional(),
+  client_id:            z.string().optional(),
+  client_nom:           z.string().min(1),
+  commande_id:          z.string().optional(),
+  date_emission:        z.string(),
+  date_echeance:        z.string(),
+  remise_globale_xaf:   z.number().min(0).default(0),
+  remise_globale_motif: z.string().optional(),
+  notes:                z.string().optional(),
   lignes: z.array(z.object({
     designation:          z.string().min(1),
     unite:                z.string().default('unité'),
     quantite:             z.number().positive(),
     prix_unitaire_ht_xaf: z.number().min(0),
+    remise_type:          z.enum(['pct', 'forfait']).optional(),
+    remise_valeur:        z.number().min(0).optional(),
+    remise_motif:         z.string().optional(),
     ordre:                z.number().int().default(0),
   })).min(1),
 })
@@ -806,26 +811,44 @@ router.post('/factures', requireRole(['admin']), zValidator('json', factureSchem
         .gte('created_at', `${year}-01-01T00:00:00.000Z`)
       const numero = `FAC-${year}-${String((count ?? 0) + 1).padStart(4, '0')}`
 
-      const total_ht_xaf  = Math.round(body.lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire_ht_xaf, 0))
-      const tva_xaf       = Math.round(total_ht_xaf * TVA_RATE)
-      const total_ttc_xaf = total_ht_xaf + tva_xaf
+      const lignesAvecRemise = body.lignes.map((l) => {
+        const remise_xaf = !l.remise_type || !l.remise_valeur ? 0
+          : l.remise_type === 'pct'
+            ? Math.round(l.quantite * l.prix_unitaire_ht_xaf * (l.remise_valeur / 100))
+            : Math.min(Math.round(l.remise_valeur), Math.round(l.quantite * l.prix_unitaire_ht_xaf))
+        return { ...l, remise_xaf }
+      })
+      const brut_ht_xaf       = Math.round(lignesAvecRemise.reduce((s, l) => s + l.quantite * l.prix_unitaire_ht_xaf, 0))
+      const remises_lignes    = Math.round(lignesAvecRemise.reduce((s, l) => s + l.remise_xaf, 0))
+      const remise_globale    = Math.round(body.remise_globale_xaf ?? 0)
+      const remise_totale_ht  = remises_lignes + remise_globale
+      const total_ht_xaf      = Math.max(0, brut_ht_xaf - remise_totale_ht)
+      const tva_xaf           = Math.round(total_ht_xaf * TVA_RATE)
+      const total_ttc_xaf     = total_ht_xaf + tva_xaf
 
       const { data: facture, error: facErr } = await db.from('factures')
-        .insert({ numero, client_id: body.client_id ?? null, client_nom: body.client_nom,
+        .insert({
+          numero, client_id: body.client_id ?? null, client_nom: body.client_nom,
           commande_id: body.commande_id ?? null, statut: 'brouillon',
           date_emission: body.date_emission, date_echeance: body.date_echeance,
-          total_ht_xaf, tva_xaf, total_ttc_xaf, montant_paye_xaf: 0,
-          notes: body.notes ?? null, created_by: user.id, sync_status: 'synced' })
+          remise_globale_xaf: remise_globale, remise_globale_motif: body.remise_globale_motif ?? null,
+          total_ht_xaf, tva_xaf, total_ttc_xaf, net_a_payer_xaf: total_ttc_xaf, montant_paye_xaf: 0,
+          notes: body.notes ?? null, created_by: user.id, sync_status: 'synced',
+        })
         .select().single()
 
       if (facErr || !facture) throw new Error(facErr?.message ?? 'Erreur création facture')
       const facId = (facture as { id: string }).id
 
       const { data: lignesData, error: lignesErr } = await db.from('factures_lignes')
-        .insert(body.lignes.map((l, i) => ({
+        .insert(lignesAvecRemise.map((l, i) => ({
           facture_id: facId, designation: l.designation, unite: l.unite,
           quantite: l.quantite, prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
           total_ht_xaf: Math.round(l.quantite * l.prix_unitaire_ht_xaf),
+          remise_type:   l.remise_type ?? null,
+          remise_valeur: l.remise_valeur ?? null,
+          remise_xaf:    l.remise_xaf,
+          remise_motif:  l.remise_motif ?? null,
           ordre: l.ordre !== 0 ? l.ordre : i,
         }))).select()
 
@@ -837,15 +860,28 @@ router.post('/factures', requireRole(['admin']), zValidator('json', factureSchem
       let pdf_url: string | null = null
       try {
         const pdfBuf = await generateFacturePDF(
-          { numero, date_emission: body.date_emission, date_echeance: body.date_echeance, total_ht_xaf, tva_xaf, total_ttc_xaf },
-          { nom: body.client_nom }, (lignesData ?? []) as FactureLignePdf[],
+          {
+            numero,
+            date_emission:       body.date_emission,
+            date_echeance:       body.date_echeance,
+            total_ht_xaf,
+            tva_xaf,
+            total_ttc_xaf,
+            remise_globale_xaf:  body.remise_globale_xaf ?? null,
+            acompte_recu_xaf:    body.acompte_recu_xaf ?? null,
+          },
+          { nom: body.client_nom },
+          (lignesData ?? []) as FactureLignePdf[],
         )
         pdf_url = await uploadPDF(pdfBuf, 'factures', `${numero}.pdf`)
       } catch (e) { console.error('[finance] PDF error:', e) }
 
       const fRow = facture as { id: string; date_emission: string }
-      genererEcritureVente({ id: fRow.id, numero, date_emission: fRow.date_emission,
+      genererEcritureVente({
+        id: fRow.id, numero, date_emission: fRow.date_emission,
         client_nom: body.client_nom, total_ht_xaf, tva_xaf, total_ttc_xaf, created_by: user.id,
+        brut_ht_xaf:          remise_totale_ht > 0 ? brut_ht_xaf : undefined,
+        remise_totale_ht_xaf: remise_totale_ht > 0 ? remise_totale_ht : undefined,
       }).catch(e => console.error('[compta] vente:', e))
 
       return enrichirFacture({ ...facture, lignes: lignesData, pdf_url })
@@ -882,7 +918,13 @@ router.get('/factures/:id/pdf', async (c) => {
     .from('factures').select('*, factures_lignes(*)').eq('id', id).single()
   if (error || !facture) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
 
-  const f = facture as { numero: string; client_nom: string; date_emission: string; date_echeance: string; total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number; factures_lignes: FactureLignePdf[] }
+  const f = facture as {
+    numero: string; client_nom: string; date_emission: string; date_echeance: string
+    total_ht_xaf: number; tva_xaf: number; frais_livraison_xaf?: number | null; total_ttc_xaf: number
+    remise_globale_xaf?: number | null; acompte_recu_xaf?: number | null; net_a_payer_xaf?: number | null
+    condition_paiement_id?: string | null
+    factures_lignes: FactureLignePdf[]
+  }
 
   // Essayer Supabase Storage d'abord
   try {
@@ -897,7 +939,18 @@ router.get('/factures/:id/pdf', async (c) => {
 
   // Régénération à la volée si absent dans Storage
   const buf = await generateFacturePDF(
-    { numero: f.numero, date_emission: f.date_emission, date_echeance: f.date_echeance, total_ht_xaf: f.total_ht_xaf, tva_xaf: f.tva_xaf, total_ttc_xaf: f.total_ttc_xaf },
+    {
+      numero:              f.numero,
+      date_emission:       f.date_emission,
+      date_echeance:       f.date_echeance,
+      total_ht_xaf:        f.total_ht_xaf,
+      tva_xaf:             f.tva_xaf,
+      frais_livraison_xaf: f.frais_livraison_xaf,
+      total_ttc_xaf:       f.total_ttc_xaf,
+      remise_globale_xaf:  f.remise_globale_xaf,
+      acompte_recu_xaf:    f.acompte_recu_xaf,
+      net_a_payer_xaf:     f.net_a_payer_xaf,
+    },
     { nom: f.client_nom },
     f.factures_lignes,
   )

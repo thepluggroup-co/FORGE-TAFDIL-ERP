@@ -99,8 +99,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <KpiCard
           title="CA du mois"
-          value={isLoading ? '…' : Math.round(caMoisActuel / 1000).toLocaleString('fr')}
-          unit="K FCFA"
+          value={isLoading ? '…' : formatXAF(caMoisActuel)}
           trend={caMoisActuel > 0 ? 'up' : 'neutral'}
           trendValue={isLoading ? '' : chartTrend ?? 'Aucune donnée'}
           icon={<TrendingUp className="h-5 w-5" />}

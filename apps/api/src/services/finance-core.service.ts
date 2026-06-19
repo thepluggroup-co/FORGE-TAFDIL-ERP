@@ -11,17 +11,27 @@ interface CommandeRow {
   numero: string
   client_id: string | null
   client_nom: string
+  condition_paiement_id?: string | null
+  acompte_recu_xaf?: number | null
+  date_echeance_solde?: string | null
   total_ht_xaf: number
   tva_xaf: number
   frais_livraison_xaf?: number | null
   total_ttc_xaf: number
   montant_paye_xaf?: number | null
+  remise_globale_xaf?: number | null
+  remise_globale_motif?: string | null
+  net_a_payer_xaf?: number | null
   commandes_lignes?: Array<{
     designation: string
     unite: string
     quantite: number
     prix_unitaire_ht_xaf: number
     total_ht_xaf: number
+    remise_type?: string | null
+    remise_valeur?: number | null
+    remise_xaf?: number | null
+    remise_motif?: string | null
     ordre: number
   }>
 }
@@ -85,7 +95,7 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
 
   const { data: commande, error } = await db
     .from('commandes')
-    .select('id, numero, client_id, client_nom, total_ht_xaf, tva_xaf, frais_livraison_xaf, total_ttc_xaf, montant_paye_xaf, commandes_lignes(*)')
+    .select('id, numero, client_id, client_nom, condition_paiement_id, acompte_recu_xaf, date_echeance_solde, total_ht_xaf, tva_xaf, frais_livraison_xaf, total_ttc_xaf, montant_paye_xaf, remise_globale_xaf, remise_globale_motif, net_a_payer_xaf, commandes_lignes(*)')
     .eq('id', options.commandeId)
     .single()
 
@@ -94,7 +104,8 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
 
   const numero = await genererNumero('factures', 'FAC')
   const dateEmission = new Date().toISOString().slice(0, 10)
-  const dateEcheance = new Date(Date.now() + (options.dateEcheanceJours ?? 7) * 86400_000).toISOString().slice(0, 10)
+  const dateEcheance = cmd.date_echeance_solde
+    ?? new Date(Date.now() + (options.dateEcheanceJours ?? 7) * 86400_000).toISOString().slice(0, 10)
   const montantPaye = Math.min(Number(options.montantPayeXaf ?? cmd.montant_paye_xaf ?? 0), Number(cmd.total_ttc_xaf))
   const statut = factureStatutDepuisPaiement(Number(cmd.total_ttc_xaf), montantPaye, options.statut ?? 'brouillon')
 
@@ -102,20 +113,25 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
     .from('factures')
     .insert({
       numero,
-      commande_id:       cmd.id,
-      client_id:         cmd.client_id,
-      client_nom:        cmd.client_nom,
+      commande_id:           cmd.id,
+      client_id:             cmd.client_id,
+      client_nom:            cmd.client_nom,
+      condition_paiement_id: cmd.condition_paiement_id ?? null,
+      acompte_recu_xaf:      Number(cmd.acompte_recu_xaf ?? 0),
       statut,
-      date_emission:     dateEmission,
-      date_echeance:     dateEcheance,
-      total_ht_xaf:      cmd.total_ht_xaf,
-      tva_xaf:           cmd.tva_xaf,
-      frais_livraison_xaf: Number(cmd.frais_livraison_xaf ?? 0),
-      total_ttc_xaf:     cmd.total_ttc_xaf,
-      montant_paye_xaf:  montantPaye,
-      notes:             options.notes ?? null,
-      created_by:        options.userId ?? null,
-      sync_status:       'synced',
+      date_emission:         dateEmission,
+      date_echeance:         dateEcheance,
+      remise_globale_xaf:    Number(cmd.remise_globale_xaf ?? 0),
+      remise_globale_motif:  cmd.remise_globale_motif ?? null,
+      total_ht_xaf:          cmd.total_ht_xaf,
+      tva_xaf:               cmd.tva_xaf,
+      frais_livraison_xaf:   Number(cmd.frais_livraison_xaf ?? 0),
+      total_ttc_xaf:         cmd.total_ttc_xaf,
+      net_a_payer_xaf:       cmd.total_ttc_xaf + Number(cmd.frais_livraison_xaf ?? 0),
+      montant_paye_xaf:      montantPaye,
+      notes:                 options.notes ?? null,
+      created_by:            options.userId ?? null,
+      sync_status:           'synced',
     })
     .select()
     .single()
@@ -130,6 +146,10 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
     quantite:              ligne.quantite,
     prix_unitaire_ht_xaf:  ligne.prix_unitaire_ht_xaf,
     total_ht_xaf:          ligne.total_ht_xaf,
+    remise_type:           ligne.remise_type ?? null,
+    remise_valeur:         ligne.remise_valeur ?? null,
+    remise_xaf:            ligne.remise_xaf ?? 0,
+    remise_motif:          ligne.remise_motif ?? null,
     ordre:                 ligne.ordre ?? index + 1,
   }))
 
@@ -141,16 +161,22 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
     }
   }
 
+  const remiseLignesXaf = Math.round((cmd.commandes_lignes ?? []).reduce((s, l) => s + Number(l.remise_xaf ?? 0), 0))
+  const remiseTotaleHtXaf = remiseLignesXaf + Math.round(Number(cmd.remise_globale_xaf ?? 0))
+  const brutHtXaf = cmd.total_ht_xaf + remiseTotaleHtXaf
+
   genererEcritureVente({
-    id:             facId,
+    id:                    facId,
     numero,
-    date_emission:  dateEmission,
-    client_nom:     cmd.client_nom,
-    total_ht_xaf:   cmd.total_ht_xaf,
-    tva_xaf:        cmd.tva_xaf,
-    frais_livraison_xaf: Number(cmd.frais_livraison_xaf ?? 0),
-    total_ttc_xaf:  cmd.total_ttc_xaf,
-    created_by:     options.userId,
+    date_emission:         dateEmission,
+    client_nom:            cmd.client_nom,
+    total_ht_xaf:          cmd.total_ht_xaf,
+    tva_xaf:               cmd.tva_xaf,
+    frais_livraison_xaf:   Number(cmd.frais_livraison_xaf ?? 0),
+    total_ttc_xaf:         cmd.total_ttc_xaf,
+    brut_ht_xaf:           remiseTotaleHtXaf > 0 ? brutHtXaf : undefined,
+    remise_totale_ht_xaf:  remiseTotaleHtXaf > 0 ? remiseTotaleHtXaf : undefined,
+    created_by:            options.userId,
   }).catch(e => console.error('[compta] vente auto:', e))
 
   return { facture: enrichirFactureSolde({ ...facture, factures_lignes: lignes }), created: true }

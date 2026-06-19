@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  dbGetProduits, dbGetAlertesProduits, dbCreateProduit, dbMouvementStock,
+  dbGetProduits, dbGetAlertesProduits, dbCreateProduit, dbMouvementStock, dbGetMouvementsStock,
 } from '@/lib/db'
 
 export interface StockProduit {
@@ -41,6 +41,34 @@ export function useCreateProduit() {
     mutationFn: (payload: CreateProduitPayload) => dbCreateProduit(payload),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['stocks'] }); toast.success('Produit créé') },
     onError:   (err: Error) => toast.error(err.message),
+  })
+}
+
+export interface MouvementStock {
+  id: string
+  created_at: string
+  type: 'entree' | 'sortie' | 'ajustement' | 'transfert'
+  quantite: number
+  reference: string | null
+  notes: string | null
+  created_by: string | null
+  produits: { ref: string; designation: string; unite: string } | null
+  profiles: { full_name: string | null } | null
+}
+
+export function useMouvementsStock(params?: {
+  produit_id?: string
+  type?: 'entree' | 'sortie' | 'ajustement' | 'transfert'
+  date_debut?: string
+  date_fin?: string
+  page?: number
+}) {
+  return useQuery({
+    queryKey:  ['mouvements_stock', params],
+    queryFn:   () => dbGetMouvementsStock(params) as Promise<{
+      data: MouvementStock[]; total: number; page: number; per_page: number; total_pages: number
+    }>,
+    staleTime: 15_000,
   })
 }
 

@@ -13,6 +13,8 @@ export interface BonSortie {
   id: string; numero: string
   statut: 'en_attente' | 'soumis' | 'valide' | 'execute' | 'refuse'
   type?: 'commande' | 'devis' | 'manuel'
+  nature_transaction?: 'comptant' | 'credit' | 'deduction_acompte' | null
+  imputation_payeur?:  'entreprise_tafdil' | 'atelier' | 'administration' | null
   commande_id?: string | null
   devis_id?: string | null
   montant_total_xaf?: number | null
@@ -69,16 +71,20 @@ export function useCreateBon() {
       technicien_nom?: string; demandeur?: string; motif?: string; notes?: string
       type?: 'manuel' | 'commande' | 'devis'
       commande_id?: string | null; devis_id?: string | null
+      nature_transaction: 'comptant' | 'credit' | 'deduction_acompte'
+      imputation_payeur:  'entreprise_tafdil' | 'atelier' | 'administration'
       lignes: Array<{ produit_id?: string; designation?: string; unite?: string; quantite?: number; quantite_demandee?: number }>
     }) => {
       const numero = await genererNumero('bons_sortie', 'TAF')
       const { data: bon, error: bonErr } = await supabase.from('bons_sortie').insert({
         numero,
-        demandeur:  payload.demandeur ?? payload.technicien_nom ?? 'Technicien',
-        motif:      payload.motif ?? 'Sortie de stock',
-        notes:      payload.notes ?? null,
-        statut:     'soumis',
-        type:       payload.type ?? 'manuel',
+        demandeur:          payload.demandeur ?? payload.technicien_nom ?? 'Technicien',
+        motif:              payload.motif ?? 'Sortie de stock',
+        notes:              payload.notes ?? null,
+        statut:             'soumis',
+        type:               payload.type ?? 'manuel',
+        nature_transaction: payload.nature_transaction,
+        imputation_payeur:  payload.imputation_payeur,
         ...(payload.commande_id ? { commande_id: payload.commande_id } : {}),
         ...(payload.devis_id ? { devis_id: payload.devis_id } : {}),
         created_by: auth.user?.id,

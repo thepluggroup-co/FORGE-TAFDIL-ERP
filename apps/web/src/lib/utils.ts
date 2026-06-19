@@ -11,7 +11,14 @@ export function formatXAF(amount: number): string {
     currency: 'XAF',
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
-  }).format(amount)
+  }).format(amount).replace(/[  ]/g, ' ')
+}
+
+export function formatNombre(n: number): string {
+  return new Intl.NumberFormat('fr-CM', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(n).replace(/[  ]/g, ' ')
 }
 
 export function formatDate(iso: string): string {

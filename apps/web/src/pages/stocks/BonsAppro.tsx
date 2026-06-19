@@ -513,7 +513,7 @@ export default function BonsAppro() {
                     notes:                    approForm.notes || undefined,
                   },
                   {
-                    onSuccess: () => { setApproOpen(false); setApproForm(DEFAULT_APPRO) },
+                    onSuccess: () => { setApproOpen(false); setApproForm(DEFAULT_APPRO); setStatutFilter('') },
                   },
                 )
               }}

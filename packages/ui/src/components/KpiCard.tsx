@@ -40,7 +40,7 @@ export function KpiCard({ title, value, unit, trend, trendValue, icon, color = '
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-gray-500 truncate">{title}</p>
         <div className="flex items-baseline gap-1 mt-0.5">
-          <span className="text-2xl font-bold text-[#212121]">{value}</span>
+          <span className="text-2xl font-bold text-[#212121] tabular-nums break-all leading-tight">{value}</span>
           {unit && <span className="text-sm font-medium text-gray-400">{unit}</span>}
         </div>
 

@@ -412,6 +412,24 @@ function BonDetailSlideOver({
             label="Montant"
             value={bon.montant_total_xaf != null ? formatXAF(Number(bon.montant_total_xaf)) : 'Sur devis'}
           />
+          <DetailItem
+            label="Nature transaction"
+            value={
+              bon.nature_transaction === 'comptant'           ? 'Comptant'
+              : bon.nature_transaction === 'credit'          ? 'Crédit'
+              : bon.nature_transaction === 'deduction_acompte' ? 'Déduction acompte'
+              : '—'
+            }
+          />
+          <DetailItem
+            label="Imputation payeur"
+            value={
+              bon.imputation_payeur === 'atelier'            ? 'Atelier'
+              : bon.imputation_payeur === 'entreprise_tafdil' ? 'Entreprise TAFDIL'
+              : bon.imputation_payeur === 'administration'    ? 'Administration'
+              : '—'
+            }
+          />
         </div>
 
         <div>
@@ -515,6 +533,8 @@ function NouveauBonSlideOver({ open, onClose }: { open: boolean; onClose: () => 
   const [sourceId, setSourceId]   = useState('')
   const [cmdOptions, setCmdOptions] = useState<CommandeOption[]>([])
   const [devOptions, setDevOptions] = useState<DevisOption[]>([])
+  const [nature, setNature]   = useState<'comptant' | 'credit' | 'deduction_acompte'>('comptant')
+  const [payeur, setPayeur]   = useState<'entreprise_tafdil' | 'atelier' | 'administration'>('atelier')
 
   const [form, setForm] = useState({
     technicien_nom: '',
@@ -539,9 +559,11 @@ function NouveauBonSlideOver({ open, onClose }: { open: boolean; onClose: () => 
   const updateLigne = (i: number, field: string, value: string | number) =>
     setForm((f) => ({ ...f, lignes: f.lignes.map((l, idx) => idx === i ? { ...l, [field]: value } : l) }))
 
-  const lignesValid = form.lignes.every((l) => l.produit_id !== '' && l.quantite > 0)
-  const sourceValid = typeSrc === 'manuel' ? form.technicien_nom !== '' : sourceId !== ''
-  const valid       = lignesValid && sourceValid
+  const lignesValid  = form.lignes.every((l) => l.produit_id !== '' && l.quantite > 0)
+  const sourceValid  = typeSrc === 'manuel' ? form.technicien_nom !== '' : sourceId !== ''
+  const hasCommande  = typeSrc === 'commande' && sourceId !== ''
+  const natureValid  = nature === 'comptant' || hasCommande
+  const valid        = lignesValid && sourceValid && natureValid
 
   const handleSubmit = () => {
     const lignes = form.lignes.map((l) => {
@@ -555,15 +577,17 @@ function NouveauBonSlideOver({ open, onClose }: { open: boolean; onClose: () => 
       : ''
 
     createBon.mutate({
-      type:         typeSrc,
-      demandeur:    typeSrc !== 'manuel' ? sourceRef : undefined,
-      technicien_nom: typeSrc === 'manuel' ? form.technicien_nom : undefined,
+      type:              typeSrc,
+      demandeur:         typeSrc !== 'manuel' ? sourceRef : undefined,
+      technicien_nom:    typeSrc === 'manuel' ? form.technicien_nom : undefined,
       motif:
         typeSrc === 'commande' ? `Préparation commande ${sourceRef}`
         : typeSrc === 'devis'  ? `Sortie devis ${sourceRef}`
         : 'Sortie de stock',
-      commande_id: typeSrc === 'commande' ? sourceId : undefined,
-      devis_id:    typeSrc === 'devis'    ? sourceId : undefined,
+      commande_id:        typeSrc === 'commande' ? sourceId : undefined,
+      devis_id:           typeSrc === 'devis'    ? sourceId : undefined,
+      nature_transaction: nature,
+      imputation_payeur:  payeur,
       lignes,
     }, { onSuccess: onClose })
   }
@@ -637,6 +661,40 @@ function NouveauBonSlideOver({ open, onClose }: { open: boolean; onClose: () => 
             )}
           </div>
         )}
+
+        {/* Nature de la transaction */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Nature de la transaction</label>
+          <select
+            value={nature}
+            onChange={(e) => setNature(e.target.value as typeof nature)}
+            className={selectCls}
+          >
+            <option value="comptant">Comptant — paiement immédiat</option>
+            <option value="credit" disabled={!hasCommande}>Crédit — vente à crédit{!hasCommande ? ' (commande requise)' : ''}</option>
+            <option value="deduction_acompte" disabled={!hasCommande}>Déduction acompte{!hasCommande ? ' (commande requise)' : ''}</option>
+          </select>
+          {!natureValid && (
+            <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-700">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              Nature "{nature}" requiert une commande liée — sélectionnez une commande ci-dessus.
+            </div>
+          )}
+        </div>
+
+        {/* Imputation payeur */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Imputation payeur</label>
+          <select
+            value={payeur}
+            onChange={(e) => setPayeur(e.target.value as typeof payeur)}
+            className={selectCls}
+          >
+            <option value="atelier">Atelier</option>
+            <option value="entreprise_tafdil">Entreprise TAFDIL</option>
+            <option value="administration">Administration</option>
+          </select>
+        </div>
 
         {/* Lignes produits */}
         <div>

@@ -16,6 +16,7 @@ import type { ProduitShopErp } from '@/hooks/useProduitsShop'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
 import type { CommandeShop } from '@/hooks/useCommandesShop'
 import { useDevisWeb, useCreerDevisErp, useChangerStatutDevisWeb } from '@/hooks/useDevisWeb'
+import { useConditionsPaiement } from '@/hooks/useDevis'
 import type { DevisWeb } from '@/hooks/useDevisWeb'
 import { useShopAnalytics } from '@/hooks/useShopAnalytics'
 
@@ -297,17 +298,6 @@ function CommandeShopDetail({ commande, onClose }: { commande: CommandeShop; onC
   )
 }
 
-// ── Conditions de paiement (référentiel migration 0016) ───────────────────────
-
-const CONDITIONS_PAIEMENT = [
-  { code: 'P100',    libelle: 'Comptant intégral' },
-  { code: 'P30-LIV', libelle: '30% commande + solde à livraison' },
-  { code: 'P30-45',  libelle: '30% commande + crédit 45 jours' },
-  { code: 'P30-60',  libelle: '30% commande + crédit 60 jours' },
-  { code: 'PROJ-3T', libelle: '30% signature + 40% mi-chantier + 30% réception' },
-  { code: 'PROJ-DG', libelle: 'Conditions spéciales — accord DG requis' },
-]
-
 // ── SlideOver traitement devis ─────────────────────────────────────────────────
 
 function TraiterDevisSlideOver({
@@ -320,6 +310,7 @@ function TraiterDevisSlideOver({
   onSuccess: (erpNumero: string) => void
 }) {
   const creerDevis = useCreerDevisErp()
+  const { data: conditionsData } = useConditionsPaiement()
 
   const today30 = new Date(Date.now() + 30 * 86_400_000).toISOString().split('T')[0]
   const [montantHt,    setMontantHt]    = useState<string>('')
@@ -431,7 +422,7 @@ function TraiterDevisSlideOver({
               onChange={(e) => setCondCode(e.target.value)}
               className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]"
             >
-              {CONDITIONS_PAIEMENT.map((c) => (
+              {(conditionsData?.data ?? []).map((c) => (
                 <option key={c.code} value={c.code}>{c.code} — {c.libelle}</option>
               ))}
             </select>

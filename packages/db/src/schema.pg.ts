@@ -42,7 +42,11 @@ export const capteurStatutEnum = pgEnum('capteur_statut', ['actif', 'alerte', 'h
 export const declStatutEnum    = pgEnum('decl_statut',    ['a_declarer', 'soumis', 'valide'])
 export const mvtTypeEnum       = pgEnum('mvt_type',       ['entree', 'sortie', 'ajustement', 'transfert'])
 export const categorieDevisEnum = pgEnum('categorie_devis', ['materiaux', 'main_oeuvre', 'equipement', 'autre'])
-export const rembTypeEnum      = pgEnum('remb_type',      ['total', 'partiel'])
+export const rembTypeEnum           = pgEnum('remb_type',              ['total', 'partiel'])
+export const natureTransactionEnum  = pgEnum('nature_transaction_enum', ['comptant', 'credit', 'deduction_acompte'])
+export const imputationPayeurEnum   = pgEnum('imputation_payeur_enum',  ['entreprise_tafdil', 'atelier', 'administration'])
+export const statutPreparationEnum  = pgEnum('statut_preparation_enum', ['a_preparer', 'en_cours', 'pret'])
+export const remiseTypeEnum         = pgEnum('remise_type_enum',        ['pct', 'forfait'])
 
 // ══════════════════════════════════════════════════════════════════════════════
 // AUTH / PROFILS
@@ -77,7 +81,8 @@ export const clientsPg = pgTable('clients', {
   ville:            text('ville'),
   pays:             text('pays').notNull().default('Cameroun'),
   statut:           clientStatutEnum('statut').notNull().default('actif'),
-  scoreFiabilite:   integer('score_fiabilite').notNull().default(50),
+  scoreFiabilite:   text('score_fiabilite').notNull().default('nouveau'),
+  plafondCreditXaf: integer('plafond_credit_xaf').default(0),
   commandesCount:   integer('commandes_count').notNull().default(0),
   totalCaXaf:       real('total_ca_xaf').notNull().default(0),
   encoursCreditXaf: real('encours_credit_xaf').notNull().default(0),
@@ -137,10 +142,14 @@ export const bonsSortiePg = pgTable('bons_sortie', {
   // FK nullable vers commandes/devis — sans .references() (forward ref non supporté sans AnyPgColumn)
   commandeId:  uuid('commande_id'),
   devisId:     uuid('devis_id'),
-  demandeur:   text('demandeur').notNull(),
-  valideParId: uuid('valide_par_id').references(() => profilesPg.id),
-  motif:       text('motif').notNull(),
-  notes:       text('notes'),
+  demandeur:        text('demandeur').notNull(),
+  valideParId:      uuid('valide_par_id').references(() => profilesPg.id),
+  motif:            text('motif').notNull(),
+  natureTransaction:   natureTransactionEnum('nature_transaction'),
+  imputationPayeur:    imputationPayeurEnum('imputation_payeur'),
+  preparateurId:       uuid('preparateur_id').references(() => profilesPg.id),
+  statutPreparation:   statutPreparationEnum('statut_preparation'),
+  notes:               text('notes'),
   createdBy:   uuid('created_by').references(() => profilesPg.id),
   createdAt:   ts('created_at'),
   updatedAt:   ts('updated_at'),
@@ -158,28 +167,103 @@ export const bonsSortieLignesPg = pgTable('bons_sortie_lignes', {
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ACHATS — FOURNISSEURS & APPROVISIONNEMENT
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const fournisseursPg = pgTable('fournisseurs', {
+  id:              id(),
+  nom:             text('nom').notNull(),
+  telephone:       text('telephone'),
+  email:           text('email'),
+  adresse:         text('adresse'),
+  notes:           text('notes'),
+  actif:           boolean('actif').notNull().default(true),
+  whatsapp:        text('whatsapp'),
+  produitsFournis: text('produits_fournis').array().default([]),
+  createdAt:       ts('created_at'),
+  updatedAt:       ts('updated_at'),
+  syncStatus:      syncStatusEnum('sync_status').notNull().default('synced'),
+})
+
+export type FournisseurPg       = typeof fournisseursPg.$inferSelect
+export type NouveauFournisseurPg = typeof fournisseursPg.$inferInsert
+
+export const bonsApprovisionnementPg = pgTable('bons_approvisionnement', {
+  id:                     id(),
+  numero:                 text('numero').notNull().unique(),
+  statut:                 text('statut').notNull().default('brouillon'),
+  bonSortieId:            uuid('bon_sortie_id').references(() => bonsSortiePg.id),
+  notes:                  text('notes'),
+  type:                   text('type').notNull().default('auto'),
+  fournisseurId:          uuid('fournisseur_id').references(() => fournisseursPg.id),
+  fournisseurNom:         text('fournisseur_nom'),
+  dateLivraisonSouhaitee: text('date_livraison_souhaitee'),
+  quantiteRecue:          real('quantite_recue').default(0),
+  createdBy:              uuid('created_by').references(() => profilesPg.id),
+  createdAt:              ts('created_at'),
+  updatedAt:              ts('updated_at'),
+  syncStatus:             syncStatusEnum('sync_status').notNull().default('synced'),
+})
+
+export type BonApprovisionnementPg       = typeof bonsApprovisionnementPg.$inferSelect
+export type NouveauBonApprovisionnementPg = typeof bonsApprovisionnementPg.$inferInsert
+
+export const bonsApprovisionnementLignesPg = pgTable('bons_approvisionnement_lignes', {
+  id:                 id(),
+  bonId:              uuid('bon_id').notNull().references(() => bonsApprovisionnementPg.id),
+  produitId:          uuid('produit_id').references(() => produitsPg.id),
+  designation:        text('designation').notNull(),
+  unite:              text('unite').notNull().default('unité'),
+  quantiteACommander: real('quantite_a_commander').notNull(),
+  stockActuelSnap:    real('stock_actuel_snap').notNull(),
+  stockMinSnap:       real('stock_min_snap').notNull(),
+  statutAlerte:       text('statut_alerte').notNull().default('alerte'),
+  fournisseur:        text('fournisseur'),
+  quantiteRecue:      real('quantite_recue').default(0),
+})
+
+export type BonApprovisionnementLignePg       = typeof bonsApprovisionnementLignesPg.$inferSelect
+export type NouveauBonApprovisionnementLignePg = typeof bonsApprovisionnementLignesPg.$inferInsert
+
+// ══════════════════════════════════════════════════════════════════════════════
 // COMMERCIAL — DEVIS
 // ══════════════════════════════════════════════════════════════════════════════
 
+export const remisesBaremePg = pgTable('remises_bareme', {
+  id:                      id(),
+  code:                    text('code').notNull().unique(),
+  libelle:                 text('libelle').notNull(),
+  type:                    remiseTypeEnum('type').notNull().default('pct'),
+  valeur:                  real('valeur').notNull(),
+  conditionAncienneteMois: integer('condition_anciennete_mois').notNull().default(0),
+  scoreMin:                text('score_min').notNull().default('nouveau'),
+  accordDgRequis:          boolean('accord_dg_requis').notNull().default(false),
+  actif:                   boolean('actif').notNull().default(true),
+  createdAt:               tsN('created_at'),
+})
+
 export const devisPg = pgTable('devis', {
-  id:                 id(),
-  numero:             text('numero').notNull().unique(),
-  clientId:           uuid('client_id').references(() => clientsPg.id),
-  clientNom:          text('client_nom').notNull(),
-  statut:             devisStatutEnum('statut').notNull().default('brouillon'),
-  dateEmission:       text('date_emission').notNull(),
-  dateValidite:       text('date_validite').notNull(),
-  validitJours:       integer('validite_jours').notNull().default(30),
-  acomptePct:         real('acompte_pct').notNull().default(0),
-  conditionsPaiement: text('conditions_paiement').notNull().default('Virement bancaire'),
-  totalHtXaf:         real('total_ht_xaf').notNull().default(0),
-  tvaXaf:             real('tva_xaf').notNull().default(0),
-  totalTtcXaf:        real('total_ttc_xaf').notNull().default(0),
-  notes:              text('notes'),
-  createdBy:          uuid('created_by').references(() => profilesPg.id),
-  createdAt:          ts('created_at'),
-  updatedAt:          ts('updated_at'),
-  syncStatus:         syncStatusEnum('sync_status').notNull().default('pending'),
+  id:                  id(),
+  numero:              text('numero').notNull().unique(),
+  clientId:            uuid('client_id').references(() => clientsPg.id),
+  clientNom:           text('client_nom').notNull(),
+  statut:              devisStatutEnum('statut').notNull().default('brouillon'),
+  dateEmission:        text('date_emission').notNull(),
+  dateValidite:        text('date_validite').notNull(),
+  validitJours:        integer('validite_jours').notNull().default(30),
+  acomptePct:          real('acompte_pct').notNull().default(0),
+  conditionPaiementId: uuid('condition_paiement_id'),
+  remiseGlobaleXaf:    real('remise_globale_xaf').default(0),
+  remiseGlobaleMotif:  text('remise_globale_motif'),
+  totalHtXaf:          real('total_ht_xaf').notNull().default(0),
+  tvaXaf:              real('tva_xaf').notNull().default(0),
+  totalTtcXaf:         real('total_ttc_xaf').notNull().default(0),
+  netAPayerXaf:        real('net_a_payer_xaf'),
+  notes:               text('notes'),
+  createdBy:           uuid('created_by').references(() => profilesPg.id),
+  createdAt:           ts('created_at'),
+  updatedAt:           ts('updated_at'),
+  syncStatus:          syncStatusEnum('sync_status').notNull().default('pending'),
 })
 
 export const devisLignesPg = pgTable('devis_lignes', {
@@ -192,8 +276,29 @@ export const devisLignesPg = pgTable('devis_lignes', {
   quantite:          real('quantite').notNull(),
   prixUnitaireHtXaf: real('prix_unitaire_ht_xaf').notNull(),
   totalHtXaf:        real('total_ht_xaf').notNull(),
+  remiseType:        text('remise_type'),
+  remiseValeur:      real('remise_valeur'),
+  remiseXaf:         real('remise_xaf').default(0),
+  remiseMotif:       text('remise_motif'),
+  appliqueParId:     uuid('applique_par_id'),
   ordre:             integer('ordre').notNull().default(0),
 })
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COMMERCIAL — CONDITIONS DE PAIEMENT
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const conditionsPaiementPg = pgTable('conditions_paiement', {
+  id:              id(),
+  code:            text('code').notNull().unique(),
+  libelle:         text('libelle').notNull(),
+  acomptePct:      real('acompte_pct').notNull().default(100),
+  delaiSoldeJours: integer('delai_solde_jours').notNull().default(0),
+  actif:           boolean('actif').notNull().default(true),
+})
+
+export type ConditionPaiementPg        = typeof conditionsPaiementPg.$inferSelect
+export type NouvelleConditionPaiementPg = typeof conditionsPaiementPg.$inferInsert
 
 // ══════════════════════════════════════════════════════════════════════════════
 // COMMERCIAL — COMMANDES
@@ -208,11 +313,18 @@ export const commandesPg = pgTable('commandes', {
   statut:              commandeStatutEnum('statut').notNull().default('confirmed'),
   dateCommande:        text('date_commande').notNull(),
   dateLivraisonPrevue: text('date_livraison_prevue'),
+  remiseGlobaleXaf:    real('remise_globale_xaf').default(0),
+  remiseGlobaleMotif:  text('remise_globale_motif'),
   totalHtXaf:          real('total_ht_xaf').notNull().default(0),
   tvaXaf:              real('tva_xaf').notNull().default(0),
   fraisLivraisonXaf:   real('frais_livraison_xaf').notNull().default(0),
   totalTtcXaf:         real('total_ttc_xaf').notNull().default(0),
+  netAPayerXaf:        real('net_a_payer_xaf'),
   acompteRecu:         real('acompte_recu_xaf').notNull().default(0),
+  conditionPaiementId: uuid('condition_paiement_id').references(() => conditionsPaiementPg.id),
+  montantAcompteXaf:   integer('montant_acompte_xaf').default(0),
+  dateEcheanceSolde:   text('date_echeance_solde'),
+  statutPaiement:      text('statut_paiement').default('non_paye'),
   notes:               text('notes'),
   createdBy:           uuid('created_by').references(() => profilesPg.id),
   createdAt:           ts('created_at'),
@@ -229,6 +341,11 @@ export const commandesLignesPg = pgTable('commandes_lignes', {
   quantite:          real('quantite').notNull(),
   prixUnitaireHtXaf: real('prix_unitaire_ht_xaf').notNull(),
   totalHtXaf:        real('total_ht_xaf').notNull(),
+  remiseType:        text('remise_type'),
+  remiseValeur:      real('remise_valeur'),
+  remiseXaf:         real('remise_xaf').default(0),
+  remiseMotif:       text('remise_motif'),
+  appliqueParId:     uuid('applique_par_id'),
   ordre:             integer('ordre').notNull().default(0),
 })
 
@@ -247,24 +364,29 @@ export const historiqueCommandesPg = pgTable('historique_commandes', {
 // ══════════════════════════════════════════════════════════════════════════════
 
 export const facturesPg = pgTable('factures', {
-  id:             id(),
-  numero:         text('numero').notNull().unique(),
-  commandeId:     uuid('commande_id').references(() => commandesPg.id),
-  clientId:       uuid('client_id').references(() => clientsPg.id),
-  clientNom:      text('client_nom').notNull(),
-  statut:         factureStatutEnum('statut').notNull().default('brouillon'),
-  dateEmission:   text('date_emission').notNull(),
-  dateEcheance:   text('date_echeance').notNull(),
-  totalHtXaf:     real('total_ht_xaf').notNull().default(0),
-  tvaXaf:         real('tva_xaf').notNull().default(0),
-  fraisLivraisonXaf: real('frais_livraison_xaf').notNull().default(0),
-  totalTtcXaf:    real('total_ttc_xaf').notNull().default(0),
-  montantPayeXaf: real('montant_paye_xaf').notNull().default(0),
-  notes:          text('notes'),
-  createdBy:      uuid('created_by').references(() => profilesPg.id),
-  createdAt:      ts('created_at'),
-  updatedAt:      ts('updated_at'),
-  syncStatus:     syncStatusEnum('sync_status').notNull().default('pending'),
+  id:                  id(),
+  numero:              text('numero').notNull().unique(),
+  commandeId:          uuid('commande_id').references(() => commandesPg.id),
+  conditionPaiementId: uuid('condition_paiement_id').references(() => conditionsPaiementPg.id),
+  clientId:            uuid('client_id').references(() => clientsPg.id),
+  clientNom:           text('client_nom').notNull(),
+  statut:              factureStatutEnum('statut').notNull().default('brouillon'),
+  acompteRecuXaf:      real('acompte_recu_xaf').default(0),
+  dateEmission:        text('date_emission').notNull(),
+  dateEcheance:        text('date_echeance').notNull(),
+  remiseGlobaleXaf:    real('remise_globale_xaf').default(0),
+  remiseGlobaleMotif:  text('remise_globale_motif'),
+  totalHtXaf:          real('total_ht_xaf').notNull().default(0),
+  tvaXaf:              real('tva_xaf').notNull().default(0),
+  fraisLivraisonXaf:   real('frais_livraison_xaf').notNull().default(0),
+  totalTtcXaf:         real('total_ttc_xaf').notNull().default(0),
+  netAPayerXaf:        real('net_a_payer_xaf'),
+  montantPayeXaf:      real('montant_paye_xaf').notNull().default(0),
+  notes:               text('notes'),
+  createdBy:           uuid('created_by').references(() => profilesPg.id),
+  createdAt:           ts('created_at'),
+  updatedAt:           ts('updated_at'),
+  syncStatus:          syncStatusEnum('sync_status').notNull().default('pending'),
 })
 
 export const facturesLignesPg = pgTable('factures_lignes', {
@@ -275,8 +397,28 @@ export const facturesLignesPg = pgTable('factures_lignes', {
   quantite:          real('quantite').notNull(),
   prixUnitaireHtXaf: real('prix_unitaire_ht_xaf').notNull(),
   totalHtXaf:        real('total_ht_xaf').notNull(),
+  remiseType:        text('remise_type'),
+  remiseValeur:      real('remise_valeur'),
+  remiseXaf:         real('remise_xaf').default(0),
+  remiseMotif:       text('remise_motif'),
+  appliqueParId:     uuid('applique_par_id'),
   ordre:             integer('ordre').notNull().default(0),
 })
+
+export const versementsFacturesPg = pgTable('versements_factures', {
+  id:            id(),
+  factureId:     uuid('facture_id').notNull().references(() => facturesPg.id),
+  montantXaf:    integer('montant_xaf').notNull(),
+  dateVersement: text('date_versement').notNull(),
+  modePaiement:  text('mode_paiement'),
+  reference:     text('reference'),
+  note:          text('note'),
+  enregistrePar: text('enregistre_par'),
+  createdAt:     tsN('created_at'),
+})
+
+export type VersementFacturePg       = typeof versementsFacturesPg.$inferSelect
+export type NouveauVersementFacturePg = typeof versementsFacturesPg.$inferInsert
 
 export const creditsPg = pgTable('credits', {
   id:              id(),
@@ -745,6 +887,60 @@ export const epiItemsPg = pgTable('epi_items', {
   createdAt:            ts('created_at'),
   updatedAt:            ts('updated_at'),
 })
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ÉQUIPEMENTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const equipementsPg = pgTable('equipements', {
+  id:                     id(),
+  code:                   text('code').notNull().unique(),
+  designation:            text('designation').notNull(),
+  categorie:              text('categorie').notNull().default('outillage'),
+  statut:                 text('statut').notNull().default('disponible'),
+  numeroSerie:            text('numero_serie'),
+  fournisseur:            text('fournisseur'),
+  marque:                 text('marque'),
+  modele:                 text('modele'),
+  dateAcquisition:        text('date_acquisition'),
+  dateFinGarantie:        text('date_fin_garantie'),
+  dateRemplacementPrevue: text('date_remplacement_prevue'),
+  valeurAchatXaf:         real('valeur_achat_xaf').notNull().default(0),
+  valeurResiduellexaf:    real('valeur_residuelle_xaf').notNull().default(0),
+  criticite:              text('criticite').notNull().default('moyenne'),
+  emplacement:            text('emplacement'),
+  responsableId:          uuid('responsable_id').references(() => employesPg.id),
+  prochaineRevision:      text('prochaine_revision'),
+  intervalleRevisionJ:    integer('intervalle_revision_j').notNull().default(365),
+  notes:                  text('notes'),
+  createdBy:              uuid('created_by').references(() => profilesPg.id),
+  createdAt:              ts('created_at'),
+  updatedAt:              ts('updated_at'),
+  syncStatus:             syncStatusEnum('sync_status').notNull().default('synced'),
+})
+
+export type EquipementPg       = typeof equipementsPg.$inferSelect
+export type NouveauEquipementPg = typeof equipementsPg.$inferInsert
+
+export const maintenancesEquipementPg = pgTable('maintenances_equipement', {
+  id:              id(),
+  equipementId:    uuid('equipement_id').notNull().references(() => equipementsPg.id),
+  type:            text('type').notNull().default('preventive'),
+  dateMaintenance: text('date_maintenance').notNull(),
+  technicienId:    uuid('technicien_id').references(() => employesPg.id),
+  coutXaf:         real('cout_xaf').notNull().default(0),
+  description:     text('description'),
+  prochaineDate:   text('prochaine_date'),
+  statut:          text('statut').notNull().default('planifie'),
+  chargeId:        uuid('charge_id').references(() => chargesPg.id),
+  createdBy:       uuid('created_by').references(() => profilesPg.id),
+  createdAt:       ts('created_at'),
+  updatedAt:       ts('updated_at'),
+  syncStatus:      syncStatusEnum('sync_status').notNull().default('synced'),
+})
+
+export type MaintenanceEquipementPg       = typeof maintenancesEquipementPg.$inferSelect
+export type NouvelleMaintenanceEquipementPg = typeof maintenancesEquipementPg.$inferInsert
 
 // ══════════════════════════════════════════════════════════════════════════════
 // IOT

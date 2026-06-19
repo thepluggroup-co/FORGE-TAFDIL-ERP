@@ -4,14 +4,14 @@ import { useNavigate } from 'react-router-dom'
 import { Plus, Minus, RotateCcw, FileOutput, ShoppingCart } from 'lucide-react'
 import { PageHeader, DataTable, StatusBadge, StockLevel, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
-import { formatXAF } from '@/lib/utils'
+import { formatXAF, formatNombre, formatDateTime } from '@/lib/utils'
 import { KpiCard } from '@forge/ui'
-import { Package, AlertTriangle, TrendingDown, DollarSign } from 'lucide-react'
+import { Package, AlertTriangle, TrendingDown, DollarSign, History } from 'lucide-react'
 import { toast } from 'sonner'
-import { useStocks, useMouvement, useCreateProduit } from '@/hooks/useStocks'
+import { useStocks, useMouvement, useCreateProduit, useMouvementsStock } from '@/hooks/useStocks'
 import { useBonsEnAttente } from '@/hooks/useBons'
 import { useBonsApproBrouillonCount, useCreerApproManuel } from '@/hooks/useBonsAppro'
-import type { StockProduit, CreateProduitPayload } from '@/hooks/useStocks'
+import type { StockProduit, CreateProduitPayload, MouvementStock } from '@/hooks/useStocks'
 
 // ── Types (alignés sur l'API) ─────────────────────────────────────────────────
 
@@ -79,7 +79,7 @@ const buildColumns = (
     csvValue: (row) => `${row.stock_actuel} ${row.unite}`,
     render: (v, row) => (
       <span className="text-sm font-semibold">
-        {(v as number).toLocaleString('fr-CM')} <span className="text-xs text-gray-400 font-normal">{row.unite as string}</span>
+        {formatNombre(v as number)} <span className="text-xs text-gray-400 font-normal">{row.unite as string}</span>
       </span>
     ),
   },
@@ -149,10 +149,24 @@ const DEFAULT_APPRO: ApproForm = {
   produitId: '', quantite: 1, fournisseurNom: '', dateLivraisonSouhaitee: '', notes: '',
 }
 
+// ── Mouvement type config ──────────────────────────────────────────────────────
+
+const MVT_TYPE_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+  entree:     { label: 'Entrée',      color: '#15803d', bg: '#dcfce7' },
+  sortie:     { label: 'Sortie',      color: '#dc2626', bg: '#fee2e2' },
+  ajustement: { label: 'Ajustement', color: '#d97706', bg: '#fef3c7' },
+  transfert:  { label: 'Transfert',  color: '#1d4ed8', bg: '#dbeafe' },
+}
+
 // ── Page component ─────────────────────────────────────────────────────────────
 
 export default function Stocks() {
   const navigate = useNavigate()
+
+  // ── Tab ────────────────────────────────────────────────────────────────────
+  const [tab, setTab] = useState<'produits' | 'historique'>('produits')
+
+  // ── Produits tab state ────────────────────────────────────────────────────
   const [search, setSearch]           = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [categorie, setCategorie]     = useState('')
@@ -163,6 +177,13 @@ export default function Stocks() {
   const [newProduit, setNewProduit]   = useState<CreateProduitPayload>(DEFAULT_PRODUIT)
   const [createError, setCreateError] = useState<string | null>(null)
   const [createDone, setCreateDone]   = useState(false)
+
+  // ── Historique tab state ──────────────────────────────────────────────────
+  const [mvtPage, setMvtPage]           = useState(1)
+  const [mvtType, setMvtType]           = useState('')
+  const [mvtProduitId, setMvtProduitId] = useState('')
+  const [mvtDateDebut, setMvtDateDebut] = useState('')
+  const [mvtDateFin, setMvtDateFin]     = useState('')
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300)
@@ -178,6 +199,14 @@ export default function Stocks() {
   const { data: bonsEnAttenteCount = 0 } = useBonsEnAttente()
   const { data: approBrouillonCount = 0 } = useBonsApproBrouillonCount()
   const creerAppro = useCreerApproManuel()
+
+  const { data: mvtData, isLoading: mvtLoading } = useMouvementsStock({
+    type:       mvtType as MouvementStock['type'] | undefined || undefined,
+    produit_id: mvtProduitId || undefined,
+    date_debut: mvtDateDebut || undefined,
+    date_fin:   mvtDateFin   || undefined,
+    page:       mvtPage,
+  })
 
   const produits = (data?.data ?? []) as Product[]
   const categories = useMemo(() => [...new Set(produits.map((p) => p.categorie as string))], [produits])
@@ -272,51 +301,243 @@ export default function Stocks() {
         </div>
       )}
 
-      {/* Filtres */}
-      <div className="flex flex-wrap items-center gap-3">
-        <input
-          type="search"
-          placeholder="Rechercher un produit..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 min-w-48 px-3 py-2 text-sm border border-gray-200 rounded-lg
-            focus:outline-none focus:ring-2 focus:ring-[#C62828] focus:border-transparent"
-        />
-        <select
-          value={categorie}
-          onChange={(e) => setCategorie(e.target.value)}
-          className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-        >
-          <option value="">Toutes catégories</option>
-          {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-        >
-          <option value="">Tous statuts</option>
-          <option value="normal">Normal</option>
-          <option value="alerte">Alerte</option>
-          <option value="critique">Critique</option>
-          <option value="rupture">Rupture</option>
-        </select>
-        {(search || categorie || statusFilter) && (
-          <Button variant="ghost" size="sm" onClick={() => { setSearch(''); setCategorie(''); setStatusFilter('') }}>
-            <RotateCcw className="h-3.5 w-3.5" />
-            Réinitialiser
-          </Button>
-        )}
+      {/* ── Onglets ── */}
+      <div className="flex border-b border-gray-200">
+        {([
+          { key: 'produits'   as const, label: 'Produits',                   icon: null },
+          { key: 'historique' as const, label: 'Historique des mouvements',  icon: <History className="h-3.5 w-3.5" /> },
+        ]).map(({ key, label, icon }) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setTab(key)}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              tab === key
+                ? 'border-[#C62828] text-[#C62828]'
+                : 'border-transparent text-gray-500 hover:text-[#212121]'
+            }`}
+          >
+            {icon}{label}
+          </button>
+        ))}
       </div>
 
-      {/* Table */}
-      <DataTable<Product>
-        columns={columns}
-        data={produits}
-        keyField="id"
-        onRowClick={(row) => openEntree(row)}
-        loading={isLoading}
-      />
+      {/* ── Onglet Produits ── */}
+      {tab === 'produits' && (
+        <>
+          {/* Filtres */}
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              type="search"
+              placeholder="Rechercher un produit..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="flex-1 min-w-48 px-3 py-2 text-sm border border-gray-200 rounded-lg
+                focus:outline-none focus:ring-2 focus:ring-[#C62828] focus:border-transparent"
+            />
+            <select
+              value={categorie}
+              onChange={(e) => setCategorie(e.target.value)}
+              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            >
+              <option value="">Toutes catégories</option>
+              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            >
+              <option value="">Tous statuts</option>
+              <option value="normal">Normal</option>
+              <option value="alerte">Alerte</option>
+              <option value="critique">Critique</option>
+              <option value="rupture">Rupture</option>
+            </select>
+            {(search || categorie || statusFilter) && (
+              <Button variant="ghost" size="sm" onClick={() => { setSearch(''); setCategorie(''); setStatusFilter('') }}>
+                <RotateCcw className="h-3.5 w-3.5" />
+                Réinitialiser
+              </Button>
+            )}
+          </div>
+
+          {/* Table */}
+          <DataTable<Product>
+            columns={columns}
+            data={produits}
+            keyField="id"
+            onRowClick={(row) => openEntree(row)}
+            loading={isLoading}
+          />
+        </>
+      )}
+
+      {/* ── Onglet Historique des mouvements ── */}
+      {tab === 'historique' && (
+        <div className="space-y-4">
+          {/* Filtres */}
+          <div className="flex flex-wrap items-center gap-3">
+            <select
+              value={mvtProduitId}
+              onChange={(e) => { setMvtProduitId(e.target.value); setMvtPage(1) }}
+              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828] min-w-48"
+            >
+              <option value="">Tous les produits</option>
+              {produits.map((p) => (
+                <option key={p.id as string} value={p.id as string}>{p.designation as string}</option>
+              ))}
+            </select>
+            <select
+              value={mvtType}
+              onChange={(e) => { setMvtType(e.target.value); setMvtPage(1) }}
+              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            >
+              <option value="">Tous types</option>
+              <option value="entree">Entrée</option>
+              <option value="sortie">Sortie</option>
+              <option value="ajustement">Ajustement</option>
+            </select>
+            <input
+              type="date"
+              value={mvtDateDebut}
+              onChange={(e) => { setMvtDateDebut(e.target.value); setMvtPage(1) }}
+              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+              title="Date début"
+            />
+            <input
+              type="date"
+              value={mvtDateFin}
+              min={mvtDateDebut}
+              onChange={(e) => { setMvtDateFin(e.target.value); setMvtPage(1) }}
+              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+              title="Date fin"
+            />
+            {(mvtProduitId || mvtType || mvtDateDebut || mvtDateFin) && (
+              <Button variant="ghost" size="sm" onClick={() => {
+                setMvtProduitId(''); setMvtType(''); setMvtDateDebut(''); setMvtDateFin(''); setMvtPage(1)
+              }}>
+                <RotateCcw className="h-3.5 w-3.5" />
+                Réinitialiser
+              </Button>
+            )}
+            {mvtData && (
+              <span className="ml-auto text-xs text-gray-400">
+                {mvtData.total} mouvement{mvtData.total !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+
+          {/* Tableau */}
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            {mvtLoading ? (
+              <div className="flex justify-center items-center py-16">
+                <div className="animate-spin h-6 w-6 rounded-full border-2 border-[#C62828] border-t-transparent" />
+              </div>
+            ) : !mvtData?.data.length ? (
+              <div className="flex flex-col items-center justify-center py-14 text-gray-400">
+                <History className="h-8 w-8 mb-2 opacity-30" />
+                <p className="text-sm">Aucun mouvement trouvé</p>
+              </div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50/60">
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Date</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Produit</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Type</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Quantité</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Référence</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Auteur</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase">Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {mvtData.data.map((mvt) => {
+                    const typeCfg = MVT_TYPE_CONFIG[mvt.type] ?? { label: mvt.type, color: '#6b7280', bg: '#f3f4f6' }
+                    return (
+                      <tr key={mvt.id} className="hover:bg-gray-50/50 transition-colors">
+                        <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                          {formatDateTime(mvt.created_at)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="font-medium text-[#212121] text-sm">{mvt.produits?.designation ?? '—'}</div>
+                          <div className="text-xs text-gray-400 font-mono">{mvt.produits?.ref ?? ''}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className="text-xs font-semibold px-2 py-0.5 rounded-full"
+                            style={{ color: typeCfg.color, backgroundColor: typeCfg.bg }}
+                          >
+                            {typeCfg.label}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <span className={`text-sm font-semibold tabular-nums ${
+                            mvt.type === 'entree' ? 'text-green-700' : mvt.type === 'sortie' ? 'text-red-600' : 'text-gray-700'
+                          }`}>
+                            {mvt.type === 'entree' ? '+' : mvt.type === 'sortie' ? '−' : ''}
+                            {formatNombre(mvt.quantite)} {mvt.produits?.unite ?? ''}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          {mvt.reference ? (
+                            mvt.reference.startsWith('BS-') || mvt.reference.startsWith('BON-') ? (
+                              <button
+                                type="button"
+                                onClick={() => navigate('/stocks/bons-sortie')}
+                                className="text-xs font-mono font-semibold text-[#C62828] hover:underline"
+                                title="Voir les bons de sortie"
+                              >
+                                {mvt.reference}
+                              </button>
+                            ) : (
+                              <span className="text-xs font-mono text-gray-600">{mvt.reference}</span>
+                            )
+                          ) : (
+                            <span className="text-gray-300">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-500">
+                          {mvt.profiles?.full_name ?? '—'}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px]">
+                          <span className="truncate block">{mvt.notes ?? '—'}</span>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* Pagination */}
+          {mvtData && mvtData.total_pages > 1 && (
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-400">
+                Page {mvtPage} / {mvtData.total_pages}
+              </span>
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost" size="sm"
+                  disabled={mvtPage <= 1}
+                  onClick={() => setMvtPage((p) => p - 1)}
+                >
+                  ← Précédent
+                </Button>
+                <Button
+                  variant="ghost" size="sm"
+                  disabled={mvtPage >= mvtData.total_pages}
+                  onClick={() => setMvtPage((p) => p + 1)}
+                >
+                  Suivant →
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* SlideOver nouveau produit */}
       <SlideOver

@@ -127,6 +127,42 @@ export async function dbMouvementStock(
   return { mouvement: mvtRes.data, produit: updRes.data }
 }
 
+export async function dbGetMouvementsStock(params?: {
+  produit_id?: string
+  type?: 'entree' | 'sortie' | 'ajustement' | 'transfert'
+  date_debut?: string
+  date_fin?: string
+  page?: number
+  per_page?: number
+}) {
+  const page    = params?.page    ?? 1
+  const perPage = params?.per_page ?? 20
+  const from = (page - 1) * perPage
+  const to   = from + perPage - 1
+
+  let q = supabase
+    .from('mouvements_stock')
+    .select('*, produits(ref, designation, unite), profiles!created_by(full_name)', { count: 'exact' })
+
+  if (params?.produit_id) q = q.eq('produit_id', params.produit_id)
+  if (params?.type)       q = q.eq('type', params.type)
+  if (params?.date_debut) q = q.gte('created_at', params.date_debut)
+  if (params?.date_fin)   q = q.lte('created_at', `${params.date_fin}T23:59:59.999Z`)
+
+  const { data, count, error } = await q
+    .order('created_at', { ascending: false })
+    .range(from, to)
+
+  if (error) raise(error, 'mouvements_stock')
+  return {
+    data:        data ?? [],
+    total:       count ?? 0,
+    page,
+    per_page:    perPage,
+    total_pages: Math.ceil((count ?? 0) / perPage),
+  }
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // CLIENTS
 // ══════════════════════════════════════════════════════════════════════════════

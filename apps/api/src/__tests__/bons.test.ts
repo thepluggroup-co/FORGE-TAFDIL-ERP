@@ -48,14 +48,17 @@ const BON_NUM = 'TAF-20260518-0001'
 const USER_ID = 'test-user-uid-001'
 
 const BON_SOUMIS = {
-  id:          BON_ID,
-  numero:      BON_NUM,
-  statut:      'soumis',
-  demandeur:   'Jean Dupont',
-  motif:       'Maintenance atelier',
-  notes:       null,
-  created_by:  USER_ID,
-  sync_status: 'synced',
+  id:                 BON_ID,
+  numero:             BON_NUM,
+  statut:             'soumis',
+  demandeur:          'Jean Dupont',
+  motif:              'Maintenance atelier',
+  notes:              null,
+  commande_id:        null,
+  nature_transaction: 'comptant',
+  imputation_payeur:  'atelier',
+  created_by:         USER_ID,
+  sync_status:        'synced',
 }
 
 const BON_VALIDE = { ...BON_SOUMIS, statut: 'valide' }
@@ -73,9 +76,11 @@ const BON_LIGNES = [
 ]
 
 const CREATE_BON_BODY = {
-  demandeur: 'Jean Dupont',
-  motif:     'Maintenance atelier',
-  lignes:    [{ designation: 'Vis M8', unite: 'pcs', quantite_demandee: 50 }],
+  demandeur:          'Jean Dupont',
+  motif:              'Maintenance atelier',
+  nature_transaction: 'comptant',
+  imputation_payeur:  'atelier',
+  lignes:             [{ designation: 'Vis M8', unite: 'pcs', quantite_demandee: 50 }],
 }
 
 describe('Test 5 — POST /api/bons crée un bon avec statut soumis', () => {
@@ -139,10 +144,11 @@ describe('Test 6 — PUT /api/bons/:id/valider change statut en valide', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('change statut soumis → valide avec décision=valide', async () => {
-    // Fetch bon (statut: 'soumis')
+    // Fetch bon (statut: 'soumis') — avec nature+payeur requis
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({
-        data: { statut: 'soumis', demandeur: 'Jean Dupont', numero: BON_NUM, created_by: USER_ID },
+        data: { statut: 'soumis', demandeur: 'Jean Dupont', numero: BON_NUM, created_by: USER_ID,
+                commande_id: null, nature_transaction: 'comptant', imputation_payeur: 'atelier' },
         error: null,
       }) as never,
     )
@@ -166,7 +172,8 @@ describe('Test 6 — PUT /api/bons/:id/valider change statut en valide', () => {
   it('retourne 422 INVALID_TRANSITION si bon pas en statut soumis', async () => {
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({
-        data: { statut: 'valide', demandeur: 'Jean', numero: BON_NUM, created_by: USER_ID },
+        data: { statut: 'valide', demandeur: 'Jean', numero: BON_NUM, created_by: USER_ID,
+                commande_id: null, nature_transaction: 'comptant', imputation_payeur: 'atelier' },
         error: null,
       }) as never,
     )
@@ -270,6 +277,19 @@ describe('Test 8 — PUT /api/bons/:id/executer avec bon code_unique → succès
     }))
   })
 
+  it('génère une écriture comptable si bon exécuté avec nature=comptant et montant', async () => {
+    const bonAvecMontant = { ...BON_VALIDE, montant_total_xaf: 50_000, nature_transaction: 'comptant', imputation_payeur: 'atelier', bons_sortie_lignes: BON_LIGNES }
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: bonAvecMontant, error: null }) as never)
+    vi.mocked(supabase.rpc).mockResolvedValueOnce({ data: { success: true, bon_id: BON_ID }, error: null } as never)
+
+    const res = await app.request(`/api/bons/${BON_ID}/executer`, {
+      method:  'PUT',
+      headers: new Headers(authHeaders('operateur')),
+      body:    JSON.stringify({ code_unique: BON_NUM }),
+    })
+    expect(res.status).toBe(200)
+  })
+
   it('retourne 503 RPC_MISSING si fn_executer_bon absente', async () => {
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({
@@ -292,5 +312,139 @@ describe('Test 8 — PUT /api/bons/:id/executer avec bon code_unique → succès
     expect(res.status).toBe(503)
     const body = await res.json() as { code: string }
     expect(body.code).toBe('RPC_MISSING')
+  })
+})
+
+// ── Tests 9-11 — nature_transaction + imputation_payeur ───────────────────────
+
+describe('Test 9 — POST /api/bons avec nature=comptant', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('crée un bon avec nature_transaction=comptant et imputation_payeur=atelier', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({ data: null, count: 0, error: null }) as never,  // genererNumeroBon
+    )
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({ data: BON_SOUMIS, error: null }) as never,  // insert bon
+    )
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({ data: BON_LIGNES, error: null }) as never,  // insert lignes
+    )
+
+    const res = await app.request('/api/bons', {
+      method:  'POST',
+      headers: new Headers(authHeaders('operateur')),
+      body:    JSON.stringify({
+        demandeur:          'Jean Dupont',
+        motif:              'Maintenance atelier',
+        nature_transaction: 'comptant',
+        imputation_payeur:  'atelier',
+        lignes:             [{ designation: 'Vis M8', unite: 'pcs', quantite_demandee: 50 }],
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const body = await res.json() as { nature_transaction: string; imputation_payeur: string }
+    expect(body.nature_transaction).toBe('comptant')
+  })
+
+  it('retourne 400 si nature_transaction manquant (Zod)', async () => {
+    const res = await app.request('/api/bons', {
+      method:  'POST',
+      headers: new Headers(authHeaders('operateur')),
+      body:    JSON.stringify({ demandeur: 'Jean', motif: 'Test', imputation_payeur: 'atelier',
+                                lignes: [{ designation: 'X', unite: 'u', quantite_demandee: 1 }] }),
+    })
+    expect(res.status).toBe(400)
+  })
+})
+
+describe('Test 10 — PUT /api/bons/:id/valider refuse credit sans commande', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('retourne 422 NATURE_INCOMPATIBLE si nature=credit sans commande_id', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({
+        data: { ...BON_SOUMIS, nature_transaction: 'credit', commande_id: null },
+        error: null,
+      }) as never,
+    )
+
+    const res = await app.request(`/api/bons/${BON_ID}/valider`, {
+      method:  'PUT',
+      headers: new Headers(authHeaders('admin')),
+      body:    JSON.stringify({ decision: 'valide' }),
+    })
+
+    expect(res.status).toBe(422)
+    const body = await res.json() as { code: string }
+    expect(body.code).toBe('NATURE_INCOMPATIBLE')
+  })
+
+  it('retourne 422 MISSING_NATURE_PAYEUR si nature_transaction absent', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({
+        data: { statut: 'soumis', demandeur: 'Jean', numero: BON_NUM, created_by: USER_ID,
+                commande_id: null, nature_transaction: null, imputation_payeur: null },
+        error: null,
+      }) as never,
+    )
+
+    const res = await app.request(`/api/bons/${BON_ID}/valider`, {
+      method:  'PUT',
+      headers: new Headers(authHeaders('admin')),
+      body:    JSON.stringify({ decision: 'valide' }),
+    })
+
+    expect(res.status).toBe(422)
+    const body = await res.json() as { code: string }
+    expect(body.code).toBe('MISSING_NATURE_PAYEUR')
+  })
+})
+
+describe('Test 11 — PUT /api/bons/:id/valider refuse deduction_acompte sans acompte', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('retourne 422 ACOMPTE_INSUFFISANT si montant_acompte_xaf=0', async () => {
+    // Fetch bon avec nature=deduction_acompte et une commande liée
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({
+        data: { ...BON_SOUMIS, nature_transaction: 'deduction_acompte', commande_id: 'cmd-uuid-001' },
+        error: null,
+      }) as never,
+    )
+    // checkNatureCompatibilite → fetch commande (montant_acompte_xaf=0)
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({ data: { montant_acompte_xaf: 0 }, error: null }) as never,
+    )
+
+    const res = await app.request(`/api/bons/${BON_ID}/valider`, {
+      method:  'PUT',
+      headers: new Headers(authHeaders('admin')),
+      body:    JSON.stringify({ decision: 'valide' }),
+    })
+
+    expect(res.status).toBe(422)
+    const body = await res.json() as { code: string }
+    expect(body.code).toBe('ACOMPTE_INSUFFISANT')
+  })
+
+  it('retourne 422 NATURE_INCOMPATIBLE si deduction_acompte sans commande_id', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({
+        data: { ...BON_SOUMIS, nature_transaction: 'deduction_acompte', commande_id: null },
+        error: null,
+      }) as never,
+    )
+
+    const res = await app.request(`/api/bons/${BON_ID}/valider`, {
+      method:  'PUT',
+      headers: new Headers(authHeaders('admin')),
+      body:    JSON.stringify({ decision: 'valide' }),
+    })
+
+    expect(res.status).toBe(422)
+    const body = await res.json() as { code: string }
+    expect(body.code).toBe('NATURE_INCOMPATIBLE')
   })
 })

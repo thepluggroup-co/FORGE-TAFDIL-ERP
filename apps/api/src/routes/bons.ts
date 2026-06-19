@@ -8,6 +8,7 @@ import { requireRole } from '../middleware/rbac'
 import { localCreateBon, localValiderBon, getBonsSortieLocal } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
 import { ensureFactureForCommande } from '../services/finance-core.service'
+import { genererEcritureBonSortieInterne } from '../services/comptabilite.service'
 import { creerBonApprovisionnementSiNecessaire } from '../services/stock-alerts.service'
 import { sendWhatsApp } from '../services/notifications'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
@@ -39,10 +40,13 @@ const ligneSchema = z.object({
 })
 
 const createBonSchema = z.object({
-  demandeur: z.string().min(1),
-  motif:     z.string().min(1),
-  notes:     z.string().optional(),
-  lignes:    z.array(ligneSchema).min(1),
+  demandeur:          z.string().min(1),
+  motif:              z.string().min(1),
+  notes:              z.string().optional(),
+  commande_id:        z.string().uuid().optional(),
+  nature_transaction: z.enum(['comptant', 'credit', 'deduction_acompte']),
+  imputation_payeur:  z.enum(['entreprise_tafdil', 'atelier', 'administration']),
+  lignes:             z.array(ligneSchema).min(1),
 })
 
 const validerBonSchema = z.object({
@@ -86,6 +90,69 @@ async function broadcastBon(event: string, payload: Record<string, unknown>): Pr
   }
 }
 
+// ── Garde-fous métier : nature_transaction ↔ commande ─────────────────────────
+
+async function checkNatureCompatibilite(
+  nature: string,
+  commande_id: string | null,
+): Promise<void> {
+  if (['credit', 'deduction_acompte'].includes(nature) && !commande_id) {
+    throw Object.assign(
+      new Error(`Nature "${nature}" requiert une commande liée.`),
+      { code: 'NATURE_INCOMPATIBLE', httpStatus: 422 },
+    )
+  }
+
+  if (nature === 'credit' && commande_id) {
+    const { data: cmd } = await db
+      .from('commandes')
+      .select('condition_paiement_id, cp:conditions_paiement!condition_paiement_id(acompte_pct)')
+      .eq('id', commande_id)
+      .maybeSingle()
+
+    const acomptePct = (cmd as { cp?: { acompte_pct: number } | null } | null)?.cp?.acompte_pct
+    if (acomptePct !== undefined && acomptePct >= 100) {
+      throw Object.assign(
+        new Error('Cette commande est en paiement comptant intégral (P100) — nature crédit impossible.'),
+        { code: 'NATURE_INCOMPATIBLE', httpStatus: 422 },
+      )
+    }
+  }
+
+  if (nature === 'deduction_acompte' && commande_id) {
+    const { data: cmd } = await db
+      .from('commandes')
+      .select('montant_acompte_xaf')
+      .eq('id', commande_id)
+      .maybeSingle()
+
+    const acompteTotal = Number((cmd as { montant_acompte_xaf?: number | null } | null)?.montant_acompte_xaf ?? 0)
+    if (acompteTotal <= 0) {
+      throw Object.assign(
+        new Error('Acompte insuffisant : aucun acompte reçu sur cette commande.'),
+        { code: 'ACOMPTE_INSUFFISANT', httpStatus: 422 },
+      )
+    }
+
+    const { data: existingDeds } = await db
+      .from('bons_sortie')
+      .select('montant_total_xaf')
+      .eq('commande_id', commande_id)
+      .eq('nature_transaction', 'deduction_acompte')
+      .in('statut', ['soumis', 'valide', 'execute'])
+
+    const dejaDeduitsXaf = ((existingDeds ?? []) as { montant_total_xaf: number | null }[])
+      .reduce((sum, b) => sum + (Number(b.montant_total_xaf) || 0), 0)
+
+    if (acompteTotal - dejaDeduitsXaf <= 0) {
+      throw Object.assign(
+        new Error(`Acompte épuisé : ${acompteTotal.toLocaleString('fr-FR')} XAF déjà intégralement déduits.`),
+        { code: 'ACOMPTE_INSUFFISANT', httpStatus: 422 },
+      )
+    }
+  }
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
@@ -118,6 +185,7 @@ async function resolveCommandeIdForBon(bon: {
 /** Liste des bons avec filtres */
 router.get('/', async (c) => {
   const { statut, technicien, search } = c.req.query()
+  const statutPreparation = c.req.query('statut_preparation')
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, Math.max(1, parseInt(c.req.query('per_page') ?? '20')))
   const from    = (page - 1) * perPage
@@ -131,11 +199,12 @@ router.get('/', async (c) => {
     .from('bons_sortie')
     .select('*, bons_sortie_lignes(*)', { count: 'exact' })
 
-  if (statut)     query = query.eq('statut', statut)
-  if (technicien) query = query.ilike('demandeur', `%${technicien}%`)
-  if (search)     query = query.or(`numero.ilike.%${search}%,demandeur.ilike.%${search}%,motif.ilike.%${search}%`)
-  if (dateDebut)  query = query.gte('created_at', `${dateDebut}T00:00:00.000Z`)
-  if (dateFin)    query = query.lte('created_at', `${dateFin}T23:59:59.999Z`)
+  if (statut)              query = query.eq('statut', statut)
+  if (statutPreparation)   query = query.eq('statut_preparation', statutPreparation)
+  if (technicien)          query = query.ilike('demandeur', `%${technicien}%`)
+  if (search)              query = query.or(`numero.ilike.%${search}%,demandeur.ilike.%${search}%,motif.ilike.%${search}%`)
+  if (dateDebut)           query = query.gte('created_at', `${dateDebut}T00:00:00.000Z`)
+  if (dateFin)             query = query.lte('created_at', `${dateFin}T23:59:59.999Z`)
 
   const { data, count, error } = await query
     .order('created_at', { ascending: false })
@@ -171,13 +240,20 @@ router.post(
 
       // ── Online : Supabase ──────────────────────────────────────────────────
       async () => {
+        await checkNatureCompatibilite(body.nature_transaction, body.commande_id ?? null)
+
         const numero = await genererNumeroBon()
 
         const { data: bon, error: bonErr } = await db
           .from('bons_sortie')
-          .insert({ numero, statut: 'soumis', demandeur: body.demandeur,
+          .insert({
+            numero, statut: 'soumis', demandeur: body.demandeur,
             motif: body.motif, notes: body.notes ?? null,
-            created_by: user.id, sync_status: 'synced' })
+            commande_id:        body.commande_id ?? null,
+            nature_transaction: body.nature_transaction,
+            imputation_payeur:  body.imputation_payeur,
+            created_by: user.id, sync_status: 'synced',
+          })
           .select().single()
 
         if (bonErr || !bon) throw new Error(bonErr?.message ?? 'Erreur création bon')
@@ -326,26 +402,49 @@ router.put(
       // ── Online : Supabase ──────────────────────────────────────────────────
       async () => {
         const { data: existing } = await db
-          .from('bons_sortie').select('id, statut, demandeur, numero, created_by, commande_id').eq('id', id).single()
+          .from('bons_sortie')
+          .select('id, statut, demandeur, numero, created_by, commande_id, nature_transaction, imputation_payeur')
+          .eq('id', id).single()
 
         if (!existing) throw Object.assign(new Error('Bon introuvable'), { code: 'NOT_FOUND', httpStatus: 404 })
-        if (!['en_attente', 'soumis'].includes((existing as { statut: string }).statut))
+
+        const ex = existing as {
+          id: string; statut: string; demandeur: string; numero: string; created_by: string
+          commande_id: string | null
+          nature_transaction: 'comptant' | 'credit' | 'deduction_acompte' | null
+          imputation_payeur: string | null
+        }
+
+        if (!['en_attente', 'soumis'].includes(ex.statut))
           throw Object.assign(
-            new Error(`Impossible de valider un bon en statut "${(existing as { statut: string }).statut}"`),
+            new Error(`Impossible de valider un bon en statut "${ex.statut}"`),
             { code: 'INVALID_TRANSITION', httpStatus: 422 },
           )
 
+        if (!ex.nature_transaction || !ex.imputation_payeur)
+          throw Object.assign(
+            new Error('Impossible de valider ce bon : nature de transaction et imputation payeur sont requis.'),
+            { code: 'MISSING_NATURE_PAYEUR', httpStatus: 422 },
+          )
+
+        await checkNatureCompatibilite(ex.nature_transaction, ex.commande_id)
+
         const { data, error } = await db.from('bons_sortie')
-          .update({ statut: body.decision, valide_par_id: user.id, updated_at: new Date().toISOString() })
+          .update({
+            statut:             body.decision,
+            valide_par_id:      user.id,
+            updated_at:         new Date().toISOString(),
+            ...(body.decision === 'valide' ? { statut_preparation: 'a_preparer' } : {}),
+          })
           .eq('id', id).select().single()
 
         if (error) throw new Error(error.message)
 
         await broadcastBon('bon_valide', {
           bon_id:      id,
-          numero:      (existing as { numero: string }).numero,
+          numero:      ex.numero,
           decision:    body.decision,
-          demandeur:   (existing as { demandeur: string }).demandeur,
+          demandeur:   ex.demandeur,
           valide_par:  user.email,
           commentaire: body.commentaire ?? null,
         })
@@ -355,17 +454,13 @@ router.put(
           module:  'stock',
           severite:body.decision === 'valide' ? 'success' : 'warning',
           titre:   body.decision === 'valide' ? 'Bon de sortie valide' : 'Bon de sortie refuse',
-          message: `Bon ${(existing as { numero: string }).numero} ${body.decision}.`,
-          ref:     (existing as { numero: string }).numero,
+          message: `Bon ${ex.numero} ${body.decision}.`,
+          ref:     ex.numero,
           url:     '/stocks/bons-sortie',
           data:    { bon_id: id, decision: body.decision },
         })
 
-        const commandeId = await resolveCommandeIdForBon(existing as {
-          id: string
-          commande_id?: string | null
-          demandeur?: string | null
-        })
+        const commandeId = await resolveCommandeIdForBon(ex)
 
         if (body.decision === 'valide' && commandeId) {
           await ensureFactureForCommande({
@@ -405,6 +500,197 @@ router.put(
   },
 )
 
+// ── Préparation physique ──────────────────────────────────────────────────────
+
+async function ensureLivraisonEnPreparation(commandeId: string, userId?: string): Promise<boolean> {
+  const { data: existing } = await db
+    .from('livraisons')
+    .select('id')
+    .eq('commande_id', commandeId)
+    .neq('statut', 'annulee')
+    .limit(1)
+    .maybeSingle()
+  if (existing) return false
+
+  const { data: cmd } = await db
+    .from('commandes')
+    .select('numero, client_id, client_nom')
+    .eq('id', commandeId)
+    .single()
+  if (!cmd) return false
+
+  const c2 = cmd as { numero: string; client_id: string | null; client_nom: string }
+  const year = new Date().getFullYear()
+  const { count } = await db.from('livraisons').select('*', { count: 'exact', head: true })
+  const numero = `LIV-${year}-${String((count ?? 0) + 1).padStart(3, '0')}`
+
+  const { data: livraison, error } = await db
+    .from('livraisons')
+    .insert({
+      numero,
+      commande_id:  commandeId,
+      client_id:    c2.client_id,
+      client_nom:   c2.client_nom,
+      destination:  'À définir',
+      statut:       'en_preparation',
+      created_by:   userId ?? null,
+      sync_status:  'synced',
+    })
+    .select('id')
+    .single()
+
+  if (error || !livraison) { console.error('[bons] livraison auto:', error); return false }
+
+  const livId = (livraison as { id: string }).id
+  await db.from('livraisons_historique').insert({
+    livraison_id:   livId,
+    ancien_statut:  null,
+    nouveau_statut: 'en_preparation',
+    commentaire:    `Livraison créée automatiquement — tous les bons de la commande ${c2.numero} sont prêts`,
+    changed_by:     userId ?? null,
+  })
+
+  await notifyWorkflow({
+    event:    'logistique.livraison_en_preparation',
+    module:   'logistique',
+    severite: 'info',
+    titre:    'Livraison en préparation',
+    message:  `Commande ${c2.numero} : tous les bons prêts — livraison ${numero} créée, planification requise.`,
+    ref:      numero,
+    url:      '/logistique',
+    data:     { livraison_id: livId, commande_id: commandeId },
+  })
+
+  return true
+}
+
+/** Assigner un préparateur à un bon validé */
+router.patch(
+  '/:id/preparateur',
+  requireRole(['admin', 'superviseur']),
+  zValidator('json', z.object({ preparateur_id: z.string().uuid() })),
+  async (c) => {
+    const { id } = c.req.param()
+    const body   = c.req.valid('json')
+    const user   = c.get('user')
+
+    const { data: existing } = await db
+      .from('bons_sortie')
+      .select('id, statut, statut_preparation, numero')
+      .eq('id', id).single()
+
+    if (!existing) return c.json({ error: 'Bon introuvable', code: 'NOT_FOUND' }, 404)
+    const ex = existing as { id: string; statut: string; statut_preparation: string | null; numero: string }
+
+    if (ex.statut !== 'valide')
+      return c.json({ error: 'Le bon doit être validé pour assigner un préparateur', code: 'INVALID_STATE' }, 422)
+    if (ex.statut_preparation === 'pret')
+      return c.json({ error: 'Ce bon est déjà prêt', code: 'ALREADY_PRET' }, 422)
+
+    const { data: prep } = await db
+      .from('profiles')
+      .select('id, full_name, phone')
+      .eq('id', body.preparateur_id).single()
+    if (!prep) return c.json({ error: 'Préparateur introuvable', code: 'PREP_NOT_FOUND' }, 404)
+
+    const p = prep as { id: string; full_name: string; phone: string | null }
+
+    const { data, error } = await db
+      .from('bons_sortie')
+      .update({ preparateur_id: body.preparateur_id, statut_preparation: 'en_cours', updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select().single()
+
+    if (error) return c.json({ error: error.message }, 400)
+
+    if (p.phone) {
+      const msg = `🏭 *TAFDIL FORGE — Bon de sortie à préparer*\nNuméro : *${ex.numero}*\nVous avez été assigné(e) comme préparateur(trice) par ${user.email}.\nMerci de préparer les articles et marquer le bon comme prêt.`
+      await sendWhatsApp(p.phone, msg).catch(e => console.error('[bons] notify preparateur:', e))
+    }
+
+    await notifyWorkflow({
+      event:    'stock.bon_sortie_assigne',
+      module:   'stock',
+      severite: 'info',
+      titre:    'Bon assigné au préparateur',
+      message:  `Bon ${ex.numero} assigné à ${p.full_name} pour préparation.`,
+      ref:      ex.numero,
+      url:      '/stocks/bons-sortie',
+      data:     { bon_id: id, preparateur_id: body.preparateur_id },
+    })
+
+    return c.json(data)
+  },
+)
+
+/** Marquer un bon comme prêt (préparateur ou superviseur) */
+router.patch(
+  '/:id/preparation',
+  requireRole(['admin', 'superviseur', 'operateur']),
+  zValidator('json', z.object({ statut: z.enum(['pret']) })),
+  async (c) => {
+    const { id } = c.req.param()
+    const user   = c.get('user')
+
+    const { data: existing } = await db
+      .from('bons_sortie')
+      .select('id, statut, statut_preparation, preparateur_id, commande_id, numero')
+      .eq('id', id).single()
+
+    if (!existing) return c.json({ error: 'Bon introuvable', code: 'NOT_FOUND' }, 404)
+    const ex = existing as {
+      id: string; statut: string; statut_preparation: string | null
+      preparateur_id: string | null; commande_id: string | null; numero: string
+    }
+
+    if (ex.statut !== 'valide')
+      return c.json({ error: 'Le bon doit être validé', code: 'INVALID_STATE' }, 422)
+    if (ex.statut_preparation !== 'en_cours')
+      return c.json({
+        error: `Transition "${ex.statut_preparation ?? 'null'}" → "pret" non autorisée — le bon doit être en cours (préparateur assigné).`,
+        code:  'INVALID_PREPARATION_TRANSITION',
+      }, 422)
+    if (!ex.preparateur_id)
+      return c.json({ error: 'Aucun préparateur assigné', code: 'NO_PREPARATEUR' }, 422)
+
+    const { data, error } = await db
+      .from('bons_sortie')
+      .update({ statut_preparation: 'pret', updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select().single()
+
+    if (error) return c.json({ error: error.message }, 400)
+
+    await notifyWorkflow({
+      event:    'stock.bon_sortie_pret',
+      module:   'stock',
+      severite: 'success',
+      titre:    'Bon prêt',
+      message:  `Bon ${ex.numero} préparé et prêt pour livraison.`,
+      ref:      ex.numero,
+      url:      '/stocks/bons-sortie',
+      data:     { bon_id: id },
+    })
+
+    // Vérifier si tous les bons validés de la commande sont prêts → déclencher livraison auto
+    if (ex.commande_id) {
+      const { count: bonsPending } = await db
+        .from('bons_sortie')
+        .select('*', { count: 'exact', head: true })
+        .eq('commande_id', ex.commande_id)
+        .eq('statut', 'valide')
+        .in('statut_preparation', ['a_preparer', 'en_cours'])
+
+      if ((bonsPending ?? 0) === 0) {
+        await ensureLivraisonEnPreparation(ex.commande_id, user.id)
+          .catch(e => console.error('[bons] livraison auto:', e))
+      }
+    }
+
+    return c.json(data)
+  },
+)
+
 /** Exécuter un bon (magasin) — transaction atomique ALL-or-NOTHING */
 router.put(
   '/:id/executer',
@@ -426,6 +712,9 @@ router.put(
 
     const b = bon as {
       id: string; numero: string; statut: string; commande_id: string | null; demandeur?: string | null
+      nature_transaction?: 'comptant' | 'credit' | 'deduction_acompte' | null
+      imputation_payeur?:  'entreprise_tafdil' | 'atelier' | 'administration' | null
+      montant_total_xaf?:  number | null
       bons_sortie_lignes: Array<{
         id: string; produit_id: string | null
         designation: string; quantite_demandee: number
@@ -460,6 +749,19 @@ router.put(
       if (commandeId) {
         ensureFactureForCommande({ commandeId, userId: user.id })
           .catch(e => console.error('[bons/executer] ensureFacture:', e))
+      }
+
+      // Écriture comptable selon la nature de la transaction
+      if (b.nature_transaction && b.montant_total_xaf && b.montant_total_xaf > 0) {
+        genererEcritureBonSortieInterne({
+          numero:             b.numero,
+          date:               new Date().toISOString(),
+          montant_xaf:        b.montant_total_xaf,
+          nature_transaction: b.nature_transaction,
+          imputation_payeur:  b.imputation_payeur ?? 'entreprise_tafdil',
+          commande_id:        b.commande_id,
+          created_by:         user.id,
+        }).catch(e => console.error('[bons/executer] ecriture comptable:', e))
       }
 
       // Vérifier les niveaux de stock et créer un bon d'approvisionnement si nécessaire

@@ -4,7 +4,7 @@ import {
   Loader2, AlertTriangle, CheckCircle, Package, Truck, CreditCard, XCircle,
 } from 'lucide-react'
 import { SlideOver, Button, StatusBadge, Modal } from '@forge/ui'
-import { formatXAF, formatDateTime } from '@/lib/utils'
+import { formatXAF, formatNombre, formatDateTime } from '@/lib/utils'
 import { useStatutCommandeShop, useAnnulerCommandeShop } from '@/hooks/useCommandesShop'
 import type { CommandeShop, StatutCommandeShop } from '@/hooks/useCommandesShop'
 
@@ -44,7 +44,7 @@ function buildWhatsAppUrl(commande: CommandeShop): string {
   const message = template
     .replace('{nom}', commande.client_nom)
     .replace('{ref}', commande.ref)
-    .replace('{ttc}', commande.montant_ttc?.toLocaleString('fr-CM') ?? '')
+    .replace('{ttc}', commande.montant_ttc != null ? formatNombre(commande.montant_ttc) : '')
   const phone = commande.client_telephone.replace(/\D/g, '')
   return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`
 }

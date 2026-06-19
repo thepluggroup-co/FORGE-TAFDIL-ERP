@@ -200,6 +200,41 @@ router.post(
   },
 )
 
+/** Liste globale paginée des mouvements de stock */
+router.get('/mouvements', async (c) => {
+  const q = c.req.query()
+  const page    = Math.max(1, parseInt(q.page    ?? '1'))
+  const perPage = Math.min(100, Math.max(1, parseInt(q.per_page ?? '20')))
+  const from = (page - 1) * perPage
+  const to   = from + perPage - 1
+
+  let query = db
+    .from('mouvements_stock')
+    .select('*, produits(ref, designation, unite), profiles!created_by(full_name)', { count: 'exact' })
+
+  if (q.produit_id) query = query.eq('produit_id', q.produit_id)
+  if (q.type)       query = query.eq('type', q.type)
+  if (q.date_debut) query = query.gte('created_at', q.date_debut)
+  if (q.date_fin)   query = query.lte('created_at', `${q.date_fin}T23:59:59.999Z`)
+
+  const { data, count, error } = await query
+    .order('created_at', { ascending: false })
+    .range(from, to)
+
+  if (error) {
+    console.error('[stocks] GET /mouvements error:', error.message)
+    return c.json({ error: error.message }, 500)
+  }
+
+  return c.json({
+    data,
+    total:       count ?? 0,
+    page,
+    per_page:    perPage,
+    total_pages: Math.ceil((count ?? 0) / perPage),
+  })
+})
+
 /** Détail produit + historique 30 jours */
 router.get('/:id', async (c) => {
   const { id } = c.req.param()

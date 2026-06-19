@@ -4,11 +4,12 @@ import { createPublicKey } from 'node:crypto'
 import type { HonoVariables } from '../types'
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const SUPABASE_URL       = process.env.SUPABASE_URL ?? ''
-const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET ?? ''
+const SUPABASE_URL = process.env.SUPABASE_URL ?? ''
 
-if (!SUPABASE_URL)        console.error('[auth] ⚠️  SUPABASE_URL manquant dans .env')
-if (!SUPABASE_JWT_SECRET) console.warn('[auth] ⚠️  SUPABASE_JWT_SECRET manquant — HS256 ne fonctionnera pas')
+// Lu lazily par-requête pour que les tests (setupFiles) puissent l'injecter après le chargement du module
+const getJwtSecret = () => process.env.SUPABASE_JWT_SECRET ?? ''
+
+if (!SUPABASE_URL) console.error('[auth] ⚠️  SUPABASE_URL manquant dans .env')
 
 // ── JWKS cache (refreshed every hour) ─────────────────────────────────────────
 interface JWK {
@@ -130,7 +131,7 @@ export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = a
   try {
     if (alg === 'HS256') {
       // Legacy projects: symmetric HMAC — use the JWT secret string directly
-      payload = jwt.verify(token, SUPABASE_JWT_SECRET, { algorithms: ['HS256'] }) as jwt.JwtPayload
+      payload = jwt.verify(token, getJwtSecret(), { algorithms: ['HS256'] }) as jwt.JwtPayload
     } else {
       // New projects (ES256, RS256): asymmetric — verify with public key from JWKS
       const publicKey = await getPublicKeyForToken(token)

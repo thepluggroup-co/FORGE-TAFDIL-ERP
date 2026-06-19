@@ -51,8 +51,11 @@ vi.mock('../../services/pdf.service', () => ({
 }))
 
 vi.mock('../../services/comptabilite.service', () => ({
-  genererEcritureVente:        vi.fn().mockResolvedValue(null),
-  genererEcritureEncaissement: vi.fn().mockResolvedValue(null),
+  genererEcritureVente:            vi.fn().mockResolvedValue(null),
+  genererEcritureEncaissement:     vi.fn().mockResolvedValue(null),
+  genererEcritureBonSortieInterne: vi.fn().mockResolvedValue(null),
+  planComptable:                   [],
+  libelleCompte:                   vi.fn().mockReturnValue(''),
 }))
 
 vi.mock('../../services/notifications', () => ({

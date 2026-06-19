@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { Megaphone, Users, TrendingUp, Target, Plus, ExternalLink, MessageCircle, Share2 } from 'lucide-react'
 import { PageHeader, KpiCard, DataTable, SlideOver, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
-import { formatXAF, formatDate } from '@/lib/utils'
+import { formatXAF, formatNombre, formatDate } from '@/lib/utils'
 import { useCampagnes, useCreateCampagne } from '@/hooks/useOperations'
 import type { Campagne } from '@/hooks/useOperations'
 
@@ -23,7 +23,7 @@ const COLUMNS: Column<CampagneRecord>[] = [
   { id: 'nom',    header: 'Campagne',     accessor: 'nom',               render: (v) => <span className="text-sm font-semibold">{v as string}</span> },
   { id: 'canal',  header: 'Canal',        accessor: 'canal',             render: (v) => <span className="text-sm text-gray-500">{v as string}</span> },
   { id: 'budget', header: 'Budget',       accessor: 'budget_xaf',        render: (v) => <span className="text-sm font-semibold">{(v as number) > 0 ? formatXAF(v as number) : 'Gratuit'}</span> },
-  { id: 'reach',  header: 'Portée',       accessor: 'reach',             render: (v) => <span className="text-sm font-semibold">{((v as number) ?? 0).toLocaleString('fr-CM')}</span> },
+  { id: 'reach',  header: 'Portée',       accessor: 'reach',             render: (v) => <span className="text-sm font-semibold">{formatNombre((v as number) ?? 0)}</span> },
   { id: 'leads',  header: 'Leads',        accessor: 'leads_count',       render: (v) => <span className="text-sm font-semibold text-[#1d4ed8]">{(v as number) ?? 0}</span> },
   { id: 'conv',   header: 'Conversions',  accessor: 'conversions_count', render: (v) => <span className="text-sm font-semibold text-[#15803d]">{(v as number) ?? 0}</span> },
   { id: 'fin',    header: 'Fin',          accessor: 'date_fin',          render: (v) => <span className="text-sm text-gray-400">{formatDate(v as string)}</span> },
@@ -128,7 +128,7 @@ export default function Marketing() {
         <KpiCard title="Campagnes actives" value={campagnes.filter(c => c.statut === 'active').length} icon={<Megaphone className="h-5 w-5" />} color="#C62828" delay={0} />
         <KpiCard title="Leads ce mois" value={totalLeads} icon={<Users className="h-5 w-5" />} color="#1d4ed8" trend="up" trendValue="+18 % vs mois" delay={0.07} />
         <KpiCard title="Taux de conversion" value={txConv} unit="%" icon={<Target className="h-5 w-5" />} color="#15803d" delay={0.14} />
-        <KpiCard title="Portée totale" value={`${(totalReach / 1000).toFixed(1)}k`} icon={<TrendingUp className="h-5 w-5" />} color="#7c3aed" delay={0.21} />
+        <KpiCard title="Portée totale" value={formatNombre(totalReach)} icon={<TrendingUp className="h-5 w-5" />} color="#7c3aed" delay={0.21} />
       </div>
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">

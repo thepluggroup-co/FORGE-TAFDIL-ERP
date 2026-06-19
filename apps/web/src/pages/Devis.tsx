@@ -13,6 +13,7 @@ import { toast } from 'sonner'
 import {
   useDevis, useCreateDevis, useUpdateDevis, useDeleteDevis,
   useUpdateStatutDevis, useEnvoyerApprobation, useTransformerDevis,
+  useConditionsPaiement,
 } from '@/hooks/useDevis'
 import { apiClient } from '@/lib/api-client'
 import { useQuery } from '@tanstack/react-query'
@@ -179,7 +180,7 @@ function DevisDetailPanel({
           <div><p className="text-gray-400 mb-0.5">Date émission</p><p className="font-medium">{formatDate(devis.date_creation as string)}</p></div>
           <div><p className="text-gray-400 mb-0.5">Validité</p><p className="font-medium">{formatDate(devis.date_validite as string)} ({devis.validite_jours as number} j)</p></div>
           <div><p className="text-gray-400 mb-0.5">Acompte</p><p className="font-medium">{devis.acompte_pct as number}%</p></div>
-          <div><p className="text-gray-400 mb-0.5">Conditions</p><p className="font-medium truncate">{devis.conditions_paiement as string}</p></div>
+          <div><p className="text-gray-400 mb-0.5">Conditions</p><p className="font-medium truncate">{(devis.condition_paiement as { libelle: string } | null)?.libelle ?? '—'}</p></div>
           {client.telephone && <div><p className="text-gray-400 mb-0.5">Tél</p><p className="font-medium">{client.telephone}</p></div>}
           {client.email     && <div><p className="text-gray-400 mb-0.5">Email</p><p className="font-medium truncate">{client.email}</p></div>}
         </div>
@@ -345,13 +346,13 @@ const CAT_LABELS: Record<Categorie, string> = { materiaux: 'Matériaux', 'main-o
 
 interface FormState {
   clientId: string; clientNom: string; clientTel: string; clientEmail: string
-  lignes: LocalLigne[]; validite: 15 | 30 | 45; acompte: number; conditionsPaiement: string; notes: string
+  lignes: LocalLigne[]; validite: 15 | 30 | 45; acompte: number; conditionPaiementId: string; notes: string
 }
 
 const DEFAULT_FORM: FormState = {
   clientId: '', clientNom: '', clientTel: '', clientEmail: '',
   lignes: [newLine()], validite: 30, acompte: 30,
-  conditionsPaiement: 'Acompte + solde à la livraison', notes: '',
+  conditionPaiementId: '', notes: '',
 }
 
 function StepProgress({ step }: { step: number }) {
@@ -396,6 +397,8 @@ function DevisFormPanel({
   const createDevis = useCreateDevis()
   const updateDevis = useUpdateDevis()
   const isMutating  = createDevis.isPending || updateDevis.isPending
+  const { data: condData } = useConditionsPaiement()
+  const conditionsList = condData?.data ?? []
 
   const [step,    setStep]    = useState(0)
   const [created, setCreated] = useState<{ reference: string; pdf_url: string | null; montantTTC: number } | null>(null)
@@ -420,7 +423,7 @@ function DevisFormPanel({
       lignes:             lignesExist.length > 0 ? lignesExist : [newLine()],
       validite:           (editingDevis.validite_jours as 15 | 30 | 45) ?? 30,
       acompte:            (editingDevis.acompte_pct as number) ?? 30,
-      conditionsPaiement: (editingDevis.conditions_paiement as string) ?? 'Acompte + solde à la livraison',
+      conditionPaiementId: (editingDevis.condition_paiement_id as string | null) ?? '',
       notes:              (editingDevis.notes as string | null) ?? '',
     }
   })
@@ -446,8 +449,8 @@ function DevisFormPanel({
       date_emission:       today,
       date_validite:       dateValid,
       validite_jours:      form.validite,
-      acompte_pct:         form.acompte,
-      conditions_paiement: form.conditionsPaiement,
+      acompte_pct:           form.acompte,
+      condition_paiement_id: form.conditionPaiementId || undefined,
       notes:               form.notes || undefined,
       lignes: form.lignes
         .filter((l) => l.designation && l.prixUnitaire > 0)
@@ -651,10 +654,11 @@ function DevisFormPanel({
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Conditions de paiement</label>
-                    <select value={form.conditionsPaiement} onChange={(e) => setForm((f) => ({ ...f, conditionsPaiement: e.target.value }))}
+                    <select value={form.conditionPaiementId} onChange={(e) => setForm((f) => ({ ...f, conditionPaiementId: e.target.value }))}
                       className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
-                      {['Acompte + solde à la livraison', 'Virement bancaire', 'Paiement comptant', 'Crédit 30 jours', 'Crédit 60 jours'].map((v) => (
-                        <option key={v} value={v}>{v}</option>
+                      <option value="">— Choisir —</option>
+                      {conditionsList.map((cp) => (
+                        <option key={cp.id} value={cp.id}>{cp.code} — {cp.libelle}</option>
                       ))}
                     </select>
                   </div>

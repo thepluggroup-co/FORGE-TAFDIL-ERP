@@ -90,6 +90,7 @@
   { "compte": "705",  "libelle": "Travaux facturés (BTP)",                                "classe": 7 },
   { "compte": "706",  "libelle": "Services vendus",                                        "classe": 7 },
   { "compte": "707",  "libelle": "Produits accessoires",                                   "classe": 7 },
+  { "compte": "7098", "libelle": "Remises accordées sur ventes",                           "classe": 7 },
   { "compte": "721",  "libelle": "Production immobilisée",                                 "classe": 7 },
   { "compte": "741",  "libelle": "Subventions d'exploitation reçues",                    "classe": 7 },
   { "compte": "751",  "libelle": "Redevances et produits financiers reçus",               "classe": 7 },

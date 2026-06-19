@@ -22,7 +22,8 @@ export interface Devis {
   date_validite: string | null
   validite_jours: number
   acompte_pct: number
-  conditions_paiement: string
+  condition_paiement_id: string | null
+  condition_paiement: { code: string; libelle: string; acompte_pct: number; delai_solde_jours: number } | null
   total_ht_xaf: number
   tva_xaf: number
   montant_ttc_xaf: number
@@ -45,7 +46,7 @@ export interface CreateDevisPayload {
   date_validite: string
   validite_jours: 15 | 30 | 45
   acompte_pct: number
-  conditions_paiement: string
+  condition_paiement_id?: string
   notes?: string
   lignes: Array<{
     designation: string; categorie: string; unite: string
@@ -162,5 +163,21 @@ export function useTransformerDevis() {
       toast.success(`Commande ${data.commande_numero} créée`)
     },
     onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export interface ConditionPaiement {
+  id: string
+  code: string
+  libelle: string
+  acompte_pct: number
+  delai_solde_jours: number
+}
+
+export function useConditionsPaiement() {
+  return useQuery({
+    queryKey: ['conditions-paiement'],
+    queryFn:  () => apiClient.get<{ data: ConditionPaiement[] }>('/api/commerce/conditions-paiement'),
+    staleTime: 5 * 60_000,
   })
 }

@@ -690,16 +690,22 @@ shopRouter.post('/devis', zValidator('json', devisWebSchema), async (c) => {
     body.produit_ref  ? `Réf. produit : ${body.produit_ref}`      : null,
   ].filter(Boolean).join('\n')
 
+  const { data: condP100 } = await db
+    .from('conditions_paiement')
+    .select('id')
+    .eq('code', 'P100')
+    .single()
+
   const { data: erpDevis, error: errDevis } = await db
     .from('devis')
     .insert({
       numero,
-      client_nom:          body.nom,
-      statut:              'brouillon',
-      date_emission:       today,
-      date_validite:       validite,
-      validite_jours:      30,
-      conditions_paiement: 'Virement bancaire',
+      client_nom:            body.nom,
+      statut:                'brouillon',
+      date_emission:         today,
+      date_validite:         validite,
+      validite_jours:        30,
+      condition_paiement_id: condP100?.id ?? null,
       notes,
       total_ht_xaf:        0,
       tva_xaf:             0,
@@ -1199,15 +1205,6 @@ const creerErpSchema = z.object({
   notes_commerciales:      z.string().optional(),
 })
 
-const CONDITIONS_PAIEMENT: Record<string, string> = {
-  'P100':    'Comptant intégral',
-  'P30-LIV': '30% commande + solde à livraison',
-  'P30-45':  '30% commande + crédit 45 jours',
-  'P30-60':  '30% commande + crédit 60 jours',
-  'PROJ-3T': '30% signature + 40% mi-chantier + 30% réception',
-  'PROJ-DG': 'Conditions spéciales — accord DG requis',
-}
-
 shopErpRouter.post('/devis/:id/creer-erp',
   zValidator('json', creerErpSchema),
   async (c) => {
@@ -1237,9 +1234,12 @@ shopErpRouter.post('/devis/:id/creer-erp',
     const diffDays   = Math.ceil((new Date(dateVal).getTime() - Date.now()) / 86_400_000)
     const validite_jours = Math.max(0, diffDays)
 
-    const condPaiement = body.condition_paiement_code
-      ? (CONDITIONS_PAIEMENT[body.condition_paiement_code] ?? body.condition_paiement_code)
-      : 'Virement bancaire'
+    const condCode = body.condition_paiement_code ?? 'P100'
+    const { data: condRow } = await db
+      .from('conditions_paiement')
+      .select('id')
+      .eq('code', condCode)
+      .single()
 
     const notesParts = [`[SOURCE WEB] ${devisWeb.description}`]
     if (body.notes_commerciales?.trim()) notesParts.push(`\n--- Notes commerciales ---\n${body.notes_commerciales.trim()}`)
@@ -1250,13 +1250,13 @@ shopErpRouter.post('/devis/:id/creer-erp',
       .from('devis')
       .insert({
         numero,
-        client_nom:          devisWeb.nom,
-        statut:              'brouillon',
-        date_emission:       today,
-        date_validite:       dateVal,
+        client_nom:            devisWeb.nom,
+        statut:                'brouillon',
+        date_emission:         today,
+        date_validite:         dateVal,
         validite_jours,
-        conditions_paiement: condPaiement,
-        notes:               notesParts.join(''),
+        condition_paiement_id: condRow?.id ?? null,
+        notes:                 notesParts.join(''),
         total_ht_xaf:        montant_ht,
         tva_xaf,
         total_ttc_xaf:       montant_ht + tva_xaf,

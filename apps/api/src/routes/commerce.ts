@@ -67,19 +67,24 @@ const devisLigneSchema = z.object({
   unite:                z.string().default('unité'),
   quantite:             z.number().positive(),
   prix_unitaire_ht_xaf: z.number().min(0),
+  remise_type:          z.enum(['pct', 'forfait']).optional(),
+  remise_valeur:        z.number().min(0).optional(),
+  remise_motif:         z.string().optional(),
   ordre:                z.number().int().default(0),
 })
 
 const devisSchema = z.object({
-  client_id:           z.string().optional(),
-  client_nom:          z.string().min(1),
-  date_emission:       z.string(),
-  date_validite:       z.string(),
-  validite_jours:      z.number().int().default(30),
-  acompte_pct:         z.number().min(0).max(100).default(0),
-  conditions_paiement: z.string().default('Virement bancaire'),
-  notes:               z.string().optional(),
-  lignes:              z.array(devisLigneSchema).min(1),
+  client_id:            z.string().optional(),
+  client_nom:           z.string().min(1),
+  date_emission:        z.string(),
+  date_validite:        z.string(),
+  validite_jours:       z.number().int().default(30),
+  acompte_pct:          z.number().min(0).max(100).default(0),
+  condition_paiement_id: z.string().uuid().optional(),
+  remise_globale_xaf:   z.number().min(0).default(0),
+  remise_globale_motif: z.string().optional(),
+  notes:                z.string().optional(),
+  lignes:               z.array(devisLigneSchema).min(1),
 })
 
 const commandeLigneSchema = z.object({
@@ -88,19 +93,24 @@ const commandeLigneSchema = z.object({
   unite:                z.string().default('unité'),
   quantite:             z.number().positive(),
   prix_unitaire_ht_xaf: z.number().min(0),
+  remise_type:          z.enum(['pct', 'forfait']).optional(),
+  remise_valeur:        z.number().min(0).optional(),
+  remise_motif:         z.string().optional(),
   ordre:                z.number().int().default(0),
 })
 
 const commandeSchema = z.object({
-  client_id:              z.string().optional(),
-  client_nom:             z.string().min(1),
-  devis_id:               z.string().optional(),
-  date_commande:          z.string(),
-  date_livraison_prevue:  z.string().optional(),
-  notes:                  z.string().optional(),
-  acompte_recu_xaf:       z.number().min(0).default(0),
-  condition_paiement_id:  z.string().uuid().optional(),
-  lignes:                 z.array(commandeLigneSchema).min(1),
+  client_id:             z.string().optional(),
+  client_nom:            z.string().min(1),
+  devis_id:              z.string().optional(),
+  date_commande:         z.string(),
+  date_livraison_prevue: z.string().optional(),
+  notes:                 z.string().optional(),
+  acompte_recu_xaf:      z.number().min(0).default(0),
+  condition_paiement_id: z.string().uuid().optional(),
+  remise_globale_xaf:    z.number().min(0).default(0),
+  remise_globale_motif:  z.string().optional(),
+  lignes:                z.array(commandeLigneSchema).min(1),
 })
 
 const statutCommandeSchema = z.object({
@@ -111,11 +121,41 @@ const statutCommandeSchema = z.object({
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function calculerTotaux(lignes: Array<{ quantite: number; prix_unitaire_ht_xaf: number }>) {
-  const total_ht_xaf  = lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire_ht_xaf, 0)
-  const tva_xaf       = Math.round(total_ht_xaf * TVA_RATE)
-  const total_ttc_xaf = Math.round(total_ht_xaf + tva_xaf)
-  return { total_ht_xaf: Math.round(total_ht_xaf), tva_xaf, total_ttc_xaf }
+function calculerRemiseLigne(qty: number, pu: number, type?: string | null, valeur?: number | null): number {
+  if (!type || !valeur || valeur <= 0) return 0
+  const brut = qty * pu
+  return type === 'pct' ? Math.round(brut * (valeur / 100)) : Math.min(Math.round(valeur), Math.round(brut))
+}
+
+interface TotauxResult {
+  brut_ht_xaf:          number
+  remise_totale_ht_xaf: number
+  remise_globale_xaf:   number
+  total_ht_xaf:         number
+  tva_xaf:              number
+  total_ttc_xaf:        number
+  net_a_payer_xaf:      number
+}
+
+function calculerTotaux(
+  lignes: Array<{ quantite: number; prix_unitaire_ht_xaf: number; remise_xaf?: number }>,
+  remise_globale_xaf = 0,
+): TotauxResult {
+  const brut_ht        = Math.round(lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire_ht_xaf, 0))
+  const remises_lignes = Math.round(lignes.reduce((s, l) => s + (l.remise_xaf ?? 0), 0))
+  const remise_globale = Math.round(remise_globale_xaf)
+  const total_ht_xaf   = Math.max(0, brut_ht - remises_lignes - remise_globale)
+  const tva_xaf        = Math.round(total_ht_xaf * TVA_RATE)
+  const total_ttc_xaf  = total_ht_xaf + tva_xaf
+  return {
+    brut_ht_xaf:          brut_ht,
+    remise_totale_ht_xaf: remises_lignes + remise_globale,
+    remise_globale_xaf:   remise_globale,
+    total_ht_xaf,
+    tva_xaf,
+    total_ttc_xaf,
+    net_a_payer_xaf:      total_ttc_xaf,
+  }
 }
 
 /** Vérifie si un devis est expiré et le marque automatiquement. */
@@ -144,8 +184,9 @@ function mapDevis(row: any) {
     date_creation:        row.date_emission ?? row.created_at,
     date_validite:        row.date_validite,
     validite_jours:       row.validite_jours,
-    acompte_pct:          row.acompte_pct,
-    conditions_paiement:  row.conditions_paiement,
+    acompte_pct:           row.acompte_pct,
+    condition_paiement_id: row.condition_paiement_id ?? null,
+    condition_paiement:    row.cp ?? null,
     total_ht_xaf:         row.total_ht_xaf ?? 0,
     tva_xaf:              row.tva_xaf ?? 0,
     montant_ttc_xaf:      row.total_ttc_xaf ?? 0,
@@ -387,6 +428,62 @@ async function verifierBlocageClient(clientId: string | undefined | null): Promi
   return null
 }
 
+const SCORE_POIDS: Record<string, number> = { nouveau: 0, standard: 25, fiable: 50, premium: 75 }
+
+function ancienneteMois(createdAt: string | null | undefined): number {
+  if (!createdAt) return 0
+  const d = new Date(createdAt)
+  const n = new Date()
+  return (n.getFullYear() - d.getFullYear()) * 12 + (n.getMonth() - d.getMonth())
+}
+
+async function verifierEligibiliteRemise(
+  remisePctTotal: number,
+  remiseXafTotal: number,
+  clientId: string | null | undefined,
+  userRole: string,
+): Promise<{ eligible: boolean; raison?: string }> {
+  if (userRole === 'admin') return { eligible: true }
+  if (remisePctTotal <= 0 && remiseXafTotal <= 0) return { eligible: true }
+
+  const niveau = (remisePctTotal > 35 || remiseXafTotal > 500_000) ? 'accord_dg'
+    : (remisePctTotal > 20 || remiseXafTotal > 200_000) ? 'score_requis'
+    : 'auto'
+
+  if (niveau === 'auto') return { eligible: true }
+
+  if (niveau === 'accord_dg') {
+    return {
+      eligible: false,
+      raison: `Remise totale ${remisePctTotal.toFixed(1)}% (${remiseXafTotal.toLocaleString('fr-FR')} XAF) — accord DG requis (seuil 35% ou 500 000 XAF).`,
+    }
+  }
+
+  if (userRole === 'operateur') {
+    return { eligible: false, raison: 'Remise > 20% ou > 200 000 XAF — autorisation superviseur ou DG requise.' }
+  }
+  if (!clientId) {
+    return { eligible: false, raison: 'Remise > 20% : client enregistré requis (pas de client anonyme).' }
+  }
+
+  const { data: client } = await db
+    .from('clients')
+    .select('score_fiabilite, created_at')
+    .eq('id', clientId)
+    .single()
+
+  if (!client) return { eligible: false, raison: 'Client introuvable.' }
+
+  const c = client as { score_fiabilite: string; created_at: string | null }
+  if ((SCORE_POIDS[c.score_fiabilite] ?? 0) < 50) {
+    return { eligible: false, raison: `Remise > 20% : score "${c.score_fiabilite}" insuffisant (minimum : "fiable").` }
+  }
+  if (ancienneteMois(c.created_at) < 6) {
+    return { eligible: false, raison: 'Remise > 20% : client trop récent (ancienneté minimum 6 mois).' }
+  }
+  return { eligible: true }
+}
+
 /**
  * Met à jour le score_fiabilite du client en fonction de ses paiements.
  * Score 0-100 : 50 de base, +1 par commande livrée, -5 par crédit échu.
@@ -569,7 +666,7 @@ router.get('/devis', async (c) => {
   const from    = (page - 1) * perPage
   const to      = from + perPage - 1
 
-  let query = db.from('devis').select('*, devis_lignes(*), clients(id, nom, telephone, email)', { count: 'exact' })
+  let query = db.from('devis').select('*, devis_lignes(*), clients(id, nom, telephone, email), cp:conditions_paiement!condition_paiement_id(code, libelle, acompte_pct, delai_solde_jours)', { count: 'exact' })
 
   if (statut)    query = query.eq('statut', statut)
   if (client_id) query = query.eq('client_id', client_id)
@@ -614,7 +711,7 @@ router.get('/devis/:id', async (c) => {
 
   const { data, error } = await db
     .from('devis')
-    .select('*, devis_lignes(*), clients(id, nom, telephone, email, adresse)')
+    .select('*, devis_lignes(*), clients(id, nom, telephone, email, adresse), cp:conditions_paiement!condition_paiement_id(code, libelle, acompte_pct, delai_solde_jours)')
     .eq('id', id)
     .single()
 
@@ -654,24 +751,46 @@ router.post('/devis', requireRole(['admin', 'superviseur', 'operateur']), zValid
     // ── Online : Supabase ──────────────────────────────────────────────────────
     async () => {
       const numero = await genererNumero('devis', 'DEV')
-      const totaux = calculerTotaux(body.lignes)
+
+      // Calcul des remises par ligne puis totaux
+      const lignesAvecRemise = body.lignes.map((l) => ({
+        ...l,
+        remise_xaf: calculerRemiseLigne(l.quantite, l.prix_unitaire_ht_xaf, l.remise_type, l.remise_valeur),
+      }))
+      const { brut_ht_xaf, remise_totale_ht_xaf, ...dbTotaux } = calculerTotaux(lignesAvecRemise, body.remise_globale_xaf ?? 0)
+
+      // Garde éligibilité remise
+      if (remise_totale_ht_xaf > 0) {
+        const remisePct = brut_ht_xaf > 0 ? (remise_totale_ht_xaf / brut_ht_xaf) * 100 : 0
+        const elig = await verifierEligibiliteRemise(remisePct, remise_totale_ht_xaf, body.client_id, user.role as string)
+        if (!elig.eligible) throw Object.assign(new Error(elig.raison!), { code: 'REMISE_NON_AUTORISEE', httpStatus: 422 })
+      }
 
       const { data: devis, error: devisErr } = await db.from('devis')
-        .insert({ numero, client_id: body.client_id ?? null, client_nom: body.client_nom,
+        .insert({
+          numero, client_id: body.client_id ?? null, client_nom: body.client_nom,
           statut: 'brouillon', date_emission: body.date_emission, date_validite: body.date_validite,
           validite_jours: body.validite_jours, acompte_pct: body.acompte_pct,
-          conditions_paiement: body.conditions_paiement, notes: body.notes ?? null,
-          created_by: user.id, sync_status: 'synced', ...totaux })
+          condition_paiement_id: body.condition_paiement_id ?? null,
+          remise_globale_motif: body.remise_globale_motif ?? null,
+          notes: body.notes ?? null,
+          created_by: user.id, sync_status: 'synced', ...dbTotaux,
+        })
         .select().single()
 
       if (devisErr || !devis) throw new Error(devisErr?.message ?? 'Erreur création devis')
 
       const devisId = (devis as { id: string }).id
-      const lignes = body.lignes.map((l, i) => ({
+      const lignes = lignesAvecRemise.map((l, i) => ({
         devis_id: devisId, designation: l.designation, description: l.description ?? null,
         categorie: l.categorie, unite: l.unite, quantite: l.quantite,
         prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
         total_ht_xaf: Math.round(l.quantite * l.prix_unitaire_ht_xaf),
+        remise_type:   l.remise_type ?? null,
+        remise_valeur: l.remise_valeur ?? null,
+        remise_xaf:    l.remise_xaf,
+        remise_motif:  l.remise_motif ?? null,
+        applique_par_id: user.id,
         ordre: l.ordre !== 0 ? l.ordre : i,
       }))
 
@@ -700,7 +819,7 @@ router.post('/devis', requireRole(['admin', 'superviseur', 'operateur']), zValid
       client_nom: body.client_nom, client_id: body.client_id,
       date_emission: body.date_emission, date_validite: body.date_validite,
       validite_jours: body.validite_jours, acompte_pct: body.acompte_pct,
-      conditions_paiement: body.conditions_paiement, notes: body.notes,
+      notes: body.notes,
       lignes: body.lignes, user_id: user.id,
     }),
   )
@@ -743,8 +862,16 @@ router.put('/devis/:id', requireRole(['admin', 'superviseur', 'operateur']), zVa
   Object.assign(updates, devisFields)
 
   if (lignes) {
-    const totaux = calculerTotaux(lignes)
-    Object.assign(updates, totaux)
+    const lignesAvecRemise = lignes.map((l) => ({
+      ...l,
+      remise_xaf: calculerRemiseLigne(l.quantite, l.prix_unitaire_ht_xaf, l.remise_type, l.remise_valeur),
+    }))
+    const { brut_ht_xaf: _b, remise_totale_ht_xaf: _r, ...dbTotaux } = calculerTotaux(
+      lignesAvecRemise,
+      (body.remise_globale_xaf as number | undefined) ?? 0,
+    )
+    Object.assign(updates, dbTotaux)
+    if (body.remise_globale_motif !== undefined) updates.remise_globale_motif = body.remise_globale_motif
   }
 
   const { data, error } = await db
@@ -768,6 +895,10 @@ router.put('/devis/:id', requireRole(['admin', 'superviseur', 'operateur']), zVa
         quantite:             l.quantite,
         prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
         total_ht_xaf:         Math.round(l.quantite * l.prix_unitaire_ht_xaf),
+        remise_type:          l.remise_type ?? null,
+        remise_valeur:        l.remise_valeur ?? null,
+        remise_xaf:           calculerRemiseLigne(l.quantite, l.prix_unitaire_ht_xaf, l.remise_type, l.remise_valeur),
+        remise_motif:         l.remise_motif ?? null,
         ordre:                l.ordre !== undefined ? l.ordre : i,
       })),
     )
@@ -835,7 +966,8 @@ router.post('/devis/:id/envoyer-approbation', requireRole(['admin', 'superviseur
     .select(`
       statut, numero, client_nom, client_id,
       date_emission, date_validite, validite_jours,
-      acompte_pct, conditions_paiement,
+      acompte_pct, conditions_paiement, condition_paiement_id,
+      cp:conditions_paiement!condition_paiement_id(libelle),
       total_ht_xaf, tva_xaf, total_ttc_xaf,
       devis_lignes(designation, unite, quantite, prix_unitaire_ht_xaf, total_ht_xaf, ordre)
     `)
@@ -848,7 +980,8 @@ router.post('/devis/:id/envoyer-approbation', requireRole(['admin', 'superviseur
   const d = devis as {
     statut: string; numero: string; client_nom: string; client_id: string | null
     date_emission: string; date_validite: string; validite_jours: number; acompte_pct: number
-    conditions_paiement: string; total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number
+    conditions_paiement: string | null; cp: { libelle: string } | null
+    total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number
     devis_lignes: LigneRow[]
   }
 
@@ -993,7 +1126,7 @@ router.post('/devis/:id/envoyer-approbation', requireRole(['admin', 'superviseur
   <div style="background:#F9FAFB;border:1px solid #E5E7EB;border-radius:8px;padding:16px 20px;margin-bottom:24px;">
     <p style="margin:0 0 10px;color:#374151;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Conditions de paiement</p>
     <p style="margin:0;color:#6B7280;font-size:12px;line-height:1.85;">
-      ${d.acompte_pct > 0 ? `• Acompte : ${d.acompte_pct}% à la commande — ${acompteXaf.toLocaleString('fr-FR')}&nbsp;XAF<br>` : ''}• Règlement : ${d.conditions_paiement}<br>
+      ${d.acompte_pct > 0 ? `• Acompte : ${d.acompte_pct}% à la commande — ${acompteXaf.toLocaleString('fr-FR')}&nbsp;XAF<br>` : ''}• Règlement : ${d.cp?.libelle ?? d.conditions_paiement ?? 'À confirmer'}<br>
       • Devis valable ${d.validite_jours} jours à compter de la date d'émission
     </p>
   </div>
@@ -1171,9 +1304,11 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
     id: string; numero: string; statut: string; client_id: string | null; client_nom: string
     date_validite: string; acompte_pct: number; conditions_paiement: string; notes: string | null
     total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number; approuve_par_client: boolean
+    remise_globale_xaf: number | null; remise_globale_motif: string | null; net_a_payer_xaf: number | null
     devis_lignes: Array<{
       designation: string; description: string | null; unite: string
       quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number; ordre: number
+      remise_type: string | null; remise_valeur: number | null; remise_xaf: number | null; remise_motif: string | null
     }>
   }
 
@@ -1235,9 +1370,12 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
       devis_id:              d.id,
       statut:                'confirmed',
       date_commande:         new Date().toISOString().slice(0, 10),
+      remise_globale_xaf:    d.remise_globale_xaf ?? 0,
+      remise_globale_motif:  d.remise_globale_motif ?? null,
       total_ht_xaf:          d.total_ht_xaf,
       tva_xaf:               d.tva_xaf,
       total_ttc_xaf:         d.total_ttc_xaf,
+      net_a_payer_xaf:       d.net_a_payer_xaf ?? d.total_ttc_xaf,
       acompte_recu_xaf:      Math.round(d.total_ttc_xaf * (d.acompte_pct / 100)),
       condition_paiement_id: conditionPaiementIdFinal,
       notes:                 d.notes,
@@ -1259,6 +1397,10 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
       quantite:             l.quantite,
       prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
       total_ht_xaf:         l.total_ht_xaf,
+      remise_type:          l.remise_type ?? null,
+      remise_valeur:        l.remise_valeur ?? null,
+      remise_xaf:           l.remise_xaf ?? 0,
+      remise_motif:         l.remise_motif ?? null,
       ordre:                l.ordre,
     })),
   )
@@ -1387,7 +1529,18 @@ router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zV
       if (blocageMsg) throw Object.assign(new Error(blocageMsg), { code: 'CLIENT_BLOQUE', httpStatus: 422 })
 
       const numero = await genererNumero('commandes', 'CMD')
-      const totaux = calculerTotaux(body.lignes)
+
+      const lignesAvecRemise = body.lignes.map((l) => ({
+        ...l,
+        remise_xaf: calculerRemiseLigne(l.quantite, l.prix_unitaire_ht_xaf, l.remise_type, l.remise_valeur),
+      }))
+      const { brut_ht_xaf, remise_totale_ht_xaf, ...dbTotaux } = calculerTotaux(lignesAvecRemise, body.remise_globale_xaf ?? 0)
+
+      if (remise_totale_ht_xaf > 0) {
+        const remisePct = brut_ht_xaf > 0 ? (remise_totale_ht_xaf / brut_ht_xaf) * 100 : 0
+        const elig = await verifierEligibiliteRemise(remisePct, remise_totale_ht_xaf, body.client_id, user.role as string)
+        if (!elig.eligible) throw Object.assign(new Error(elig.raison!), { code: 'REMISE_NON_AUTORISEE', httpStatus: 422 })
+      }
 
       // ── Résolution condition de paiement ──────────────────────────────────
       let montantAcompte    = 0
@@ -1401,11 +1554,10 @@ router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zV
           .single()
 
         if (cp) {
-          // Vérifier éligibilité crédit avant toute insertion
           const typeCmd: TypeCommande = body.devis_id ? 'devis' : 'devis'
           const eligibilite = await verifierEligibiliteCredit(
             body.client_id ?? null,
-            totaux.total_ttc_xaf,
+            dbTotaux.total_ttc_xaf,
             typeCmd,
             cp.code,
           )
@@ -1416,39 +1568,46 @@ router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zV
             })
           }
 
-          montantAcompte = Math.round(totaux.total_ttc_xaf * (cp.acompte_pct / 100))
+          montantAcompte = Math.round(dbTotaux.total_ttc_xaf * (cp.acompte_pct / 100))
 
           if (cp.delai_solde_jours > 0) {
             const base = new Date(body.date_commande)
             base.setDate(base.getDate() + cp.delai_solde_jours)
             dateEcheanceSolde = base.toISOString().slice(0, 10)
           } else if (cp.delai_solde_jours === 0 && cp.acompte_pct < 100) {
-            // Paiement à la livraison — échéance = date livraison prévue si connue
             dateEcheanceSolde = body.date_livraison_prevue ?? null
           }
         }
       }
 
       const { data: commande, error: cmdErr } = await db.from('commandes')
-        .insert({ numero, client_id: body.client_id ?? null, client_nom: body.client_nom,
+        .insert({
+          numero, client_id: body.client_id ?? null, client_nom: body.client_nom,
           devis_id: body.devis_id ?? null, statut: 'confirmed',
           date_commande: body.date_commande, date_livraison_prevue: body.date_livraison_prevue ?? null,
           acompte_recu_xaf: body.acompte_recu_xaf, notes: body.notes ?? null,
           condition_paiement_id: body.condition_paiement_id ?? null,
+          remise_globale_motif: body.remise_globale_motif ?? null,
           montant_acompte: montantAcompte,
           date_echeance_solde: dateEcheanceSolde,
           statut_paiement: 'non_paye',
-          created_by: user.id, sync_status: 'synced', ...totaux })
+          created_by: user.id, sync_status: 'synced', ...dbTotaux,
+        })
         .select().single()
 
       if (cmdErr || !commande) throw new Error(cmdErr?.message ?? 'Erreur création commande')
       const cmd = commande as { id: string }
 
-      const lignes = body.lignes.map((l, i) => ({
+      const lignes = lignesAvecRemise.map((l, i) => ({
         commande_id: cmd.id, produit_id: l.produit_id ?? null,
         designation: l.designation, unite: l.unite, quantite: l.quantite,
         prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
-        total_ht_xaf: Math.round(l.quantite * l.prix_unitaire_ht_xaf),
+        total_ht_xaf:  Math.round(l.quantite * l.prix_unitaire_ht_xaf),
+        remise_type:   l.remise_type ?? null,
+        remise_valeur: l.remise_valeur ?? null,
+        remise_xaf:    l.remise_xaf,
+        remise_motif:  l.remise_motif ?? null,
+        applique_par_id: user.id,
         ordre: l.ordre !== 0 ? l.ordre : i,
       }))
 

@@ -63,6 +63,7 @@ export interface PdfLigne {
   quantite:             number
   prix_unitaire_ht_xaf: number
   total_ht_xaf:         number
+  remise_xaf?:          number | null
 }
 
 export interface PdfClient {
@@ -75,13 +76,17 @@ export interface PdfClient {
 }
 
 export interface PdfFacture {
-  numero:        string
-  date_emission: string
-  date_echeance: string
-  total_ht_xaf:  number
-  tva_xaf:       number
+  numero:               string
+  date_emission:        string
+  date_echeance:        string
+  total_ht_xaf:         number
+  tva_xaf:              number
   frais_livraison_xaf?: number | null
-  total_ttc_xaf: number
+  total_ttc_xaf:        number
+  remise_globale_xaf?:  number | null
+  acompte_recu_xaf?:    number | null
+  net_a_payer_xaf?:     number | null
+  condition_paiement?:  string | null
 }
 
 export interface PdfDevis {
@@ -256,28 +261,57 @@ function drawTableRow(
 }
 
 function drawTotals(
-  doc:    InstanceType<typeof PDFDocument>,
-  y:      number,
-  ht:     number,
-  tva:    number,
+  doc:       InstanceType<typeof PDFDocument>,
+  y:         number,
+  ht:        number,
+  tva:       number,
   livraison: number,
-  ttc:    number,
+  ttc:       number,
+  opts?: {
+    brut_ht?:       number
+    remise_totale?: number
+    acompte?:       number
+  },
 ): number {
-  const TX = COL.pu   // left of totals block
-  const TW = W - (TX - ML)  // width of totals block
+  const TX = COL.pu
+  const TW = W - (TX - ML)
+
+  const remise  = Math.round(opts?.remise_totale ?? 0)
+  const brut_ht = Math.round(opts?.brut_ht ?? ht)
+  const acompte = Math.round(opts?.acompte ?? 0)
 
   y += 10
 
-  // HT
+  if (remise > 0) {
+    // Brut HT
+    doc.font('Helvetica').fontSize(9).fillColor(C.mid)
+    doc.text('Brut HT :',     TX, y, { width: 84 })
+    doc.font('Helvetica').fontSize(9).fillColor(C.dark)
+    doc.text(xaf(brut_ht), TX + 84, y, { width: TW - 84, align: 'right' })
+    y += 14
+
+    // Remise
+    doc.font('Helvetica').fontSize(9).fillColor(C.mid)
+    doc.text('(−) Remises :',  TX, y, { width: 84 })
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('#C62828')
+    doc.text(`-${xaf(remise)}`, TX + 84, y, { width: TW - 84, align: 'right' })
+    y += 14
+
+    // Separator
+    doc.moveTo(TX, y).lineTo(TX + TW, y).strokeColor(C.border).lineWidth(0.5).stroke()
+    y += 6
+  }
+
+  // HT net (base imposable)
   doc.font('Helvetica').fontSize(9).fillColor(C.mid)
-  doc.text('Sous-total HT :',        TX, y,      { width: 84 })
+  doc.text(remise > 0 ? 'Total HT net :' : 'Sous-total HT :', TX, y, { width: 84 })
   doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
   doc.text(xaf(ht), TX + 84, y, { width: TW - 84, align: 'right' })
   y += 16
 
   // TVA
   doc.font('Helvetica').fontSize(9).fillColor(C.mid)
-  doc.text('TVA (19,25%) :',         TX, y,      { width: 84 })
+  doc.text('TVA (19,25%) :', TX, y, { width: 84 })
   doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
   doc.text(xaf(tva), TX + 84, y, { width: TW - 84, align: 'right' })
   y += 16
@@ -295,20 +329,49 @@ function drawTotals(
   // TTC box
   doc.rect(TX, y, TW, 26).fill(C.red)
   doc.font('Helvetica-Bold').fontSize(10).fillColor('white')
-  doc.text('TOTAL TTC :',           TX + 6, y + 8, { width: 84 })
+  doc.text('TOTAL TTC :', TX + 6, y + 8, { width: 84 })
   doc.font('Helvetica-Bold').fontSize(11).fillColor('white')
   doc.text(xaf(ttc), TX + 84, y + 7, { width: TW - 90, align: 'right' })
   y += 34
 
-  // Amount in words
-  const lettres = montantEnLettres(ttc)
-  doc.rect(ML, y, W, 28).fill(C.blue)
-  doc.rect(ML, y, 3, 28).fill(C.blueMid)
-  doc.font('Helvetica').fontSize(7.5).fillColor(C.muted)
-    .text('Arrêté à la somme de :', ML + 10, y + 6)
-  doc.font('Helvetica-Bold').fontSize(8).fillColor(C.blueMid)
-    .text(lettres.toUpperCase(), ML + 10, y + 16, { width: W - 20 })
-  y += 36
+  if (acompte > 0) {
+    // Acompte reçu
+    doc.font('Helvetica').fontSize(9).fillColor(C.mid)
+    doc.text('(−) Acompte reçu :', TX, y, { width: 100 })
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.mid)
+    doc.text(`-${xaf(acompte)}`, TX + 100, y, { width: TW - 100, align: 'right' })
+    y += 14
+
+    const solde = Math.max(0, ttc - acompte)
+
+    // Solde box
+    doc.rect(TX, y, TW, 26).fill(C.blueMid)
+    doc.font('Helvetica-Bold').fontSize(10).fillColor('white')
+    doc.text('SOLDE À RÉGLER :', TX + 6, y + 8, { width: 110 })
+    doc.font('Helvetica-Bold').fontSize(11).fillColor('white')
+    doc.text(xaf(solde), TX + 110, y + 7, { width: TW - 116, align: 'right' })
+    y += 34
+
+    // Amount in words based on solde
+    const lettres = montantEnLettres(solde)
+    doc.rect(ML, y, W, 28).fill(C.blue)
+    doc.rect(ML, y, 3, 28).fill(C.blueMid)
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.muted)
+      .text('Solde arrêté à la somme de :', ML + 10, y + 6)
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.blueMid)
+      .text(lettres.toUpperCase(), ML + 10, y + 16, { width: W - 20 })
+    y += 36
+  } else {
+    // Amount in words based on TTC
+    const lettres = montantEnLettres(ttc)
+    doc.rect(ML, y, W, 28).fill(C.blue)
+    doc.rect(ML, y, 3, 28).fill(C.blueMid)
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.muted)
+      .text('Arrêté à la somme de :', ML + 10, y + 6)
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.blueMid)
+      .text(lettres.toUpperCase(), ML + 10, y + 16, { width: W - 20 })
+    y += 36
+  }
 
   return y
 }
@@ -332,14 +395,16 @@ function drawLegalMentions(doc: InstanceType<typeof PDFDocument>, y: number, tva
   return y
 }
 
-function drawPaymentTerms(doc: InstanceType<typeof PDFDocument>, y: number): number {
+function drawPaymentTerms(doc: InstanceType<typeof PDFDocument>, y: number, conditionLibelle?: string | null): number {
   y += 10
   doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.mid)
     .text('CONDITIONS DE PAIEMENT', ML, y)
   y += 10
   doc.font('Helvetica').fontSize(7.5).fillColor(C.muted)
+  if (conditionLibelle) {
+    doc.text(`• Condition convenue : ${conditionLibelle}`, ML, y); y += 10
+  }
   doc.text('• Mode de règlement : Virement bancaire / Chèque certifié / Espèces', ML, y); y += 10
-  doc.text('• Délai de paiement : 30 jours à compter de la date de facturation', ML, y); y += 10
   doc.text('• Pénalités de retard : 1,5% par mois sur le montant TTC impayé', ML, y); y += 10
   return y
 }
@@ -384,18 +449,19 @@ function drawBtpConditions(doc: InstanceType<typeof PDFDocument>, y: number): nu
 
 function buildPdf(
   meta: {
-    title:      string
-    docType:    'FACTURE' | 'DEVIS'
-    numero:     string
-    labelLeft:  string
-    dateLeft:   string
-    labelRight: string
-    dateRight:  string
-    extraFn?:   (doc: InstanceType<typeof PDFDocument>, y: number) => number
+    title:              string
+    docType:            'FACTURE' | 'DEVIS'
+    numero:             string
+    labelLeft:          string
+    dateLeft:           string
+    labelRight:         string
+    dateRight:          string
+    conditionPaiement?: string | null
+    extraFn?:           (doc: InstanceType<typeof PDFDocument>, y: number) => number
   },
   client:  PdfClient,
   lignes:  PdfLigne[],
-  totaux:  { ht: number; tva: number; livraison?: number; ttc: number },
+  totaux:  { ht: number; tva: number; livraison?: number; ttc: number; brut_ht?: number; remise_totale?: number; acompte?: number },
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
@@ -435,7 +501,7 @@ function buildPdf(
     }
 
     // ── Totals ───────────────────────────────────────────────────────────────
-    const totalsHeight = 130
+    const totalsHeight = 240
     if (y + totalsHeight > PAGE_END) {
       drawFooter(doc, page)
       doc.addPage()
@@ -446,7 +512,11 @@ function buildPdf(
       y = 40
     }
 
-    y = drawTotals(doc, y, totaux.ht, totaux.tva, Number(totaux.livraison ?? 0), totaux.ttc)
+    y = drawTotals(doc, y, totaux.ht, totaux.tva, Number(totaux.livraison ?? 0), totaux.ttc, {
+      brut_ht:       totaux.brut_ht,
+      remise_totale: totaux.remise_totale,
+      acompte:       totaux.acompte,
+    })
 
     // ── Extra section (BTP conditions for devis) ─────────────────────────────
     if (meta.extraFn) {
@@ -467,7 +537,7 @@ function buildPdf(
       y = 40
     }
     y = drawLegalMentions(doc, y, totaux.tva)
-    y = drawPaymentTerms(doc, y)
+    y = drawPaymentTerms(doc, y, meta.conditionPaiement)
 
     // ── Signature zone ───────────────────────────────────────────────────────
     if (y + 90 > PAGE_END) {
@@ -492,23 +562,33 @@ export async function generateFacturePDF(
   client:  PdfClient,
   lignes:  PdfLigne[],
 ): Promise<Buffer> {
+  const remiseLignes  = Math.round(lignes.reduce((s, l) => s + Number(l.remise_xaf ?? 0), 0))
+  const remiseGlobale = Math.round(Number(facture.remise_globale_xaf ?? 0))
+  const remiseTotale  = remiseLignes + remiseGlobale
+  const brut_ht       = remiseTotale > 0 ? facture.total_ht_xaf + remiseTotale : undefined
+  const acompte       = Number(facture.acompte_recu_xaf ?? 0)
+
   return buildPdf(
     {
-      title:      facture.numero,
-      docType:    'FACTURE',
-      numero:     facture.numero,
-      labelLeft:  'Émission',
-      dateLeft:   facture.date_emission,
-      labelRight: 'Échéance',
-      dateRight:  facture.date_echeance,
+      title:              facture.numero,
+      docType:            'FACTURE',
+      numero:             facture.numero,
+      labelLeft:          'Émission',
+      dateLeft:           facture.date_emission,
+      labelRight:         'Échéance',
+      dateRight:          facture.date_echeance,
+      conditionPaiement:  facture.condition_paiement ?? null,
     },
     client,
     lignes,
     {
-      ht: facture.total_ht_xaf,
-      tva: facture.tva_xaf,
-      livraison: Number(facture.frais_livraison_xaf ?? 0),
-      ttc: facture.total_ttc_xaf,
+      ht:            facture.total_ht_xaf,
+      tva:           facture.tva_xaf,
+      livraison:     Number(facture.frais_livraison_xaf ?? 0),
+      ttc:           facture.total_ttc_xaf,
+      brut_ht,
+      remise_totale: remiseTotale > 0 ? remiseTotale : undefined,
+      acompte:       acompte > 0 ? acompte : undefined,
     },
   )
 }

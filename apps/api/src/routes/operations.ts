@@ -20,10 +20,6 @@ function calcStatutStock(stock: number, min: number, critique: number) {
   return 'normal'
 }
 
-async function genererNumero(table: string, prefix: string) {
-  const { count } = await db.from(table).select('*', { count: 'exact', head: true })
-  return `${prefix}-${new Date().getFullYear()}-${String((count ?? 0) + 1).padStart(3, '0')}`
-}
 
 async function enregistrerMouvementStock(args: {
   produit_id: string
@@ -85,80 +81,6 @@ async function ensureFactureCommande(commandeId: string, userId?: string) {
     console.error('[finance] facture auto production:', e)
     return false
   }
-
-  const { data: existing } = await db
-    .from('factures')
-    .select('id')
-    .eq('commande_id', commandeId)
-    .limit(1)
-    .maybeSingle()
-
-  if (existing) return false
-
-  const { data: commande, error } = await db
-    .from('commandes')
-    .select('id, client_id, client_nom, total_ht_xaf, tva_xaf, frais_livraison_xaf, total_ttc_xaf, commandes_lignes(*)')
-    .eq('id', commandeId)
-    .single()
-
-  if (error || !commande) return false
-
-  const cmd = commande as {
-    id: string
-    client_id: string | null
-    client_nom: string
-    total_ht_xaf: number
-    tva_xaf: number
-    frais_livraison_xaf?: number | null
-    total_ttc_xaf: number
-    commandes_lignes?: Array<{
-      designation: string
-      unite: string
-      quantite: number
-      prix_unitaire_ht_xaf: number
-      total_ht_xaf: number
-      ordre: number
-    }>
-  }
-
-  const numero = await genererNumero('factures', 'FAC')
-  const dateEmission = new Date().toISOString().slice(0, 10)
-  const dateEcheance = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-
-  const { data: facture, error: factureError } = await db
-    .from('factures')
-    .insert({
-      numero,
-      commande_id:     cmd.id,
-      client_id:       cmd.client_id,
-      client_nom:      cmd.client_nom,
-      statut:          'envoye',
-      date_emission:   dateEmission,
-      date_echeance:   dateEcheance,
-      total_ht_xaf:    cmd.total_ht_xaf,
-      tva_xaf:         cmd.tva_xaf,
-      frais_livraison_xaf: Number(cmd.frais_livraison_xaf ?? 0),
-      total_ttc_xaf:   cmd.total_ttc_xaf,
-      created_by:      userId ?? null,
-      sync_status:     'synced',
-    })
-    .select('id')
-    .single()
-
-  if (factureError || !facture) return false
-
-  const lignes = (cmd.commandes_lignes ?? []).map((ligne, index) => ({
-    facture_id:            (facture as { id: string }).id,
-    designation:           ligne.designation,
-    unite:                 ligne.unite,
-    quantite:              ligne.quantite,
-    prix_unitaire_ht_xaf:  ligne.prix_unitaire_ht_xaf,
-    total_ht_xaf:          ligne.total_ht_xaf,
-    ordre:                 ligne.ordre ?? index + 1,
-  }))
-
-  if (lignes.length > 0) await db.from('factures_lignes').insert(lignes)
-  return true
 }
 
 async function getCommandeSmsInfo(commandeId: string) {
@@ -279,14 +201,16 @@ const TRANSITIONS_PROJET: Record<string, string[]> = {
 }
 
 const TRANSITIONS_LIVRAISON: Record<string, string[]> = {
-  confirmed:     ['pret', 'cancelled'], // compat anciennes donnees
-  pret:          ['delivered', 'cancelled'],
-  delivered:     [],
-  cancelled:     [],
-  planifiee:     ['en_transit', 'annulee'],
-  en_transit:    ['livree', 'annulee'],
-  livree:        [],
-  annulee:       [],
+  en_preparation: ['planifiee', 'annulee'],
+  planifiee:      ['en_transit', 'annulee'],
+  en_transit:     ['livree', 'annulee'],
+  livree:         [],
+  annulee:        [],
+  // compat anciennes données
+  confirmed:      ['pret', 'cancelled'],
+  pret:           ['delivered', 'cancelled'],
+  delivered:      [],
+  cancelled:      [],
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1285,7 +1209,7 @@ router.get('/logistique/commandes-pretes', async (c) => {
   const { data: livraisonsActives } = await db
     .from('livraisons')
     .select('commande_id')
-    .in('statut', ['planifiee', 'en_transit', 'confirmed', 'pret'])
+    .in('statut', ['en_preparation', 'planifiee', 'en_transit', 'confirmed', 'pret'])
     .not('commande_id', 'is', null)
 
   const commandeIdsDejaPlanifiees = ((livraisonsActives ?? []) as { commande_id: string | null }[])
@@ -1315,6 +1239,32 @@ router.get('/logistique/commandes-pretes', async (c) => {
   }
 
   return c.json({ data: eligible, total: eligible.length })
+})
+
+/** Tableau de bord préparation — 4 colonnes */
+router.get('/logistique/preparation/resume', async (c) => {
+  const [
+    { count: aPreparerCount },
+    { count: enCoursCount },
+    { count: pretALivrerCount },
+    { count: planifieeCount },
+  ] = await Promise.all([
+    db.from('bons_sortie').select('*', { count: 'exact', head: true })
+      .eq('statut', 'valide').eq('statut_preparation', 'a_preparer'),
+    db.from('bons_sortie').select('*', { count: 'exact', head: true })
+      .eq('statut', 'valide').eq('statut_preparation', 'en_cours'),
+    db.from('livraisons').select('*', { count: 'exact', head: true })
+      .eq('statut', 'en_preparation'),
+    db.from('livraisons').select('*', { count: 'exact', head: true })
+      .eq('statut', 'planifiee'),
+  ])
+
+  return c.json({
+    a_preparer:    aPreparerCount  ?? 0,
+    en_cours:      enCoursCount    ?? 0,
+    pret_a_livrer: pretALivrerCount ?? 0,
+    planifiee:     planifieeCount  ?? 0,
+  })
 })
 
 router.post('/logistique/livraisons', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', livraisonSchema), async (c) => {
@@ -1352,7 +1302,7 @@ router.post('/logistique/livraisons', requireRole(['admin', 'superviseur', 'oper
       .from('livraisons')
       .select('*', { count: 'exact', head: true })
       .eq('commande_id', body.commande_id)
-      .in('statut', ['planifiee', 'en_transit', 'confirmed', 'pret'])
+      .in('statut', ['en_preparation', 'planifiee', 'en_transit', 'confirmed', 'pret'])
 
     if ((activeLivraisons ?? 0) > 0) {
       return c.json({

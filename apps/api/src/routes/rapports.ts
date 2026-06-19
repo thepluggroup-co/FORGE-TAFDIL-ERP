@@ -1094,7 +1094,7 @@ router.get('/plan-comptable', async (c) => {
 router.get('/journaux-comptables', requireRole(['admin', 'superviseur']), async (c) => {
   return c.json({
     data: [
-      { code: 'VT', label: 'Journal des ventes', source: 'Factures', comptes_usuels: ['411', '701', '705', '706', '4431'] },
+      { code: 'VT', label: 'Journal des ventes', source: 'Factures', comptes_usuels: ['411', '701', '705', '706', '7098', '4431'] },
       { code: 'BQ', label: 'Journal banque', source: 'Encaissements banque', comptes_usuels: ['521', '411'] },
       { code: 'CA', label: 'Journal caisse', source: 'Encaissements caisse', comptes_usuels: ['571', '411'] },
       { code: 'AC', label: 'Journal achats', source: 'Achats et fournisseurs', comptes_usuels: ['401', '601', '602', '4432'] },
@@ -1106,6 +1106,67 @@ router.get('/journaux-comptables', requireRole(['admin', 'superviseur']), async 
       'Une ligne ne peut pas porter debit et credit simultanement.',
       'Les factures et paiements generent leurs ecritures automatiquement depuis Finance.',
     ],
+  })
+})
+
+// ── Rapport remises accordées ──────────────────────────────────────────────────
+
+router.get('/remises', requireRole(['admin', 'superviseur']), async (c) => {
+  const { date_debut, date_fin, client_id } = c.req.query()
+
+  let devisQ = db
+    .from('devis_lignes')
+    .select('remise_type, remise_valeur, remise_xaf, remise_motif, designation, quantite, prix_unitaire_ht_xaf, devis!inner(numero, client_nom, client_id, date_emission)')
+    .gt('remise_xaf', 0)
+
+  let cmdQ = db
+    .from('commandes_lignes')
+    .select('remise_type, remise_valeur, remise_xaf, remise_motif, designation, quantite, prix_unitaire_ht_xaf, commandes!inner(numero, client_nom, client_id, date_commande)')
+    .gt('remise_xaf', 0)
+
+  if (date_debut) {
+    devisQ = (devisQ as typeof devisQ).gte('devis.date_emission', date_debut)
+    cmdQ   = (cmdQ as typeof cmdQ).gte('commandes.date_commande', date_debut)
+  }
+  if (date_fin) {
+    devisQ = (devisQ as typeof devisQ).lte('devis.date_emission', date_fin)
+    cmdQ   = (cmdQ as typeof cmdQ).lte('commandes.date_commande', date_fin)
+  }
+  if (client_id) {
+    devisQ = (devisQ as typeof devisQ).eq('devis.client_id', client_id)
+    cmdQ   = (cmdQ as typeof cmdQ).eq('commandes.client_id', client_id)
+  }
+
+  const [{ data: devisLignes }, { data: cmdLignes }] = await Promise.all([devisQ, cmdQ])
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mapLigne = (l: any, source: 'devis' | 'commande') => {
+    const brut = Math.round((l.quantite ?? 0) * (l.prix_unitaire_ht_xaf ?? 0))
+    return {
+      source,
+      document_numero: source === 'devis' ? l.devis?.numero : l.commandes?.numero,
+      client_nom:      source === 'devis' ? l.devis?.client_nom : l.commandes?.client_nom,
+      client_id:       source === 'devis' ? l.devis?.client_id : l.commandes?.client_id,
+      date:            source === 'devis' ? l.devis?.date_emission : l.commandes?.date_commande,
+      designation:     l.designation,
+      remise_type:     l.remise_type,
+      remise_valeur:   l.remise_valeur,
+      remise_xaf:      l.remise_xaf ?? 0,
+      remise_motif:    l.remise_motif,
+      brut_ht_xaf:     brut,
+      remise_pct:      brut > 0 ? Math.round(((l.remise_xaf ?? 0) / brut) * 1000) / 10 : 0,
+    }
+  }
+
+  const lignes = [
+    ...(devisLignes ?? []).map((l) => mapLigne(l, 'devis')),
+    ...(cmdLignes   ?? []).map((l) => mapLigne(l, 'commande')),
+  ].sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
+
+  return c.json({
+    data:               lignes,
+    total:              lignes.length,
+    total_remises_xaf:  Math.round(lignes.reduce((s, l) => s + l.remise_xaf, 0)),
   })
 })
 

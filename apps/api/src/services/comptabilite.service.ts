@@ -68,24 +68,27 @@ async function ecrituresExistent(
 // ÉCRITURES DE VENTE
 // ══════════════════════════════════════════════════════════════════════════════
 //
-// Vente de marchandises / services TAFDIL (BTP, usinage, …)
-//   Dr 411 Clients              (montant TTC)
-//   Cr 701/705 Ventes / Travaux (montant HT)
-//   Cr 4431 TVA facturée        (montant TVA)
-//
-// Équilibre : 411 TTC = 701 HT + 4431 TVA ✓
+// Sans remise : Dr 411 TTC = Cr 701 HT NET + Cr 4431 TVA
+// Avec remise (OHADA 7098) :
+//   Dr 411 Clients          NET TTC
+//   Cr 701/705 Ventes       BRUT HT
+//   Dr 7098 Remises accordées REMISE HT
+//   Cr 4431 TVA             TVA sur NET HT
+// Équilibre : 411 + 7098 = 701 + 4431 ✓
 
 export async function genererEcritureVente(facture: {
-  id:            string
-  numero:        string
-  date_emission: string
-  client_nom:    string
-  total_ht_xaf:  number
-  tva_xaf:       number
-  frais_livraison_xaf?: number | null
-  total_ttc_xaf: number
-  created_by?:   string
-  type_vente?:   'marchandises' | 'travaux' | 'services'
+  id:                    string
+  numero:                string
+  date_emission:         string
+  client_nom:            string
+  total_ht_xaf:          number   // NET HT après remises = base imposable
+  tva_xaf:               number
+  frais_livraison_xaf?:  number | null
+  total_ttc_xaf:         number   // NET TTC
+  brut_ht_xaf?:          number   // BRUT HT avant remises (pour Cr 701)
+  remise_totale_ht_xaf?: number   // Total remises HT (pour Dr 7098)
+  created_by?:           string
+  type_vente?:           'marchandises' | 'travaux' | 'services'
 }): Promise<ComptaResult> {
   if (await ecrituresExistent('facture_id', facture.id)) {
     return { ok: true, inserts: 0 }
@@ -97,55 +100,38 @@ export async function genererEcritureVente(facture: {
     ? '706'
     : '701'
 
-  const libelle = `Vente — ${facture.numero} — ${facture.client_nom}`
-  const date    = facture.date_emission.slice(0, 10)
+  const libelle          = `Vente — ${facture.numero} — ${facture.client_nom}`
+  const date             = facture.date_emission.slice(0, 10)
+  const fraisLivraison   = Math.round(Number(facture.frais_livraison_xaf ?? 0))
+  const remiseHt         = Math.round(Number(facture.remise_totale_ht_xaf ?? 0))
+  const brutHt           = remiseHt > 0 ? Math.round(Number(facture.brut_ht_xaf ?? facture.total_ht_xaf)) : facture.total_ht_xaf
+  const creditVente      = remiseHt > 0 ? brutHt : facture.total_ht_xaf
 
-  const fraisLivraison = Math.round(Number(facture.frais_livraison_xaf ?? 0))
+  const common = { reference_doc: facture.numero, facture_id: facture.id, created_by: facture.created_by }
+
   const ecritures = [
-    {
-      date, libelle,
-      compte_syscohada: '411',
-      compte_label:     libelleCompte('411'),
-      debit_xaf:        facture.total_ttc_xaf,
-      credit_xaf:       0,
-      reference_doc:    facture.numero,
-      facture_id:       facture.id,
-      created_by:       facture.created_by,
-    },
-    {
-      date, libelle,
-      compte_syscohada: compteVente,
-      compte_label:     libelleCompte(compteVente),
-      debit_xaf:        0,
-      credit_xaf:       facture.total_ht_xaf,
-      reference_doc:    facture.numero,
-      facture_id:       facture.id,
-      created_by:       facture.created_by,
-    },
-    {
-      date,
-      libelle:          `TVA collectée — ${facture.numero}`,
-      compte_syscohada: '4431',
-      compte_label:     libelleCompte('4431'),
-      debit_xaf:        0,
-      credit_xaf:       facture.tva_xaf,
-      reference_doc:    facture.numero,
-      facture_id:       facture.id,
-      created_by:       facture.created_by,
-    },
+    { date, libelle, compte_syscohada: '411', compte_label: libelleCompte('411'),
+      debit_xaf: facture.total_ttc_xaf, credit_xaf: 0, ...common },
+    { date, libelle, compte_syscohada: compteVente, compte_label: libelleCompte(compteVente),
+      debit_xaf: 0, credit_xaf: creditVente, ...common },
+    { date, libelle: `TVA collectée — ${facture.numero}`, compte_syscohada: '4431',
+      compte_label: libelleCompte('4431'), debit_xaf: 0, credit_xaf: facture.tva_xaf, ...common },
   ]
+
+  // Remise accordée : OHADA compte 7098 (débiteur — réduit les produits)
+  if (remiseHt > 0) {
+    ecritures.push({
+      date, libelle: `Remises accordées — ${facture.numero}`,
+      compte_syscohada: '7098', compte_label: libelleCompte('7098'),
+      debit_xaf: remiseHt, credit_xaf: 0, ...common,
+    })
+  }
 
   if (fraisLivraison > 0) {
     ecritures.push({
-      date,
-      libelle:          `Frais de livraison - ${facture.numero}`,
-      compte_syscohada: '706',
-      compte_label:     libelleCompte('706'),
-      debit_xaf:        0,
-      credit_xaf:       fraisLivraison,
-      reference_doc:    facture.numero,
-      facture_id:       facture.id,
-      created_by:       facture.created_by,
+      date, libelle: `Frais de livraison - ${facture.numero}`,
+      compte_syscohada: '706', compte_label: libelleCompte('706'),
+      debit_xaf: 0, credit_xaf: fraisLivraison, ...common,
     })
   }
 
@@ -558,3 +544,63 @@ export async function annulerEcrituresReference(params: {
 }
 
 export { PLAN_RAW as planComptable, libelleCompte }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ÉCRITURE BON DE SORTIE INTERNE (vente boutique → atelier/admin)
+// ══════════════════════════════════════════════════════════════════════════════
+//
+//   comptant        : Dr 512 Banque      / Cr 701 Ventes
+//   credit          : Dr 411 Clients     / Cr 701 Ventes  (créance ouverte)
+//   deduction_acompte: Dr 419 Avances reçues / Cr 701 Ventes (acompte consommé)
+
+export async function genererEcritureBonSortieInterne(bon: {
+  numero:             string
+  date:               string
+  montant_xaf:        number
+  nature_transaction: 'comptant' | 'credit' | 'deduction_acompte'
+  imputation_payeur:  string
+  commande_id?:       string | null
+  created_by?:        string
+}): Promise<ComptaResult> {
+  if (!bon.montant_xaf || bon.montant_xaf <= 0) return { ok: true, inserts: 0 }
+
+  const refDoc = `BON-${bon.numero}`
+  if (await ecrituresExistent('reference_doc', refDoc)) return { ok: true, inserts: 0 }
+
+  const date    = bon.date.slice(0, 10)
+  const payeur  = bon.imputation_payeur.replace(/_/g, ' ')
+  const libelle = `Sortie stock interne ${bon.nature_transaction} — ${bon.numero} — ${payeur}`
+  const montant = Math.round(bon.montant_xaf)
+
+  const cptContre =
+    bon.nature_transaction === 'comptant'          ? '512'  // Banque
+    : bon.nature_transaction === 'credit'          ? '411'  // Clients — créance
+    :                                                '419'  // Avances et acomptes reçus
+
+  const common = {
+    date,
+    libelle,
+    reference_doc: refDoc,
+    commande_id:   bon.commande_id ?? undefined,
+    created_by:    bon.created_by,
+  }
+
+  const ecritures: EcritureInsert[] = [
+    {
+      ...common,
+      compte_syscohada: cptContre,
+      compte_label:     libelleCompte(cptContre),
+      debit_xaf:        montant,
+      credit_xaf:       0,
+    },
+    {
+      ...common,
+      compte_syscohada: '701',
+      compte_label:     libelleCompte('701'),
+      debit_xaf:        0,
+      credit_xaf:       montant,
+    },
+  ]
+
+  return insertEcritures(ecritures)
+}
