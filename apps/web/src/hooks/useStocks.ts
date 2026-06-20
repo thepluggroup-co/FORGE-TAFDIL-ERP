@@ -1,8 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  dbGetProduits, dbGetAlertesProduits, dbCreateProduit, dbMouvementStock, dbGetMouvementsStock,
+  dbGetProduits, dbGetAlertesProduits, dbCreateProduit, dbMouvementStock,
 } from '@/lib/db'
+import { apiClient } from '@/lib/api-client'
 
 export interface StockProduit {
   id: string; ref: string; designation: string; categorie: string; unite: string
@@ -65,9 +66,18 @@ export function useMouvementsStock(params?: {
 }) {
   return useQuery({
     queryKey:  ['mouvements_stock', params],
-    queryFn:   () => dbGetMouvementsStock(params) as Promise<{
-      data: MouvementStock[]; total: number; page: number; per_page: number; total_pages: number
-    }>,
+    queryFn:   () => {
+      const qs = new URLSearchParams()
+      if (params?.produit_id) qs.set('produit_id', params.produit_id)
+      if (params?.type)       qs.set('type', params.type)
+      if (params?.date_debut) qs.set('date_debut', params.date_debut)
+      if (params?.date_fin)   qs.set('date_fin', params.date_fin)
+      if (params?.page)       qs.set('page', String(params.page))
+      const query = qs.toString()
+      return apiClient.get<{ data: MouvementStock[]; total: number; page: number; per_page: number; total_pages: number }>(
+        `/api/stocks/mouvements${query ? `?${query}` : ''}`
+      )
+    },
     staleTime: 15_000,
   })
 }

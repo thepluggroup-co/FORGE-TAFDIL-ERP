@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   Phone, Mail, MapPin, ExternalLink, MessageCircle,
   Loader2, AlertTriangle, CheckCircle, Package, Truck, CreditCard, XCircle,
@@ -7,6 +8,7 @@ import { SlideOver, Button, StatusBadge, Modal } from '@forge/ui'
 import { formatXAF, formatNombre, formatDateTime } from '@/lib/utils'
 import { useStatutCommandeShop, useAnnulerCommandeShop } from '@/hooks/useCommandesShop'
 import type { CommandeShop, StatutCommandeShop } from '@/hooks/useCommandesShop'
+import { supabase } from '@/lib/supabase'
 
 // ── Labels ──────────────────────────────────────────────────────────────────────
 
@@ -63,7 +65,7 @@ interface Action {
 
 const PAIEMENT_EN_LIGNE: string[] = ['mtn_momo', 'orange_money']
 
-function getActions(commande: CommandeShop): Action[] {
+function getActions(commande: CommandeShop, bonSortieExecute: boolean): Action[] {
   const { statut_commande, statut_paiement, mode_paiement } = commande
   const actions: Action[] = []
   const paiementEnLigne = PAIEMENT_EN_LIGNE.includes(mode_paiement)
@@ -117,7 +119,7 @@ function getActions(commande: CommandeShop): Action[] {
     })
   }
 
-  if (statut_commande === 'en_preparation') {
+  if (statut_commande === 'en_preparation' && bonSortieExecute) {
     actions.push({
       label:      'Marquer comme prête — Expédier',
       icon:       CheckCircle,
@@ -163,7 +165,27 @@ export function CommandesWebDetail({ commande, onClose }: Props) {
 
   const peutAnnuler = commande.statut_commande !== 'livree' && commande.statut_commande !== 'annulee'
 
-  const actions = getActions(commande)
+  // Check bon de sortie execute status — "Marquer prêt" is blocked until bon de sortie is execute
+  const inPrep = commande.statut_commande === 'en_preparation' && !!commande.erp_commande_id
+  const { data: bonSortieData } = useQuery({
+    queryKey: ['bon-sortie-statut', commande.erp_commande_id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('bons_sortie')
+        .select('statut')
+        .eq('commande_id', commande.erp_commande_id!)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      return data
+    },
+    enabled: inPrep,
+    staleTime: 10_000,
+  })
+  // No erp_commande_id → no bon de sortie linked → allow immediately
+  const bonSortieExecute = !commande.erp_commande_id || bonSortieData?.statut === 'execute'
+
+  const actions = getActions(commande, bonSortieExecute)
 
   const handleAction = (action: Action) => {
     if (action.requiresRef || action.confirmText) {
@@ -353,6 +375,16 @@ export function CommandesWebDetail({ commande, onClose }: Props) {
               </Button>
               <Button size="sm" variant="secondary" onClick={() => { setConfirming(null); setPaymentRef('') }}>Annuler</Button>
             </div>
+          </div>
+        )}
+
+        {/* Avertissement bon de sortie non exécuté */}
+        {commande.statut_commande === 'en_preparation' && commande.erp_commande_id && !bonSortieExecute && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+            <AlertTriangle size={15} className="text-amber-500 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-700">
+              En attente de l'exécution du bon de sortie ERP. La commande ne peut être marquée prête qu'une fois le bon exécuté.
+            </p>
           </div>
         )}
 

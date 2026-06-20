@@ -841,7 +841,7 @@ router.get('/appro/count', async (c) => {
 })
 
 /** Liste paginée des bons d'approvisionnement */
-router.get('/appro', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/appro', requireRole(['admin', 'superviseur', 'operateur']), async (c) => {
   const { statut, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))

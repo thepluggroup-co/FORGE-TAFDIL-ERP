@@ -175,9 +175,9 @@ export default function BonsAppro() {
   const [approOpen, setApproOpen]       = useState(false)
   const [approForm, setApproForm]       = useState<ApproForm>(DEFAULT_APPRO)
 
-  const { data, isLoading }    = useBonsAppro(statutFilter ? { statut: statutFilter } : undefined)
-  const { data: stocksData }   = useStocks()
-  const creerAppro             = useCreerApproManuel()
+  const { data, isLoading, isError }    = useBonsAppro(statutFilter ? { statut: statutFilter } : undefined)
+  const { data: stocksData }            = useStocks()
+  const creerAppro                      = useCreerApproManuel()
 
   const bons    = (data?.data ?? []) as BonRecord[]
   const produits = (stocksData?.data ?? []) as unknown as Produit[]
@@ -354,7 +354,12 @@ export default function BonsAppro() {
       </div>
 
       {/* Table avec lignes expandables */}
-      {bons.length === 0 && !isLoading ? (
+      {isError ? (
+        <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+          <AlertTriangle className="h-5 w-5 shrink-0" />
+          <span>Impossible de charger les bons d'approvisionnement. Vérifiez vos permissions ou réessayez.</span>
+        </div>
+      ) : bons.length === 0 && !isLoading ? (
         <EmptyState
           icon={<Package className="h-10 w-10 text-gray-300" />}
           title="Aucun bon d'approvisionnement"

@@ -72,6 +72,46 @@ function samePhone(a?: string | null, b?: string | null) {
   return left.endsWith(right) || right.endsWith(left)
 }
 
+async function syncClientDepuisShop(opts: {
+  nom: string
+  telephone: string
+  email: string | null
+  adresse: string
+  ville: string | null
+  erpCommandeId: string | null
+}) {
+  const { data: existing } = await db
+    .from('clients')
+    .select('id')
+    .eq('telephone', opts.telephone)
+    .maybeSingle()
+
+  let clientId = (existing as { id?: string } | null)?.id ?? null
+
+  if (!clientId) {
+    const { data: created } = await db
+      .from('clients')
+      .insert({
+        nom:         opts.nom,
+        type:        'particulier',
+        telephone:   opts.telephone,
+        email:       opts.email,
+        adresse:     opts.adresse,
+        ville:       opts.ville,
+        pays:        'Cameroun',
+        statut:      'actif',
+        sync_status: 'synced',
+      })
+      .select('id')
+      .single()
+    clientId = (created as { id?: string } | null)?.id ?? null
+  }
+
+  if (clientId && opts.erpCommandeId) {
+    await db.from('commandes').update({ client_id: clientId }).eq('id', opts.erpCommandeId)
+  }
+}
+
 async function creerBonSortieShop(args: {
   commandeId?: string | null
   ref: string
@@ -461,6 +501,16 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   if (errErpCommande) {
     console.error('[shop] insert commande ERP:', errErpCommande.message)
   }
+
+  // 8b. Créer/lier le client dans le module clients (non-bloquant)
+  void syncClientDepuisShop({
+    nom:           body.client_nom,
+    telephone:     body.client_telephone,
+    email:         body.client_email ?? null,
+    adresse:       body.client_adresse,
+    ville:         body.client_ville ?? null,
+    erpCommandeId: erpCommande?.id ?? null,
+  }).catch(e => console.error('[shop] sync client:', e))
 
   // 9. Lier commande_shop → commande ERP
   if (erpCommande?.id) {
