@@ -850,16 +850,37 @@ router.get('/appro', requireRole(['admin', 'superviseur', 'operateur']), async (
 
   let q = db
     .from('bons_approvisionnement')
-    .select('*, bons_approvisionnement_lignes(*)', { count: 'exact' })
+    .select('*', { count: 'exact' })
 
   if (statut) q = q.eq('statut', statut)
   if (search) q = q.ilike('numero', `%${search}%`)
 
-  const { data, count, error } = await q
+  const { data: bons, count, error } = await q
     .order('created_at', { ascending: false })
     .range(from, to)
 
   if (error) return c.json({ error: error.message }, 500)
+
+  // Charger les lignes séparément (FK non garantie dans le cache PostgREST)
+  const bonIds = (bons ?? []).map((b) => (b as { id: string }).id)
+  const lignesMap: Record<string, unknown[]> = {}
+  if (bonIds.length > 0) {
+    const { data: lignes } = await db
+      .from('bons_approvisionnement_lignes')
+      .select('*')
+      .in('bon_id', bonIds)
+    for (const l of lignes ?? []) {
+      const ligne = l as { bon_id: string }
+      if (!lignesMap[ligne.bon_id]) lignesMap[ligne.bon_id] = []
+      lignesMap[ligne.bon_id].push(l)
+    }
+  }
+
+  const data = (bons ?? []).map((b) => {
+    const bon = b as { id: string }
+    return { ...b, bons_approvisionnement_lignes: lignesMap[bon.id] ?? [] }
+  })
+
   return c.json({
     data,
     total:       count ?? 0,

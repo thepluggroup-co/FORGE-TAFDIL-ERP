@@ -210,14 +210,14 @@ router.get('/mouvements', async (c) => {
 
   let query = db
     .from('mouvements_stock')
-    .select('*, produits(ref, designation, unite), profiles!created_by(full_name)', { count: 'exact' })
+    .select('*, produits(ref, designation, unite)', { count: 'exact' })
 
   if (q.produit_id) query = query.eq('produit_id', q.produit_id)
   if (q.type)       query = query.eq('type', q.type)
   if (q.date_debut) query = query.gte('created_at', q.date_debut)
   if (q.date_fin)   query = query.lte('created_at', `${q.date_fin}T23:59:59.999Z`)
 
-  const { data, count, error } = await query
+  const { data: rows, count, error } = await query
     .order('created_at', { ascending: false })
     .range(from, to)
 
@@ -225,6 +225,32 @@ router.get('/mouvements', async (c) => {
     console.error('[stocks] GET /mouvements error:', error.message)
     return c.json({ error: error.message }, 500)
   }
+
+  // Enrichir avec le nom de l'auteur (FK profiles non garantie dans le cache PostgREST)
+  const createdByIds = [...new Set(
+    (rows ?? [])
+      .map((r) => (r as { created_by?: string | null }).created_by)
+      .filter(Boolean) as string[]
+  )]
+  const profilesMap: Record<string, string> = {}
+  if (createdByIds.length > 0) {
+    const { data: profiles } = await db
+      .from('profiles')
+      .select('id, full_name')
+      .in('id', createdByIds)
+    for (const p of profiles ?? []) {
+      const pr = p as { id: string; full_name: string | null }
+      profilesMap[pr.id] = pr.full_name ?? ''
+    }
+  }
+
+  const data = (rows ?? []).map((r) => {
+    const row = r as { created_by?: string | null }
+    return {
+      ...r,
+      profiles: row.created_by ? { full_name: profilesMap[row.created_by] ?? null } : null,
+    }
+  })
 
   return c.json({
     data,
