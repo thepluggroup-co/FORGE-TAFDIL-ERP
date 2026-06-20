@@ -175,7 +175,7 @@ export default function BonsAppro() {
   const [approOpen, setApproOpen]       = useState(false)
   const [approForm, setApproForm]       = useState<ApproForm>(DEFAULT_APPRO)
 
-  const { data, isLoading, isError }    = useBonsAppro(statutFilter ? { statut: statutFilter } : undefined)
+  const { data, isLoading, isError, error } = useBonsAppro(statutFilter ? { statut: statutFilter } : undefined)
   const { data: stocksData }            = useStocks()
   const creerAppro                      = useCreerApproManuel()
 
@@ -355,9 +355,14 @@ export default function BonsAppro() {
 
       {/* Table avec lignes expandables */}
       {isError ? (
-        <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
-          <AlertTriangle className="h-5 w-5 shrink-0" />
-          <span>Impossible de charger les bons d'approvisionnement. Vérifiez vos permissions ou réessayez.</span>
+        <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+          <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" />
+          <div className="flex flex-col gap-1 min-w-0">
+            <span className="font-medium">Impossible de charger les bons d'approvisionnement.</span>
+            {error instanceof Error && (
+              <span className="font-mono text-xs text-red-600 break-words">{error.message}</span>
+            )}
+          </div>
         </div>
       ) : bons.length === 0 && !isLoading ? (
         <EmptyState
