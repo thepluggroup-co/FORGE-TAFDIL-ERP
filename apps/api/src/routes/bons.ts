@@ -313,7 +313,7 @@ router.post(
 )
 
 /** Détail bon + lignes + historique statuts */
-router.get('/:id', async (c) => {
+router.get('/:id{[0-9a-f-]{36}}', async (c) => {
   const { id } = c.req.param()
 
   const { data, error } = await db
@@ -336,7 +336,7 @@ router.get('/:id', async (c) => {
 })
 
 /** Vérification préalable des stocks avant exécution d'un bon */
-router.get('/:id/verifier-stock', async (c) => {
+router.get('/:id{[0-9a-f-]{36}}/verifier-stock', async (c) => {
   const { id } = c.req.param()
 
   const { data: bon, error } = await db
