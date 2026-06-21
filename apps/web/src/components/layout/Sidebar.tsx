@@ -18,26 +18,33 @@ interface NavItem {
   dynamicBadge?: boolean
 }
 
-// ── Static nav items — no arbitrary badge numbers ──────────────────────────────
+// ── Static nav items — ordered by standard user journey ──────────────────────
 const NAV_ITEMS_BASE: NavItem[] = [
+  // Vue d'ensemble
   { path: '/dashboard',    label: 'Dashboard',    icon: LayoutDashboard },
+  // Cycle commercial
+  { path: '/clients',      label: 'Clients',      icon: Users },
+  { path: '/devis',        label: 'Devis',        icon: FileText },
+  { path: '/commandes',    label: 'Commandes',    icon: ShoppingCart },
   { path: '/boutique',     label: 'Boutique',     icon: Store,          dynamicBadge: true },
-  { path: '/production',   label: 'Production',   icon: Wrench },
+  // Cycle opérationnel
   { path: '/stocks',       label: 'Stocks',       icon: Package },
   { path: '/fournisseurs', label: 'Fournisseurs', icon: Building2 },
-  { path: '/commandes',    label: 'Commandes',    icon: ShoppingCart },
-  { path: '/devis',        label: 'Devis',        icon: FileText },
-  { path: '/clients',      label: 'Clients',      icon: Users },
+  { path: '/production',   label: 'Production',   icon: Wrench },
+  { path: '/logistique',   label: 'Logistique',   icon: Truck },
+  // Finance
   { path: '/finance',      label: 'Finance',      icon: DollarSign },
+  // Ressources internes
   { path: '/rh',           label: 'RH',           icon: Users },
   { path: '/formation',    label: 'Formation',    icon: GraduationCap },
-  { path: '/projets',      label: 'Projets',      icon: Kanban },
-  { path: '/logistique',   label: 'Logistique',   icon: Truck },
-  { path: '/marketing',    label: 'Marketing',    icon: Megaphone },
-  { path: '/securite',     label: 'Sécurité',     icon: Shield },
-  { path: '/intelligence', label: 'Intelligence', icon: Brain },
-  { path: '/iot',          label: 'IoT',          icon: Wifi },
   { path: '/equipements',  label: 'Équipements',  icon: Hammer },
+  { path: '/projets',      label: 'Projets',      icon: Kanban },
+  // Pilotage & croissance
+  { path: '/intelligence', label: 'Intelligence', icon: Brain },
+  { path: '/marketing',    label: 'Marketing',    icon: Megaphone },
+  // Infrastructure
+  { path: '/iot',          label: 'IoT',          icon: Wifi },
+  { path: '/securite',     label: 'Sécurité',     icon: Shield },
 ]
 
 interface SidebarProps {
