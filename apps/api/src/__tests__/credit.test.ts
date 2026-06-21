@@ -152,15 +152,13 @@ describe('checkEligibility', () => {
   })
 
   it('retourne éligible=false si aucun plafond configuré', async () => {
-    // Chaîne de mocks pour client actif mais pas de plafond
-    db.from.mockImplementation((table: string) => ({
-      select:      () => ({ eq: () => ({ single: () => Promise.resolve(table === 'clients' ? BASE_CLIENT : { data: null, error: null }) }) }),
-      eq:          () => ({ single: () => Promise.resolve(BASE_CLIENT), maybeSingle: () => Promise.resolve({ data: null, error: null }), eq: () => ({ count: 5 }) }),
-      single:      () => Promise.resolve(BASE_CLIENT),
-      maybeSingle: () => Promise.resolve({ data: null, error: null }),
-      in:          () => ({ order: () => Promise.resolve({ data: [], error: null }) }),
-      order:       () => Promise.resolve({ data: [], error: null }),
-    }))
+    mockFrom({
+      clients:                BASE_CLIENT,
+      commandes:              { data: [], error: null, count: 5 },
+      customer_credit_limits: { data: null, error: null },
+      credit_eligibility_rules: { data: [], error: null },
+      payment_plans:          { data: [], error: null },
+    })
 
     const result = await checkEligibility('client-1')
     expect(result.eligible).toBe(false)
@@ -277,7 +275,7 @@ describe('recordPayment — statut et solde', () => {
     expect(newStatus).toBe('PARTIAL')
   })
 
-  it('calcule l'encours restant après paiement complet d'une échéance', () => {
+  it("calcule l'encours restant après paiement complet d'une échéance", () => {
     const installments = [
       { amount_due: 300_000, amount_paid: 300_000 },
       { amount_due: 500_000, amount_paid: 250_000 },
@@ -342,7 +340,7 @@ describe('POST /credit/plans — validation Zod', () => {
     expect(result.success).toBe(false)
   })
 
-  it('rejette un nombre d'échéances invalide (5)', () => {
+  it("rejette un nombre d'échéances invalide (5)", () => {
     const result = createPlanSchema.safeParse({ ...VALID, installments_count: 5 })
     expect(result.success).toBe(false)
   })

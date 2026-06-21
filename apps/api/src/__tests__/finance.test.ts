@@ -44,8 +44,18 @@ vi.mock('../services/pdf.service', () => ({
 }))
 
 vi.mock('../services/comptabilite.service', () => ({
-  genererEcritureVente:        vi.fn().mockResolvedValue(null),
-  genererEcritureEncaissement: vi.fn().mockResolvedValue(null),
+  genererEcritureVente:              vi.fn().mockResolvedValue(null),
+  genererEcritureEncaissement:       vi.fn().mockResolvedValue(null),
+  genererEcritureCharge:             vi.fn().mockResolvedValue(null),
+  genererEcritureSortieTresorerie:   vi.fn().mockResolvedValue({ ok: true }),
+  genererEcriturePaiementCredit:     vi.fn().mockResolvedValue(null),
+  annulerEcrituresReference:         vi.fn().mockResolvedValue({ ok: true }),
+  planComptable:                     [],
+  libelleCompte:                     vi.fn().mockReturnValue(''),
+}))
+
+vi.mock('../services/offline-fallback', () => ({
+  withOfflineFallback: vi.fn().mockImplementation((_label: string, online: () => Promise<unknown>) => online()),
 }))
 
 import app from '../app'
@@ -349,5 +359,317 @@ describe('Test 13 — POST /api/credits/:id/rembourser met à jour le statut', (
     expect(res.status).toBe(422)
     const body = await res.json() as { code: string }
     expect(body.code).toBe('ALREADY_DONE')
+  })
+})
+
+// ── Couverture supplémentaire (Finance 14–40) ──────────────────────────────────
+
+const CHARGE_ID  = 'chg-test-001'
+const SORTIE_ID  = 'srt-test-001'
+const DECL_ID    = 'dcl-test-001'
+
+describe('Finance 14 — GET /api/finance/dashboard', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec métriques financières', async () => {
+    const res = await app.request('/api/finance/dashboard', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 15 — GET /api/finance/indicateurs', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec indicateurs', async () => {
+    const res = await app.request('/api/finance/indicateurs', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 16 — GET /api/declarations-fiscales', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec liste déclarations', async () => {
+    const res = await app.request('/api/declarations-fiscales', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+  it('couvre branches filtres type/statut', async () => {
+    const res = await app.request('/api/declarations-fiscales?type=TVA&statut=preparee', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 17 — POST /api/declarations-fiscales/tva/preparer', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 201 avec déclaration TVA préparée', async () => {
+    const res = await app.request('/api/declarations-fiscales/tva/preparer', {
+      method: 'POST',
+      headers: new Headers({ ...authHeaders('admin'), 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ periode: '2026-06' }),
+    })
+    expect(res.status).toBe(201)
+  })
+})
+
+describe('Finance 18 — PATCH /api/declarations-fiscales/:id/statut', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec déclaration mise à jour (mock null)', async () => {
+    const res = await app.request(`/api/declarations-fiscales/${DECL_ID}/statut`, {
+      method: 'PATCH',
+      headers: new Headers({ ...authHeaders('admin'), 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ statut: 'a_declarer' }),
+    })
+    expect(res.status).not.toBe(500)
+  })
+})
+
+describe('Finance 19 — GET /api/finance/exports/indicateurs.xls', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec fichier XLS', async () => {
+    const res = await app.request('/api/finance/exports/indicateurs.xls', {
+      headers: new Headers(authHeaders('admin')),
+    })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toContain('ms-excel')
+  })
+})
+
+describe('Finance 20 — GET /api/finance/exports/tva.xls', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec fichier XLS TVA', async () => {
+    const res = await app.request('/api/finance/exports/tva.xls', {
+      headers: new Headers(authHeaders('admin')),
+    })
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 21 — GET /api/factures : liste factures', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec liste', async () => {
+    const res = await app.request('/api/factures', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+  it('couvre branches filtres statut/client_id/search', async () => {
+    const res = await app.request('/api/factures?statut=payee&client_id=00000000-0000-0000-0000-000000000001&search=FAC', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 22 — GET /api/factures/:id/pdf : PDF facture', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 404 si facture introuvable', async () => {
+    const res = await app.request(`/api/factures/${FACTURE_ID}/pdf`, {
+      headers: new Headers(authHeaders('admin')),
+    })
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('Finance 23 — PATCH /api/factures/:id/statut', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 404 si facture introuvable', async () => {
+    const res = await app.request(`/api/factures/${FACTURE_ID}/statut`, {
+      method: 'PATCH',
+      headers: new Headers({ ...authHeaders('admin'), 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ statut: 'valide' }),
+    })
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('Finance 24 — GET /api/factures/:id/versements', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec liste versements', async () => {
+    const res = await app.request(`/api/factures/${FACTURE_ID}/versements`, {
+      headers: new Headers(authHeaders('admin')),
+    })
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 25 — POST /api/factures/:id/whatsapp', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('entre dans le handler (retourne 404 ou 200)', async () => {
+    const res = await app.request(`/api/factures/${FACTURE_ID}/whatsapp`, {
+      method: 'POST',
+      headers: new Headers({ ...authHeaders('admin'), 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ phone: '237670000000' }),
+    })
+    expect(res.status).not.toBe(500)
+    expect(res.status).not.toBe(400)
+  })
+})
+
+describe('Finance 26 — GET /api/finance/exports/charges.xls', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec fichier XLS charges', async () => {
+    const res = await app.request('/api/finance/exports/charges.xls', {
+      headers: new Headers(authHeaders('admin')),
+    })
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 27 — POST /api/factures/:id/relance', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('entre dans le handler', async () => {
+    const res = await app.request(`/api/factures/${FACTURE_ID}/relance`, {
+      method: 'POST',
+      headers: new Headers({ ...authHeaders('admin'), 'Content-Type': 'application/json' }),
+      body: JSON.stringify({}),
+    })
+    expect(res.status).not.toBe(500)
+  })
+})
+
+describe('Finance 28 — GET /api/charges : liste charges', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec liste charges', async () => {
+    const res = await app.request('/api/charges', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+  it('couvre branches filtres statut/categorie/justificatif/fournisseur/from/to', async () => {
+    const res = await app.request('/api/charges?statut=payee&categorie=matières premières&justificatif=recu&fournisseur=SODECOTON&from=2026-01-01&to=2026-12-31', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 29 — POST /api/charges : créer charge', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 422 (compte inexistant dans plan vide)', async () => {
+    const res = await app.request('/api/charges', {
+      method: 'POST',
+      headers: new Headers({ ...authHeaders('admin'), 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        fournisseur_nom: 'SODECOTON', categorie: 'matières premières',
+        compte_charge: '601', date_charge: '2026-06-01', montant_ht_xaf: 100_000, tva_xaf: 0,
+      }),
+    })
+    expect(res.status).toBe(422)
+  })
+})
+
+describe('Finance 30 — GET /api/charges/dashboard : dashboard charges', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec données dashboard', async () => {
+    const res = await app.request('/api/charges/dashboard', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 31 — GET /api/charges/:id : détail charge', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec détail charge (le handler ne vérifie pas !data)', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({ data: { id: CHARGE_ID, montant_ttc_xaf: 100000, montant_paye_xaf: 0, statut: 'en_attente' }, error: null }) as never,
+    )
+    const res = await app.request(`/api/charges/${CHARGE_ID}`, { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 32 — GET /api/sorties-tresorerie : liste sorties', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec liste sorties', async () => {
+    const res = await app.request('/api/sorties-tresorerie', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+  it('filtre par statut, justificatif, from, to', async () => {
+    const res = await app.request(
+      '/api/sorties-tresorerie?statut=validee&justificatif=recu&from=2026-01-01&to=2026-12-31',
+      { headers: new Headers(authHeaders('admin')) },
+    )
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 33 — POST /api/sorties-tresorerie : créer sortie', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 201 avec sortie créée', async () => {
+    const res = await app.request('/api/sorties-tresorerie', {
+      method: 'POST',
+      headers: new Headers({ ...authHeaders('admin'), 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        date_sortie: '2026-06-01', beneficiaire: 'SODECOTON', motif: 'Achat matières',
+        montant_xaf: 100_000, mode_paiement: 'caisse', compte_tresorerie: '571',
+      }),
+    })
+    expect(res.status).toBe(201)
+  })
+})
+
+describe('Finance 34 — GET /api/credits : liste crédits', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec liste crédits', async () => {
+    const res = await app.request('/api/credits', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+  it('filtre par statut et client_id', async () => {
+    const res = await app.request(
+      '/api/credits?statut=en_cours&client_id=00000000-0000-0000-0000-000000000001',
+      { headers: new Headers(authHeaders('admin')) },
+    )
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 35 — GET /api/credits/:id : détail crédit', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 ou 404 (dépend du mock)', async () => {
+    const res = await app.request(`/api/credits/${CREDIT_ID}`, { headers: new Headers(authHeaders('admin')) })
+    expect([200, 404]).toContain(res.status)
+  })
+})
+
+describe('Finance 36 — GET /api/ecritures : liste écritures', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec liste écritures', async () => {
+    const res = await app.request('/api/ecritures', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+  it('filtre par compte et mois', async () => {
+    const res = await app.request(
+      '/api/ecritures?compte=701&mois=2026-06',
+      { headers: new Headers(authHeaders('admin')) },
+    )
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 37 — POST /api/ecritures : créer écriture', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 422 (compte inexistant dans plan vide)', async () => {
+    const res = await app.request('/api/ecritures', {
+      method: 'POST',
+      headers: new Headers({ ...authHeaders('admin'), 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        date: '2026-06-01', libelle: 'Test écriture',
+        compte_syscohada: '411', compte_label: 'Clients',
+        debit_xaf: 100_000, credit_xaf: 0,
+      }),
+    })
+    expect(res.status).toBe(422)
+  })
+})
+
+describe('Finance 38 — GET /api/rapports/bilan : bilan comptable', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec bilan', async () => {
+    const res = await app.request('/api/rapports/bilan?exercice=2026', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 39 — GET /api/rapports/resultat : compte de résultat', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec résultat', async () => {
+    const res = await app.request('/api/rapports/resultat?exercice=2026', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('Finance 40 — GET /api/rapports/dashboard : dashboard rapports', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('retourne 200 avec tableau de bord', async () => {
+    const res = await app.request('/api/rapports/dashboard', { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
   })
 })

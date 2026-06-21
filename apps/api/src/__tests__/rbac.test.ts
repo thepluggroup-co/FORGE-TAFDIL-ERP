@@ -52,6 +52,9 @@ function mockDb(tableResponses: Record<string, unknown>) {
   })
 }
 
+// Reset entre chaque test pour éviter les queues mockReturnValueOnce résiduelles
+beforeEach(() => db.from.mockReset())
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // checkPermission — IMMUTABLE_RULES
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -66,8 +69,8 @@ describe('checkPermission — IMMUTABLE_RULES', () => {
 
   it('SUPER_ADMIN a toujours ADMIN:CONFIGURE', async () => {
     mockDb({
-      rbac_user_profiles: { data: { role_id: 'role-sa', is_active: true, rbac_roles: { name: 'SUPER_ADMIN' } }, error: null },
-      rbac_roles:         { data: { id: 'role-sa' }, error: null },
+      rbac_user_profiles:    { data: { role_id: 'role-sa', is_active: true }, error: null },
+      rbac_roles:            { data: { id: 'role-sa', name: 'SUPER_ADMIN' }, error: null },
       rbac_role_permissions: { data: [], error: null },
     })
     const result = await checkPermission('user-super', 'ADMIN', 'CONFIGURE')
@@ -77,8 +80,8 @@ describe('checkPermission — IMMUTABLE_RULES', () => {
 
   it('MANAGER ne peut pas accéder à ADMIN:CONFIGURE', async () => {
     mockDb({
-      rbac_user_profiles: { data: { role_id: 'role-mgr', is_active: true, rbac_roles: { name: 'MANAGER' } }, error: null },
-      rbac_roles:         { data: { id: 'role-mgr' }, error: null },
+      rbac_user_profiles:    { data: { role_id: 'role-mgr', is_active: true }, error: null },
+      rbac_roles:            { data: { id: 'role-mgr', name: 'MANAGER' }, error: null },
       rbac_role_permissions: { data: [], error: null },
     })
     const result = await checkPermission('user-manager', 'ADMIN', 'CONFIGURE')
@@ -95,8 +98,8 @@ describe('checkPermission — IMMUTABLE_RULES', () => {
 
   it('READONLY ne peut pas créer (CREATE refusé par IMMUTABLE_RULES)', async () => {
     mockDb({
-      rbac_user_profiles: { data: { role_id: 'role-ro', is_active: true, rbac_roles: { name: 'READONLY' } }, error: null },
-      rbac_roles:         { data: { id: 'role-ro' }, error: null },
+      rbac_user_profiles:    { data: { role_id: 'role-ro', is_active: true }, error: null },
+      rbac_roles:            { data: { id: 'role-ro', name: 'READONLY' }, error: null },
       rbac_role_permissions: { data: [], error: null },
     })
     const result = await checkPermission('user-readonly', 'STOCK', 'CREATE')
@@ -106,15 +109,13 @@ describe('checkPermission — IMMUTABLE_RULES', () => {
   })
 
   it('READONLY peut lire (READ autorisé)', async () => {
-    mockDb({
-      rbac_user_profiles: { data: { role_id: 'role-ro', is_active: true, rbac_roles: { name: 'READONLY' } }, error: null },
-      rbac_roles:         { data: { id: 'role-ro' }, error: null },
-      rbac_role_permissions: {
-        data: [{ rbac_permissions: { module: 'STOCK', action: 'READ' } }],
-        error: null,
-      },
-    })
     invalidatePermissionCache('user-readonly')
+    mockDb({
+      rbac_user_profiles:    { data: { role_id: 'role-ro', is_active: true }, error: null },
+      rbac_roles:            { data: { id: 'role-ro', name: 'READONLY' }, error: null },
+      rbac_role_permissions: { data: [{ permission_id: 'perm-read-001' }], error: null },
+      rbac_permissions:      { data: [{ module: 'STOCK', action: 'READ' }], error: null },
+    })
     const result = await checkPermission('user-readonly', 'STOCK', 'READ')
     expect(result.allowed).toBe(true)
   })
@@ -128,12 +129,10 @@ describe('checkPermission — cache', () => {
   it('Second appel utilise le cache (from() non rappelé)', async () => {
     invalidatePermissionCache('user-cached')
     mockDb({
-      rbac_user_profiles: { data: { role_id: 'role-mgr', is_active: true, rbac_roles: { name: 'MANAGER' } }, error: null },
-      rbac_roles:         { data: { id: 'role-mgr' }, error: null },
-      rbac_role_permissions: {
-        data: [{ rbac_permissions: { module: 'STOCK', action: 'READ' } }],
-        error: null,
-      },
+      rbac_user_profiles:    { data: { role_id: 'role-mgr', is_active: true }, error: null },
+      rbac_roles:            { data: { id: 'role-mgr', name: 'MANAGER' }, error: null },
+      rbac_role_permissions: { data: [{ permission_id: 'perm-001' }], error: null },
+      rbac_permissions:      { data: [{ module: 'STOCK', action: 'READ' }], error: null },
     })
 
     await checkPermission('user-cached', 'STOCK', 'READ')
@@ -149,12 +148,10 @@ describe('checkPermission — cache', () => {
   it('invalidatePermissionCache force un re-fetch', async () => {
     invalidatePermissionCache('user-inv')
     mockDb({
-      rbac_user_profiles: { data: { role_id: 'role-mgr', is_active: true, rbac_roles: { name: 'MANAGER' } }, error: null },
-      rbac_roles:         { data: { id: 'role-mgr' }, error: null },
-      rbac_role_permissions: {
-        data: [{ rbac_permissions: { module: 'COMMERCIAL', action: 'READ' } }],
-        error: null,
-      },
+      rbac_user_profiles:    { data: { role_id: 'role-mgr', is_active: true }, error: null },
+      rbac_roles:            { data: { id: 'role-mgr', name: 'MANAGER' }, error: null },
+      rbac_role_permissions: { data: [{ permission_id: 'perm-001' }], error: null },
+      rbac_permissions:      { data: [{ module: 'COMMERCIAL', action: 'READ' }], error: null },
     })
 
     await checkPermission('user-inv', 'COMMERCIAL', 'READ')
@@ -176,13 +173,10 @@ describe('checkPermission — fallback legacy role', () => {
   it('operateur → COMMERCIAL peut lire STOCK (via ROLE_MAP)', async () => {
     invalidatePermissionCache('user-legacy')
     mockDb({
-      // Pas de rbac_user_profiles → fallback
-      rbac_user_profiles: { data: null, error: { code: 'PGRST116' } },
-      rbac_roles:         { data: { id: 'role-comm' }, error: null },
-      rbac_role_permissions: {
-        data: [{ rbac_permissions: { module: 'STOCK', action: 'READ' } }],
-        error: null,
-      },
+      rbac_user_profiles:    { data: null, error: { code: 'PGRST116' } },
+      rbac_roles:            { data: { id: 'role-comm', name: 'COMMERCIAL' }, error: null },
+      rbac_role_permissions: { data: [{ permission_id: 'perm-read-001' }], error: null },
+      rbac_permissions:      { data: [{ module: 'STOCK', action: 'READ' }], error: null },
     })
     const result = await checkPermission('user-legacy', 'STOCK', 'READ', 'operateur')
     expect(result.allowed).toBe(true)
@@ -288,8 +282,8 @@ describe('requirePermission — middleware', () => {
   it('retourne 403 si permission refusée', async () => {
     invalidatePermissionCache('mw-deny')
     mockDb({
-      rbac_user_profiles: { data: { role_id: 'role-ro', is_active: true, rbac_roles: { name: 'READONLY' } }, error: null },
-      rbac_roles:         { data: { id: 'role-ro' }, error: null },
+      rbac_user_profiles:    { data: { role_id: 'role-ro', is_active: true }, error: null },
+      rbac_roles:            { data: { id: 'role-ro', name: 'READONLY' }, error: null },
       rbac_role_permissions: { data: [], error: null },
     })
     const { requirePermission } = await import('../middleware/permission.middleware')
@@ -302,8 +296,8 @@ describe('requirePermission — middleware', () => {
   it('appelle next() si permission accordée', async () => {
     invalidatePermissionCache('mw-ok')
     mockDb({
-      rbac_user_profiles: { data: { role_id: 'role-sa', is_active: true, rbac_roles: { name: 'SUPER_ADMIN' } }, error: null },
-      rbac_roles:         { data: { id: 'role-sa' }, error: null },
+      rbac_user_profiles:    { data: { role_id: 'role-sa', is_active: true }, error: null },
+      rbac_roles:            { data: { id: 'role-sa', name: 'SUPER_ADMIN' }, error: null },
       rbac_role_permissions: { data: [], error: null },
     })
     const { requirePermission } = await import('../middleware/permission.middleware')

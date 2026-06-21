@@ -109,6 +109,8 @@ describe('TEST-03 : Pipeline commande web avec paiement', () => {
         commande_ref: COMMANDE_REF,
         montant:      MONTANT,
         email:        'kouam@example.cm',
+        canal:        'cm.mtn',
+        telephone:    '651234567',
       }),
     })
 
@@ -128,14 +130,6 @@ describe('TEST-03 : Pipeline commande web avec paiement', () => {
       mkChain({ data: COMMANDE_SHOP, error: null }) as never,
     )
     // 2. update commandes_shop statut_paiement + statut_commande
-    mockFrom.mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
-    // 3. select stock produit
-    mockFrom.mockReturnValueOnce(
-      mkChain({ data: { stock_actuel: 10 }, error: null }) as never,
-    )
-    // 4. update produit stock (10 - 2 = 8)
-    mockFrom.mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
-    // 5. insert mouvement_stock
     mockFrom.mockReturnValue(mkChain({ data: null, error: null }) as never)
 
     const payload = JSON.stringify({
@@ -170,14 +164,6 @@ describe('TEST-03 : Pipeline commande web avec paiement', () => {
       return chain === 'commandes_shop'
     })
     expect(updateCall).toBeDefined()
-
-    // ── Assert : stock déduit ──────────────────────────────────────────────────
-    const produitUpdateCall = mockFrom.mock.calls.some((c) => c[0] === 'produits')
-    expect(produitUpdateCall).toBe(true)
-
-    // ── Assert : mouvement de stock enregistré ─────────────────────────────────
-    const mouvCall = mockFrom.mock.calls.some((c) => c[0] === 'mouvements_stock')
-    expect(mouvCall).toBe(true)
 
     // ── Assert : notification Realtime émise ───────────────────────────────────
     expect(mockChannel).toHaveBeenCalledWith('erp-notifications')

@@ -46,13 +46,16 @@ const BON_NUMERO = 'TAF-20260518-0001'
 const PRODUIT_ID = 'prod-uuid-vis-m6'
 
 const BON_SOUMIS = {
-  id:         BON_ID,
-  numero:     BON_NUMERO,
-  statut:     'soumis',
-  demandeur:  'Ali Technicien',
-  motif:      'Maintenance préventive groupe électrogène',
-  notes:      null,
-  created_by: 'test-user-uid-001',
+  id:                 BON_ID,
+  numero:             BON_NUMERO,
+  statut:             'soumis',
+  demandeur:          'Ali Technicien',
+  motif:              'Maintenance préventive groupe électrogène',
+  notes:              null,
+  commande_id:        null,
+  nature_transaction: 'comptant' as const,
+  imputation_payeur:  'entreprise_tafdil',
+  created_by:         'test-user-uid-001',
 }
 
 const LIGNES = [
@@ -84,20 +87,26 @@ describe('TEST-02 : Workflow complet bon de sortie', () => {
     mockFrom.mockReturnValueOnce(mkChain({ data: BON_SOUMIS, error: null }) as never)
     // 3. insert lignes
     mockFrom.mockReturnValueOnce(mkChain({ data: LIGNES, error: null }) as never)
-    // 4. valider : select existant (statut check)
+    // 4. auditMiddleware (POST /bons 201) : from('audit_log').insert().then()
+    mockFrom.mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
+    // 5. valider : select existant (statut check)
     mockFrom.mockReturnValueOnce(mkChain({ data: BON_SOUMIS, error: null }) as never)
-    // 5. valider : update statut → 'valide'
+    // 6. valider : update statut → 'valide'
     mockFrom.mockReturnValueOnce(
       mkChain({ data: { ...BON_SOUMIS, statut: 'valide' }, error: null }) as never,
     )
-    // 6. executer : select bon avec lignes
+    // 7. valider : resolveCommandeIdForBon → from('commandes_shop')
+    mockFrom.mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
+    // 8. auditMiddleware (PUT /bons/:id/valider 200) : from('audit_log').insert().then()
+    mockFrom.mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
+    // 9. executer : select bon avec lignes
     mockFrom.mockReturnValueOnce(
       mkChain({
         data:  { ...BON_SOUMIS, statut: 'valide', bons_sortie_lignes: LIGNES },
         error: null,
       }) as never,
     )
-    // fallback : any remaining from() → succès neutre
+    // fallback : resolveCommandeIdForBon + auditMiddleware executer + tout le reste
     mockFrom.mockReturnValue(mkChain({ data: null, error: null }) as never)
 
     // RPC fn_executer_bon → succès direct (atomique PostgreSQL)
@@ -111,8 +120,10 @@ describe('TEST-02 : Workflow complet bon de sortie', () => {
       method:  'POST',
       headers: new Headers(authHeaders('operateur')),
       body:    JSON.stringify({
-        demandeur: 'Ali Technicien',
-        motif:     'Maintenance préventive groupe électrogène',
+        demandeur:          'Ali Technicien',
+        motif:              'Maintenance préventive groupe électrogène',
+        nature_transaction: 'comptant',
+        imputation_payeur:  'entreprise_tafdil',
         lignes: [
           { produit_id: PRODUIT_ID, designation: 'Vis M6 x 20mm', quantite_demandee: 7 },
         ],

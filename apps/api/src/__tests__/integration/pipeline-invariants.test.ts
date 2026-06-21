@@ -117,16 +117,16 @@ const TODAY   = new Date().toISOString().slice(0, 10)
 const TODAY8  = TODAY.replace(/-/g, '')
 const YEAR    = new Date().getFullYear()
 
-const CP_ID      = 'cp-pip-uuid-001'
-const CLIENT_ID  = 'cli-pip-uuid-001'
-const DEVIS_ID   = 'dev-pip-uuid-001'
-const CMD_ID     = 'cmd-pip-uuid-001'
-const BON_ID     = 'bon-pip-uuid-001'
-const BON2_ID    = 'bon-pip-uuid-002'
-const FAC_ID     = 'fac-pip-uuid-001'
-const LIV_ID     = 'liv-pip-uuid-001'
-const PREP_ID    = 'prep-pip-uuid-001'
-const VERS_ID    = 'vers-pip-uuid-001'
+const CP_ID      = '00000000-0000-0000-0000-000000000001'
+const CLIENT_ID  = '00000000-0000-0000-0000-000000000002'
+const DEVIS_ID   = '00000000-0000-0000-0000-000000000003'
+const CMD_ID     = '00000000-0000-0000-0000-000000000004'
+const BON_ID     = '00000000-0000-0000-0000-000000000005'
+const BON2_ID    = '00000000-0000-0000-0000-000000000006'
+const FAC_ID     = '00000000-0000-0000-0000-000000000007'
+const LIV_ID     = '00000000-0000-0000-0000-000000000008'
+const PREP_ID    = '00000000-0000-0000-0000-000000000009'
+const VERS_ID    = '00000000-0000-0000-0000-000000000010'
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -385,26 +385,27 @@ describe('🔄 PIPELINE — Invariants passation → livraison → facturation �
   // ── Bon de sortie — marquer prêt + livraison auto ─────────────────────────
 
   it('P05 — [I8] Tous bons pret → livraison "en_preparation" créée automatiquement', async () => {
-    // Séquence DB (10 appels) :
-    //   1. fetch bon (statut='valide', statut_preparation='en_cours')
-    //   2. update bon → pret
-    //   3. notifyWorkflow insert (safe chain ok)
-    //   4. bonsPending count = 0 (safe chain count:0 ok)
-    //   5. livraisons existing? maybySingle → null (safe chain ok)
-    //   6. commandes fetch → CMD_BASIC (DOIT être non-null pour créer livraison)
-    //   7. livraisons count → count:0 (safe chain ok)
-    //   8. livraisons insert → LIVRAISON_EN_PREP (DOIT retourner id)
-    //   9. livraisons_historique insert (safe chain ok)
-    //   10. notifyWorkflow insert (safe chain ok)
+    // Séquence DB :
+    //   1. fetch bon (bons_sortie.select.single)
+    //   2. update bon → pret (bons_sortie.update.select.single)
+    //   notifyWorkflow → channel.send (pas de from())
+    //   3. bonsPending count = 0 (bons_sortie.select.count)
+    //   ensureLivraisonEnPreparation :
+    //   4. livraisons existing? maybySingle → null
+    //   5. commandes fetch → CMD_BASIC (non-null → continue)
+    //   6. livraisons count → count:0
+    //   7. livraisons insert → LIVRAISON_EN_PREP
+    //   8. livraisons_historique insert (safe chain)
+    //   notifyWorkflow → channel.send (pas de from())
+    //   audit (safe chain)
     mockFrom()
       .mockReturnValueOnce(mkChain({ data: BON_EN_COURS_PIP, error: null }) as never)      // 1: fetch bon
       .mockReturnValueOnce(mkChain({ data: BON_PRET_PIP, error: null }) as never)           // 2: update → pret
-      .mockReturnValueOnce(mkChain({ data: null, error: null }) as never)                   // 3: notifyWorkflow
-      .mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)         // 4: bonsPending=0
-      .mockReturnValueOnce(mkChain({ data: null, error: null }) as never)                   // 5: livraisons existing
-      .mockReturnValueOnce(mkChain({ data: CMD_BASIC, error: null }) as never)              // 6: commandes
-      .mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)         // 7: livraisons count
-      .mockReturnValueOnce(mkChain({ data: LIVRAISON_EN_PREP, error: null }) as never)      // 8: insert livraison
+      .mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)         // 3: bonsPending=0
+      .mockReturnValueOnce(mkChain({ data: null, error: null }) as never)                   // 4: livraisons existing
+      .mockReturnValueOnce(mkChain({ data: CMD_BASIC, error: null }) as never)              // 5: commandes
+      .mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)         // 6: livraisons count
+      .mockReturnValueOnce(mkChain({ data: LIVRAISON_EN_PREP, error: null }) as never)      // 7: insert livraison
 
     const res = await app.request(`/api/bons/${BON_ID}/preparation`, {
       method:  'PATCH',
@@ -424,14 +425,14 @@ describe('🔄 PIPELINE — Invariants passation → livraison → facturation �
   })
 
   it('P06 — [I9] Idempotence : livraison existante → pas de doublon créé', async () => {
-    // Call 5 (livraisons existing) retourne LIVRAISON_EN_PREP → existing truthy → return false
-    // → from() appelé seulement 5 fois (pas d'insert livraison)
+    // Séquence DB (5 appels) :
+    //   1. fetch bon, 2. update bon → pret, notifyWorkflow → channel (pas de from())
+    //   3. bonsPending count=0, 4. livraisons existing → { id } → return false, 5. audit (safeChain)
     mockFrom()
       .mockReturnValueOnce(mkChain({ data: BON_EN_COURS_PIP, error: null }) as never)      // 1: fetch bon
       .mockReturnValueOnce(mkChain({ data: BON_PRET_PIP, error: null }) as never)           // 2: update → pret
-      .mockReturnValueOnce(mkChain({ data: null, error: null }) as never)                   // 3: notifyWorkflow
-      .mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)         // 4: bonsPending=0
-      .mockReturnValueOnce(mkChain({ data: { id: LIV_ID }, error: null }) as never)        // 5: livraison DÉJÀ existante
+      .mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)         // 3: bonsPending=0
+      .mockReturnValueOnce(mkChain({ data: { id: LIV_ID }, error: null }) as never)        // 4: livraison DÉJÀ existante
 
     const res = await app.request(`/api/bons/${BON_ID}/preparation`, {
       method:  'PATCH',
@@ -457,7 +458,7 @@ describe('🔄 PIPELINE — Invariants passation → livraison → facturation �
     )
 
     const res = await app.request(`/api/commandes/${CMD_ID}/statut`, {
-      method:  'PUT',
+      method:  'PATCH',
       headers: authHeaders('admin'),
       body:    JSON.stringify({ statut: 'in_production', commentaire: 'Test négatif' }),
     })

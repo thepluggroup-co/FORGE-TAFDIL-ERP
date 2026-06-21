@@ -101,13 +101,14 @@ const TODAY    = new Date().toISOString().slice(0, 10)
 const TODAY8   = TODAY.replace(/-/g, '')
 const YEAR     = new Date().getFullYear()
 
-const BON_ID  = 'bon-jc-uuid-001'
+const BON_ID  = '00000000-0000-0000-0000-00000000b0a1'
 const BON_NUM = `TAF-${TODAY8}-0001`
 
 const BON_SOUMIS = {
   id: BON_ID, numero: BON_NUM, statut: 'soumis',
   demandeur: 'Paul Atangana', motif: 'Maintenance machine soudure',
   notes: null, created_by: 'test-user-uid-001', sync_status: 'synced',
+  commande_id: null, nature_transaction: 'comptant', imputation_payeur: 'entreprise_tafdil',
 }
 
 const BON_VALIDE = { ...BON_SOUMIS, statut: 'valide' }
@@ -133,7 +134,10 @@ const DEVIS = {
   date_emission: TODAY, date_validite: `${YEAR}-12-31`,
   validite_jours: 30, acompte_pct: 30,
   total_ht_xaf: 1_000_000, tva_xaf: 192_500, total_ttc_xaf: 1_192_500,
-  sync_status: 'synced',
+  sync_status: 'synced', approuve_par_client: true,
+  conditions_paiement: 'Comptant', net_a_payer_xaf: 1_192_500,
+  remise_globale_xaf: null, remise_globale_motif: null,
+  notes: null,
 }
 
 const DEVIS_WITH_LIGNES = {
@@ -266,13 +270,17 @@ describe('🔧 ATELIER — Workflow bon de sortie', () => {
     mockFrom().mockReturnValueOnce(mkChain({ data: BON_SOUMIS, error: null }) as never)
     // insert lignes
     mockFrom().mockReturnValueOnce(mkChain({ data: BON_LIGNES, error: null }) as never)
+    // audit middleware (POST 201) : from('audit_log').insert().then()
+    mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
     const res = await app.request('/api/bons', {
       method:  'POST',
       headers: authHeaders('operateur'),
       body:    JSON.stringify({
-        demandeur: 'Paul Atangana',
-        motif:     'Maintenance machine soudure',
+        demandeur:          'Paul Atangana',
+        motif:              'Maintenance machine soudure',
+        nature_transaction: 'comptant',
+        imputation_payeur:  'entreprise_tafdil',
         lignes:    [{ designation: 'Fil de soudure', unite: 'kg', quantite_demandee: 5 }],
       }),
     })
@@ -314,6 +322,10 @@ describe('🔧 ATELIER — Workflow bon de sortie', () => {
     mockFrom().mockReturnValueOnce(mkChain({ data: BON_SOUMIS, error: null }) as never)
     // update statut → 'valide'
     mockFrom().mockReturnValueOnce(mkChain({ data: BON_VALIDE, error: null }) as never)
+    // resolveCommandeIdForBon → from('commandes_shop') (demandeur non-vide + commande_id null)
+    mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
+    // audit middleware (PUT 200)
+    mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
     const res = await app.request(`/api/bons/${BON_ID}/valider`, {
       method:  'PUT',
@@ -342,6 +354,10 @@ describe('🔧 ATELIER — Workflow bon de sortie', () => {
       data:  { success: true, bon_id: BON_ID },
       error: null,
     })
+    // resolveCommandeIdForBon → from('commandes_shop') (demandeur non-vide + commande_id null)
+    mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
+    // audit middleware (PUT 200)
+    mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
     const res = await app.request(`/api/bons/${BON_ID}/executer`, {
       method:  'PUT',
@@ -459,15 +475,21 @@ describe('💼 COMMERCE — Devis et commandes', () => {
   it('T11 — POST /api/devis/:id/transformer-commande crée la commande', async () => {
     // 1 : fetch devis avec lignes
     mockFrom().mockReturnValueOnce(mkChain({ data: DEVIS_WITH_LIGNES, error: null }) as never)
-    // 2 : genererNumero pour CMD — count commandes du jour
+    // 2 : verifierBlocageClient → from('clients').select().eq().single()
+    mockFrom().mockReturnValueOnce(mkChain({ data: { statut: 'actif', nom: 'SOGEA Cameroun' }, error: null }) as never)
+    // 3 : verifierBlocageClient → from('credits').select(count)
     mockFrom().mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)
-    // 3 : insert commande
+    // 4 : genererNumero pour CMD — count commandes du jour
+    mockFrom().mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)
+    // 5 : insert commande
     mockFrom().mockReturnValueOnce(mkChain({ data: COMMANDE, error: null }) as never)
-    // 4 : insert commandes_lignes
+    // 6 : insert commandes_lignes
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
-    // 5 : update devis → statut='transforme'
+    // 7 : update devis → statut='transforme'
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
-    // 6 : insert historique_commandes
+    // 8 : insert historique_commandes
+    mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
+    // 9 : audit middleware (POST 201)
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
     const res = await app.request(`/api/devis/${DEVIS_ID}/transformer-commande`, {
@@ -491,7 +513,7 @@ describe('💼 COMMERCE — Devis et commandes', () => {
     console.log(`✅ T11 — Commande créée depuis devis ${body.devis_numero} → ${body.commande_numero}`)
   })
 
-  it('T12 — PUT /api/commandes/:id/statut passe en in_production', async () => {
+  it('T12 — PATCH /api/commandes/:id/statut passe en in_production', async () => {
     // fetch commande (statut actuel = confirmed)
     mockFrom().mockReturnValueOnce(
       mkChain({ data: { statut: 'confirmed', numero: CMD_NUM }, error: null }) as never,
@@ -504,7 +526,7 @@ describe('💼 COMMERCE — Devis et commandes', () => {
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
     const res = await app.request(`/api/commandes/${CMD_ID}/statut`, {
-      method:  'PUT',
+      method:  'PATCH',
       headers: authHeaders('admin'),
       body:    JSON.stringify({ statut: 'in_production', commentaire: 'Début de fabrication atelier' }),
     })
@@ -517,7 +539,7 @@ describe('💼 COMMERCE — Devis et commandes', () => {
     console.log('✅ T12 — Commande passée en production')
   })
 
-  it('T13 — PUT /api/commandes/:id/statut passe en pret pour livraison', async () => {
+  it('T13 — PATCH /api/commandes/:id/statut passe en pret pour livraison', async () => {
     // fetch commande (statut actuel = in_production)
     mockFrom().mockReturnValueOnce(
       mkChain({ data: { statut: 'in_production', numero: CMD_NUM }, error: null }) as never,
@@ -530,7 +552,7 @@ describe('💼 COMMERCE — Devis et commandes', () => {
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
     const res = await app.request(`/api/commandes/${CMD_ID}/statut`, {
-      method:  'PUT',
+      method:  'PATCH',
       headers: authHeaders('admin'),
       body:    JSON.stringify({ statut: 'pret', commentaire: 'Prête pour enlèvement client' }),
     })
@@ -552,11 +574,13 @@ describe('💰 FINANCE — Facturation et crédits', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('T14 — POST /api/factures génère la facture et le PDF', async () => {
-    // count factures cette année (pour numéro FAC-YYYY-XXXX)
+    // 1 : check existing facture pour commande → aucune
     mockFrom().mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)
-    // insert facture
+    // 2 : count factures cette année (pour numéro FAC-YYYY-XXXX)
+    mockFrom().mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)
+    // 3 : insert facture
     mockFrom().mockReturnValueOnce(mkChain({ data: FACTURE, error: null }) as never)
-    // insert factures_lignes
+    // 4 : insert factures_lignes
     mockFrom().mockReturnValueOnce(
       mkChain({
         data: [{
@@ -566,6 +590,8 @@ describe('💰 FINANCE — Facturation et crédits', () => {
         error: null,
       }) as never,
     )
+    // 5 : audit middleware (POST 201)
+    mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
     const res = await app.request('/api/factures', {
       method:  'POST',
@@ -625,6 +651,9 @@ describe('💰 FINANCE — Facturation et crédits', () => {
   })
 
   it('T16 — GET /api/credits/alertes retourne les crédits échus et proches', async () => {
+    // autoEchoirCredits() : select credits en_cours expirés → aucun
+    mockFrom().mockReturnValueOnce(mkChain({ data: [], error: null }) as never)
+    // requête principale alertes
     mockFrom().mockReturnValueOnce(
       mkChain({
         data: [
