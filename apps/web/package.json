@@ -11,7 +11,9 @@
     "test": "vitest run",
     "test:ui": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@forge/ai": "workspace:*",
@@ -36,6 +38,7 @@
     "tailwind-merge": "^2.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.0",
     "@tailwindcss/vite": "^4.0.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
