@@ -10,19 +10,27 @@ import {
 import { useAuth } from '@/context/AuthContext'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
 
+type AppRole = 'admin' | 'superviseur' | 'operateur' | 'technicien'
+
 interface NavItem {
   path: string
   label: string
   icon: React.ElementType
   badge?: number
   dynamicBadge?: boolean
+  roles?: AppRole[]   // undefined = tous les rôles
 }
 
 interface NavGroup {
   id: string
   label: string
   items: NavItem[]
+  roles?: AppRole[]   // filtre le groupe entier si tous ses items sont cachés
 }
+
+const ALL: AppRole[] = ['admin', 'superviseur', 'operateur', 'technicien']
+const NO_TECHNICIEN: AppRole[] = ['admin', 'superviseur', 'operateur']
+const ADMIN_SUPERVISEUR: AppRole[] = ['admin', 'superviseur']
 
 const DASHBOARD_ITEM: NavItem = { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard }
 
@@ -31,41 +39,41 @@ const NAV_GROUPS: NavGroup[] = [
     id: 'activite',
     label: 'Activité',
     items: [
-      { path: '/boutique',     label: 'Boutique',     icon: Store, dynamicBadge: true },
-      { path: '/production',   label: 'Production',   icon: Wrench },
-      { path: '/commandes',    label: 'Commandes',    icon: ShoppingCart },
-      { path: '/stocks',       label: 'Stocks',       icon: Package },
-      { path: '/fournisseurs', label: 'Fournisseurs', icon: Building2 },
+      { path: '/boutique',     label: 'Boutique',     icon: Store, dynamicBadge: true, roles: ALL },
+      { path: '/production',   label: 'Production',   icon: Wrench,        roles: ALL },
+      { path: '/commandes',    label: 'Commandes',    icon: ShoppingCart,  roles: ALL },
+      { path: '/stocks',       label: 'Stocks',       icon: Package,       roles: ALL },
+      { path: '/fournisseurs', label: 'Fournisseurs', icon: Building2,     roles: ALL },
     ],
   },
   {
     id: 'commercial',
     label: 'Commercial',
     items: [
-      { path: '/devis',      label: 'Devis',      icon: FileText },
-      { path: '/clients',    label: 'Clients',    icon: Users },
-      { path: '/logistique', label: 'Logistique', icon: Truck },
+      { path: '/devis',      label: 'Devis',      icon: FileText, roles: ALL },
+      { path: '/clients',    label: 'Clients',    icon: Users,    roles: ALL },
+      { path: '/logistique', label: 'Logistique', icon: Truck,    roles: ALL },
     ],
   },
   {
     id: 'gestion',
     label: 'Gestion',
     items: [
-      { path: '/finance',     label: 'Finance',     icon: DollarSign },
-      { path: '/rh',          label: 'RH',          icon: Users },
-      { path: '/formation',   label: 'Formation',   icon: GraduationCap },
-      { path: '/equipements', label: 'Équipements', icon: Hammer },
-      { path: '/projets',     label: 'Projets',     icon: Kanban },
+      { path: '/finance',     label: 'Finance',     icon: DollarSign,   roles: ADMIN_SUPERVISEUR },
+      { path: '/rh',          label: 'RH',          icon: Users,        roles: ADMIN_SUPERVISEUR },
+      { path: '/formation',   label: 'Formation',   icon: GraduationCap, roles: NO_TECHNICIEN },
+      { path: '/equipements', label: 'Équipements', icon: Hammer,       roles: NO_TECHNICIEN },
+      { path: '/projets',     label: 'Projets',     icon: Kanban,       roles: ADMIN_SUPERVISEUR },
     ],
   },
   {
     id: 'pilotage',
     label: 'Pilotage',
     items: [
-      { path: '/intelligence', label: 'Intelligence', icon: Brain },
-      { path: '/marketing',    label: 'Marketing',    icon: Megaphone },
-      { path: '/iot',          label: 'IoT',          icon: Wifi },
-      { path: '/securite',     label: 'Sécurité',     icon: Shield },
+      { path: '/intelligence', label: 'Intelligence', icon: Brain,    roles: ADMIN_SUPERVISEUR },
+      { path: '/marketing',    label: 'Marketing',    icon: Megaphone, roles: ADMIN_SUPERVISEUR },
+      { path: '/iot',          label: 'IoT',          icon: Wifi,     roles: NO_TECHNICIEN },
+      { path: '/securite',     label: 'Sécurité',     icon: Shield,   roles: ADMIN_SUPERVISEUR },
     ],
   },
 ]
@@ -120,12 +128,18 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     })
   }
 
-  // Inject admin item at bottom of Gestion group
-  const groups: NavGroup[] = NAV_GROUPS.map(g =>
-    g.id === 'gestion' && appRole === 'admin'
-      ? { ...g, items: [...g.items, { path: '/admin', label: 'Administration', icon: Crown }] }
+  const currentRole = (appRole ?? 'technicien') as AppRole
+
+  // Inject admin item at bottom of Gestion group, then filter by role
+  const groups: NavGroup[] = NAV_GROUPS.map(g => {
+    const withAdmin = g.id === 'gestion' && appRole === 'admin'
+      ? { ...g, items: [...g.items, { path: '/admin', label: 'Administration', icon: Crown, roles: ['admin'] as AppRole[] }] }
       : g
-  )
+    return {
+      ...withAdmin,
+      items: withAdmin.items.filter(item => !item.roles || item.roles.includes(currentRole)),
+    }
+  }).filter(g => g.items.length > 0)
 
   const resolveItem = (item: NavItem): NavItem =>
     item.dynamicBadge && item.path === '/boutique'
@@ -140,7 +154,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     admin:       'Admin (Patron)',
     superviseur: 'Superviseur',
     operateur:   'Opérateur',
-    apprenant:   'Apprenant',
+    technicien:  'Technicien',
   }
   const roleLabel = roleLabels[appRole ?? ''] ?? (appRole ?? 'Utilisateur')
 

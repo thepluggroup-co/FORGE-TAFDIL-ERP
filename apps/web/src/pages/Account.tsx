@@ -18,7 +18,7 @@ const ROLE_CONFIG: Record<string, { label: string; color: string; bg: string }> 
   admin:       { label: 'Admin',       color: '#C62828', bg: '#FFEBEE' },
   superviseur: { label: 'Superviseur', color: '#1d4ed8', bg: '#dbeafe' },
   operateur:   { label: 'Opérateur',   color: '#15803d', bg: '#dcfce7' },
-  apprenant:   { label: 'Apprenant',   color: '#6b7280', bg: '#f3f4f6' },
+  technicien:  { label: 'Technicien',  color: '#6b7280', bg: '#f3f4f6' },
 }
 
 // ── Shared field ──────────────────────────────────────────────────────────────

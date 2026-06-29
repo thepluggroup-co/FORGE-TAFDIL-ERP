@@ -100,7 +100,8 @@ const LEGACY_ROLE_MAP: Record<string, string> = {
   directeur:   'SUPER_ADMIN',
   superviseur: 'MANAGER',
   operateur:   'COMMERCIAL',
-  apprenant:   'READONLY',
+  technicien:  'READONLY',
+  apprenant:   'READONLY',   // legacy alias
 }
 
 // ── Chargement des permissions depuis la DB ───────────────────────────────────

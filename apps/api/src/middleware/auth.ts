@@ -156,17 +156,18 @@ export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = a
   const email = (payload['email'] as string | undefined) ?? ''
   const appMeta = (payload['app_metadata'] as { role?: string } | undefined) ?? {}
 
-  // Normalize legacy role names (after rename: directeur→admin, viewer→apprenant)
+  // Normalize legacy role names (after rename: directeur→admin, apprenant→technicien)
   const ROLE_MAP: Record<string, HonoVariables['user']['role']> = {
     admin:       'admin',
     superviseur: 'superviseur',
     operateur:   'operateur',
-    apprenant:   'apprenant',
+    technicien:  'technicien',
     livreur:     'livreur',
-    directeur:   'admin',       // legacy
-    viewer:      'apprenant',   // legacy
+    directeur:   'admin',        // legacy
+    apprenant:   'technicien',   // legacy
+    viewer:      'technicien',   // legacy
   }
-  const role = ROLE_MAP[appMeta.role as string] ?? 'apprenant'
+  const role = ROLE_MAP[appMeta.role as string] ?? 'technicien'
 
   console.log('[auth] ✅', email, '| role:', role, '| jwt_raw:', appMeta.role, '| alg:', alg)
 

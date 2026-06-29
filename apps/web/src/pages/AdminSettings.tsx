@@ -22,7 +22,7 @@ const ROLES: { value: ForgeRole; label: string; color: string; bg: string; desc:
   { value: 'admin',       label: 'Admin (Patron)',  color: '#C62828', bg: '#FFEBEE', desc: 'Accès complet + gestion utilisateurs' },
   { value: 'superviseur', label: 'Superviseur',     color: '#1d4ed8', bg: '#dbeafe', desc: 'Validation, stocks, rapports, formation' },
   { value: 'operateur',   label: 'Opérateur',       color: '#15803d', bg: '#dcfce7', desc: 'Stocks, commandes, bons, production' },
-  { value: 'apprenant',   label: 'Apprenant',       color: '#6b7280', bg: '#f3f4f6', desc: 'Lecture tâches, stock et formation' },
+  { value: 'technicien',  label: 'Technicien',      color: '#6b7280', bg: '#f3f4f6', desc: 'Activité complète + modules commerciaux' },
 ]
 
 function RoleBadge({ role }: { role: ForgeRole }) {
@@ -344,7 +344,7 @@ export default function AdminSettings() {
     admin:       users.filter((u) => u.role === 'admin').length,
     superviseur: users.filter((u) => u.role === 'superviseur').length,
     operateur:   users.filter((u) => u.role === 'operateur').length,
-    apprenant:   users.filter((u) => u.role === 'apprenant').length,
+    technicien:  users.filter((u) => u.role === 'technicien').length,
     inactif:     users.filter((u) => !u.actif).length,
   }
 
@@ -400,7 +400,7 @@ export default function AdminSettings() {
           { label: 'Admins',        value: counts.admin,       color: '#C62828', bg: '#FFEBEE' },
           { label: 'Superviseurs',  value: counts.superviseur, color: '#1d4ed8', bg: '#dbeafe' },
           { label: 'Opérateurs',    value: counts.operateur,   color: '#15803d', bg: '#dcfce7' },
-          { label: 'Apprenants',    value: counts.apprenant,   color: '#6b7280', bg: '#f3f4f6' },
+          { label: 'Techniciens',   value: counts.technicien,  color: '#6b7280', bg: '#f3f4f6' },
           { label: 'Inactifs',      value: counts.inactif,     color: '#9ca3af', bg: '#f9fafb' },
         ].map(({ label, value, color, bg }) => (
           <div
@@ -494,24 +494,29 @@ export default function AdminSettings() {
             </thead>
             <tbody>
               {[
-                { module: 'Dashboard',           admin: true,  superviseur: true,  operateur: true,  apprenant: true  },
-                { module: 'Stocks & Production',  admin: true,  superviseur: true,  operateur: true,  apprenant: true  },
-                { module: 'Commandes & Devis',    admin: true,  superviseur: true,  operateur: true,  apprenant: false },
-                { module: 'Clients',              admin: true,  superviseur: true,  operateur: true,  apprenant: false },
-                { module: 'Finance (lecture)',     admin: true,  superviseur: true,  operateur: false, apprenant: false },
-                { module: 'Finance (écriture)',    admin: true,  superviseur: false, operateur: false, apprenant: false },
-                { module: 'RH (lecture)',          admin: true,  superviseur: true,  operateur: false, apprenant: false },
-                { module: 'RH (paie/employes)',    admin: true,  superviseur: false, operateur: false, apprenant: false },
-                { module: 'Intelligence IA',       admin: true,  superviseur: true,  operateur: false, apprenant: false },
-                { module: 'Formation',             admin: true,  superviseur: true,  operateur: false, apprenant: true  },
-                { module: 'Projets & Tâches',      admin: true,  superviseur: true,  operateur: true,  apprenant: true  },
-                { module: 'Rapports & Exports',    admin: true,  superviseur: true,  operateur: false, apprenant: false },
-                { module: 'Paramètres système',    admin: true,  superviseur: false, operateur: false, apprenant: false },
-                { module: 'Gestion utilisateurs',  admin: true,  superviseur: false, operateur: false, apprenant: false },
+                { module: 'Dashboard',           admin: true,  superviseur: true,  operateur: true,  technicien: true  },
+                { module: 'Boutique',             admin: true,  superviseur: true,  operateur: true,  technicien: true  },
+                { module: 'Production',           admin: true,  superviseur: true,  operateur: true,  technicien: true  },
+                { module: 'Commandes',            admin: true,  superviseur: true,  operateur: true,  technicien: true  },
+                { module: 'Stocks',               admin: true,  superviseur: true,  operateur: true,  technicien: true  },
+                { module: 'Fournisseurs',         admin: true,  superviseur: true,  operateur: true,  technicien: true  },
+                { module: 'Devis',                admin: true,  superviseur: true,  operateur: true,  technicien: true  },
+                { module: 'Clients',              admin: true,  superviseur: true,  operateur: true,  technicien: true  },
+                { module: 'Logistique',           admin: true,  superviseur: true,  operateur: true,  technicien: true  },
+                { module: 'Finance',              admin: true,  superviseur: true,  operateur: false, technicien: false },
+                { module: 'RH',                   admin: true,  superviseur: true,  operateur: false, technicien: false },
+                { module: 'Formation',            admin: true,  superviseur: true,  operateur: true,  technicien: false },
+                { module: 'Équipements',          admin: true,  superviseur: true,  operateur: true,  technicien: false },
+                { module: 'Projets',              admin: true,  superviseur: true,  operateur: false, technicien: false },
+                { module: 'Intelligence',         admin: true,  superviseur: true,  operateur: false, technicien: false },
+                { module: 'Marketing',            admin: true,  superviseur: true,  operateur: false, technicien: false },
+                { module: 'IoT',                  admin: true,  superviseur: true,  operateur: true,  technicien: false },
+                { module: 'Sécurité',             admin: true,  superviseur: true,  operateur: false, technicien: false },
+                { module: 'Administration',       admin: true,  superviseur: false, operateur: false, technicien: false },
               ].map((row) => (
                 <tr key={row.module} className="border-b border-gray-50 hover:bg-gray-50/50">
                   <td className="px-4 py-2.5 text-sm text-[#212121] font-medium">{row.module}</td>
-                  {(['admin', 'superviseur', 'operateur', 'apprenant'] as const).map((role) => (
+                  {(['admin', 'superviseur', 'operateur', 'technicien'] as const).map((role) => (
                     <td key={role} className="px-4 py-2.5 text-center">
                       {row[role]
                         ? <CheckCircle className="h-4 w-4 text-green-500 mx-auto" />

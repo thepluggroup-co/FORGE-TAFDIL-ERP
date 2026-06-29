@@ -59,7 +59,7 @@ export const adminRouter = new Hono<{ Variables: HonoVariables }>()
 // ── Gestion utilisateurs réservée au Patron (admin) ──────────────────────────
 adminRouter.use('*', requireRole(['admin']))
 
-const VALID_ROLES = ['admin', 'superviseur', 'operateur', 'apprenant'] as const
+const VALID_ROLES = ['admin', 'superviseur', 'operateur', 'technicien'] as const
 type ForgeRole = typeof VALID_ROLES[number]
 
 // ── GET /api/admin/users ──────────────────────────────────────────────────────
@@ -137,8 +137,8 @@ const RBAC_TO_LEGACY: Record<string, ForgeRole> = {
   COMMERCIAL:  'operateur',
   CAISSIER:    'operateur',
   MAGASINIER:  'operateur',
-  FORMATEUR:   'apprenant',
-  READONLY:    'apprenant',
+  FORMATEUR:   'technicien',
+  READONLY:    'technicien',
 }
 
 // ── POST /api/admin/users/invite ──────────────────────────────────────────────

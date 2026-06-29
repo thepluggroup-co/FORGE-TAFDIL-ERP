@@ -5,14 +5,14 @@ export const USER_ROLE_LABELS: Record<UserRole, string> = {
   admin:       'Admin (Patron)',
   superviseur: 'Superviseur',
   operateur:   'Opérateur',
-  apprenant:   'Apprenant',
+  technicien:  'Technicien',
 }
 
 export const USER_ROLE_COLORS: Record<UserRole, string> = {
   admin:       'text-forge-red bg-forge-red-light',
   superviseur: 'text-blue-700 bg-blue-50',
   operateur:   'text-green-700 bg-green-50',
-  apprenant:   'text-gray-600 bg-gray-100',
+  technicien:  'text-gray-600 bg-gray-100',
 }
 
 // --- Statuts commandes ---

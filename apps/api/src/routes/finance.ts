@@ -2369,7 +2369,7 @@ router.get('/rapports/resultat', requireRole(['admin', 'superviseur']), async (c
 
 // ── Dashboard KPIs ────────────────────────────────────────────────────────────
 
-router.get('/rapports/dashboard', requireRole(['admin', 'superviseur', 'operateur', 'apprenant']), async (c) => {
+router.get('/rapports/dashboard', requireRole(['admin', 'superviseur', 'operateur', 'technicien']), async (c) => {
   const maintenant = new Date()
 
   const debut6Mois = new Date(maintenant)
