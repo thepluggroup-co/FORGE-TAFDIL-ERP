@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
 import { requireRole } from '../middleware/rbac'
 import { checkPermission, writeAuditLog } from '../services/rbacService'
+import { ensureFactureForCommande } from '../services/finance-core.service'
 import type { HonoVariables } from '../types'
 
 const db = supabaseAdmin!
@@ -279,7 +280,7 @@ logistiqueRouter.patch(
 
     const { data: livraison, error: fetchErr } = await db
       .from('livraisons')
-      .select('id, statut, livreur_id, created_by')
+      .select('id, statut, commande_id, livreur_id, created_by')
       .eq('id', id)
       .single()
 
@@ -288,7 +289,8 @@ logistiqueRouter.patch(
     }
 
     const lv = livraison as {
-      id: string; statut: string; livreur_id: string | null; created_by: string | null
+      id: string; statut: string; commande_id: string | null
+      livreur_id: string | null; created_by: string | null
     }
 
     // Un operateur ne peut modifier que ses propres livraisons
@@ -347,7 +349,49 @@ logistiqueRouter.patch(
       changed_by:     user.id,
     })
 
-    return c.json(updated)
+    let facture: unknown = null
+    if (body.statut === 'livree' && lv.commande_id) {
+      const { data: commande } = await db
+        .from('commandes')
+        .select('statut, numero')
+        .eq('id', lv.commande_id)
+        .single()
+
+      const cmd = commande as { statut: string; numero: string } | null
+      if (cmd && cmd.statut !== 'delivered') {
+        const { error: cmdUpdateErr } = await db
+          .from('commandes')
+          .update({ statut: 'delivered', updated_at: new Date().toISOString() })
+          .eq('id', lv.commande_id)
+
+        if (cmdUpdateErr) return c.json({ error: cmdUpdateErr.message }, 500)
+
+        await db.from('historique_commandes').insert({
+          commande_id:    lv.commande_id,
+          ancien_statut:  cmd.statut,
+          nouveau_statut: 'delivered',
+          commentaire:    body.commentaire ?? `Livraison ${id} marquee livree`,
+          changed_by:     user.id,
+        })
+      }
+
+      try {
+        const ensured = await ensureFactureForCommande({
+          commandeId: lv.commande_id,
+          statut:    'brouillon',
+          userId:    user.id,
+          notes:     'Facture generee automatiquement apres livraison logistique.',
+        })
+        facture = ensured.facture
+      } catch (e) {
+        return c.json({
+          error: `Livraison marquee livree, mais la facture automatique n'a pas pu etre generee : ${(e as Error).message}`,
+          code:  'FACTURE_AUTO_FAILED',
+        }, 500)
+      }
+    }
+
+    return c.json({ ...(updated as Record<string, unknown>), facture })
   },
 )
 

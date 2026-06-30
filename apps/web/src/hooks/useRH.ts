@@ -260,8 +260,12 @@ export function useGenererPaie() {
     onSuccess: (_, { mois }) => {
       void qc.invalidateQueries({ queryKey: ['bulletins', { mois }] })
       void qc.invalidateQueries({ queryKey: ['bulletins'] })
+      void qc.invalidateQueries({ queryKey: ['avances-salaire'] })
+      void qc.invalidateQueries({ queryKey: ['retenues-salaire'] })
       void qc.invalidateQueries({ queryKey: ['controle-paie', mois] })
-      toast.success('Bulletins de paie générés')
+      void qc.invalidateQueries({ queryKey: ['paie-periodes', mois] })
+      void qc.invalidateQueries({ queryKey: ['cotisations-sociales', mois] })
+      toast.success('Paie mensuelle recalculée')
     },
     onError: (err: Error) => toast.error(err.message),
   })
@@ -299,7 +303,9 @@ export function useCreateAvanceSalaire() {
       void qc.invalidateQueries({ queryKey: ['bulletins', { mois: payload.mois_deduction }] })
       void qc.invalidateQueries({ queryKey: ['bulletins'] })
       void qc.invalidateQueries({ queryKey: ['controle-paie', payload.mois_deduction] })
-      toast.success('Avance sur salaire enregistrée')
+      void qc.invalidateQueries({ queryKey: ['paie-periodes', payload.mois_deduction] })
+      void qc.invalidateQueries({ queryKey: ['cotisations-sociales', payload.mois_deduction] })
+      toast.success('Avance enregistrée. Recalculez la paie du mois pour la déduire.')
     },
     onError: (err: Error) => toast.error(err.message),
   })
@@ -342,7 +348,9 @@ export function useCreateRetenueSalaire() {
       void qc.invalidateQueries({ queryKey: ['bulletins', { mois: payload.mois_deduction }] })
       void qc.invalidateQueries({ queryKey: ['bulletins'] })
       void qc.invalidateQueries({ queryKey: ['controle-paie', payload.mois_deduction] })
-      toast.success('Retenue salariale enregistrée')
+      void qc.invalidateQueries({ queryKey: ['paie-periodes', payload.mois_deduction] })
+      void qc.invalidateQueries({ queryKey: ['cotisations-sociales', payload.mois_deduction] })
+      toast.success('Retenue enregistrée. Recalculez la paie du mois pour la déduire.')
     },
     onError: (err: Error) => toast.error(err.message),
   })

@@ -78,6 +78,9 @@ vi.mock('@/hooks/useBons', () => ({
   useExecuteBon:  vi.fn(),
   useBackfillBons: vi.fn(),
   useVerifierStockBon: vi.fn(),
+  usePreparateursBons: vi.fn(),
+  useAssignPreparateurBon: vi.fn(),
+  useMarquerBonPret: vi.fn(),
 }))
 
 vi.mock('@/hooks/useStocks', () => ({ useStocks:  vi.fn() }))
@@ -90,7 +93,17 @@ vi.mock('@/lib/utils', () => ({
 
 import React from 'react'
 import BonsSortie from '../pages/stocks/BonsSortie'
-import { useBons, useCreateBon, useValidateBon, useExecuteBon, useBackfillBons, useVerifierStockBon } from '@/hooks/useBons'
+import {
+  useAssignPreparateurBon,
+  useBackfillBons,
+  useBons,
+  useCreateBon,
+  useExecuteBon,
+  useMarquerBonPret,
+  usePreparateursBons,
+  useValidateBon,
+  useVerifierStockBon,
+} from '@/hooks/useBons'
 import { useStocks } from '@/hooks/useStocks'
 import { useEmployes } from '@/hooks/useRH'
 
@@ -105,6 +118,8 @@ const BON_SOUMIS = {
 
 const BON_VALIDE = {
   id: 'bon-valide-001', numero: 'TAF-20260518-0002', statut: 'valide',
+  preparateur_id: 'prep-1', statut_preparation: 'pret',
+  preparateur: { id: 'prep-1', nom: 'Marie Curie' },
   technicien_nom: 'Marie Curie', cout_total_xaf: 8000,
   created_at: '2026-05-18T09:00:00Z',
   lignes: [{ produit_id: 'p2', designation: 'Acier inox', quantite: 2, unite: 'kg' }],
@@ -138,6 +153,9 @@ function setupDefaultMocks() {
   vi.mocked(useExecuteBon).mockReturnValue({ mutate: vi.fn(), isPending: false } as any)
   vi.mocked(useBackfillBons).mockReturnValue({ mutate: vi.fn(), isPending: false } as any)
   vi.mocked(useVerifierStockBon).mockReturnValue({ data: null, isLoading: false } as any)
+  vi.mocked(usePreparateursBons).mockReturnValue({ data: { data: [] }, isLoading: false } as any)
+  vi.mocked(useAssignPreparateurBon).mockReturnValue({ mutate: vi.fn(), isPending: false } as any)
+  vi.mocked(useMarquerBonPret).mockReturnValue({ mutate: vi.fn(), isPending: false } as any)
   vi.mocked(useStocks).mockReturnValue({ data: STOCKS_DATA } as any)
   vi.mocked(useEmployes).mockReturnValue({ data: EMPLOYES_DATA } as any)
 }
@@ -225,7 +243,11 @@ describe('Test 10 — formulaire création bon désactive Soumettre si données 
     await user.selectOptions(combos[0], 'Jean Dupont')
 
     // Sélectionner le produit (deuxième <select>)
-    await user.selectOptions(combos[1], 'p1')
+    const productSelect = screen.getAllByRole('combobox').find((select) =>
+      Array.from((select as HTMLSelectElement).options).some((option) => option.value === 'p1'),
+    )
+    expect(productSelect).toBeTruthy()
+    await user.selectOptions(productSelect as HTMLSelectElement, 'p1')
 
     expect(screen.getByRole('button', { name: /Soumettre le bon/i })).not.toBeDisabled()
   })

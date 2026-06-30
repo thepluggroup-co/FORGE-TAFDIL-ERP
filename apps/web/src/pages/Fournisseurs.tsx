@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'sonner'
 import {
@@ -34,6 +34,14 @@ const STATUT_COLOR: Record<string, string> = {
   recu_total:   'bg-green-100 text-green-700',
   recu:         'bg-green-100 text-green-700',
   annule:       'bg-red-100 text-red-600',
+}
+
+function normalizeText(value?: string | null) {
+  return (value ?? '').trim().toLocaleLowerCase('fr-FR')
+}
+
+function quantiteLigne(ligne: BonAppro['bons_approvisionnement_lignes'][number]) {
+  return ligne.quantite_a_commander ?? ligne.quantite ?? 0
 }
 
 // ── SlideOver formulaire fournisseur ──────────────────────────────────────────
@@ -245,6 +253,65 @@ interface EnvoyerBonModalProps {
   onClose:     () => void
 }
 
+function BonApproChoice({
+  bon,
+  selected,
+  onSelect,
+}: {
+  bon: BonAppro
+  selected: boolean
+  onSelect: () => void
+}) {
+  const lignes = bon.bons_approvisionnement_lignes ?? []
+  const preview = lignes.slice(0, 3)
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`w-full rounded-xl border p-3 text-left transition ${
+        selected
+          ? 'border-[#C62828] bg-[#C62828]/5 ring-2 ring-[#C62828]/10'
+          : 'border-gray-200 bg-white hover:border-[#C62828]/60 hover:bg-gray-50'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-mono text-sm font-bold text-[#111827]">{bon.numero}</div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${STATUT_COLOR[bon.statut] ?? STATUT_COLOR.valide}`}>
+              {STATUT_LABEL[bon.statut] ?? bon.statut}
+            </span>
+            {bon.fournisseur_nom && (
+              <span className="truncate rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">
+                {bon.fournisseur_nom}
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="text-right text-[11px] text-[#9CA3AF]">
+          {new Date(bon.created_at).toLocaleDateString('fr-FR')}
+        </div>
+      </div>
+
+      <div className="mt-2 space-y-1">
+        {preview.map((ligne) => (
+          <div key={ligne.id} className="flex justify-between gap-3 text-xs text-[#374151]">
+            <span className="truncate">{ligne.designation}</span>
+            <span className="shrink-0 font-semibold">
+              {quantiteLigne(ligne)} {ligne.unite}
+            </span>
+          </div>
+        ))}
+        {lignes.length > preview.length && (
+          <div className="text-[11px] font-medium text-[#9CA3AF]">
+            +{lignes.length - preview.length} autre{lignes.length - preview.length > 1 ? 's' : ''} article{lignes.length - preview.length > 1 ? 's' : ''}
+          </div>
+        )}
+      </div>
+    </button>
+  )
+}
+
 function EnvoyerBonModal({ fournisseur, onClose }: EnvoyerBonModalProps) {
   const { data: bons, isLoading } = useBonsAppro({ statut: 'valide' })
   const envoyer = useEnvoyerBon()
@@ -252,6 +319,18 @@ function EnvoyerBonModal({ fournisseur, onClose }: EnvoyerBonModalProps) {
   const [bonId,    setBonId]    = useState('')
   const [canal,    setCanal]    = useState<'email' | 'whatsapp'>('email')
   const [message,  setMessage]  = useState('')
+  const bonsValides = bons?.data ?? []
+  const { bonsAssocies, autresBons } = useMemo(() => {
+    const fournisseurNom = normalizeText(fournisseur.nom)
+    const matchesFournisseur = (bon: BonAppro) =>
+      bon.fournisseur_id === fournisseur.id ||
+      (!!bon.fournisseur_nom && normalizeText(bon.fournisseur_nom) === fournisseurNom) ||
+      bon.bons_approvisionnement_lignes.some(l => normalizeText(l.fournisseur) === fournisseurNom)
+
+    const associes = bonsValides.filter(matchesFournisseur)
+    const autres = bonsValides.filter(b => !matchesFournisseur(b))
+    return { bonsAssocies: associes, autresBons: autres }
+  }, [bonsValides, fournisseur.id, fournisseur.nom])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -302,20 +381,31 @@ function EnvoyerBonModal({ fournisseur, onClose }: EnvoyerBonModalProps) {
                 <Loader2 size={14} className="animate-spin" /> Chargement…
               </div>
             ) : (
-              <select
-                value={bonId}
-                onChange={e => setBonId(e.target.value)}
-                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:border-[#C62828] focus:ring-2 focus:ring-[#C62828]/10"
-              >
-                <option value="">-- Sélectionner --</option>
-                {(bons?.data ?? []).map((b: BonAppro) => (
-                  <option key={b.id} value={b.id}>
-                    {b.numero} — {STATUT_LABEL[b.statut] ?? b.statut}
-                  </option>
-                ))}
-              </select>
+              <div className="max-h-72 space-y-3 overflow-y-auto rounded-xl border border-gray-100 bg-gray-50 p-2">
+                {bonsAssocies.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="px-1 text-[11px] font-bold uppercase tracking-wide text-[#6B7280]">
+                      Bons pour ce fournisseur
+                    </p>
+                    {bonsAssocies.map((b) => (
+                      <BonApproChoice key={b.id} bon={b} selected={bonId === b.id} onSelect={() => setBonId(b.id)} />
+                    ))}
+                  </div>
+                )}
+                {autresBons.length > 0 && (
+                  <div className="space-y-2">
+                    {bonsAssocies.length > 0 && <div className="h-px bg-gray-200" />}
+                    <p className="px-1 text-[11px] font-bold uppercase tracking-wide text-[#6B7280]">
+                      Autres bons valides
+                    </p>
+                    {autresBons.map((b) => (
+                      <BonApproChoice key={b.id} bon={b} selected={bonId === b.id} onSelect={() => setBonId(b.id)} />
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
-            {!isLoading && (bons?.data ?? []).length === 0 && (
+            {!isLoading && bonsValides.length === 0 && (
               <p className="mt-1 text-xs text-[#9CA3AF]">Aucun bon validé disponible</p>
             )}
           </div>

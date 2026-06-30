@@ -1636,6 +1636,28 @@ router.post('/rh/paie', requireRole(['admin']), zValidator('json', paieGenererSc
   const user = c.get('user')
   const { mois, generer_pdf, forcer } = c.req.valid('json')
 
+  if (forcer) {
+    const [{ data: bulletinsVerrouilles }, { data: periodeVerrouillee }] = await Promise.all([
+      db.from('bulletins_paie')
+        .select('id, statut')
+        .eq('mois', mois)
+        .in('statut', ['valide', 'vire'])
+        .limit(1),
+      db.from('paie_periodes')
+        .select('id, statut')
+        .eq('mois', mois)
+        .in('statut', ['validee', 'viree'])
+        .limit(1),
+    ])
+
+    if ((bulletinsVerrouilles ?? []).length > 0 || (periodeVerrouillee ?? []).length > 0) {
+      return c.json({
+        error: 'Recalcul impossible : la paie de ce mois est deja validee ou viree.',
+        code:  'PAIE_VERROUILLEE',
+      }, 422)
+    }
+  }
+
   // Si déjà générés et pas de forçage : renvoyer les existants
   if (!forcer) {
     const { count } = await db

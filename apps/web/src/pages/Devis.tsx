@@ -20,6 +20,8 @@ import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/context/AuthContext'
 import type { Devis as DevisApi, DevisLigne, CreateDevisPayload } from '@/hooks/useDevis'
 import type { Client } from '@/hooks/useClients'
+import { DevisPreview } from '@/components/devis/DevisPreview'
+import { useProduitsShop, type ProduitShopErp } from '@/hooks/useProduitsShop'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -42,7 +44,7 @@ const STATUT_COLORS: Record<string, { bg: string; text: string }> = {
 // ── Utils ──────────────────────────────────────────────────────────────────────
 
 interface LocalLigne {
-  id: string; designation: string; categorie: Categorie
+  id: string; produitId?: string; designation: string; categorie: Categorie
   quantite: number; prixUnitaire: number; unite: string
 }
 
@@ -61,7 +63,7 @@ function addDays(dateStr: string, days: number) {
 }
 
 const newLine = (): LocalLigne => ({
-  id: Math.random().toString(36).slice(2),
+  id: Math.random().toString(36).slice(2), produitId: '',
   designation: '', categorie: 'materiaux', quantite: 1, prixUnitaire: 0, unite: 'unité',
 })
 
@@ -131,9 +133,10 @@ function DevisDetailPanel({
   const client         = devis.client as DevisApi['client']
   const joursRestants  = devis.jours_restants as number | null
   const canAdmin       = role === 'admin' || role === 'superviseur'
+  const canSendApproval = role === 'admin' || role === 'superviseur' || role === 'operateur'
   const canEdit        = canAdmin && ['brouillon', 'envoye', 'refuse', 'accepte'].includes(statut)
   const canDelete      = canAdmin && ['brouillon', 'refuse'].includes(statut)
-  const canEnvoyerAppr = canAdmin && ['brouillon', 'envoye'].includes(statut)
+  const canEnvoyerAppr = canSendApproval && ['brouillon', 'envoye'].includes(statut)
   const canTransformer = canAdmin && statut === 'accepte' && approuve
   const sc             = STATUT_COLORS[statut] ?? STATUT_COLORS.brouillon
 
@@ -174,6 +177,25 @@ function DevisDetailPanel({
             <p className="text-lg font-bold text-[#C62828]">{formatXAF(devis.montant_ttc_xaf as number)}</p>
           </div>
         </div>
+
+        {/* Apercu commercial */}
+        <DevisPreview
+          compact
+          devis={{
+            numero:             devis.reference as string,
+            client_nom:         client.nom,
+            date_emission:      devis.date_creation as string | null,
+            date_validite:      devis.date_validite as string | null,
+            validite_jours:     devis.validite_jours as number,
+            acompte_pct:        devis.acompte_pct as number,
+            condition_paiement: (devis.condition_paiement as { libelle: string } | null)?.libelle ?? null,
+            total_ht_xaf:       devis.total_ht_xaf as number,
+            tva_xaf:            devis.tva_xaf as number,
+            total_ttc_xaf:      devis.montant_ttc_xaf as number,
+            notes:              devis.notes as string | null,
+            lignes,
+          }}
+        />
 
         {/* Infos client */}
         <div className="grid grid-cols-2 gap-3 bg-gray-50 rounded-xl p-3 text-xs">
@@ -267,6 +289,16 @@ function DevisDetailPanel({
                 <p className="text-xs text-blue-500">Lien valable 30 jours · copié automatiquement</p>
               </div>
             </button>
+          )}
+
+          {canSendApproval && !canEnvoyerAppr && ['accepte', 'refuse', 'expire', 'transforme'].includes(statut) && (
+            <div className="flex items-start gap-2.5 px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl">
+              <AlertTriangle className="h-4 w-4 text-gray-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs font-bold text-gray-700">Lien d'approbation indisponible</p>
+                <p className="text-xs text-gray-500">Ce devis est deja {statut}; il ne peut plus recevoir un nouveau lien client.</p>
+              </div>
+            </div>
           )}
 
           {/* CMD01 — transformer en commande */}
@@ -399,6 +431,7 @@ function DevisFormPanel({
   const isMutating  = createDevis.isPending || updateDevis.isPending
   const { data: condData } = useConditionsPaiement()
   const conditionsList = condData?.data ?? []
+  const { data: produitsCatalogue = [] } = useProduitsShop()
 
   const [step,    setStep]    = useState(0)
   const [created, setCreated] = useState<{ reference: string; pdf_url: string | null; montantTTC: number } | null>(null)
@@ -408,6 +441,7 @@ function DevisFormPanel({
     if (!editingDevis) return DEFAULT_FORM
     const lignesExist = (editingDevis.lignes as DevisLigne[]).map((l) => ({
       id:          l.id,
+      produitId:   l.produit_id ?? '',
       designation: l.designation,
       categorie:   (l.categorie === 'main_oeuvre' ? 'main-oeuvre' : l.categorie) as Categorie,
       quantite:    l.quantite,
@@ -431,6 +465,31 @@ function DevisFormPanel({
   const updateLine = (id: string, field: keyof LocalLigne, value: string | number | Categorie) =>
     setForm((f) => ({ ...f, lignes: f.lignes.map((l) => l.id === id ? { ...l, [field]: value } : l) }))
 
+  const categorieFromProduit = (produit: ProduitShopErp): Categorie => {
+    if (produit.categorie === 'main_oeuvre') return 'main-oeuvre'
+    if (produit.categorie === 'equipement') return 'equipement'
+    return 'materiaux'
+  }
+
+  const applyProduitToLine = (lineId: string, produitId: string) => {
+    const produit = produitsCatalogue.find((p) => p.id === produitId)
+    setForm((f) => ({
+      ...f,
+      lignes: f.lignes.map((l) => {
+        if (l.id !== lineId) return l
+        if (!produit) return { ...l, produitId: '' }
+        return {
+          ...l,
+          produitId:    produit.id,
+          designation:  produit.nom,
+          categorie:    categorieFromProduit(produit),
+          unite:        produit.unite || l.unite || 'unité',
+          prixUnitaire: produit.prix_public ? Math.round(produit.prix_public / (1 + TVA)) : l.prixUnitaire,
+        }
+      }),
+    }))
+  }
+
   const { totalHT, tva, totalTTC } = calcTotals(form.lignes)
 
   const stepValid = [
@@ -446,6 +505,8 @@ function DevisFormPanel({
     const payload: CreateDevisPayload = {
       client_id:           form.clientId || undefined,
       client_nom:          form.clientNom.trim(),
+      client_telephone:    form.clientTel || undefined,
+      client_email:        form.clientEmail || undefined,
       date_emission:       today,
       date_validite:       dateValid,
       validite_jours:      form.validite,
@@ -455,6 +516,7 @@ function DevisFormPanel({
       lignes: form.lignes
         .filter((l) => l.designation && l.prixUnitaire > 0)
         .map((l, i) => ({
+          produit_id:           l.produitId || undefined,
           designation:          l.designation,
           categorie:            mapCategorie(l.categorie),
           unite:                l.unite || 'unité',
@@ -574,9 +636,29 @@ function DevisFormPanel({
                 <div className="space-y-3">
                   {form.lignes.map((ligne) => (
                     <div key={ligne.id} className="border border-gray-100 bg-gray-50 rounded-xl p-3 space-y-2">
+                      <div>
+                        <label className="block text-[10px] text-gray-400 mb-0.5">Produit catalogue</label>
+                        <select
+                          value={ligne.produitId ?? ''}
+                          onChange={(e) => applyProduitToLine(ligne.id, e.target.value)}
+                          className="w-full px-2.5 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                        >
+                          <option value="">Saisie libre / aucun produit</option>
+                          {produitsCatalogue.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.ref ? `${p.ref} - ` : ''}{p.nom} - {p.unite || 'unité'} - stock {p.stock_actuel}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                       <div className="flex gap-2">
                         <input value={ligne.designation}
-                          onChange={(e) => updateLine(ligne.id, 'designation', e.target.value)}
+                          onChange={(e) => setForm((f) => ({
+                            ...f,
+                            lignes: f.lignes.map((l) => l.id === ligne.id
+                              ? { ...l, produitId: '', designation: e.target.value }
+                              : l),
+                          }))}
                           placeholder="Désignation *"
                           className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
                         {form.lignes.length > 1 && (

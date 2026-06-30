@@ -17,11 +17,13 @@ import {
 import { getFacturesLocal, getCreditsLocal, localCreateFacture, localCreateCredit, localRembourser } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
+import { backfillCreditsClients, syncCreditForFacture } from '../services/finance-core.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
 type FinanceContext = Context<{ Variables: HonoVariables }>
 const TVA_RATE = 0.1925
+let creditsBackfillStarted = false
 
 const chargeSchema = z.object({
   fournisseur_nom:     z.string().min(1),
@@ -877,6 +879,7 @@ router.post('/factures', requireRole(['admin']), zValidator('json', factureSchem
       } catch (e) { console.error('[finance] PDF error:', e) }
 
       const fRow = facture as { id: string; date_emission: string }
+      await syncCreditForFacture(facture, user.id)
       genererEcritureVente({
         id: fRow.id, numero, date_emission: fRow.date_emission,
         client_nom: body.client_nom, total_ht_xaf, tva_xaf, total_ttc_xaf, created_by: user.id,
@@ -1020,6 +1023,7 @@ router.patch(
       .single()
 
     if (error) return c.json({ error: error.message }, 400)
+    await syncCreditForFacture(data, undefined)
     await notifyWorkflow({
       event:   body.statut === 'paye' ? 'finance.facture_payee' : `finance.facture_${body.statut}`,
       module:  'finance',
@@ -1055,7 +1059,7 @@ router.post(
 
     const { data: facture } = await db
       .from('factures')
-      .select('statut, total_ttc_xaf, montant_paye_xaf, numero, client_nom, client_id')
+      .select('statut, total_ttc_xaf, montant_paye_xaf, numero, client_nom, client_id, commande_id, date_emission, date_echeance, created_by')
       .eq('id', id)
       .single()
 
@@ -1091,6 +1095,7 @@ router.post(
       .single()
 
     if (error) return c.json({ error: error.message }, 400)
+    await syncCreditForFacture(data, user.id)
 
     await notifyWorkflow({
       event:   nouveauSolde <= 0 ? 'finance.facture_soldee' : 'finance.paiement_facture_recu',
@@ -1155,7 +1160,7 @@ router.post(
 
     const { data: facture } = await db
       .from('factures')
-      .select('statut, total_ttc_xaf, montant_paye_xaf, numero, client_nom, client_id')
+      .select('statut, total_ttc_xaf, montant_paye_xaf, numero, client_nom, client_id, commande_id, date_emission, date_echeance, created_by')
       .eq('id', id)
       .single()
 
@@ -1206,6 +1211,7 @@ router.post(
       .single()
 
     if (fErr) return c.json({ error: fErr.message }, 500)
+    await syncCreditForFacture(factureUpdated, user.id)
 
     const modeCompta = ['virement', 'cheque'].includes(body.mode_paiement) ? 'banque' : 'caisse'
     const refLabel   = [f.numero, body.mode_paiement, body.reference].filter(Boolean).join(' — ')
@@ -1855,6 +1861,10 @@ router.get('/credits/alertes', async (c) => {
 router.get('/credits', async (c) => {
   // Auto-échoir en arrière-plan avant de lire
   autoEchoirCredits().catch(e => console.error('[finance] autoEchoirCredits:', e))
+  if (!creditsBackfillStarted) {
+    creditsBackfillStarted = true
+    await backfillCreditsClients().catch(e => console.error('[finance] backfillCreditsClients:', e))
+  }
 
   const { statut, client_id } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
@@ -1874,6 +1884,16 @@ router.get('/credits', async (c) => {
   }
 
   return c.json({ data, total: count ?? 0, page, per_page: perPage, total_pages: Math.ceil((count ?? 0) / perPage) })
+})
+
+router.post('/credits/backfill', requireRole(['admin']), async (c) => {
+  const user = c.get('user')
+  try {
+    const result = await backfillCreditsClients(user.id)
+    return c.json({ success: true, ...result })
+  } catch (error) {
+    return c.json({ error: (error as Error).message, code: 'CREDIT_BACKFILL_FAILED' }, 500)
+  }
 })
 
 router.post('/credits', requireRole(['admin']), zValidator('json', creditSchema), async (c) => {
@@ -1968,10 +1988,18 @@ router.post('/credits/:id/rembourser', requireRole(['admin']), zValidator('json'
     // ── Online : Supabase ──────────────────────────────────────────────────────
     async () => {
       const { data: credit } = await db.from('credits')
-        .select('solde_restant_xaf, statut, client_nom, client_id, numero').eq('id', id).single()
+        .select('solde_restant_xaf, statut, client_nom, client_id, facture_id, commande_id, numero').eq('id', id).single()
 
       if (!credit) throw Object.assign(new Error('Crédit introuvable'), { code: 'NOT_FOUND', httpStatus: 404 })
-      const cr = credit as { solde_restant_xaf: number; statut: string; client_nom: string; client_id: string | null; numero: string }
+      const cr = credit as {
+        solde_restant_xaf: number
+        statut: string
+        client_nom: string
+        client_id: string | null
+        facture_id?: string | null
+        commande_id?: string | null
+        numero: string
+      }
       if (cr.statut === 'rembourse') throw Object.assign(new Error('Crédit déjà remboursé'), { code: 'ALREADY_DONE', httpStatus: 422 })
       if (body.montant_xaf > cr.solde_restant_xaf)
         throw Object.assign(new Error(`Montant dépasse le solde restant (${xaf(cr.solde_restant_xaf)})`), { code: 'AMOUNT_EXCEEDED', httpStatus: 422 })
@@ -1992,6 +2020,45 @@ router.post('/credits/:id/rembourser', requireRole(['admin']), zValidator('json'
       }).eq('id', id)
 
       if (cr.client_id) await syncEncoursClient(cr.client_id)
+
+      if (cr.facture_id || cr.commande_id) {
+        const { data: factureLiee, error: factureLieeError } = await db
+          .from('factures')
+          .select('*')
+          .neq('statut', 'annule')
+          .or(cr.facture_id ? `id.eq.${cr.facture_id}` : `commande_id.eq.${cr.commande_id}`)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (factureLieeError) throw new Error(factureLieeError.message)
+
+        if (factureLiee) {
+          const facture = factureLiee as { id: string; total_ttc_xaf: number; montant_paye_xaf?: number | null }
+          const montantPaye = Math.min(
+            Number(facture.total_ttc_xaf ?? 0),
+            Math.round(Number(facture.montant_paye_xaf ?? 0) + body.montant_xaf),
+          )
+          const statutFacture = montantPaye >= Number(facture.total_ttc_xaf ?? 0) ? 'paye' : 'envoye'
+
+          const { data: factureUpdated, error: factureUpdateError } = await db
+            .from('factures')
+            .update({ montant_paye_xaf: montantPaye, statut: statutFacture, updated_at: new Date().toISOString() })
+            .eq('id', facture.id)
+            .select()
+            .single()
+
+          if (factureUpdateError) throw new Error(factureUpdateError.message)
+
+          if (cr.commande_id) {
+            await db.from('commandes')
+              .update({ montant_paye_xaf: montantPaye, updated_at: new Date().toISOString() })
+              .eq('id', cr.commande_id)
+          }
+
+          await syncCreditForFacture(factureUpdated, user.id)
+        }
+      }
 
       genererEcritureEncaissement({ credit_id: id, reference: cr.numero,
         date: body.date_paiement, montant_xaf: body.montant_xaf,

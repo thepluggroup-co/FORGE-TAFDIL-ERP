@@ -683,6 +683,9 @@ export default function RH() {
   const controlesErreur     = controlePaie?.controles.filter(c => c.niveau === 'error').length ?? 0
   const controlesAttention  = controlePaie?.controles.filter(c => c.niveau === 'warning').length ?? 0
   const tauxNetSurBrut      = totalBrut > 0 ? Math.round((totalMasseSalariale / totalBrut) * 100) : 0
+  const paieVerrouillee     = bulletins.some(b => ['valide', 'vire'].includes(b.statut)) || ['validee', 'viree'].includes(paiePeriode?.statut ?? '')
+  const paieRecalculable    = bulletins.length > 0 && !paieVerrouillee
+  const paieADeductionsEnAttente = paieRecalculable && (avancesEnAttente > 0 || retenuesEnAttente > 0)
 
   // Colonnes employés
   const employeColumns: Column<EmployeRecord>[] = [
@@ -890,9 +893,13 @@ export default function RH() {
               <Button size="sm" variant="ghost" disabled={exportPaie.isPending || bulletins.length === 0} onClick={() => exportPaie.mutate(moisPaie)}>
                 <Download className="h-3.5 w-3.5" /> Export
               </Button>
-              <Button size="sm" disabled={genererPaie.isPending} onClick={() => genererPaie.mutate({ mois: moisPaie })}>
+              <Button
+                size="sm"
+                disabled={genererPaie.isPending || (bulletins.length > 0 && paieVerrouillee)}
+                onClick={() => genererPaie.mutate({ mois: moisPaie, forcer: bulletins.length > 0 })}
+              >
                 <FileText className="h-3.5 w-3.5" />
-                {genererPaie.isPending ? 'Génération…' : 'Générer les bulletins'}
+                {genererPaie.isPending ? 'Calcul...' : bulletins.length > 0 ? 'Recalculer la paie' : 'Generer les bulletins'}
               </Button>
             </div>
           ) : undefined
@@ -1068,6 +1075,18 @@ export default function RH() {
                     </div>
                   )}
                 </div>
+
+                {paieADeductionsEnAttente && (
+                  <div className="mx-5 mb-4 flex items-center justify-between gap-3 p-3 rounded-lg bg-amber-50 border border-amber-100 text-amber-700 text-sm">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="h-4 w-4 shrink-0" />
+                      <span>Avances ou retenues en attente de deduction. Recalculez la paie du mois.</span>
+                    </div>
+                    <Button size="sm" variant="ghost" disabled={genererPaie.isPending} onClick={() => genererPaie.mutate({ mois: moisPaie, forcer: true })}>
+                      Recalculer
+                    </Button>
+                  </div>
+                )}
 
                 <DataTable<BulletinRecord> columns={paieColumns} data={bulletins} keyField="id" loading={bulletinsLoading} />
 

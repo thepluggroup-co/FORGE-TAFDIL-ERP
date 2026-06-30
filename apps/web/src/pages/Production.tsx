@@ -99,7 +99,16 @@ export default function Production() {
     form.machine !== '' &&
     form.technicien !== '' &&
     form.finPrevue !== '' &&
-    (form.typeJob === 'commande' || Number(form.quantitePrevue) > 0)
+    Number(form.quantitePrevue) > 0
+
+  const handleTerminer = (row: JobRecord) => {
+    const quantiteProduite = Number(row.quantite_produite ?? row.quantite_prevue ?? 0)
+    updateJobStatut.mutate({
+      id: row.id,
+      statut: 'pret',
+      quantite_produite: quantiteProduite > 0 ? quantiteProduite : undefined,
+    })
+  }
 
   const columns: Column<JobRecord>[] = [
     ...BASE_COLUMNS,
@@ -117,13 +126,7 @@ export default function Production() {
           {row.statut === 'in_production' ? (
             <Button
               size="sm"
-              onClick={() => updateJobStatut.mutate({
-                id: row.id,
-                statut: 'pret',
-                quantite_produite: row.type_job === 'stock'
-                  ? Number(row.quantite_prevue ?? 0)
-                  : undefined,
-              })}
+              onClick={() => handleTerminer(row)}
             >
               <CheckCircle2 className="h-3.5 w-3.5" /> Terminer
             </Button>
@@ -143,7 +146,7 @@ export default function Production() {
         produit_ref: form.ref || undefined,
         categorie: form.categorie || undefined,
         unite: form.unite || undefined,
-        quantite_prevue: form.typeJob === 'stock' ? Number(form.quantitePrevue) : undefined,
+        quantite_prevue: Number(form.quantitePrevue),
         prix_unitaire_xaf: form.prixUnitaire ? Number(form.prixUnitaire) : undefined,
         prix_public_xaf: form.prixPublic ? Number(form.prixPublic) : undefined,
         publier_shop: form.publierShop,
@@ -245,6 +248,17 @@ export default function Production() {
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
             />
           </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Qte prevue *</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.quantitePrevue}
+              onChange={(e) => setForm((f) => ({ ...f, quantitePrevue: e.target.value }))}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            />
+          </div>
           {form.typeJob === 'stock' ? (
             <>
               <div className="grid grid-cols-3 gap-3">
@@ -275,18 +289,7 @@ export default function Production() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Qté prévue *</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.quantitePrevue}
-                    onChange={(e) => setForm((f) => ({ ...f, quantitePrevue: e.target.value }))}
-                    className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-                  />
-                </div>
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Coût unit.</label>
                   <input

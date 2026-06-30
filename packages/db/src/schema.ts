@@ -173,6 +173,7 @@ export type NouveauDevis = typeof devis.$inferInsert
 export const devisLignes = sqliteTable('devis_lignes', {
   id:             id(),
   devisId:        text('devis_id').notNull().references(() => devis.id),
+  produitId:      text('produit_id').references(() => produits.id),
   designation:    text('designation').notNull(),
   description:    text('description'),
   categorie:      text('categorie', { enum: ['materiaux', 'main_oeuvre', 'equipement', 'autre'] }).notNull().default('materiaux'),
@@ -331,6 +332,7 @@ export const credits = sqliteTable('credits', {
   numero:          text('numero').notNull().unique(),
   clientId:        text('client_id').references(() => clients.id),
   clientNom:       text('client_nom').notNull(),
+  factureId:       text('facture_id').references(() => factures.id),
   commandeId:      text('commande_id').references(() => commandes.id),
   montantXaf:      real('montant_xaf').notNull(),
   soldeRestantXaf: real('solde_restant_xaf').notNull(),

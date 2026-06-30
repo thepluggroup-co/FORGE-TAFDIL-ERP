@@ -19,6 +19,7 @@ export interface BonApproLigne {
   designation: string
   unite: string
   quantite_a_commander: number
+  quantite?: number
   stock_actuel_snap: number
   stock_min_snap: number
   statut_alerte: 'alerte' | 'critique' | 'rupture'
@@ -30,6 +31,10 @@ export interface BonAppro {
   numero: string
   statut: StatutAppro
   bon_sortie_id: string | null
+  type?: 'auto' | 'manuel'
+  fournisseur_id?: string | null
+  fournisseur_nom?: string | null
+  date_livraison_souhaitee?: string | null
   notes: string | null
   created_at: string
   updated_at: string

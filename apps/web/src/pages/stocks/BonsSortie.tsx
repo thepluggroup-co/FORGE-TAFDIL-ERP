@@ -1,10 +1,21 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { Plus, Check, ChevronRight, RefreshCw, AlertTriangle, CheckCircle2, Minus } from 'lucide-react'
+import { toast } from 'sonner'
 import { PageHeader, DataTable, StatusBadge, SlideOver, Modal, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDateTime } from '@/lib/utils'
-import { useBons, useCreateBon, useValidateBon, useExecuteBon, useBackfillBons, useVerifierStockBon } from '@/hooks/useBons'
+import {
+  useAssignPreparateurBon,
+  useBackfillBons,
+  useBons,
+  useCreateBon,
+  useExecuteBon,
+  useMarquerBonPret,
+  usePreparateursBons,
+  useValidateBon,
+  useVerifierStockBon,
+} from '@/hooks/useBons'
 import { useStocks } from '@/hooks/useStocks'
 import { useEmployes } from '@/hooks/useRH'
 import type { BonSortie as BonApi, BonLigne } from '@/hooks/useBons'
@@ -15,9 +26,15 @@ import { supabase } from '@/lib/supabase'
 type BonRecord = BonApi & Record<string, unknown>
 
 type BonStatus = 'soumis' | 'valide' | 'execute'
+type PreparationStatus = 'a_preparer' | 'en_cours' | 'pret'
 
 const STEP_LABELS: Record<BonStatus, string> = { soumis: 'En attente', valide: 'Validé', execute: 'Exécuté' }
 const STEPS: BonStatus[] = ['soumis', 'valide', 'execute']
+const PREPARATION_LABELS: Record<PreparationStatus, string> = {
+  a_preparer: 'A preparer',
+  en_cours:   'En cours',
+  pret:       'Pret',
+}
 
 function lignesDuBon(bon: Partial<BonRecord> | null | undefined): BonLigne[] {
   if (!bon) return []
@@ -38,6 +55,20 @@ function quantiteServieLigne(ligne: BonLigne, statut: string) {
 function commandeLabel(bon: BonRecord) {
   if (bon.type === 'commande') return bon.demandeur || bon.commande_id || ''
   return bon.commande_id ?? ''
+}
+
+function preparateurLabel(bon: BonRecord) {
+  const preparateur = bon.preparateur as BonApi['preparateur'] | undefined
+  return preparateur?.nom ?? preparateur?.full_name ?? preparateur?.email ?? ''
+}
+
+function preparationStatus(bon: BonRecord): PreparationStatus | null {
+  if (bon.statut_preparation) return bon.statut_preparation as PreparationStatus
+  return bon.statut === 'valide' ? 'a_preparer' : null
+}
+
+function peutExecuterBon(bon: BonRecord) {
+  return Boolean(bon.preparateur_id) && preparationStatus(bon) === 'pret'
 }
 
 // ── Stepper ────────────────────────────────────────────────────────────────────
@@ -77,12 +108,18 @@ export default function BonsSortie() {
   const [execBonId, setExecBonId]       = useState<string | null>(null)
   const [execBonNumero, setExecBonNumero] = useState('')
   const [codeInput, setCodeInput]       = useState('')
+  const [assignBon, setAssignBon]       = useState<BonRecord | null>(null)
+  const [preparateurId, setPreparateurId] = useState('')
 
   const { data, isLoading } = useBons()
   const validateBon  = useValidateBon()
   const executeBon   = useExecuteBon()
   const backfillBons = useBackfillBons()
+  const assignPreparateur = useAssignPreparateurBon()
+  const marquerPret = useMarquerBonPret()
+  const { data: preparateursData } = usePreparateursBons()
   const { data: stockCheck, isLoading: stockCheckLoading } = useVerifierStockBon(execBonId)
+  const preparateurs = preparateursData?.data ?? []
 
   const bons = useMemo(
     () => ((data?.data ?? []) as BonRecord[]).map((bon) => ({
@@ -93,9 +130,13 @@ export default function BonsSortie() {
   )
   const enAttente = bons.filter((b) => b.statut === 'soumis' || b.statut === 'en_attente').length
 
-  function ouvrirExecution(id: string, numero: string) {
-    setExecBonId(id)
-    setExecBonNumero(numero)
+  function ouvrirExecution(bon: BonRecord) {
+    if (!peutExecuterBon(bon)) {
+      toast.error('Assignez un preparateur et marquez la preparation comme prete avant execution.')
+      return
+    }
+    setExecBonId(bon.id)
+    setExecBonNumero(bon.numero)
     setCodeInput('')
   }
 
@@ -111,6 +152,24 @@ export default function BonsSortie() {
     executeBon.mutate(
       { id: execBonId, code_unique: codeInput, nb_articles: nbArticles },
       { onSuccess: fermerExecution },
+    )
+  }
+
+  function ouvrirAssignation(bon: BonRecord) {
+    setAssignBon(bon)
+    setPreparateurId((bon.preparateur_id as string | null | undefined) ?? '')
+  }
+
+  function fermerAssignation() {
+    setAssignBon(null)
+    setPreparateurId('')
+  }
+
+  function confirmerAssignation() {
+    if (!assignBon || !preparateurId) return
+    assignPreparateur.mutate(
+      { id: assignBon.id, preparateur_id: preparateurId },
+      { onSuccess: fermerAssignation },
     )
   }
 
@@ -146,6 +205,39 @@ export default function BonsSortie() {
       header: 'Workflow',
       accessor: 'statut',
       render: (v) => <WorkflowStepper status={v as string} />,
+    },
+    {
+      id: 'preparateur',
+      header: 'Préparateur',
+      accessor: 'preparateur_id',
+      render: (_v, row) => {
+        const nom = preparateurLabel(row)
+        if (!nom) return <span className="text-xs text-gray-400 italic">A assigner</span>
+        return (
+          <div>
+            <span className="text-sm font-medium text-[#212121]">{nom}</span>
+            {row.preparateur?.role && <div className="text-xs text-gray-400">{row.preparateur.role}</div>}
+          </div>
+        )
+      },
+    },
+    {
+      id: 'statut_preparation',
+      header: 'Préparation',
+      accessor: 'statut_preparation',
+      render: (_v, row) => {
+        const statutPrep = preparationStatus(row)
+        if (!statutPrep) return <span className="text-xs text-gray-400 italic">—</span>
+        const cls =
+          statutPrep === 'pret' ? 'bg-green-50 text-green-700 border-green-200'
+          : statutPrep === 'en_cours' ? 'bg-blue-50 text-blue-700 border-blue-200'
+          : 'bg-amber-50 text-amber-700 border-amber-200'
+        return (
+          <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${cls}`}>
+            {PREPARATION_LABELS[statutPrep]}
+          </span>
+        )
+      },
     },
     {
       id: 'badge',
@@ -204,13 +296,35 @@ export default function BonsSortie() {
             </button>
           )}
           {v === 'valide' && (
-            <button
-              disabled={executeBon.isPending}
-              onClick={() => ouvrirExecution(row.id as string, row.numero as string)}
-              className="px-2 py-1 text-xs font-medium rounded-lg bg-green-50 text-green-700 hover:bg-green-100 transition-colors disabled:opacity-50"
-            >
-              Exécuter
-            </button>
+            <>
+              {(!row.preparateur_id || preparationStatus(row) === 'a_preparer') && (
+                <button
+                  disabled={assignPreparateur.isPending}
+                  onClick={() => ouvrirAssignation(row)}
+                  className="px-2 py-1 text-xs font-medium rounded-lg bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors disabled:opacity-50"
+                >
+                  Assigner préparateur
+                </button>
+              )}
+              {row.preparateur_id && preparationStatus(row) === 'en_cours' && (
+                <button
+                  disabled={marquerPret.isPending}
+                  onClick={() => marquerPret.mutate({ id: row.id as string })}
+                  className="px-2 py-1 text-xs font-medium rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors disabled:opacity-50"
+                >
+                  Marquer prêt
+                </button>
+              )}
+              {peutExecuterBon(row) && (
+                <button
+                  disabled={executeBon.isPending}
+                  onClick={() => ouvrirExecution(row)}
+                  className="px-2 py-1 text-xs font-medium rounded-lg bg-green-50 text-green-700 hover:bg-green-100 transition-colors disabled:opacity-50"
+                >
+                  Exécuter
+                </button>
+              )}
+            </>
           )}
         </div>
       ),
@@ -261,15 +375,56 @@ export default function BonsSortie() {
         onRowClick={setSelectedBon}
       />
 
+      <Modal
+        isOpen={!!assignBon}
+        onClose={fermerAssignation}
+        title={`Assigner préparateur ${assignBon?.numero ?? ''}`}
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">
+              Préparateur responsable <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={preparateurId}
+              onChange={(e) => setPreparateurId(e.target.value)}
+              className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            >
+              <option value="">Sélectionner...</option>
+              {preparateurs.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.nom ?? p.full_name ?? p.email} {p.role ? `- ${p.role}` : ''}
+                </option>
+              ))}
+            </select>
+            {preparateurs.length === 0 && (
+              <p className="mt-1 text-xs text-amber-600">Aucun profil actif disponible pour l'assignation.</p>
+            )}
+          </div>
+          <div className="flex gap-3 pt-2 border-t border-gray-100">
+            <Button variant="ghost" className="flex-1" onClick={fermerAssignation} disabled={assignPreparateur.isPending}>
+              Annuler
+            </Button>
+            <Button
+              className="flex-1"
+              disabled={!preparateurId || assignPreparateur.isPending}
+              onClick={confirmerAssignation}
+            >
+              {assignPreparateur.isPending ? 'Assignation...' : 'Assigner'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       {nouveauOpen && <NouveauBonSlideOver open={nouveauOpen} onClose={() => setNouveauOpen(false)} />}
       {selectedBon && (
         <BonDetailSlideOver
           bon={selectedBon}
           onClose={() => setSelectedBon(null)}
           onValidate={(arg) => validateBon.mutate(arg)}
-          onExecute={(id, numero) => {
+          onExecute={(bon) => {
             setSelectedBon(null)
-            ouvrirExecution(id, numero)
+            ouvrirExecution(bon)
           }}
           validatePending={validateBon.isPending}
           executePending={executeBon.isPending}
@@ -384,7 +539,7 @@ function BonDetailSlideOver({
   bon: BonRecord
   onClose: () => void
   onValidate: (arg: { id: string; nature_transaction?: 'comptant' | 'credit' | 'deduction_acompte'; imputation_payeur?: 'entreprise_tafdil' | 'atelier' | 'administration' }) => void
-  onExecute: (id: string, numero: string) => void
+  onExecute: (bon: BonRecord) => void
   validatePending: boolean
   executePending: boolean
 }) {
@@ -392,6 +547,7 @@ function BonDetailSlideOver({
   const statut = bon.statut === 'en_attente' ? 'soumis' : bon.statut
   const canValidate = bon.statut === 'soumis' || bon.statut === 'en_attente'
   const canExecute = bon.statut === 'valide'
+  const executionReady = peutExecuterBon(bon)
 
   const missingNature = canValidate && !bon.nature_transaction
   const missingPayeur = canValidate && !bon.imputation_payeur
@@ -428,6 +584,11 @@ function BonDetailSlideOver({
           <DetailItem label="Demandeur" value={bon.demandeur} />
           <DetailItem label="Type" value={bon.type ?? 'manuel'} />
           <DetailItem label="Commande" value={commandeLabel(bon)} />
+          <DetailItem label="Préparateur" value={preparateurLabel(bon) || 'A assigner'} />
+          <DetailItem
+            label="Préparation"
+            value={preparationStatus(bon) ? PREPARATION_LABELS[preparationStatus(bon)!] : '-'}
+          />
           <DetailItem
             label="Montant"
             value={bon.montant_total_xaf != null ? formatXAF(Number(bon.montant_total_xaf)) : 'Sur devis'}
@@ -547,7 +708,12 @@ function BonDetailSlideOver({
               </Button>
             )}
             {canExecute && (
-              <Button className="flex-1" disabled={executePending} onClick={() => onExecute(bon.id, bon.numero)}>
+              <Button
+                className="flex-1"
+                disabled={executePending || !executionReady}
+                onClick={() => onExecute(bon)}
+                title={!executionReady ? 'Préparateur et préparation prête requis' : undefined}
+              >
                 Executer le bon
               </Button>
             )}

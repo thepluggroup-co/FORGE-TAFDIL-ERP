@@ -463,12 +463,19 @@ router.put(
         const commandeId = await resolveCommandeIdForBon(ex)
 
         if (body.decision === 'valide' && commandeId) {
-          await ensureFactureForCommande({
-            commandeId,
-            statut:    'brouillon',
-            userId:    user.id,
-            notes:     'Facture generee automatiquement apres validation du bon de sortie. Validation finance requise.',
-          }).catch((e) => console.error('[bons] ensure facture commande:', e))
+          try {
+            await ensureFactureForCommande({
+              commandeId,
+              statut:    'brouillon',
+              userId:    user.id,
+              notes:     'Facture generee automatiquement apres validation du bon de sortie. Validation finance requise.',
+            })
+          } catch (e) {
+            return c.json({
+              error: `Bon valide, mais la facture automatique n'a pas pu etre generee : ${(e as Error).message}`,
+              code:  'FACTURE_AUTO_FAILED',
+            }, 500)
+          }
           await notifyWorkflow({
             event:   'finance.facture_brouillon_a_valider',
             module:  'finance',
@@ -589,11 +596,11 @@ router.patch(
 
     const { data: prep } = await db
       .from('profiles')
-      .select('id, full_name, phone')
+      .select('id, nom, telephone')
       .eq('id', body.preparateur_id).single()
     if (!prep) return c.json({ error: 'Préparateur introuvable', code: 'PREP_NOT_FOUND' }, 404)
 
-    const p = prep as { id: string; full_name: string; phone: string | null }
+    const p = prep as { id: string; nom: string; telephone: string | null }
 
     const { data, error } = await db
       .from('bons_sortie')
@@ -603,9 +610,9 @@ router.patch(
 
     if (error) return c.json({ error: error.message }, 400)
 
-    if (p.phone) {
+    if (p.telephone) {
       const msg = `🏭 *TAFDIL FORGE — Bon de sortie à préparer*\nNuméro : *${ex.numero}*\nVous avez été assigné(e) comme préparateur(trice) par ${user.email}.\nMerci de préparer les articles et marquer le bon comme prêt.`
-      await sendWhatsApp(p.phone, msg).catch(e => console.error('[bons] notify preparateur:', e))
+      await sendWhatsApp(p.telephone, msg).catch(e => console.error('[bons] notify preparateur:', e))
     }
 
     await notifyWorkflow({
@@ -613,7 +620,7 @@ router.patch(
       module:   'stock',
       severite: 'info',
       titre:    'Bon assigné au préparateur',
-      message:  `Bon ${ex.numero} assigné à ${p.full_name} pour préparation.`,
+      message:  `Bon ${ex.numero} assigné à ${p.nom} pour préparation.`,
       ref:      ex.numero,
       url:      '/stocks/bons-sortie',
       data:     { bon_id: id, preparateur_id: body.preparateur_id },
@@ -712,6 +719,8 @@ router.put(
 
     const b = bon as {
       id: string; numero: string; statut: string; commande_id: string | null; demandeur?: string | null
+      preparateur_id?: string | null
+      statut_preparation?: string | null
       nature_transaction?: 'comptant' | 'credit' | 'deduction_acompte' | null
       imputation_payeur?:  'entreprise_tafdil' | 'atelier' | 'administration' | null
       montant_total_xaf?:  number | null
@@ -734,6 +743,13 @@ router.put(
       }, 422)
     }
 
+    if (!b.preparateur_id || b.statut_preparation !== 'pret') {
+      return c.json({
+        error: 'Impossible d\'executer ce bon : un preparateur doit etre assigne et la preparation doit etre marquee prete.',
+        code:  'PREPARATION_REQUIRED',
+      }, 422)
+    }
+
     // Essayer la fonction PostgreSQL atomique
     const { data: rpcData, error: rpcError } = await (db as never as {
       rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { code: string; message: string } | null }>
@@ -746,9 +762,22 @@ router.put(
     if (!rpcError) {
       // Si le bon est lié à une commande, garantir l'existence d'une facture Finance
       const commandeId = await resolveCommandeIdForBon(b)
+      let facture: unknown = null
       if (commandeId) {
-        ensureFactureForCommande({ commandeId, userId: user.id })
-          .catch(e => console.error('[bons/executer] ensureFacture:', e))
+        try {
+          const ensured = await ensureFactureForCommande({
+            commandeId,
+            statut: 'brouillon',
+            userId: user.id,
+            notes:  'Facture generee automatiquement apres execution du bon de sortie.',
+          })
+          facture = ensured.facture
+        } catch (e) {
+          return c.json({
+            error: `Bon execute, mais la facture automatique n'a pas pu etre generee : ${(e as Error).message}`,
+            code:  'FACTURE_AUTO_FAILED',
+          }, 500)
+        }
       }
 
       // Écriture comptable selon la nature de la transaction
@@ -785,7 +814,7 @@ router.put(
         url:     '/stocks/bons-sortie',
         data:    { bon_id: id },
       })
-      return c.json(rpcData ?? { success: true, bon_id: id, facture_triggered: !!commandeId })
+      return c.json(rpcData ?? { success: true, bon_id: id, facture_triggered: !!commandeId, facture })
     }
 
     // Fonction absente — migration non appliquée

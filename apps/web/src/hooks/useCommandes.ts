@@ -37,6 +37,7 @@ export interface CreateCommandeLigne {
 }
 export interface CreateCommandePayload {
   client_id?: string; client_nom: string; devis_id?: string; date_commande: string
+  client_telephone?: string; client_email?: string; client_adresse?: string; client_ville?: string
   date_livraison_prevue?: string; notes?: string; acompte_recu_xaf?: number
   condition_paiement_id?: string
   lignes: CreateCommandeLigne[]

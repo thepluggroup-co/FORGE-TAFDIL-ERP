@@ -688,6 +688,7 @@ export default function Commandes() {
       {
         client_id:             selectedClient?.id,
         client_nom:            cmdForm.client_nom,
+        client_telephone:      cmdForm.client_telephone || undefined,
         date_commande:         new Date().toISOString().split('T')[0],
         date_livraison_prevue: cmdForm.date_livraison_prevue || undefined,
         condition_paiement_id: cmdForm.condition_paiement_id || undefined,

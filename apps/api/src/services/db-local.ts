@@ -503,7 +503,7 @@ export function localCreateDevis(opts: {
   acompte_pct?:        number
   conditions_paiement?: string
   notes?:              string
-  lignes: Array<{ designation: string; description?: string; categorie?: string; unite?: string; quantite: number; prix_unitaire_ht_xaf: number }>
+  lignes: Array<{ produit_id?: string; designation: string; description?: string; categorie?: string; unite?: string; quantite: number; prix_unitaire_ht_xaf: number }>
   user_id?: string
 }): Record<string, unknown> {
   const TVA = 0.1925
@@ -540,6 +540,7 @@ export function localCreateDevis(opts: {
     const lid = randomUUID()
     const ligne = {
       id: lid, devis_id: id,
+      produit_id:           l.produit_id ?? null,
       designation:          l.designation,
       description:          l.description ?? null,
       categorie:            l.categorie ?? 'materiaux',

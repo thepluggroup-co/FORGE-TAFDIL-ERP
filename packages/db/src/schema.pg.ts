@@ -269,6 +269,7 @@ export const devisPg = pgTable('devis', {
 export const devisLignesPg = pgTable('devis_lignes', {
   id:                id(),
   devisId:           uuid('devis_id').notNull().references(() => devisPg.id),
+  produitId:         uuid('produit_id').references(() => produitsPg.id),
   designation:       text('designation').notNull(),
   description:       text('description'),
   categorie:         categorieDevisEnum('categorie').notNull().default('materiaux'),
@@ -425,6 +426,7 @@ export const creditsPg = pgTable('credits', {
   numero:          text('numero').notNull().unique(),
   clientId:        uuid('client_id').references(() => clientsPg.id),
   clientNom:       text('client_nom').notNull(),
+  factureId:       uuid('facture_id').references(() => facturesPg.id),
   commandeId:      uuid('commande_id').references(() => commandesPg.id),
   montantXaf:      real('montant_xaf').notNull(),
   soldeRestantXaf: real('solde_restant_xaf').notNull(),

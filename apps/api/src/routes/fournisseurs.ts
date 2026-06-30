@@ -60,6 +60,7 @@ interface BonApproLigne {
   designation:  string
   unite:        string
   quantite:     number
+  quantite_a_commander?: number
   prix_unitaire_ht_xaf?: number | null
 }
 
@@ -131,14 +132,15 @@ async function generateBonApproPdf(bon: BonAppro, fournisseurNom: string): Promi
     let totalHt = 0
     bon.lignes.forEach((l, i) => {
       const pu    = l.prix_unitaire_ht_xaf ?? 0
-      const total = pu * l.quantite
+      const quantite = l.quantite_a_commander ?? l.quantite ?? 0
+      const total = pu * quantite
       totalHt    += total
 
       const bg = i % 2 === 0 ? C.white : '#F9FAFB'
       doc.rect(ML, y, W, ROW).fill(bg)
       doc.fillColor(C.dark).fontSize(8).font('Helvetica')
       doc.text(l.designation,                      COL.des + 4, y + 5, { width: 270 })
-      doc.text(String(l.quantite),                 COL.qty,     y + 5, { width: 50,  align: 'center' })
+      doc.text(String(quantite),                   COL.qty,     y + 5, { width: 50,  align: 'center' })
       doc.text(l.unite,                            COL.uni,     y + 5, { width: 48,  align: 'center' })
       doc.text(pu > 0 ? fmt(pu)    : '—',          COL.pu,      y + 5, { width: 58,  align: 'right'  })
       doc.text(total > 0 ? fmt(total) : '—',       COL.tot,     y + 5, { width: 62,  align: 'right'  })
@@ -311,9 +313,9 @@ router.post(
     const { data: bonRaw, error: bErr } = await db
       .from('bons_approvisionnement')
       .select(`
-        id, numero, statut, fournisseur_nom, notes, created_at,
+        id, numero, statut, fournisseur_id, fournisseur_nom, notes, created_at,
         bons_approvisionnement_lignes (
-          designation, unite, quantite, prix_unitaire_ht_xaf
+          designation, unite, quantite_a_commander, prix_unitaire_ht_xaf
         )
       `)
       .eq('id', body.bon_appro_id)
@@ -326,7 +328,14 @@ router.post(
     }
     bon.lignes = bon.bons_approvisionnement_lignes ?? []
 
-    const nomFournisseur = (bon.fournisseur_nom ?? f.nom)
+    if (bon.statut !== 'valide') {
+      return c.json({
+        error: `Impossible d'envoyer un bon au statut "${bon.statut}" (statut requis : valide)`,
+        code:  'INVALID_BON_STATUS',
+      }, 422)
+    }
+
+    const nomFournisseur = f.nom
 
     // ── 3. Canal email ─────────────────────────────────────────────────────────
     if (body.canal === 'email') {
@@ -335,7 +344,7 @@ router.post(
       const pdfBuffer = await generateBonApproPdf(bon, nomFournisseur)
 
       const lignesResume = bon.lignes
-        .map(l => `• ${l.designation} : ${l.quantite} ${l.unite}`)
+        .map(l => `• ${l.designation} : ${l.quantite_a_commander ?? l.quantite ?? 0} ${l.unite}`)
         .join('<br>')
 
       const html = `
@@ -365,7 +374,12 @@ router.post(
       // Mettre à jour le statut du bon
       await db
         .from('bons_approvisionnement')
-        .update({ statut: 'envoye', updated_at: new Date().toISOString() })
+        .update({
+          statut:          'envoye',
+          fournisseur_id:  f.id,
+          fournisseur_nom: f.nom,
+          updated_at:      new Date().toISOString(),
+        })
         .eq('id', body.bon_appro_id)
 
       return c.json({ success: true, canal: 'email', messageId: result.messageId })
@@ -376,7 +390,7 @@ router.post(
     if (!waNumber) return c.json({ error: 'Ce fournisseur n\'a pas de numéro WhatsApp', code: 'NO_WHATSAPP' }, 422)
 
     const lignesTexte = bon.lignes
-      .map(l => `• ${l.designation} : ${l.quantite} ${l.unite}`)
+      .map(l => `• ${l.designation} : ${l.quantite_a_commander ?? l.quantite ?? 0} ${l.unite}`)
       .join('\n')
 
     const message = body.message_personnalise
@@ -388,7 +402,12 @@ router.post(
     // Mettre à jour le statut
     await db
       .from('bons_approvisionnement')
-      .update({ statut: 'envoye', updated_at: new Date().toISOString() })
+      .update({
+        statut:          'envoye',
+        fournisseur_id:  f.id,
+        fournisseur_nom: f.nom,
+        updated_at:      new Date().toISOString(),
+      })
       .eq('id', body.bon_appro_id)
 
     return c.json({ success: true, canal: 'whatsapp', wa_link: waLink })

@@ -7,6 +7,7 @@ import { useAuth } from '@/context/AuthContext'
 
 export interface DevisLigne {
   id: string
+  produit_id?: string | null
   designation: string
   categorie: 'materiaux' | 'main-oeuvre' | 'equipement' | string
   quantite: number
@@ -42,6 +43,10 @@ export interface Devis {
 export interface CreateDevisPayload {
   client_id?: string
   client_nom: string
+  client_telephone?: string
+  client_email?: string
+  client_adresse?: string
+  client_ville?: string
   date_emission: string
   date_validite: string
   validite_jours: 15 | 30 | 45
@@ -49,6 +54,7 @@ export interface CreateDevisPayload {
   condition_paiement_id?: string
   notes?: string
   lignes: Array<{
+    produit_id?: string
     designation: string; categorie: string; unite: string
     quantite: number; prix_unitaire_ht_xaf: number; ordre: number; description?: string
   }>

@@ -113,7 +113,6 @@ async function notifyCommandeEvent(commandeId: string, event: Parameters<typeof 
 }
 
 async function finaliserProductionStock(job: Record<string, unknown>, userId?: string, quantiteProduite?: number) {
-  if (job.type_job !== 'stock') return null
   if (Number(job.quantite_produite ?? 0) > 0) return job.produit_id ?? null
 
   const quantite = quantiteProduite ?? Number(job.quantite_prevue ?? 0)
@@ -156,7 +155,7 @@ async function finaliserProductionStock(job: Record<string, unknown>, userId?: s
     type:       'entree',
     quantite,
     reference:  String(job.numero ?? 'PRODUCTION'),
-    notes:      `Production stock terminee - ${designation}`,
+    notes:      `Production terminee - ${designation}`,
     user_id:    userId,
   })
 
@@ -549,13 +548,13 @@ router.patch(
 
     const { data: existing } = await db
       .from('jobs_production')
-      .select('statut, commande_id, numero')
+      .select('*')
       .eq('id', id)
       .single()
 
     if (!existing) return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
 
-    const ex = existing as { statut: string; commande_id: string | null; numero: string }
+    const ex = existing as { statut: string; commande_id: string | null; numero: string } & Record<string, unknown>
     if (['delivered', 'cancelled'].includes(ex.statut)) {
       return c.json({
         error: `Avancement ne peut pas être modifié sur un job en statut "${ex.statut}"`,
@@ -584,6 +583,15 @@ router.patch(
       .select().single()
 
     if (error) return c.json({ error: error.message }, 400)
+
+    if (nouveauStatut === 'pret') {
+      try {
+        await finaliserProductionStock({ ...ex, ...data }, c.get('user')?.id)
+      } catch (err) {
+        const e = err as Error & { httpStatus?: number; code?: string }
+        return c.json({ error: e.message, code: e.code ?? 'PRODUCTION_FINALIZE_ERROR' }, (e.httpStatus ?? 400) as ContentfulStatusCode)
+      }
+    }
 
     // Auto-transition commande si job passe à 'pret'
     if (nouveauStatut === 'pret' && ex.commande_id) {

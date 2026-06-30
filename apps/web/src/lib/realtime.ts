@@ -10,12 +10,12 @@ type WorkflowNotification = {
 }
 
 const WORKFLOW_KEYS: Record<string, string[][]> = {
-  boutique:   [['commandes-shop'], ['shop-erp'], ['dashboard', 'kpis']],
-  commandes:  [['commandes'], ['dashboard', 'kpis']],
-  stock:      [['bons'], ['stocks'], ['dashboard', 'kpis']],
-  finance:    [['factures'], ['finance', 'dashboard'], ['dashboard', 'kpis']],
-  logistique: [['livraisons'], ['logistique', 'commandes-pretes'], ['commandes'], ['commandes-shop']],
-  production: [['jobs'], ['equipements'], ['equipements', 'dashboard'], ['commandes'], ['dashboard', 'kpis']],
+  boutique:   [['commandes-shop'], ['shop-erp'], ['dashboard', 'kpis'], ['ai', 'alertes']],
+  commandes:  [['commandes'], ['dashboard', 'kpis'], ['ai', 'alertes']],
+  stock:      [['bons'], ['stocks'], ['dashboard', 'kpis'], ['ai', 'alertes']],
+  finance:    [['factures'], ['finance', 'dashboard'], ['dashboard', 'kpis'], ['ai', 'alertes']],
+  logistique: [['livraisons'], ['logistique', 'commandes-pretes'], ['commandes'], ['commandes-shop'], ['ai', 'alertes']],
+  production: [['jobs'], ['equipements'], ['equipements', 'dashboard'], ['commandes'], ['dashboard', 'kpis'], ['ai', 'alertes']],
 }
 
 export function setupRealtime(queryClient: QueryClient): () => void {
@@ -26,7 +26,7 @@ export function setupRealtime(queryClient: QueryClient): () => void {
   const produits = supabase
     .channel('forge-produits')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'produits' }, () => {
-      inv(['stocks'], ['dashboard', 'kpis'])
+      inv(['stocks'], ['dashboard', 'kpis'], ['ai', 'alertes'])
     })
     .subscribe()
 
@@ -76,14 +76,21 @@ export function setupRealtime(queryClient: QueryClient): () => void {
   const commandes = supabase
     .channel('forge-commandes')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'commandes' }, () => {
-      inv(['commandes'], ['dashboard', 'kpis'])
+      inv(['commandes'], ['dashboard', 'kpis'], ['ai', 'alertes'])
     })
     .subscribe()
 
   const commandesShop = supabase
     .channel('forge-commandes-shop')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'commandes_shop' }, () => {
-      inv(['commandes-shop'])
+      inv(['commandes-shop'], ['dashboard', 'kpis'])
+    })
+    .subscribe()
+
+  const commandesWebNouvelles = supabase
+    .channel('commandes_web_nouvelles')
+    .on('broadcast', { event: 'nouvelle_commande_web' }, () => {
+      inv(['commandes-shop'], ['commandes'], ['dashboard', 'kpis'], ['ai', 'alertes'])
     })
     .subscribe()
 
@@ -107,7 +114,7 @@ export function setupRealtime(queryClient: QueryClient): () => void {
       inv(['factures'])
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'credits' }, () => {
-      inv(['credits'], ['dashboard', 'kpis'])
+      inv(['credits'], ['dashboard', 'kpis'], ['ai', 'alertes'])
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'ecritures_comptables' }, () => {
       inv(['ecritures'])
@@ -141,6 +148,12 @@ export function setupRealtime(queryClient: QueryClient): () => void {
     .channel('forge-operations')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'jobs_production' }, () => {
       inv(['jobs'])
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'machines' }, () => {
+      inv(['ai', 'alertes'])
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'capteurs_iot' }, () => {
+      inv(['ai', 'alertes'])
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'projets' }, () => {
       inv(['projets'])
@@ -184,6 +197,7 @@ export function setupRealtime(queryClient: QueryClient): () => void {
     void supabase.removeChannel(stock)
     void supabase.removeChannel(commandes)
     void supabase.removeChannel(commandesShop)
+    void supabase.removeChannel(commandesWebNouvelles)
     void supabase.removeChannel(clients)
     void supabase.removeChannel(devis)
     void supabase.removeChannel(finance)

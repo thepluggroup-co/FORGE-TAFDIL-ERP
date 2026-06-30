@@ -9,9 +9,22 @@ export interface BonLigne {
   id?: string; produit_id?: string | null; designation: string; quantite?: number
   quantite_demandee?: number; quantite_servie?: number; unite: string
 }
+export type StatutPreparationBon = 'a_preparer' | 'en_cours' | 'pret'
+export interface BonPreparateur {
+  id: string
+  nom?: string | null
+  full_name?: string | null
+  email?: string | null
+  telephone?: string | null
+  phone?: string | null
+  role?: string | null
+}
 export interface BonSortie {
   id: string; numero: string
   statut: 'en_attente' | 'soumis' | 'valide' | 'execute' | 'refuse'
+  preparateur_id?: string | null
+  statut_preparation?: StatutPreparationBon | null
+  preparateur?: BonPreparateur | null
   type?: 'commande' | 'devis' | 'manuel'
   nature_transaction?: 'comptant' | 'credit' | 'deduction_acompte' | null
   imputation_payeur?:  'entreprise_tafdil' | 'atelier' | 'administration' | null
@@ -22,12 +35,29 @@ export interface BonSortie {
   lignes: BonLigne[]; bons_sortie_lignes?: BonLigne[]; created_at: string; updated_at?: string; code_unique?: string
 }
 interface BonsResponse { data: BonSortie[]; total: number }
+interface PreparateursResponse { data: BonPreparateur[]; total: number }
 
 export function useBons(params?: { statut?: string }) {
   return useQuery({
     queryKey:  ['bons', params],
     queryFn:   () => dbGetBons(params) as Promise<BonsResponse>,
     staleTime: 15_000,
+  })
+}
+
+export function usePreparateursBons() {
+  return useQuery({
+    queryKey: ['bons', 'preparateurs'],
+    queryFn: async (): Promise<PreparateursResponse> => {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, nom, email, telephone, role, actif')
+        .eq('actif', true)
+        .order('nom', { ascending: true })
+      if (error) throw new Error(error.message)
+      return { data: (data ?? []) as BonPreparateur[], total: data?.length ?? 0 }
+    },
+    staleTime: 60_000,
   })
 }
 
@@ -185,6 +215,33 @@ export function useVerifierStockBon(id: string | null) {
     queryFn:   () => apiClient.get<StockCheckResult>(`/api/bons/${id}/verifier-stock`),
     enabled:   !!id,
     staleTime: 0,
+  })
+}
+
+export function useAssignPreparateurBon() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, preparateur_id }: { id: string; preparateur_id: string }) =>
+      apiClient.patch<BonSortie>(`/api/bons/${id}/preparateur`, { preparateur_id }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['bons'] })
+      toast.success('Preparateur assigne')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useMarquerBonPret() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) =>
+      apiClient.patch<BonSortie>(`/api/bons/${id}/preparation`, { statut: 'pret' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['bons'] })
+      void qc.invalidateQueries({ queryKey: ['livraisons'] })
+      toast.success('Bon marque pret')
+    },
+    onError: (err: Error) => toast.error(err.message),
   })
 }
 

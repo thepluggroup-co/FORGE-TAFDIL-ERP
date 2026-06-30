@@ -432,35 +432,18 @@ export function useRemboursement() {
       const montant_xaf = arg.montant_xaf ?? arg.montant ?? 0
       const date_paiement = arg.date_paiement ?? new Date().toISOString().slice(0, 10)
       const type = arg.type ?? (montant_xaf > 0 ? 'partiel' : 'partiel')
-      const { data: cr } = await supabase.from('credits')
-        .select('solde_restant_xaf,statut,client_id')
-        .eq('id', id)
-        .single()
-      if (!cr) throw new Error('Credit introuvable')
-      const c = cr as { solde_restant_xaf: number; statut: string; client_id: string | null }
-      if (c.statut === 'rembourse') throw new Error('Credit deja rembourse')
-      if (montant_xaf > c.solde_restant_xaf) throw new Error('Montant depasse le solde restant')
-
-      const nouveauSolde = Math.max(0, c.solde_restant_xaf - montant_xaf)
-      const nouveauStatut = nouveauSolde <= 0 ? 'rembourse' : 'en_cours'
-      await supabase.from('credits')
-        .update({ solde_restant_xaf: nouveauSolde, statut: nouveauStatut, updated_at: new Date().toISOString() })
-        .eq('id', id)
-
-      if (c.client_id) {
-        const { data: credits } = await supabase.from('credits')
-          .select('solde_restant_xaf')
-          .eq('client_id', c.client_id)
-          .in('statut', ['en_cours', 'echu'])
-        const encours = ((credits ?? []) as { solde_restant_xaf: number }[])
-          .reduce((sum, item) => sum + item.solde_restant_xaf, 0)
-        await supabase.from('clients').update({ encours_credit_xaf: Math.round(encours) }).eq('id', c.client_id)
-      }
-
-      return { nouveau_solde_xaf: nouveauSolde, statut: nouveauStatut, date_paiement, type }
+      return apiClient.post(`/api/credits/${id}/rembourser`, {
+        montant_xaf,
+        date_paiement,
+        type,
+        notes: arg.notes,
+      })
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['credits'] })
+      void qc.invalidateQueries({ queryKey: ['factures'] })
+      void qc.invalidateQueries({ queryKey: ['commandes'] })
+      void qc.invalidateQueries({ queryKey: ['ecritures'] })
       toast.success('Remboursement enregistre')
     },
     onError: (err: Error) => toast.error(err.message),

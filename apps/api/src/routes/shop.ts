@@ -7,6 +7,8 @@ import { FRAIS_LIVRAISON } from '@forge/shared'
 import { notifyCommandeSms } from '../services/sms.service'
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
+import { ensureClient } from '../services/client-sync.service'
+import { solderCreditsForCommande, syncCreditForCommande } from '../services/finance-core.service'
 
 const db = supabaseAdmin!
 import type { HonoVariables } from '../types'
@@ -70,46 +72,6 @@ function samePhone(a?: string | null, b?: string | null) {
   const right = String(b ?? '').replace(/\D/g, '')
   if (!left || !right) return false
   return left.endsWith(right) || right.endsWith(left)
-}
-
-async function syncClientDepuisShop(opts: {
-  nom: string
-  telephone: string
-  email: string | null
-  adresse: string
-  ville: string | null
-  erpCommandeId: string | null
-}) {
-  const { data: existing } = await db
-    .from('clients')
-    .select('id')
-    .eq('telephone', opts.telephone)
-    .maybeSingle()
-
-  let clientId = (existing as { id?: string } | null)?.id ?? null
-
-  if (!clientId) {
-    const { data: created } = await db
-      .from('clients')
-      .insert({
-        nom:         opts.nom,
-        type:        'particulier',
-        telephone:   opts.telephone,
-        email:       opts.email,
-        adresse:     opts.adresse,
-        ville:       opts.ville,
-        pays:        'Cameroun',
-        statut:      'actif',
-        sync_status: 'synced',
-      })
-      .select('id')
-      .single()
-    clientId = (created as { id?: string } | null)?.id ?? null
-  }
-
-  if (clientId && opts.erpCommandeId) {
-    await db.from('commandes').update({ client_id: clientId }).eq('id', opts.erpCommandeId)
-  }
 }
 
 async function creerBonSortieShop(args: {
@@ -419,13 +381,27 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   }
 
   // 2. Vérifier éligibilité crédit si condition ≠ P100
+  const clientId = await ensureClient({
+    nom:       body.client_nom,
+    telephone: body.client_telephone,
+    email:     body.client_email ?? null,
+    adresse:   body.client_adresse,
+    ville:     body.client_ville ?? null,
+    type:      'particulier',
+  })
+
   const condCode = body.condition_paiement_code ?? 'P100'
+  const { data: conditionPaiement } = await db
+    .from('conditions_paiement')
+    .select('id, acompte_pct, delai_solde_jours')
+    .eq('code', condCode)
+    .maybeSingle()
   if (condCode !== 'P100') {
     const montantEstime = Math.round(body.lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0))
     const tvaEstimee    = Math.round(montantEstime * TVA_RATE)
     const ttcEstime     = Math.round(montantEstime + tvaEstimee + body.frais_livraison)
 
-    const eligibilite = await verifierEligibiliteCredit(null, ttcEstime, 'web', condCode)
+    const eligibilite = await verifierEligibiliteCredit(clientId, ttcEstime, 'web', condCode)
     if (!eligibilite.eligible) {
       return c.json({
         error: eligibilite.raison ?? 'Condition de crédit non autorisée pour les commandes web',
@@ -439,6 +415,11 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   const frais_livraison  = Math.round(body.frais_livraison)
   const tva              = Math.round(montant_ht * TVA_RATE)
   const montant_ttc      = Math.round(montant_ht + tva + frais_livraison)
+  const cp = conditionPaiement as { id?: string; acompte_pct?: number | null; delai_solde_jours?: number | null } | null
+  const montantAcompte = Math.round(montant_ttc * (Number(cp?.acompte_pct ?? 100) / 100))
+  const dateEcheanceSolde = cp?.delai_solde_jours !== undefined && cp?.delai_solde_jours !== null
+    ? new Date(Date.now() + Number(cp.delai_solde_jours) * 86400_000).toISOString().slice(0, 10)
+    : null
 
   // 5. Générer référence unique
   const ref = genRef()
@@ -486,6 +467,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     .from('commandes')
     .insert({
       numero:              ref,
+      client_id:           clientId,
       client_nom:          body.client_nom,
       statut:              'confirmed',
       date_commande:       today,
@@ -493,6 +475,9 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
       tva_xaf:             tva,
       frais_livraison_xaf: frais_livraison,
       total_ttc_xaf:       montant_ttc,
+      condition_paiement_id: cp?.id ?? null,
+      montant_acompte:     montantAcompte,
+      date_echeance_solde: dateEcheanceSolde,
       notes:               `[SOURCE WEB] ${body.notes_client ?? ''}`.trim(),
     })
     .select('id')
@@ -501,16 +486,6 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   if (errErpCommande) {
     console.error('[shop] insert commande ERP:', errErpCommande.message)
   }
-
-  // 8b. Créer/lier le client dans le module clients (non-bloquant)
-  void syncClientDepuisShop({
-    nom:           body.client_nom,
-    telephone:     body.client_telephone,
-    email:         body.client_email ?? null,
-    adresse:       body.client_adresse,
-    ville:         body.client_ville ?? null,
-    erpCommandeId: erpCommande?.id ?? null,
-  }).catch(e => console.error('[shop] sync client:', e))
 
   // 9. Lier commande_shop → commande ERP
   if (erpCommande?.id) {
@@ -530,6 +505,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
       ordre:                i,
     }))
     await db.from('commandes_lignes').insert(lignesErp)
+    await syncCreditForCommande(erpCommande.id, null)
 
     let bonSortie: unknown = null
     try {
@@ -746,10 +722,20 @@ shopRouter.post('/devis', zValidator('json', devisWebSchema), async (c) => {
     .eq('code', 'P100')
     .single()
 
+  const clientId = await ensureClient({
+    nom:       body.nom,
+    telephone: body.telephone,
+    email:     body.email ?? null,
+    adresse:   null,
+    ville:     null,
+    type:      'particulier',
+  })
+
   const { data: erpDevis, error: errDevis } = await db
     .from('devis')
     .insert({
       numero,
+      client_id:             clientId,
       client_nom:            body.nom,
       statut:                'brouillon',
       date_emission:         today,
@@ -1296,10 +1282,20 @@ shopErpRouter.post('/devis/:id/creer-erp',
 
     const numero = await genererNumeroDevis()
 
+    const clientId = await ensureClient({
+      nom:       devisWeb.nom,
+      telephone: devisWeb.telephone,
+      email:     devisWeb.email ?? null,
+      adresse:   null,
+      ville:     null,
+      type:      'particulier',
+    })
+
     const { data: erpDevis, error: errCreate } = await db
       .from('devis')
       .insert({
         numero,
+        client_id:             clientId,
         client_nom:            devisWeb.nom,
         statut:                'brouillon',
         date_emission:         today,
@@ -1391,6 +1387,8 @@ shopErpRouter.patch(
         .from('commandes')
         .update({ statut: 'cancelled', updated_at: now })
         .eq('id', cmd.erp_commande_id)
+
+      await solderCreditsForCommande(cmd.erp_commande_id, null)
 
       // Annuler les bons de sortie liés non encore exécutés
       await db

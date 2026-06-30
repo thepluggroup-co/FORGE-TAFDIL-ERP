@@ -206,6 +206,60 @@ export async function dbUpdateClient(id: string, payload: Record<string, unknown
   return data!
 }
 
+async function ensureClientLocal(payload: {
+  client_id?: string
+  client_nom: string
+  client_telephone?: string
+  client_email?: string
+  client_adresse?: string
+  client_ville?: string
+  user_id?: string
+}) {
+  if (payload.client_id) return payload.client_id
+
+  const nom = payload.client_nom.trim()
+  if (!nom) return null
+
+  const telephone = payload.client_telephone?.trim() || null
+  const email = payload.client_email?.trim().toLowerCase() || null
+  const telTail = telephone?.replace(/\D/g, '').slice(-8) || ''
+
+  let existing: { id: string } | null = null
+  if (telTail) {
+    const { data } = await supabase.from('clients').select('id').ilike('telephone', `%${telTail}%`).limit(1).maybeSingle()
+    existing = data as { id: string } | null
+  }
+  if (!existing && email) {
+    const { data } = await supabase.from('clients').select('id').eq('email', email).maybeSingle()
+    existing = data as { id: string } | null
+  }
+  if (!existing) {
+    const { data } = await supabase.from('clients').select('id').ilike('nom', nom).limit(1).maybeSingle()
+    existing = data as { id: string } | null
+  }
+  if (existing?.id) return existing.id
+
+  const { data, error } = await supabase
+    .from('clients')
+    .insert({
+      nom,
+      type:        'particulier',
+      telephone,
+      email,
+      adresse:     payload.client_adresse?.trim() || null,
+      ville:       payload.client_ville?.trim() || null,
+      pays:        'Cameroun',
+      statut:      'actif',
+      created_by:  payload.user_id ?? null,
+      sync_status: 'synced',
+    })
+    .select('id')
+    .single()
+
+  if (error) raise(error, 'créer client automatiquement')
+  return (data as { id: string }).id
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // COMMANDES
 // ══════════════════════════════════════════════════════════════════════════════
@@ -270,6 +324,7 @@ function mapCommande(row: Record<string, unknown>) {
 export async function dbCreateCommande(
   payload: {
     client_id?: string; client_nom: string; devis_id?: string
+    client_telephone?: string; client_email?: string; client_adresse?: string; client_ville?: string
     date_commande: string; date_livraison_prevue?: string
     notes?: string; acompte_recu_xaf?: number
     condition_paiement_id?: string
@@ -281,12 +336,22 @@ export async function dbCreateCommande(
   userId?: string,
 ) {
   // Vérifier blocage client
-  if (payload.client_id) {
+  const clientId = await ensureClientLocal({
+    client_id:        payload.client_id,
+    client_nom:       payload.client_nom,
+    client_telephone: payload.client_telephone,
+    client_email:     payload.client_email,
+    client_adresse:   payload.client_adresse,
+    client_ville:     payload.client_ville,
+    user_id:          userId,
+  })
+
+  if (clientId) {
     const { count } = await supabase.from('credits')
       .select('*', { count: 'exact', head: true })
-      .eq('client_id', payload.client_id).eq('statut', 'echu')
+      .eq('client_id', clientId).eq('statut', 'echu')
     if ((count ?? 0) > 0) {
-      const { data: cli } = await supabase.from('clients').select('nom').eq('id', payload.client_id).single()
+      const { data: cli } = await supabase.from('clients').select('nom').eq('id', clientId).single()
       throw new Error(`Client "${(cli as { nom?: string } | null)?.nom}" a des crédits échus — commande bloquée`)
     }
   }
@@ -298,7 +363,7 @@ export async function dbCreateCommande(
     .from('commandes')
     .insert({
       numero,
-      client_id:             payload.client_id ?? null,
+      client_id:             clientId ?? payload.client_id ?? null,
       client_nom:            payload.client_nom,
       devis_id:              payload.devis_id ?? null,
       statut:                'confirmed',
@@ -730,10 +795,24 @@ export async function dbGetBons(params?: { statut?: string }) {
   if (params?.statut) q = q.eq('statut', params.statut)
   const { data, count, error } = await q.order('created_at', { ascending: false })
   if (error) raise(error, 'bons sortie')
+  const rows = (data ?? []) as Record<string, unknown>[]
+  const preparateurIds = [...new Set(
+    rows.map((row) => row.preparateur_id).filter(Boolean) as string[],
+  )]
+  const preparateurs = new Map<string, Record<string, unknown>>()
+  if (preparateurIds.length > 0) {
+    const { data: profiles, error: profilesError } = await supabase
+      .from('profiles')
+      .select('id, nom, email, telephone, role')
+      .in('id', preparateurIds)
+    if (profilesError) raise(profilesError, 'preparateurs bons sortie')
+    for (const profile of profiles ?? []) preparateurs.set(profile.id as string, profile as Record<string, unknown>)
+  }
   return {
-    data: (data ?? []).map((row: Record<string, unknown>) => ({
+    data: rows.map((row: Record<string, unknown>) => ({
       ...row,
       lignes: row.lignes ?? row.bons_sortie_lignes ?? [],
+      preparateur: row.preparateur_id ? preparateurs.get(row.preparateur_id as string) ?? null : null,
     })),
     total: count ?? 0,
   }

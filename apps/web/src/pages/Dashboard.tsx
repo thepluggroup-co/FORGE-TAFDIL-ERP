@@ -9,6 +9,7 @@ import { KpiCard, PageHeader, StatusBadge } from '@forge/ui'
 import { useAuth } from '@/context/AuthContext'
 import { formatXAF, formatDate } from '@/lib/utils'
 import { useDashboardKpis } from '@/hooks/useFinance'
+import { useAiAlertes } from '@/hooks/useAI'
 
 // ── Custom tooltip ─────────────────────────────────────────────────────────────
 
@@ -26,12 +27,26 @@ function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse bg-gray-100 rounded ${className ?? ''}`} />
 }
 
+type DashboardAlert = {
+  id: string
+  level: 'critique' | 'danger' | 'warning'
+  message: string
+  link: string
+}
+
+function alertLevel(severite: string): DashboardAlert['level'] {
+  if (severite === 'critique') return 'critique'
+  if (severite === 'alerte') return 'danger'
+  return 'warning'
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
   const { user, displayName: authName } = useAuth()
   const navigate = useNavigate()
   const { data: dashboard, isLoading } = useDashboardKpis()
+  const { data: aiAlertesData, isLoading: aiAlertesLoading } = useAiAlertes()
 
   const userName = authName ?? user?.email?.split('@')[0] ?? 'Utilisateur'
   const today = new Date().toLocaleDateString('fr-CM', {
@@ -67,6 +82,27 @@ export default function Dashboard() {
       result.push({ id: 'bons',   level: 'warning',  message: `${bons_en_attente} bon(s) de sortie en attente de validation`, link: '/stocks/bons-sortie' })
     return result
   }, [dashboard?.kpis])
+
+  const priorityAlertes = useMemo(() => {
+    const aiAlertes = aiAlertesData?.alertes ?? []
+    if (aiAlertes.length === 0) return alertes
+
+    const result: DashboardAlert[] = aiAlertes.slice(0, 6).map((alerte) => ({
+      id:      alerte.id,
+      level:   alertLevel(alerte.severite),
+      message: `${alerte.titre} - ${alerte.description}`,
+      link:    alerte.lien ?? '/intelligence',
+    }))
+
+    const bonsAlert = alertes.find((alerte) => alerte.id === 'bons')
+    if (bonsAlert && !result.some((alerte) => alerte.id === bonsAlert.id)) {
+      result.push(bonsAlert)
+    }
+
+    return result.slice(0, 6)
+  }, [aiAlertesData?.alertes, alertes])
+
+  const alertesLoading = isLoading || (aiAlertesLoading && priorityAlertes.length === 0)
 
   return (
     <motion.div
@@ -149,25 +185,25 @@ export default function Dashboard() {
           <div className="flex items-center gap-2 px-5 py-4 border-b border-gray-100">
             <AlertTriangle className="h-4 w-4 text-[#C62828]" />
             <h2 className="text-sm font-semibold text-[#212121]">Alertes prioritaires</h2>
-            {alertes.length > 0 && (
+            {priorityAlertes.length > 0 && (
               <span className="ml-auto flex items-center justify-center w-5 h-5 rounded-full bg-[#C62828] text-white text-xs font-bold">
-                {alertes.length}
+                {priorityAlertes.length}
               </span>
             )}
           </div>
 
-          {isLoading ? (
+          {alertesLoading ? (
             <div className="p-5 space-y-3">
               {[1, 2, 3].map((i) => <Skeleton key={i} className="h-10 w-full" />)}
             </div>
-          ) : alertes.length === 0 ? (
+          ) : priorityAlertes.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-10 text-gray-400">
               <Package className="h-8 w-8 mb-2 opacity-30" />
               <p className="text-sm">Aucune alerte active</p>
             </div>
           ) : (
             <div className="divide-y divide-gray-50">
-              {alertes.map((alert) => (
+              {priorityAlertes.map((alert) => (
                 <button
                   key={alert.id}
                   type="button"

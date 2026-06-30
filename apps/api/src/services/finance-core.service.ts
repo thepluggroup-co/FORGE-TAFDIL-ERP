@@ -6,6 +6,36 @@ const db = supabaseAdmin!
 type FactureStatut = 'brouillon' | 'valide' | 'envoye' | 'paye' | 'annule'
 type PaiementMethode = 'mobile_money' | 'virement' | 'especes' | 'cheque' | 'notchpay'
 
+interface FactureCreditRow {
+  id?: string | null
+  numero?: string | null
+  client_id?: string | null
+  client_nom?: string | null
+  commande_id?: string | null
+  statut?: string | null
+  date_emission?: string | null
+  date_echeance?: string | null
+  total_ttc_xaf?: number | null
+  montant_paye_xaf?: number | null
+  created_by?: string | null
+}
+
+interface CommandeCreditRow {
+  id: string
+  numero?: string | null
+  client_id?: string | null
+  client_nom?: string | null
+  condition_paiement_id?: string | null
+  acompte_recu_xaf?: number | null
+  montant_paye_xaf?: number | null
+  total_ttc_xaf?: number | null
+  date_commande?: string | null
+  date_livraison_prevue?: string | null
+  date_echeance_solde?: string | null
+  statut?: string | null
+  created_by?: string | null
+}
+
 interface CommandeRow {
   id: string
   numero: string
@@ -75,6 +105,320 @@ function factureStatutDepuisPaiement(total: number, montantPaye: number, fallbac
   return fallback
 }
 
+function creditStatutDepuisEcheance(echeance: string) {
+  const today = new Date().toISOString().slice(0, 10)
+  return echeance < today ? 'echu' : 'en_cours'
+}
+
+async function syncEncoursCreditClient(clientId?: string | null) {
+  if (!clientId) return
+
+  const { data, error } = await db
+    .from('credits')
+    .select('solde_restant_xaf')
+    .eq('client_id', clientId)
+    .in('statut', ['en_cours', 'echu'])
+
+  if (error) throw new Error(error.message)
+
+  const encours = ((data ?? []) as { solde_restant_xaf?: number | null }[])
+    .reduce((sum, credit) => sum + Number(credit.solde_restant_xaf ?? 0), 0)
+
+  const { error: updateError } = await db
+    .from('clients')
+    .update({ encours_credit_xaf: Math.round(encours), updated_at: new Date().toISOString() })
+    .eq('id', clientId)
+
+  if (updateError) throw new Error(updateError.message)
+}
+
+async function getCreditByFactureOrCommande(factureId?: string | null, commandeId?: string | null) {
+  if (factureId) {
+    const { data, error } = await db
+      .from('credits')
+      .select('*')
+      .eq('facture_id', factureId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) throw new Error(error.message)
+    if (data) return data
+  }
+
+  if (commandeId) {
+    const { data, error } = await db
+      .from('credits')
+      .select('*')
+      .eq('commande_id', commandeId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) throw new Error(error.message)
+    return data ?? null
+  }
+
+  return null
+}
+
+export async function syncCreditForFacture(facture: FactureCreditRow | null, userId?: string | null) {
+  if (!facture?.id && !facture?.commande_id) return null
+
+  const total = Number(facture.total_ttc_xaf ?? 0)
+  const montantPaye = Number(facture.montant_paye_xaf ?? 0)
+  const solde = facture.statut === 'annule' ? 0 : Math.max(0, Math.round(total - montantPaye))
+  const now = new Date().toISOString()
+
+  const existing = await getCreditByFactureOrCommande(facture.id, facture.commande_id)
+  const credit = existing as { id: string; montant_xaf?: number | null; client_id?: string | null } | null
+
+  if (solde <= 0) {
+    if (!credit) return null
+
+    const { data, error } = await db
+      .from('credits')
+      .update({
+        facture_id:          facture.id ?? null,
+        commande_id:         facture.commande_id ?? null,
+        solde_restant_xaf: 0,
+        statut:           'rembourse',
+        updated_at:       now,
+        sync_status:      'synced',
+      })
+      .eq('id', credit.id)
+      .select()
+      .single()
+
+    if (error) throw new Error(error.message)
+    await syncEncoursCreditClient(credit.client_id ?? facture.client_id)
+    return data
+  }
+
+  if (!facture.client_id) return null
+
+  const dateDebut = facture.date_emission ?? new Date().toISOString().slice(0, 10)
+  const echeance = facture.date_echeance ?? dateDebut
+  const statut = creditStatutDepuisEcheance(echeance)
+
+  if (credit) {
+    const { data, error } = await db
+      .from('credits')
+      .update({
+        client_id:           facture.client_id,
+        client_nom:          facture.client_nom ?? 'Client',
+        facture_id:          facture.id ?? null,
+        commande_id:         facture.commande_id ?? null,
+        montant_xaf:         Math.max(Number(credit.montant_xaf ?? 0), solde),
+        solde_restant_xaf:   solde,
+        echeance,
+        statut,
+        notes:               `Creance synchronisee automatiquement depuis la facture ${facture.numero ?? facture.id ?? ''}`.trim(),
+        updated_at:          now,
+        sync_status:         'synced',
+      })
+      .eq('id', credit.id)
+      .select()
+      .single()
+
+    if (error) throw new Error(error.message)
+    await syncEncoursCreditClient(facture.client_id)
+    return data
+  }
+
+  const numero = await genererNumero('credits', 'CRD')
+  const { data, error } = await db
+    .from('credits')
+    .insert({
+      numero,
+      client_id:           facture.client_id,
+      client_nom:          facture.client_nom ?? 'Client',
+      facture_id:          facture.id ?? null,
+      commande_id:         facture.commande_id,
+      montant_xaf:         solde,
+      solde_restant_xaf:   solde,
+      date_debut:          dateDebut,
+      echeance,
+      statut,
+      notes:               `Creance generee automatiquement depuis la facture ${facture.numero ?? facture.id ?? ''}`.trim(),
+      created_by:          userId ?? facture.created_by ?? null,
+      sync_status:         'synced',
+    })
+    .select()
+    .single()
+
+  if (error) throw new Error(error.message)
+  await syncEncoursCreditClient(facture.client_id)
+  return data
+}
+
+export async function syncCreditForCommande(commandeId: string, userId?: string | null) {
+  const facture = await getFactureActiveByCommande(commandeId)
+  if (facture) return syncCreditForFacture(facture, userId)
+
+  const { data, error } = await db
+    .from('commandes')
+    .select('id, numero, client_id, client_nom, condition_paiement_id, acompte_recu_xaf, montant_paye_xaf, total_ttc_xaf, date_commande, date_livraison_prevue, date_echeance_solde, statut, created_by')
+    .eq('id', commandeId)
+    .single()
+
+  if (error || !data) throw new Error(error?.message ?? 'Commande introuvable')
+
+  const commande = data as CommandeCreditRow
+  let acomptePct: number | null = null
+  if (commande.condition_paiement_id) {
+    const { data: condition, error: conditionError } = await db
+      .from('conditions_paiement')
+      .select('acompte_pct')
+      .eq('id', commande.condition_paiement_id)
+      .maybeSingle()
+
+    if (conditionError) throw new Error(conditionError.message)
+    acomptePct = Number((condition as { acompte_pct?: number | null } | null)?.acompte_pct ?? 100)
+  }
+
+  const total = Number(commande.total_ttc_xaf ?? 0)
+  const montantPaye = Math.max(Number(commande.montant_paye_xaf ?? 0), Number(commande.acompte_recu_xaf ?? 0))
+  const solde = commande.statut === 'cancelled' ? 0 : Math.max(0, Math.round(total - montantPaye))
+  const existing = await getCreditByFactureOrCommande(null, commande.id)
+  const credit = existing as { id: string; montant_xaf?: number | null; client_id?: string | null } | null
+
+  if (solde <= 0 || !commande.condition_paiement_id || acomptePct >= 100) {
+    if (!credit) return null
+    const { data: updated, error: updateError } = await db
+      .from('credits')
+      .update({
+        solde_restant_xaf: 0,
+        statut:           'rembourse',
+        updated_at:       new Date().toISOString(),
+        sync_status:      'synced',
+      })
+      .eq('id', credit.id)
+      .select()
+      .single()
+
+    if (updateError) throw new Error(updateError.message)
+    await syncEncoursCreditClient(credit.client_id ?? commande.client_id)
+    return updated
+  }
+
+  if (!commande.client_id) return null
+
+  const dateDebut = commande.date_commande ?? new Date().toISOString().slice(0, 10)
+  const echeance = commande.date_echeance_solde ?? commande.date_livraison_prevue ?? dateDebut
+  const statut = creditStatutDepuisEcheance(echeance)
+  const now = new Date().toISOString()
+
+  if (credit) {
+    const { data: updated, error: updateError } = await db
+      .from('credits')
+      .update({
+        client_id:           commande.client_id,
+        client_nom:          commande.client_nom ?? 'Client',
+        commande_id:         commande.id,
+        montant_xaf:         Math.max(Number(credit.montant_xaf ?? 0), solde),
+        solde_restant_xaf:   solde,
+        echeance,
+        statut,
+        notes:               `Creance synchronisee automatiquement depuis la commande ${commande.numero ?? commande.id}`.trim(),
+        updated_at:          now,
+        sync_status:         'synced',
+      })
+      .eq('id', credit.id)
+      .select()
+      .single()
+
+    if (updateError) throw new Error(updateError.message)
+    await syncEncoursCreditClient(commande.client_id)
+    return updated
+  }
+
+  const numero = await genererNumero('credits', 'CRD')
+  const { data: created, error: createError } = await db
+    .from('credits')
+    .insert({
+      numero,
+      client_id:           commande.client_id,
+      client_nom:          commande.client_nom ?? 'Client',
+      commande_id:         commande.id,
+      montant_xaf:         solde,
+      solde_restant_xaf:   solde,
+      date_debut:          dateDebut,
+      echeance,
+      statut,
+      notes:               `Creance generee automatiquement depuis la commande ${commande.numero ?? commande.id}`.trim(),
+      created_by:          userId ?? commande.created_by ?? null,
+      sync_status:         'synced',
+    })
+    .select()
+    .single()
+
+  if (createError) throw new Error(createError.message)
+  await syncEncoursCreditClient(commande.client_id)
+  return created
+}
+
+export async function solderCreditsForCommande(commandeId: string, userId?: string | null) {
+  const facture = await getFactureActiveByCommande(commandeId).catch(() => null)
+  if (facture) await syncCreditForFacture({ ...(facture as FactureCreditRow), statut: 'annule', montant_paye_xaf: facture.total_ttc_xaf }, userId)
+
+  const { data: credits, error } = await db
+    .from('credits')
+    .select('id, client_id')
+    .eq('commande_id', commandeId)
+    .neq('statut', 'rembourse')
+
+  if (error) throw new Error(error.message)
+
+  const rows = (credits ?? []) as Array<{ id: string; client_id?: string | null }>
+  if (rows.length === 0) return { count: 0 }
+
+  const { error: updateError } = await db
+    .from('credits')
+    .update({
+      solde_restant_xaf: 0,
+      statut:           'rembourse',
+      updated_at:       new Date().toISOString(),
+      sync_status:      'synced',
+      notes:            'Creance soldee automatiquement apres annulation de la commande.',
+    })
+    .in('id', rows.map(row => row.id))
+
+  if (updateError) throw new Error(updateError.message)
+  await Promise.all([...new Set(rows.map(row => row.client_id).filter(Boolean) as string[])].map(syncEncoursCreditClient))
+  return { count: rows.length }
+}
+
+export async function backfillCreditsClients(userId?: string | null) {
+  const { data: factures, error: facturesError } = await db
+    .from('factures')
+    .select('id, numero, client_id, client_nom, commande_id, statut, date_emission, date_echeance, total_ttc_xaf, montant_paye_xaf, created_by')
+    .neq('statut', 'annule')
+
+  if (facturesError) throw new Error(facturesError.message)
+
+  let facturesSynced = 0
+  for (const facture of (factures ?? []) as FactureCreditRow[]) {
+    const credit = await syncCreditForFacture(facture, userId)
+    if (credit) facturesSynced += 1
+  }
+
+  const { data: commandes, error: commandesError } = await db
+    .from('commandes')
+    .select('id')
+    .neq('statut', 'cancelled')
+
+  if (commandesError) throw new Error(commandesError.message)
+
+  let commandesSynced = 0
+  for (const commande of (commandes ?? []) as Array<{ id: string }>) {
+    const credit = await syncCreditForCommande(commande.id, userId)
+    if (credit) commandesSynced += 1
+  }
+
+  return { factures_synced: facturesSynced, commandes_synced: commandesSynced }
+}
+
 export async function getFactureActiveByCommande(commandeId: string) {
   const { data, error } = await db
     .from('factures')
@@ -91,7 +435,10 @@ export async function getFactureActiveByCommande(commandeId: string) {
 
 export async function ensureFactureForCommande(options: EnsureFactureOptions) {
   const existing = await getFactureActiveByCommande(options.commandeId)
-  if (existing) return { facture: enrichirFactureSolde(existing), created: false }
+  if (existing) {
+    const credit = await syncCreditForFacture(existing, options.userId)
+    return { facture: enrichirFactureSolde({ ...existing, credit_auto: credit }), created: false }
+  }
 
   const { data: commande, error } = await db
     .from('commandes')
@@ -179,7 +526,8 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
     created_by:            options.userId,
   }).catch(e => console.error('[compta] vente auto:', e))
 
-  return { facture: enrichirFactureSolde({ ...facture, factures_lignes: lignes }), created: true }
+  const credit = await syncCreditForFacture(facture as FactureCreditRow, options.userId)
+  return { facture: enrichirFactureSolde({ ...facture, factures_lignes: lignes, credit_auto: credit }), created: true }
 }
 
 export async function enregistrerPaiementCommande(options: EnregistrerPaiementCommandeOptions) {
@@ -253,6 +601,7 @@ export async function enregistrerPaiementCommande(options: EnregistrerPaiementCo
       .single()
     if (factureError) throw new Error(factureError.message)
     factureUpdate = updatedFacture
+    await syncCreditForFacture(updatedFacture as FactureCreditRow, options.userId)
 
     genererEcritureEncaissement({
       facture_id:  factureId,

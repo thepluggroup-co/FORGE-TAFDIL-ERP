@@ -12,9 +12,10 @@ import { localCreateDevis, localCreateCommande, getClientsLocal, getCommandesLoc
 import { withOfflineFallback } from '../services/offline-fallback'
 import { notifyStatutChange } from '../services/notifications'
 import { notifyCommandeSms } from '../services/sms.service'
-import { enregistrerPaiementCommande, ensureFactureForCommande } from '../services/finance-core.service'
+import { enregistrerPaiementCommande, ensureFactureForCommande, solderCreditsForCommande, syncCreditForCommande } from '../services/finance-core.service'
 import { enqueueEmail, notifyWhatsApp, sendEmailDirect } from '../services/email-queue.service'
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
+import { ensureClient } from '../services/client-sync.service'
 import type { TypeCommande } from '../services/credit-eligibility.service'
 import type { HonoVariables } from '../types'
 
@@ -61,6 +62,7 @@ const clientSchema = z.object({
 })
 
 const devisLigneSchema = z.object({
+  produit_id:           z.string().uuid().optional(),
   designation:          z.string().min(1),
   description:          z.string().optional(),
   categorie:            z.enum(['materiaux', 'main_oeuvre', 'equipement', 'autre']).default('materiaux'),
@@ -76,6 +78,10 @@ const devisLigneSchema = z.object({
 const devisSchema = z.object({
   client_id:            z.string().optional(),
   client_nom:           z.string().min(1),
+  client_telephone:     z.string().optional(),
+  client_email:         z.string().email().optional(),
+  client_adresse:       z.string().optional(),
+  client_ville:         z.string().optional(),
   date_emission:        z.string(),
   date_validite:        z.string(),
   validite_jours:       z.number().int().default(30),
@@ -102,6 +108,10 @@ const commandeLigneSchema = z.object({
 const commandeSchema = z.object({
   client_id:             z.string().optional(),
   client_nom:            z.string().min(1),
+  client_telephone:      z.string().optional(),
+  client_email:          z.string().email().optional(),
+  client_adresse:        z.string().optional(),
+  client_ville:          z.string().optional(),
   devis_id:              z.string().optional(),
   date_commande:         z.string(),
   date_livraison_prevue: z.string().optional(),
@@ -207,6 +217,7 @@ function mapDevis(row: any) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     lignes: (row.devis_lignes ?? []).map((l: any) => ({
       id:                   l.id,
+      produit_id:           l.produit_id ?? null,
       designation:          l.designation,
       categorie:            (l.categorie as string).replace('_', '-'),
       quantite:             l.quantite,
@@ -751,6 +762,16 @@ router.post('/devis', requireRole(['admin', 'superviseur', 'operateur']), zValid
     // ── Online : Supabase ──────────────────────────────────────────────────────
     async () => {
       const numero = await genererNumero('devis', 'DEV')
+      const clientId = await ensureClient({
+        clientId:  body.client_id ?? null,
+        nom:       body.client_nom,
+        telephone: body.client_telephone ?? null,
+        email:     body.client_email ?? null,
+        adresse:   body.client_adresse ?? null,
+        ville:     body.client_ville ?? null,
+        type:      'particulier',
+        createdBy: user.id,
+      })
 
       // Calcul des remises par ligne puis totaux
       const lignesAvecRemise = body.lignes.map((l) => ({
@@ -762,13 +783,13 @@ router.post('/devis', requireRole(['admin', 'superviseur', 'operateur']), zValid
       // Garde éligibilité remise
       if (remise_totale_ht_xaf > 0) {
         const remisePct = brut_ht_xaf > 0 ? (remise_totale_ht_xaf / brut_ht_xaf) * 100 : 0
-        const elig = await verifierEligibiliteRemise(remisePct, remise_totale_ht_xaf, body.client_id, user.role as string)
+        const elig = await verifierEligibiliteRemise(remisePct, remise_totale_ht_xaf, clientId ?? body.client_id, user.role as string)
         if (!elig.eligible) throw Object.assign(new Error(elig.raison!), { code: 'REMISE_NON_AUTORISEE', httpStatus: 422 })
       }
 
       const { data: devis, error: devisErr } = await db.from('devis')
         .insert({
-          numero, client_id: body.client_id ?? null, client_nom: body.client_nom,
+          numero, client_id: clientId ?? body.client_id ?? null, client_nom: body.client_nom,
           statut: 'brouillon', date_emission: body.date_emission, date_validite: body.date_validite,
           validite_jours: body.validite_jours, acompte_pct: body.acompte_pct,
           condition_paiement_id: body.condition_paiement_id ?? null,
@@ -783,6 +804,7 @@ router.post('/devis', requireRole(['admin', 'superviseur', 'operateur']), zValid
       const devisId = (devis as { id: string }).id
       const lignes = lignesAvecRemise.map((l, i) => ({
         devis_id: devisId, designation: l.designation, description: l.description ?? null,
+        produit_id: l.produit_id ?? null,
         categorie: l.categorie, unite: l.unite, quantite: l.quantite,
         prix_unitaire_ht_xaf: l.prix_unitaire_ht_xaf,
         total_ht_xaf: Math.round(l.quantite * l.prix_unitaire_ht_xaf),
@@ -888,6 +910,7 @@ router.put('/devis/:id', requireRole(['admin', 'superviseur', 'operateur']), zVa
     await db.from('devis_lignes').insert(
       lignes.map((l, i) => ({
         devis_id:             id,
+        produit_id:           l.produit_id ?? null,
         designation:          l.designation,
         description:          l.description ?? null,
         categorie:            l.categorie ?? 'materiaux',
@@ -1306,6 +1329,7 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
     total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number; approuve_par_client: boolean
     remise_globale_xaf: number | null; remise_globale_motif: string | null; net_a_payer_xaf: number | null
     devis_lignes: Array<{
+      produit_id: string | null
       designation: string; description: string | null; unite: string
       quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number; ordre: number
       remise_type: string | null; remise_valeur: number | null; remise_xaf: number | null; remise_motif: string | null
@@ -1392,6 +1416,7 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
   await db.from('commandes_lignes').insert(
     d.devis_lignes.map((l) => ({
       commande_id:          cmd.id,
+      produit_id:           l.produit_id ?? null,
       designation:          l.designation,
       unite:                l.unite,
       quantite:             l.quantite,
@@ -1416,6 +1441,8 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
     commentaire:    `Créée depuis devis ${d.numero}`,
     changed_by:     user.id,
   })
+
+  await syncCreditForCommande(cmd.id, user.id)
 
   return c.json({ commande, devis_numero: d.numero, commande_numero: cmd.numero }, 201)
 })
@@ -1525,7 +1552,18 @@ router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zV
 
     // ── Online : Supabase ──────────────────────────────────────────────────────
     async () => {
-      const blocageMsg = await verifierBlocageClient(body.client_id)
+      const clientId = await ensureClient({
+        clientId:  body.client_id ?? null,
+        nom:       body.client_nom,
+        telephone: body.client_telephone ?? null,
+        email:     body.client_email ?? null,
+        adresse:   body.client_adresse ?? null,
+        ville:     body.client_ville ?? null,
+        type:      'particulier',
+        createdBy: user.id,
+      })
+
+      const blocageMsg = await verifierBlocageClient(clientId ?? body.client_id)
       if (blocageMsg) throw Object.assign(new Error(blocageMsg), { code: 'CLIENT_BLOQUE', httpStatus: 422 })
 
       const numero = await genererNumero('commandes', 'CMD')
@@ -1538,7 +1576,7 @@ router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zV
 
       if (remise_totale_ht_xaf > 0) {
         const remisePct = brut_ht_xaf > 0 ? (remise_totale_ht_xaf / brut_ht_xaf) * 100 : 0
-        const elig = await verifierEligibiliteRemise(remisePct, remise_totale_ht_xaf, body.client_id, user.role as string)
+        const elig = await verifierEligibiliteRemise(remisePct, remise_totale_ht_xaf, clientId ?? body.client_id, user.role as string)
         if (!elig.eligible) throw Object.assign(new Error(elig.raison!), { code: 'REMISE_NON_AUTORISEE', httpStatus: 422 })
       }
 
@@ -1556,7 +1594,7 @@ router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zV
         if (cp) {
           const typeCmd: TypeCommande = body.devis_id ? 'devis' : 'devis'
           const eligibilite = await verifierEligibiliteCredit(
-            body.client_id ?? null,
+            clientId ?? body.client_id ?? null,
             dbTotaux.total_ttc_xaf,
             typeCmd,
             cp.code,
@@ -1582,7 +1620,7 @@ router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zV
 
       const { data: commande, error: cmdErr } = await db.from('commandes')
         .insert({
-          numero, client_id: body.client_id ?? null, client_nom: body.client_nom,
+          numero, client_id: clientId ?? body.client_id ?? null, client_nom: body.client_nom,
           devis_id: body.devis_id ?? null, statut: 'confirmed',
           date_commande: body.date_commande, date_livraison_prevue: body.date_livraison_prevue ?? null,
           acompte_recu_xaf: body.acompte_recu_xaf, notes: body.notes ?? null,
@@ -1618,6 +1656,8 @@ router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zV
         commande_id: cmd.id, ancien_statut: null,
         nouveau_statut: 'confirmed', commentaire: 'Commande créée', changed_by: user.id,
       })
+
+      await syncCreditForCommande(cmd.id, user.id)
 
       const { data: full, error: fullErr } = await db.from('commandes')
         .select('*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone), conditions_paiement(code, libelle, acompte_pct, delai_solde_jours)')
@@ -1708,6 +1748,12 @@ router.patch(
 
     if (updateErr) return c.json({ error: updateErr.message }, 400)
 
+    if (body.statut === 'cancelled') {
+      await solderCreditsForCommande(id, user.id)
+    } else {
+      await syncCreditForCommande(id, user.id)
+    }
+
     await db.from('historique_commandes').insert({
       commande_id:    id,
       ancien_statut:  ex.statut,
@@ -1721,6 +1767,24 @@ router.patch(
       await creerBonSortieCommande(id, ex.numero, user.id).catch((e) =>
         console.error('[commerce] auto-bon-sortie:', e)
       )
+    }
+
+    let factureAuto: unknown = null
+    if (body.statut === 'delivered') {
+      try {
+        const ensured = await ensureFactureForCommande({
+          commandeId: id,
+          statut:    'brouillon',
+          userId:    user.id,
+          notes:     'Facture generee automatiquement apres livraison de la commande.',
+        })
+        factureAuto = ensured.facture
+      } catch (e) {
+        return c.json({
+          error: `Commande livree, mais la facture automatique n'a pas pu etre generee : ${(e as Error).message}`,
+          code:  'FACTURE_AUTO_FAILED',
+        }, 500)
+      }
     }
 
     // Recalculer le score fiabilité si livraison complète ou annulation
@@ -1758,7 +1822,7 @@ router.patch(
       }, event).catch((e) => console.error('[sms] statut commande ERP:', e))
     }
 
-    return c.json(full ? mapCommande(full) : { id, statut: body.statut })
+    return c.json(full ? { ...mapCommande(full), facture_auto: factureAuto } : { id, statut: body.statut, facture_auto: factureAuto })
   },
 )
 
@@ -1958,12 +2022,20 @@ router.patch(
         const dejaPayeXaf = (body.statut_paiement ?? cmd.statut_paiement) === 'paye'
           ? Math.round(cmd.montant_ttc ?? 0)
           : 0
-        ensureFactureForCommande({
-          commandeId:       cmd.erp_commande_id,
-          statut:           'valide',
-          montantPayeXaf:   dejaPayeXaf,
-          userId:           user.id,
-        }).catch((e) => console.error('[commerce/livree] ensureFacture:', e))
+        try {
+          await ensureFactureForCommande({
+            commandeId:       cmd.erp_commande_id,
+            statut:           'valide',
+            montantPayeXaf:   dejaPayeXaf,
+            userId:           user.id,
+            notes:            'Facture generee automatiquement apres livraison de la commande web.',
+          })
+        } catch (e) {
+          return c.json({
+            error: `Commande web livree, mais la facture automatique n'a pas pu etre generee : ${(e as Error).message}`,
+            code:  'FACTURE_AUTO_FAILED',
+          }, 500)
+        }
       }
     }
 
@@ -2036,6 +2108,12 @@ if (erpStatut) {
     commentaire:    `[Shop Web] ${body.statut_commande}`,
     changed_by:     user.id,
   })
+
+  if (erpStatut === 'cancelled') {
+    await solderCreditsForCommande(cmd.erp_commande_id, user.id)
+  } else {
+    await syncCreditForCommande(cmd.erp_commande_id, user.id)
+  }
 
   // ── Auto-création bon de sortie quand la commande web passe en préparation ──
   if (erpStatut === 'in_production' && cmd.erp_commande_id) {
