@@ -595,12 +595,15 @@ router.patch(
       return c.json({ error: 'Ce bon est déjà prêt', code: 'ALREADY_PRET' }, 422)
 
     const { data: prep } = await db
-      .from('profiles')
-      .select('id, nom, telephone')
+      .from('employes')
+      .select('id, nom, poste, departement, telephone, statut')
       .eq('id', body.preparateur_id).single()
     if (!prep) return c.json({ error: 'Préparateur introuvable', code: 'PREP_NOT_FOUND' }, 404)
 
-    const p = prep as { id: string; nom: string; telephone: string | null }
+    const p = prep as { id: string; nom: string; poste: string | null; departement: string | null; telephone: string | null; statut: string }
+    if (p.statut !== 'actif') {
+      return c.json({ error: 'Le preparateur doit etre un employe RH actif', code: 'PREP_INACTIF' }, 422)
+    }
 
     const { data, error } = await db
       .from('bons_sortie')

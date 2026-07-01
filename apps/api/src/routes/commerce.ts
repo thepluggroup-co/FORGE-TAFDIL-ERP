@@ -26,7 +26,7 @@ const TVA_RATE = 0.1925
 const TRANSITIONS_COMMANDE: Record<string, string[]> = {
   confirmed:     ['in_production', 'cancelled'],
   in_production: ['pret', 'cancelled'],
-  pret:          ['delivered', 'cancelled'],
+  pret:          ['cancelled'],
   delivered:     [],
   cancelled:     [],
 }
@@ -86,7 +86,7 @@ const devisSchema = z.object({
   date_validite:        z.string(),
   validite_jours:       z.number().int().default(30),
   acompte_pct:          z.number().min(0).max(100).default(0),
-  condition_paiement_id: z.string().uuid().optional(),
+  condition_paiement_id: z.string().uuid(),
   remise_globale_xaf:   z.number().min(0).default(0),
   remise_globale_motif: z.string().optional(),
   notes:                z.string().optional(),
@@ -408,6 +408,72 @@ async function creerBonSortieCommande(
  *  - statut = 'bloque'
  *  - ou crédit en statut 'echu'
  * Retourne null si OK, ou un message d'erreur.
+ */
+// Cree les jobs de production depuis les lignes reelles d'une commande.
+async function creerJobsProductionCommande(
+  commandeId: string,
+  commandeNumero: string,
+  userId: string,
+): Promise<boolean> {
+  const { data: existing } = await db
+    .from('jobs_production')
+    .select('id')
+    .eq('commande_id', commandeId)
+    .limit(1)
+
+  if (existing && existing.length > 0) return true
+
+  const { data: lignes, error: lignesErr } = await db
+    .from('commandes_lignes')
+    .select('produit_id, designation, unite, quantite, prix_unitaire_ht_xaf, ordre')
+    .eq('commande_id', commandeId)
+    .order('ordre', { ascending: true })
+
+  if (lignesErr || !lignes || lignes.length === 0) {
+    console.error('[commerce] creerJobsProductionCommande - lignes:', lignesErr?.message ?? 'aucune ligne')
+    return false
+  }
+
+  type LigneCommande = {
+    produit_id: string | null
+    designation: string
+    unite: string | null
+    quantite: number
+    prix_unitaire_ht_xaf: number
+    ordre: number | null
+  }
+
+  const jobs = (lignes as LigneCommande[])
+    .filter((l) => Number(l.quantite ?? 0) > 0 && String(l.designation ?? '').trim() !== '')
+    .map((l, index) => ({
+      numero:              `OF-${commandeNumero}-${String(index + 1).padStart(2, '0')}`,
+      commande_id:         commandeId,
+      type_job:            'commande',
+      produit_id:          l.produit_id ?? null,
+      produit_designation: l.designation,
+      unite:               l.unite ?? 'unite',
+      quantite_prevue:     Number(l.quantite),
+      prix_unitaire_xaf:   Number(l.prix_unitaire_ht_xaf ?? 0),
+      avancement_pct:      0,
+      statut:              'confirmed',
+      date_debut:          new Date().toISOString(),
+      created_by:          userId,
+      sync_status:         'synced',
+    }))
+
+  if (jobs.length === 0) return false
+
+  const { error } = await db.from('jobs_production').insert(jobs)
+  if (error) {
+    console.error('[commerce] creerJobsProductionCommande - insert jobs:', error.message)
+    return false
+  }
+
+  return true
+}
+
+/**
+ * Verifie si un client est bloque pour de nouvelles commandes.
  */
 async function verifierBlocageClient(clientId: string | undefined | null): Promise<string | null> {
   if (!clientId) return null
@@ -1325,7 +1391,7 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
 
   const d = devis as {
     id: string; numero: string; statut: string; client_id: string | null; client_nom: string
-    date_validite: string; acompte_pct: number; conditions_paiement: string; notes: string | null
+    date_validite: string; acompte_pct: number; conditions_paiement: string; condition_paiement_id: string | null; notes: string | null
     total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number; approuve_par_client: boolean
     remise_globale_xaf: number | null; remise_globale_motif: string | null; net_a_payer_xaf: number | null
     devis_lignes: Array<{
@@ -1359,27 +1425,42 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
     return c.json({ error: blocageMsg, code: 'CLIENT_BLOQUE' }, 422)
   }
 
-  // Vérifier éligibilité crédit si une condition de paiement est fournie
+  // Reprendre automatiquement la condition choisie sur le devis, sauf surcharge explicite.
+  const conditionPaiementIdSource = (body as { condition_paiement_id?: string }).condition_paiement_id ?? d.condition_paiement_id ?? null
+  const montantAcompte = Math.round(d.total_ttc_xaf * (d.acompte_pct / 100))
   let conditionPaiementIdFinal: string | null = null
-  if ((body as { condition_paiement_id?: string }).condition_paiement_id) {
-    const cpId = (body as { condition_paiement_id: string }).condition_paiement_id
+  let dateEcheanceSolde: string | null = null
+
+  if (conditionPaiementIdSource) {
     const { data: cp } = await db
       .from('conditions_paiement')
-      .select('code')
-      .eq('id', cpId)
+      .select('code, acompte_pct, delai_solde_jours')
+      .eq('id', conditionPaiementIdSource)
       .single()
 
-    if (cp) {
-      const eligibilite = await verifierEligibiliteCredit(
-        d.client_id,
-        d.total_ttc_xaf,
-        'devis',
-        (cp as { code: string }).code,
-      )
-      if (!eligibilite.eligible) {
-        return c.json({ error: eligibilite.raison ?? 'Condition de crédit non autorisée', code: 'CREDIT_NON_ELIGIBLE' }, 422)
-      }
-      conditionPaiementIdFinal = cpId
+    if (!cp) {
+      return c.json({ error: 'Condition de paiement introuvable', code: 'CONDITION_PAIEMENT_NOT_FOUND' }, 422)
+    }
+
+    const condition = cp as { code: string; acompte_pct: number; delai_solde_jours: number }
+    const eligibilite = await verifierEligibiliteCredit(
+      d.client_id,
+      d.total_ttc_xaf,
+      'devis',
+      condition.code,
+    )
+    if (!eligibilite.eligible) {
+      return c.json({ error: eligibilite.raison ?? 'Condition de crédit non autorisée', code: 'CREDIT_NON_ELIGIBLE' }, 422)
+    }
+
+    conditionPaiementIdFinal = conditionPaiementIdSource
+
+    if (condition.delai_solde_jours > 0) {
+      const base = new Date()
+      base.setDate(base.getDate() + condition.delai_solde_jours)
+      dateEcheanceSolde = base.toISOString().slice(0, 10)
+    } else if (condition.delai_solde_jours === 0 && condition.acompte_pct < 100) {
+      dateEcheanceSolde = null
     }
   }
 
@@ -1400,8 +1481,11 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
       tva_xaf:               d.tva_xaf,
       total_ttc_xaf:         d.total_ttc_xaf,
       net_a_payer_xaf:       d.net_a_payer_xaf ?? d.total_ttc_xaf,
-      acompte_recu_xaf:      Math.round(d.total_ttc_xaf * (d.acompte_pct / 100)),
+      acompte_recu_xaf:      montantAcompte,
       condition_paiement_id: conditionPaiementIdFinal,
+      montant_acompte:       montantAcompte,
+      date_echeance_solde:   dateEcheanceSolde,
+      statut_paiement:       montantAcompte >= d.total_ttc_xaf ? 'solde_recu' : montantAcompte > 0 ? 'acompte_recu' : 'non_paye',
       notes:                 d.notes,
       created_by:            user.id,
       sync_status:           'synced',
@@ -1700,6 +1784,13 @@ router.patch(
     const ex = existing as { statut: string; numero: string; client_id: string | null; total_ttc_xaf: number }
     const allowed  = TRANSITIONS_COMMANDE[ex.statut] ?? []
 
+    if (body.statut === 'delivered') {
+      return c.json({
+        error: 'La validation de livraison se fait uniquement depuis le module Logistique.',
+        code:  'DELIVERY_ONLY_LOGISTICS',
+      }, 422)
+    }
+
     if (!allowed.includes(body.statut)) {
       return c.json({
         error: `Transition "${ex.statut}" → "${body.statut}" non autorisée`,
@@ -1764,6 +1855,9 @@ router.patch(
 
     // ── Auto-création bon de sortie sur passage en production ──────────────────
     if (body.statut === 'in_production') {
+      await creerJobsProductionCommande(id, ex.numero, user.id).catch((e) =>
+        console.error('[commerce] auto-jobs-production:', e)
+      )
       await creerBonSortieCommande(id, ex.numero, user.id).catch((e) =>
         console.error('[commerce] auto-bon-sortie:', e)
       )
@@ -2002,18 +2096,19 @@ router.patch(
       erp_commande_id: string | null; payment_reference: string | null
     }
 
+    if (body.statut_commande === 'livree') {
+      return c.json({
+        error: 'La validation de livraison se fait uniquement depuis le module Logistique.',
+        code:  'DELIVERY_ONLY_LOGISTICS',
+      }, 422)
+    }
+
     if (body.statut_commande === 'en_preparation' &&
         ['recue', 'confirmee'].includes(cmd.statut_commande)) {
       if (cmd.erp_commande_id) {
-        const today = new Date().toISOString()
-        await db.from('jobs_production').insert({
-          numero:               `OF-${cmd.ref}`,
-          commande_id:          cmd.erp_commande_id,
-          produit_designation:  `Commande web ${cmd.ref}`,
-          avancement_pct:       0,
-          statut:               'confirmed',
-          date_debut:           today,
-        })
+        await creerJobsProductionCommande(cmd.erp_commande_id, cmd.ref, user.id).catch((e) =>
+          console.error('[commerce] auto-jobs-production-web:', e)
+        )
       }
     }
 
@@ -2091,7 +2186,6 @@ router.patch(
       const ERP_STATUT: Record<string, string> = {
         en_preparation: 'in_production',
         expediee:       'pret',
-        livree:         'delivered',
         annulee:        'cancelled',
       }
       const erpStatut = ERP_STATUT[body.statut_commande]

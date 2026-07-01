@@ -118,6 +118,8 @@ export const bonsSortie = sqliteTable('bons_sortie', {
   demandeur:   text('demandeur').notNull(),
   valideParId: text('valide_par_id').references(() => profiles.id),
   motif:       text('motif').notNull(),
+  preparateurId: text('preparateur_id'),
+  statutPreparation: text('statut_preparation', { enum: ['a_preparer', 'en_cours', 'pret'] }),
   notes:       text('notes'),
   createdBy:   text('created_by').references(() => profiles.id),
   createdAt:   ts('created_at'),

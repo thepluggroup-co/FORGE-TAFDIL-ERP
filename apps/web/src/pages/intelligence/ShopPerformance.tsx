@@ -64,7 +64,7 @@ function KpiCard({
           <Icon size={13} style={{ color }} />
         </div>
       </div>
-      <p className="text-lg font-bold" style={{ color: DARK }}>{value}</p>
+      <p className="truncate whitespace-nowrap text-base font-bold tabular-nums" style={{ color: DARK }}>{value}</p>
     </div>
   )
 }

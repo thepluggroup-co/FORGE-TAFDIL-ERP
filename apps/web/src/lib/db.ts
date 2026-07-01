@@ -414,7 +414,10 @@ export async function dbUpdateStatutCommande(
 ) {
   const TRANSITIONS: Record<string, string[]> = {
     confirmed: ['in_production','cancelled'], in_production: ['pret','cancelled'],
-    pret: ['delivered','cancelled'], delivered: [], cancelled: [],
+    pret: ['cancelled'], delivered: [], cancelled: [],
+  }
+  if (statut === 'delivered') {
+    throw new Error('La validation de livraison se fait uniquement depuis le module Logistique.')
   }
   const { data: ex } = await supabase.from('commandes').select('statut').eq('id', id).single()
   if (!ex) throw new Error('Commande introuvable')
@@ -801,12 +804,12 @@ export async function dbGetBons(params?: { statut?: string }) {
   )]
   const preparateurs = new Map<string, Record<string, unknown>>()
   if (preparateurIds.length > 0) {
-    const { data: profiles, error: profilesError } = await supabase
-      .from('profiles')
-      .select('id, nom, email, telephone, role')
+    const { data: employes, error: employesError } = await supabase
+      .from('employes')
+      .select('id, nom, poste, departement, telephone, statut')
       .in('id', preparateurIds)
-    if (profilesError) raise(profilesError, 'preparateurs bons sortie')
-    for (const profile of profiles ?? []) preparateurs.set(profile.id as string, profile as Record<string, unknown>)
+    if (employesError) raise(employesError, 'preparateurs bons sortie')
+    for (const employe of employes ?? []) preparateurs.set(employe.id as string, employe as Record<string, unknown>)
   }
   return {
     data: rows.map((row: Record<string, unknown>) => ({

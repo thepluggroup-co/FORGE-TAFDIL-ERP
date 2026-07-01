@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Phone, Mail, MapPin, ExternalLink, MessageCircle,
-  Loader2, AlertTriangle, CheckCircle, Package, Truck, CreditCard, XCircle,
+  Loader2, AlertTriangle, CheckCircle, Package, CreditCard, XCircle,
 } from 'lucide-react'
 import { SlideOver, Button, StatusBadge, Modal } from '@forge/ui'
 import { formatXAF, formatNombre, formatDateTime } from '@/lib/utils'
@@ -125,16 +125,6 @@ function getActions(commande: CommandeShop, bonSortieExecute: boolean): Action[]
       icon:       CheckCircle,
       nextStatut: 'expediee',
       variant:    'primary',
-    })
-  }
-
-  if (statut_commande === 'expediee') {
-    actions.push({
-      label:        'Confirmer la livraison',
-      icon:         Truck,
-      nextStatut:   'livree',
-      nextPaiement: mode_paiement === 'livraison' ? 'paye' : undefined,
-      variant:      'primary',
     })
   }
 

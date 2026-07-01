@@ -51,7 +51,7 @@ export interface CreateDevisPayload {
   date_validite: string
   validite_jours: 15 | 30 | 45
   acompte_pct: number
-  condition_paiement_id?: string
+  condition_paiement_id: string
   notes?: string
   lignes: Array<{
     produit_id?: string

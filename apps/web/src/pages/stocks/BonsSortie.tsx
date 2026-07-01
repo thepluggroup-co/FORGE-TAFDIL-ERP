@@ -59,7 +59,7 @@ function commandeLabel(bon: BonRecord) {
 
 function preparateurLabel(bon: BonRecord) {
   const preparateur = bon.preparateur as BonApi['preparateur'] | undefined
-  return preparateur?.nom ?? preparateur?.full_name ?? preparateur?.email ?? ''
+  return preparateur?.nom ?? ''
 }
 
 function preparationStatus(bon: BonRecord): PreparationStatus | null {
@@ -216,7 +216,7 @@ export default function BonsSortie() {
         return (
           <div>
             <span className="text-sm font-medium text-[#212121]">{nom}</span>
-            {row.preparateur?.role && <div className="text-xs text-gray-400">{row.preparateur.role}</div>}
+            {row.preparateur?.poste && <div className="text-xs text-gray-400">{row.preparateur.poste}</div>}
           </div>
         )
       },
@@ -393,12 +393,12 @@ export default function BonsSortie() {
               <option value="">Sélectionner...</option>
               {preparateurs.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.nom ?? p.full_name ?? p.email} {p.role ? `- ${p.role}` : ''}
+                  {p.nom} {p.poste ? `- ${p.poste}` : ''}{p.departement ? ` (${p.departement})` : ''}
                 </option>
               ))}
             </select>
             {preparateurs.length === 0 && (
-              <p className="mt-1 text-xs text-amber-600">Aucun profil actif disponible pour l'assignation.</p>
+              <p className="mt-1 text-xs text-amber-600">Aucun employe RH actif disponible pour l'assignation.</p>
             )}
           </div>
           <div className="flex gap-3 pt-2 border-t border-gray-100">

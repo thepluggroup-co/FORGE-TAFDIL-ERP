@@ -39,9 +39,9 @@ export function KpiCard({ title, value, unit, trend, trendValue, icon, color = '
       {/* Content */}
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-gray-500 truncate">{title}</p>
-        <div className="flex items-baseline gap-1 mt-0.5">
-          <span className="text-2xl font-bold text-[#212121] tabular-nums break-all leading-tight">{value}</span>
-          {unit && <span className="text-sm font-medium text-gray-400">{unit}</span>}
+        <div className="flex min-w-0 items-baseline gap-1 mt-0.5">
+          <span className="min-w-0 max-w-full truncate whitespace-nowrap text-xl font-bold text-[#212121] tabular-nums leading-tight">{value}</span>
+          {unit && <span className="shrink-0 text-sm font-medium text-gray-400">{unit}</span>}
         </div>
 
         {t && trendValue && (

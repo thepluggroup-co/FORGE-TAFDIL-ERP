@@ -113,15 +113,31 @@ async function notifyCommandeEvent(commandeId: string, event: Parameters<typeof 
 }
 
 async function finaliserProductionStock(job: Record<string, unknown>, userId?: string, quantiteProduite?: number) {
-  if (Number(job.quantite_produite ?? 0) > 0) return job.produit_id ?? null
+  const dejaProduite = Number(job.quantite_produite ?? 0)
+  if (dejaProduite > 0) {
+    if (job.produit_id) return job.produit_id
+    throw Object.assign(new Error('Produit stock manquant pour une production deja finalisee'), {
+      code:       'PRODUIT_STOCK_MANQUANT',
+      httpStatus: 422,
+    })
+  }
 
   const quantite = quantiteProduite ?? Number(job.quantite_prevue ?? 0)
   if (!Number.isFinite(quantite) || quantite <= 0) {
-    throw Object.assign(new Error('Quantite produite requise pour entrer le stock'), { httpStatus: 422 })
+    throw Object.assign(new Error('Quantite produite requise pour entrer le stock'), {
+      code:       'QUANTITE_PRODUITE_REQUIRED',
+      httpStatus: 422,
+    })
   }
 
   let produitId = (job.produit_id as string | null) ?? null
   const designation = String(job.produit_designation ?? '').trim()
+  if (!designation) {
+    throw Object.assign(new Error('Designation produit requise pour entrer le stock'), {
+      code:       'DESIGNATION_PRODUIT_REQUIRED',
+      httpStatus: 422,
+    })
+  }
 
   if (!produitId) {
     const stockMin = 5
@@ -467,7 +483,7 @@ router.patch(
       const COMMANDE_STATUT: Record<string, string | null> = {
         in_production: 'in_production',
         pret:          'pret',
-        delivered:     'delivered',
+        delivered:     null,
         cancelled:     null,  // on ne ferme pas la commande auto depuis le job
       }
       const cStatut = COMMANDE_STATUT[body.statut]
@@ -482,7 +498,7 @@ router.patch(
           const TRANSITIONS_COMMANDE: Record<string, string[]> = {
             confirmed:     ['in_production', 'cancelled'],
             in_production: ['pret', 'cancelled'],
-            pret:          ['delivered', 'cancelled'],
+            pret:          ['cancelled'],
             delivered:     [],
             cancelled:     [],
           }
@@ -524,7 +540,6 @@ router.patch(
                 data:    { job_id: id, commande_id: ex.commande_id },
               })
             }
-            if (cStatut === 'delivered') await notifyCommandeEvent(ex.commande_id, 'commande_livree')
           }
         }
       }

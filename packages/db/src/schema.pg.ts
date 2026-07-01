@@ -147,7 +147,7 @@ export const bonsSortiePg = pgTable('bons_sortie', {
   motif:            text('motif').notNull(),
   natureTransaction:   natureTransactionEnum('nature_transaction'),
   imputationPayeur:    imputationPayeurEnum('imputation_payeur'),
-  preparateurId:       uuid('preparateur_id').references(() => profilesPg.id),
+  preparateurId:       uuid('preparateur_id'),
   statutPreparation:   statutPreparationEnum('statut_preparation'),
   notes:               text('notes'),
   createdBy:   uuid('created_by').references(() => profilesPg.id),

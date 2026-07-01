@@ -13,11 +13,10 @@ export type StatutPreparationBon = 'a_preparer' | 'en_cours' | 'pret'
 export interface BonPreparateur {
   id: string
   nom?: string | null
-  full_name?: string | null
-  email?: string | null
   telephone?: string | null
-  phone?: string | null
-  role?: string | null
+  poste?: string | null
+  departement?: string | null
+  statut?: string | null
 }
 export interface BonSortie {
   id: string; numero: string
@@ -50,9 +49,9 @@ export function usePreparateursBons() {
     queryKey: ['bons', 'preparateurs'],
     queryFn: async (): Promise<PreparateursResponse> => {
       const { data, error } = await supabase
-        .from('profiles')
-        .select('id, nom, email, telephone, role, actif')
-        .eq('actif', true)
+        .from('employes')
+        .select('id, nom, poste, departement, telephone, statut')
+        .eq('statut', 'actif')
         .order('nom', { ascending: true })
       if (error) throw new Error(error.message)
       return { data: (data ?? []) as BonPreparateur[], total: data?.length ?? 0 }

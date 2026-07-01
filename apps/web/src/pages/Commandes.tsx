@@ -658,6 +658,10 @@ export default function Commandes() {
   // ── Kanban ─────────────────────────────────────────────────────────────────
 
   const moveOrder = (orderId: string, colId: KanbanCol) => {
+    if (colId === 'delivered') {
+      toast.error('La validation de livraison se fait uniquement depuis Logistique.')
+      return
+    }
     if (colId === 'cancelled') {
       setPendingMove({ orderId, colId })
       return

@@ -76,7 +76,7 @@ export function setupRealtime(queryClient: QueryClient): () => void {
   const commandes = supabase
     .channel('forge-commandes')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'commandes' }, () => {
-      inv(['commandes'], ['dashboard', 'kpis'], ['ai', 'alertes'])
+      inv(['commandes'], ['logistique', 'commandes-pretes'], ['dashboard', 'kpis'], ['ai', 'alertes'])
     })
     .subscribe()
 
@@ -159,7 +159,7 @@ export function setupRealtime(queryClient: QueryClient): () => void {
       inv(['projets'])
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'livraisons' }, () => {
-      inv(['livraisons'])
+      inv(['livraisons'], ['logistique', 'commandes-pretes'])
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'campagnes_marketing' }, () => {
       inv(['campagnes'])

@@ -97,7 +97,10 @@ export function useStatutCommande() {
   return useMutation({
     mutationFn: ({ id, statut, commentaire }: { id: string; statut: string; commentaire?: string }) =>
       dbUpdateStatutCommande(id, statut, commentaire, auth.user?.id),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['commandes'] }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['commandes'] })
+      void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
+    },
     onError:   (err: Error) => toast.error(err.message),
   })
 }

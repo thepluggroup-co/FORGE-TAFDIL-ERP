@@ -495,10 +495,17 @@ function DevisFormPanel({
   const stepValid = [
     form.clientNom.trim() !== '',
     form.lignes.some((l) => l.designation && l.prixUnitaire > 0),
-    true, true,
+    form.conditionPaiementId.trim() !== '',
+    form.conditionPaiementId.trim() !== '',
   ][step] ?? true
 
   async function handleSubmit() {
+    if (!form.conditionPaiementId.trim()) {
+      toast.error('Selectionnez une condition de paiement')
+      setStep(2)
+      return
+    }
+
     const today    = new Date().toISOString().slice(0, 10)
     const dateValid = addDays(today, form.validite)
 
@@ -511,7 +518,7 @@ function DevisFormPanel({
       date_validite:       dateValid,
       validite_jours:      form.validite,
       acompte_pct:           form.acompte,
-      condition_paiement_id: form.conditionPaiementId || undefined,
+      condition_paiement_id: form.conditionPaiementId,
       notes:               form.notes || undefined,
       lignes: form.lignes
         .filter((l) => l.designation && l.prixUnitaire > 0)

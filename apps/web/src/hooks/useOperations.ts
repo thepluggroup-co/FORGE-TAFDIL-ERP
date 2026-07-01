@@ -79,6 +79,7 @@ export function useUpdateJobStatut() {
       void qc.invalidateQueries({ queryKey: ['stocks'] })
       void qc.invalidateQueries({ queryKey: ['produits-shop'] })
       void qc.invalidateQueries({ queryKey: ['commandes'] })
+      void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
       void qc.invalidateQueries({ queryKey: ['factures'] })
     },
     onError:   (err: Error) => toast.error(err.message),
@@ -92,7 +93,11 @@ export function useUpdateJobAvancement() {
       apiClient.patch<Job>(`/api/production/jobs/${id}/avancement`, { avancement_pct }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['jobs'] })
+      void qc.invalidateQueries({ queryKey: ['stocks'] })
+      void qc.invalidateQueries({ queryKey: ['produits-shop'] })
       void qc.invalidateQueries({ queryKey: ['commandes'] })
+      void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
+      void qc.invalidateQueries({ queryKey: ['factures'] })
     },
     onError: (err: Error) => toast.error(err.message),
   })
