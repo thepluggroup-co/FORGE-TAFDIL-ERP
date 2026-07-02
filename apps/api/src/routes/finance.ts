@@ -767,7 +767,7 @@ router.get('/finance/exports/tva.xls', requireRole(['admin', 'superviseur']), as
 router.get('/factures', async (c) => {
   const { statut, client_id, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
-  const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
+  const perPage = Math.min(500, parseInt(c.req.query('per_page') ?? '20'))
   const from    = (page - 1) * perPage
 
   let q = db.from('factures').select('*, factures_lignes(*)', { count: 'exact' })

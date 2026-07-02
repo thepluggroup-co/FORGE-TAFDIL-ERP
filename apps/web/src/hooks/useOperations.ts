@@ -410,16 +410,16 @@ export interface CreateLivraisonPayload {
 
 interface LivraisonsResponse { data: Livraison[]; total: number }
 
-function queryString(params?: Record<string, string | undefined>) {
+function queryString(params?: Record<string, string | number | undefined>) {
   const qs = new URLSearchParams()
   Object.entries(params ?? {}).forEach(([key, value]) => {
-    if (value) qs.set(key, value)
+    if (value !== undefined && value !== '') qs.set(key, String(value))
   })
   const value = qs.toString()
   return value ? `?${value}` : ''
 }
 
-export function useLivraisons(params?: { statut?: string; search?: string }) {
+export function useLivraisons(params?: { statut?: string; search?: string; page?: number; per_page?: number }) {
   return useQuery({
     queryKey:  ['livraisons', params],
     queryFn:   () => apiClient.get<LivraisonsResponse>(`/api/logistique/livraisons${queryString(params)}`),

@@ -108,6 +108,7 @@ function Badge({ statut, map }: { statut: string; map: Record<string, { label: s
 
 const TABS = ['Dashboard', 'Factures', 'Crédits', 'Charges', 'Comptabilité', 'Déclarations Fiscales'] as const
 type Tab = typeof TABS[number]
+type FactureSort = 'recent' | 'oldest' | 'amount-desc' | 'amount-asc' | 'due-asc' | 'client' | 'workflow' | 'paid'
 
 // ── PDF Preview ────────────────────────────────────────────────────────────────
 
@@ -1688,7 +1689,7 @@ export default function Finance() {
   const [showOrderSelector, setShowOrderSelector]   = useState(false)
   const [planOrder, setPlanOrder]                   = useState<Commande | null>(null)
   const [showNewFacture, setShowNewFacture] = useState(false)
-  const [factureStatusSort, setFactureStatusSort] = useState<'recent' | 'workflow' | 'paid'>('recent')
+  const [factureStatusSort, setFactureStatusSort] = useState<FactureSort>('recent')
   const [selectedFacture, setSelectedFacture] = useState<FactureRecord | null>(null)
   const [paiementFacture, setPaiementFacture] = useState<FactureRecord | null>(null)
   const [relanceFacture, setRelanceFacture] = useState<FactureRecord | null>(null)
@@ -1713,7 +1714,7 @@ export default function Finance() {
     selectedFacture?.id as string ?? null,
   )
 
-  const { data: facturesData, isLoading: facturesLoading } = useFactures()
+  const { data: facturesData, isLoading: facturesLoading } = useFactures({ per_page: 500 })
   const { data: creditsData,  isLoading: creditsLoading  } = useCredits()
   const { data: ecrituresData, isLoading: ecrituresLoading } = useEcritures({
     compte: compteFilter || undefined,
@@ -1778,8 +1779,27 @@ export default function Finance() {
         ? { brouillon: 0, valide: 1, envoye: 2, paye: 3, annule: 4 }
         : {}
 
-    if (factureStatusSort === 'recent') return factures
     return [...factures].sort((a, b) => {
+      if (factureStatusSort === 'recent') {
+        return String(b.date_emission ?? b.created_at ?? '').localeCompare(String(a.date_emission ?? a.created_at ?? ''))
+      }
+      if (factureStatusSort === 'oldest') {
+        return String(a.date_emission ?? a.created_at ?? '').localeCompare(String(b.date_emission ?? b.created_at ?? ''))
+      }
+      if (factureStatusSort === 'amount-desc') {
+        return Number(b.montant_ttc_xaf ?? 0) - Number(a.montant_ttc_xaf ?? 0)
+      }
+      if (factureStatusSort === 'amount-asc') {
+        return Number(a.montant_ttc_xaf ?? 0) - Number(b.montant_ttc_xaf ?? 0)
+      }
+      if (factureStatusSort === 'due-asc') {
+        return String(a.date_echeance ?? '').localeCompare(String(b.date_echeance ?? ''))
+      }
+      if (factureStatusSort === 'client') {
+        const leftClient = String((a.client as { nom?: string } | undefined)?.nom ?? a.client_nom ?? '')
+        const rightClient = String((b.client as { nom?: string } | undefined)?.nom ?? b.client_nom ?? '')
+        return leftClient.localeCompare(rightClient, 'fr', { sensitivity: 'base' })
+      }
       const left = order[String(a.statut ?? '')] ?? 99
       const right = order[String(b.statut ?? '')] ?? 99
       if (left !== right) return left - right
@@ -2308,15 +2328,20 @@ export default function Finance() {
                       Synchroniser factures
                     </Button>
                     <label className="text-xs font-semibold uppercase text-gray-400" htmlFor="facture-status-sort">
-                      Tri statut
+                      Tri
                     </label>
                     <select
                       id="facture-status-sort"
                       value={factureStatusSort}
-                      onChange={(e) => setFactureStatusSort(e.target.value as typeof factureStatusSort)}
+                      onChange={(e) => setFactureStatusSort(e.target.value as FactureSort)}
                       className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#C62828]"
                     >
                       <option value="recent">Plus recentes</option>
+                      <option value="oldest">Plus anciennes</option>
+                      <option value="amount-desc">Montant decroissant</option>
+                      <option value="amount-asc">Montant croissant</option>
+                      <option value="due-asc">Echeance proche</option>
+                      <option value="client">Client A-Z</option>
                       <option value="workflow">Brouillon vers paye</option>
                       <option value="paid">Payees d'abord</option>
                     </select>
@@ -2327,6 +2352,8 @@ export default function Finance() {
                     keyField="id"
                     onRowClick={setSelectedFacture}
                     loading={facturesLoading}
+                    initialPageSize="all"
+                    pageSizeOptions={['all', 10, 25, 50]}
                   />
                 </>
               )

@@ -328,10 +328,10 @@ export interface ChargesDashboard {
 interface ChargesResponse { data: Charge[]; total: number }
 interface SortiesTresorerieResponse { data: SortieTresorerie[]; total: number }
 
-function queryString(params?: Record<string, string | undefined>) {
+function queryString(params?: Record<string, string | number | undefined>) {
   const qs = new URLSearchParams()
   Object.entries(params ?? {}).forEach(([key, value]) => {
-    if (value) qs.set(key, value)
+    if (value !== undefined && value !== '') qs.set(key, String(value))
   })
   const value = qs.toString()
   return value ? `?${value}` : ''
@@ -363,7 +363,7 @@ function mapFacture(row: Record<string, unknown>): Facture {
   }
 }
 
-export function useFactures(params?: { statut?: string }) {
+export function useFactures(params?: { statut?: string; page?: number; per_page?: number }) {
   return useQuery({
     queryKey: ['factures', params],
     queryFn: async () => {

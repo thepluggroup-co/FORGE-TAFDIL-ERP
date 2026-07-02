@@ -14,6 +14,7 @@ import {
 import type { CommandePreteLivraison, Livraison } from '@/hooks/useOperations'
 
 type LivraisonRecord = Livraison & Record<string, unknown>
+type LivraisonSort = 'recent' | 'oldest' | 'status' | 'client' | 'departure' | 'planned'
 type PaiementLivraison = {
   montant_xaf: number
   methode: 'mobile_money' | 'especes'
@@ -93,9 +94,10 @@ const DEFAULT_FORM: LivraisonForm = {
 export default function Logistique() {
   const [slideOpen, setSlideOpen] = useState(false)
   const [selected, setSelected] = useState<LivraisonRecord | null>(null)
+  const [livraisonSort, setLivraisonSort] = useState<LivraisonSort>('recent')
   const [form, setForm] = useState<LivraisonForm>(DEFAULT_FORM)
 
-  const { data, isLoading } = useLivraisons()
+  const { data, isLoading } = useLivraisons({ per_page: 500 })
   const { data: commandesPretesData, isLoading: commandesLoading } = useCommandesPretesLivraison()
   const createLivraison = useCreateLivraison()
   const synchroniserLivraisons = useSynchroniserLivraisons()
@@ -126,6 +128,42 @@ export default function Logistique() {
     { id: 'livraison', header: 'Livraison', accessor: 'date_livraison_prevue', render: (v) => <span className="text-sm text-gray-500">{v ? formatDate(v as string) : '-'}</span> },
     { id: 'statut', header: 'Statut', accessor: 'statut', render: (v) => <StatusBadge status={STATUT_LABELS[v as Livraison['statut']] ?? String(v)} /> },
   ], [])
+
+  const livraisonsTriees = useMemo(() => {
+    const statusOrder: Record<string, number> = {
+      en_preparation: 0,
+      planifiee: 1,
+      en_route: 2,
+      en_transit: 2,
+      livree: 3,
+      delivered: 3,
+      echec_livraison: 4,
+      annulee: 5,
+      cancelled: 5,
+    }
+
+    return [...livraisons].sort((a, b) => {
+      if (livraisonSort === 'recent') {
+        return String(b.created_at ?? b.date_depart ?? '').localeCompare(String(a.created_at ?? a.date_depart ?? ''))
+      }
+      if (livraisonSort === 'oldest') {
+        return String(a.created_at ?? a.date_depart ?? '').localeCompare(String(b.created_at ?? b.date_depart ?? ''))
+      }
+      if (livraisonSort === 'status') {
+        const left = statusOrder[String(a.statut ?? '')] ?? 99
+        const right = statusOrder[String(b.statut ?? '')] ?? 99
+        if (left !== right) return left - right
+        return String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''))
+      }
+      if (livraisonSort === 'client') {
+        return String(a.client_nom ?? '').localeCompare(String(b.client_nom ?? ''), 'fr', { sensitivity: 'base' })
+      }
+      if (livraisonSort === 'departure') {
+        return String(a.date_depart ?? '9999-12-31').localeCompare(String(b.date_depart ?? '9999-12-31'))
+      }
+      return String(a.date_livraison_prevue ?? '9999-12-31').localeCompare(String(b.date_livraison_prevue ?? '9999-12-31'))
+    })
+  }, [livraisonSort, livraisons])
 
   const today = new Date().toISOString().split('T')[0]
   const planifiees = livraisons.filter(l => l.statut === 'planifiee').length
@@ -244,9 +282,35 @@ export default function Logistique() {
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
             <h2 className="font-semibold text-sm text-[#212121]">Livraisons - {new Date().toLocaleDateString('fr-CM', { month: 'long', year: 'numeric' })}</h2>
-            <div className="flex items-center gap-1 text-xs text-gray-400"><Clock className="h-3.5 w-3.5" /> En temps réel</div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <label className="text-xs font-semibold uppercase text-gray-400" htmlFor="livraison-sort">
+                Tri
+              </label>
+              <select
+                id="livraison-sort"
+                value={livraisonSort}
+                onChange={(e) => setLivraisonSort(e.target.value as LivraisonSort)}
+                className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+              >
+                <option value="recent">Plus recentes</option>
+                <option value="oldest">Plus anciennes</option>
+                <option value="status">Par statut</option>
+                <option value="client">Client A-Z</option>
+                <option value="departure">Depart proche</option>
+                <option value="planned">Livraison prevue</option>
+              </select>
+              <div className="flex items-center gap-1 text-xs text-gray-400"><Clock className="h-3.5 w-3.5" /> En temps réel</div>
+            </div>
           </div>
-          <DataTable<LivraisonRecord> columns={columns} data={livraisons} keyField="id" loading={isLoading} onRowClick={setSelected} />
+          <DataTable<LivraisonRecord>
+            columns={columns}
+            data={livraisonsTriees}
+            keyField="id"
+            loading={isLoading}
+            onRowClick={setSelected}
+            initialPageSize="all"
+            pageSizeOptions={['all', 10, 25, 50]}
+          />
         </div>
 
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 min-h-[320px]">

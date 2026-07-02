@@ -153,7 +153,7 @@ const livraisonsQuerySchema = z.object({
   date_debut:   z.string().optional(),
   date_fin:     z.string().optional(),
   page:         z.coerce.number().int().min(1).default(1),
-  per_page:     z.coerce.number().int().min(1).max(100).default(20),
+  per_page:     z.coerce.number().int().min(1).max(500).default(20),
 })
 
 // ── Helper numéro ─────────────────────────────────────────────────────────────

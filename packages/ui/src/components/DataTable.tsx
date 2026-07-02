@@ -19,11 +19,14 @@ export interface DataTableProps<T extends object> {
   loading?: boolean
   keyField?: keyof T
   emptyMessage?: string
+  initialPageSize?: PageSize
+  pageSizeOptions?: PageSize[]
 }
 
 type SortDir = 'asc' | 'desc' | null
+type PageSize = 10 | 25 | 50 | 'all'
 
-const PAGE_SIZE_OPTIONS = [10, 25, 50] as const
+const PAGE_SIZE_OPTIONS: PageSize[] = [10, 25, 50]
 
 function getCellValue<T extends object>(row: T, accessor: Column<T>['accessor']): unknown {
   return typeof accessor === 'function' ? accessor(row) : (row as Record<PropertyKey, unknown>)[accessor as PropertyKey]
@@ -87,12 +90,14 @@ export function DataTable<T extends object>({
   loading = false,
   keyField,
   emptyMessage = 'Aucun résultat',
+  initialPageSize = 10,
+  pageSizeOptions = PAGE_SIZE_OPTIONS,
 }: DataTableProps<T>) {
   const [search, setSearch]   = useState('')
   const [sortCol, setSortCol] = useState<string | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>(null)
   const [page, setPage]       = useState(1)
-  const [pageSize, setPageSize] = useState<10 | 25 | 50>(10)
+  const [pageSize, setPageSize] = useState<PageSize>(initialPageSize)
   const [selected, setSelected] = useState<Set<number>>(new Set())
 
   const filtered = useMemo(() => {
@@ -118,8 +123,9 @@ export function DataTable<T extends object>({
     })
   }, [filtered, sortCol, sortDir, columns])
 
-  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
-  const paginated  = sorted.slice((page - 1) * pageSize, page * pageSize)
+  const resolvedPageSize = pageSize === 'all' ? Math.max(sorted.length, 1) : pageSize
+  const totalPages = pageSize === 'all' ? 1 : Math.max(1, Math.ceil(sorted.length / resolvedPageSize))
+  const paginated  = pageSize === 'all' ? sorted : sorted.slice((page - 1) * resolvedPageSize, page * resolvedPageSize)
 
   const toggleSort = useCallback((colId: string) => {
     setSortCol((prev) => {
@@ -134,7 +140,7 @@ export function DataTable<T extends object>({
     setSelected((prev) =>
       prev.size === paginated.length
         ? new Set()
-        : new Set(paginated.map((_, i) => (page - 1) * pageSize + i)),
+        : new Set(paginated.map((_, i) => (page - 1) * resolvedPageSize + i)),
     )
   }
 
@@ -229,7 +235,7 @@ export function DataTable<T extends object>({
               </tr>
             ) : (
               paginated.map((row, rowIdx) => {
-                const absIdx = (page - 1) * pageSize + rowIdx
+                const absIdx = (page - 1) * resolvedPageSize + rowIdx
                 const isSelected = selected.has(absIdx)
                 const key = keyField ? String(row[keyField]) : absIdx
 
@@ -270,11 +276,15 @@ export function DataTable<T extends object>({
         <div className="flex items-center gap-2">
           <span>Lignes :</span>
           <select
-            value={pageSize}
-            onChange={(e) => { setPageSize(Number(e.target.value) as 10 | 25 | 50); setPage(1) }}
+            value={String(pageSize)}
+            onChange={(e) => {
+              const value = e.target.value === 'all' ? 'all' : Number(e.target.value) as PageSize
+              setPageSize(value)
+              setPage(1)
+            }}
             className="border border-gray-200 rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-[#C62828]"
           >
-            {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
+            {pageSizeOptions.map((n) => <option key={n} value={n}>{n === 'all' ? 'Toutes' : n}</option>)}
           </select>
           <span>{sorted.length} résultat{sorted.length !== 1 ? 's' : ''}</span>
         </div>
