@@ -5,7 +5,7 @@ import { supabaseAdmin } from '@forge/db'
 import { requireRole } from '../middleware/rbac'
 import { checkPermission, writeAuditLog } from '../services/rbacService'
 import { enregistrerPaiementCommande, ensureFactureForCommande, getFactureActiveByCommande } from '../services/finance-core.service'
-import { synchroniserCommandesWorkflow } from '../services/commande-workflow.service'
+import { resolveBonSortieLivrableForCommande, synchroniserCommandesWorkflow } from '../services/commande-workflow.service'
 import type { HonoVariables } from '../types'
 
 const db = supabaseAdmin!
@@ -29,31 +29,31 @@ function normalizeLivraisonStatut(statut: string) {
 }
 
 async function verifierCommandeLivrable(commandeId: string) {
-  const [bonPretRes, bonLatestRes, facture] = await Promise.all([
-    db.from('bons_sortie')
-      .select('id, numero, statut, statut_preparation')
-      .eq('commande_id', commandeId)
-      .eq('statut_preparation', 'pret')
-      .limit(1)
-      .maybeSingle(),
-    db.from('bons_sortie')
-      .select('id, numero, statut, statut_preparation')
-      .eq('commande_id', commandeId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    getFactureActiveByCommande(commandeId),
-  ])
+  const bonResolution = await resolveBonSortieLivrableForCommande({ commande_id: commandeId })
+  const context = bonResolution.context
 
-  if (bonPretRes.error) throw new Error(bonPretRes.error.message)
-  if (bonLatestRes.error) throw new Error(bonLatestRes.error.message)
+  if (!context) {
+    return {
+      ok: false,
+      code: 'COMMANDE_NOT_FOUND',
+      error: 'Commande introuvable ou impossible a reconstruire pour la livraison.',
+      document_requis: {
+        type:   'commande',
+        label:  'Commande',
+        etat:   'introuvable',
+        module: 'Commandes',
+        url:    '/commandes',
+        action: 'Verifier que la commande ERP ou la commande web existe et qu elle est synchronisee.',
+      },
+    }
+  }
 
-  if (!bonPretRes.data) {
-    const bon = bonLatestRes.data as { numero?: string; statut?: string; statut_preparation?: string | null } | null
+  if (!bonResolution.bonLivrable) {
+    const bon = bonResolution.dernierBon as { numero?: string; statut?: string; statut_preparation?: string | null } | null
     return {
       ok: false,
       code: 'BON_SORTIE_NOT_READY',
-      error: 'Le bon de sortie doit etre prepare et marque pret avant la livraison.',
+      error: 'Le bon de sortie doit etre prepare, marque pret ou execute avant la livraison.',
       document_requis: {
         type:   'bon_sortie',
         label:  bon?.numero ? `Bon de sortie ${bon.numero}` : 'Bon de sortie',
@@ -61,11 +61,13 @@ async function verifierCommandeLivrable(commandeId: string) {
         module: 'Stocks > Bons de sortie',
         url:    '/stocks/bons-sortie',
         action: bon
-          ? 'Assigner un preparateur, verifier le stock, puis marquer la preparation prete.'
+          ? 'Assigner un preparateur, verifier le stock, puis marquer la preparation prete ou executer le bon.'
           : 'Creer ou synchroniser le bon de sortie de cette commande, puis le preparer.',
       },
     }
   }
+
+  const facture = await getFactureActiveByCommande(context.commandeId)
 
   const f = facture as {
     numero?: string

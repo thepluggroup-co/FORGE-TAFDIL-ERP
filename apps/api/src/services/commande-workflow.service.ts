@@ -35,6 +35,15 @@ type BonResolutionRow = {
   numero?: string | null
 }
 
+type BonSortieWorkflowRow = {
+  id: string
+  numero?: string | null
+  statut?: string | null
+  statut_preparation?: string | null
+  commande_id?: string | null
+  demandeur?: string | null
+}
+
 type CommandeRow = {
   id: string
   numero: string
@@ -298,6 +307,102 @@ export async function resolveCommandeContext(input: CommandeContextInput): Promi
     shopCommande,
     ref: shopCommande?.ref ?? ref,
   }
+}
+
+function bonSortieEstPretOuExecute(bon: BonSortieWorkflowRow | null | undefined) {
+  return bon?.statut_preparation === 'pret' || bon?.statut === 'execute'
+}
+
+async function fetchBonsSortieByCommandeId(commandeId: string): Promise<BonSortieWorkflowRow[]> {
+  const { data, error } = await db
+    .from('bons_sortie')
+    .select('id, numero, statut, statut_preparation, commande_id, demandeur')
+    .eq('commande_id', commandeId)
+    .order('updated_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+
+  if (error) throw new Error(error.message)
+  return (data ?? []) as BonSortieWorkflowRow[]
+}
+
+async function fetchBonsSortieByReference(ref: string): Promise<BonSortieWorkflowRow[]> {
+  const queries = [
+    db.from('bons_sortie')
+      .select('id, numero, statut, statut_preparation, commande_id, demandeur')
+      .eq('demandeur', ref)
+      .order('updated_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false }),
+    db.from('bons_sortie')
+      .select('id, numero, statut, statut_preparation, commande_id, demandeur')
+      .eq('numero', ref)
+      .order('updated_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false }),
+    db.from('bons_sortie')
+      .select('id, numero, statut, statut_preparation, commande_id, demandeur')
+      .ilike('demandeur', `%${ref}%`)
+      .order('updated_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false }),
+  ]
+
+  const results = await Promise.all(queries)
+  for (const result of results) {
+    if (result.error) throw new Error(result.error.message)
+  }
+
+  return results.flatMap((result) => (result.data ?? []) as BonSortieWorkflowRow[])
+}
+
+async function rattacherBonSortieCommandeSiNecessaire(bon: BonSortieWorkflowRow, commandeId: string) {
+  if (bon.commande_id === commandeId) return bon
+
+  const { error } = await db
+    .from('bons_sortie')
+    .update({ commande_id: commandeId, updated_at: new Date().toISOString() })
+    .eq('id', bon.id)
+
+  if (error) throw new Error(error.message)
+  return { ...bon, commande_id: commandeId }
+}
+
+export async function resolveBonSortieLivrableForCommande(input: CommandeContextInput): Promise<{
+  context: CommandeWorkflowContext | null
+  bonLivrable: BonSortieWorkflowRow | null
+  dernierBon: BonSortieWorkflowRow | null
+}> {
+  const context = await resolveCommandeContext(input)
+  if (!context) return { context: null, bonLivrable: null, dernierBon: null }
+
+  const refs = Array.from(new Set([
+    input.ref,
+    input.numero,
+    input.demandeur,
+    context.ref,
+    context.commande.numero,
+    context.shopCommande?.ref,
+  ].map((v) => String(v ?? '').trim()).filter(Boolean)))
+
+  const byId = new Map<string, BonSortieWorkflowRow>()
+  const addBon = (bon: BonSortieWorkflowRow) => {
+    if (!byId.has(bon.id)) byId.set(bon.id, bon)
+  }
+
+  ;(await fetchBonsSortieByCommandeId(context.commandeId)).forEach(addBon)
+
+  for (const ref of refs) {
+    ;(await fetchBonsSortieByReference(ref)).forEach(addBon)
+  }
+
+  const bons = Array.from(byId.values())
+  let dernierBon = bons[0] ?? null
+  let bonLivrable = bons.find(bonSortieEstPretOuExecute) ?? null
+
+  if (bonLivrable) {
+    bonLivrable = await rattacherBonSortieCommandeSiNecessaire(bonLivrable, context.commandeId)
+  } else if (dernierBon) {
+    dernierBon = await rattacherBonSortieCommandeSiNecessaire(dernierBon, context.commandeId)
+  }
+
+  return { context, bonLivrable, dernierBon }
 }
 
 export async function ensureLivraisonEnPreparationForCommande(
@@ -683,6 +788,28 @@ export async function synchroniserCommandesWorkflow(options: {
       }
 
       if (cible === 'livraisons' || cible === 'tout') {
+        const bonResolution = await resolveBonSortieLivrableForCommande({
+          commande_id:      context.commandeId,
+          ref:              context.ref ?? context.commande.numero ?? reference,
+          commande_shop_id: context.shopCommande?.id ?? null,
+          userId:           options.userId ?? null,
+        })
+
+        if (bonResolution.bonLivrable && !['pret', 'delivered'].includes(String(context.commande.statut ?? ''))) {
+          await db.from('commandes')
+            .update({ statut: 'pret', updated_at: new Date().toISOString() })
+            .eq('id', context.commandeId)
+          await db.from('historique_commandes').insert({
+            commande_id:    context.commandeId,
+            ancien_statut:  context.commande.statut ?? null,
+            nouveau_statut: 'pret',
+            commentaire:    `Commande marquee prete par synchronisation livraison apres bon ${bonResolution.bonLivrable.numero ?? ''}.`,
+            changed_by:     options.userId ?? null,
+          })
+          context.commande.statut = 'pret'
+          detail.message = `Commande ${detail.reference} rattachee au bon ${bonResolution.bonLivrable.numero ?? ''} et prete pour livraison.`
+        }
+
         if (!['pret', 'delivered'].includes(String(context.commande.statut ?? ''))) {
           detail.livraison = {
             action: 'ignoree',
