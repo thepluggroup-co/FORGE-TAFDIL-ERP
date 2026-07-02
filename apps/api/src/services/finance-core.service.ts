@@ -92,6 +92,12 @@ export function enrichirFactureSolde<T extends { total_ttc_xaf?: number; montant
   return { ...facture, solde_restant_xaf: Math.round(solde) }
 }
 
+export function statutCreditDepuisSoldeEtEcheance(solde: number, echeance?: string | null) {
+  if (solde <= 0) return 'rembourse'
+  const today = new Date().toISOString().slice(0, 10)
+  return String(echeance ?? today) < today ? 'echu' : 'en_cours'
+}
+
 async function genererNumero(table: string, prefix: string) {
   const year = new Date().getFullYear()
   const { count } = await db.from(table).select('*', { count: 'exact', head: true })
@@ -147,8 +153,7 @@ async function engagerFactureSiNecessaire(
 }
 
 function creditStatutDepuisEcheance(echeance: string) {
-  const today = new Date().toISOString().slice(0, 10)
-  return echeance < today ? 'echu' : 'en_cours'
+  return statutCreditDepuisSoldeEtEcheance(1, echeance)
 }
 
 async function syncEncoursCreditClient(clientId?: string | null) {
@@ -639,8 +644,24 @@ export async function enregistrerPaiementCommande(options: EnregistrerPaiementCo
     id: string; numero: string; client_id: string | null; client_nom: string
     total_ttc_xaf: number; montant_paye_xaf: number | null
   }
-  const dejaPaye = Number(cmd.montant_paye_xaf ?? 0)
-  const solde = Math.max(0, Number(cmd.total_ttc_xaf) - dejaPaye)
+  const { facture } = options.ensureFacture === false
+    ? { facture: await getFactureActiveByCommande(options.commandeId) }
+    : await ensureFactureForCommande({
+        commandeId: options.commandeId,
+        statut:     options.factureStatutSiCreation ?? 'envoye',
+        userId:     options.userId,
+      })
+
+  const factureCourante = facture as {
+    id?: string | null
+    numero?: string | null
+    total_ttc_xaf?: number | null
+    montant_paye_xaf?: number | null
+  } | null
+  const factureId = factureCourante?.id ?? null
+  const totalReference = Number(factureCourante?.total_ttc_xaf ?? cmd.total_ttc_xaf ?? 0)
+  const dejaPaye = Number(factureCourante?.montant_paye_xaf ?? cmd.montant_paye_xaf ?? 0)
+  const solde = Math.max(0, totalReference - dejaPaye)
   if (options.montantXaf > solde + 1) {
     throw Object.assign(new Error(`Montant depasse le solde restant (${Math.round(solde).toLocaleString('fr-CM')} XAF)`), {
       code: 'AMOUNT_EXCEEDED',
@@ -648,17 +669,7 @@ export async function enregistrerPaiementCommande(options: EnregistrerPaiementCo
     })
   }
 
-  const nouveauPaye = Math.min(Number(cmd.total_ttc_xaf), Math.round(dejaPaye + options.montantXaf))
-  const { facture } = options.ensureFacture === false
-    ? { facture: await getFactureActiveByCommande(options.commandeId) }
-    : await ensureFactureForCommande({
-        commandeId:      options.commandeId,
-        statut:          options.factureStatutSiCreation ?? 'envoye',
-        montantPayeXaf:  nouveauPaye,
-        userId:          options.userId,
-      })
-
-  const factureId = (facture as { id?: string } | null)?.id ?? null
+  const nouveauPaye = Math.min(totalReference, Math.round(dejaPaye + options.montantXaf))
 
   const { data: paiement, error: paiementError } = await db
     .from('paiements_commande')
@@ -686,7 +697,7 @@ export async function enregistrerPaiementCommande(options: EnregistrerPaiementCo
 
   let factureUpdate = facture
   if (factureId) {
-    const nouveauStatut = nouveauPaye >= Number(cmd.total_ttc_xaf) ? 'paye' : 'envoye'
+    const nouveauStatut = nouveauPaye >= totalReference ? 'paye' : 'envoye'
     const { data: updatedFacture, error: factureError } = await db
       .from('factures')
       .update({ montant_paye_xaf: nouveauPaye, statut: nouveauStatut, updated_at: new Date().toISOString() })
@@ -708,7 +719,7 @@ export async function enregistrerPaiementCommande(options: EnregistrerPaiementCo
     }).catch(e => console.error('[compta] encaissement commande:', e))
   }
 
-  const soldeApres = Math.max(0, Number(cmd.total_ttc_xaf) - nouveauPaye)
+  const soldeApres = Math.max(0, totalReference - nouveauPaye)
   return {
     paiement,
     facture: factureUpdate ? enrichirFactureSolde(factureUpdate as { total_ttc_xaf?: number; montant_paye_xaf?: number }) : null,

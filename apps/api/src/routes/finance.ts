@@ -17,7 +17,7 @@ import {
 import { getFacturesLocal, getCreditsLocal, localCreateFacture, localCreateCredit, localRembourser } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
-import { backfillCreditsClients, syncCreditForFacture } from '../services/finance-core.service'
+import { backfillCreditsClients, statutCreditDepuisSoldeEtEcheance, syncCreditForFacture } from '../services/finance-core.service'
 import { synchroniserCommandesWorkflow } from '../services/commande-workflow.service'
 import type { HonoVariables } from '../types'
 
@@ -2049,7 +2049,7 @@ router.post('/credits/:id/rembourser', requireRole(['admin']), zValidator('json'
     // ── Online : Supabase ──────────────────────────────────────────────────────
     async () => {
       const { data: credit } = await db.from('credits')
-        .select('solde_restant_xaf, statut, client_nom, client_id, facture_id, commande_id, numero').eq('id', id).single()
+        .select('solde_restant_xaf, statut, client_nom, client_id, facture_id, commande_id, numero, echeance').eq('id', id).single()
 
       if (!credit) throw Object.assign(new Error('Crédit introuvable'), { code: 'NOT_FOUND', httpStatus: 404 })
       const cr = credit as {
@@ -2060,6 +2060,7 @@ router.post('/credits/:id/rembourser', requireRole(['admin']), zValidator('json'
         facture_id?: string | null
         commande_id?: string | null
         numero: string
+        echeance?: string | null
       }
       if (cr.statut === 'rembourse') throw Object.assign(new Error('Crédit déjà remboursé'), { code: 'ALREADY_DONE', httpStatus: 422 })
       if (body.montant_xaf > cr.solde_restant_xaf)
@@ -2073,7 +2074,7 @@ router.post('/credits/:id/rembourser', requireRole(['admin']), zValidator('json'
       if (rembErr) throw new Error(rembErr.message)
 
       const nouveauSolde  = Math.max(0, cr.solde_restant_xaf - body.montant_xaf)
-      const nouveauStatut = nouveauSolde <= 0 ? 'rembourse' : 'en_cours'
+      const nouveauStatut = statutCreditDepuisSoldeEtEcheance(nouveauSolde, cr.echeance)
 
       await db.from('credits').update({
         solde_restant_xaf: nouveauSolde, statut: nouveauStatut,

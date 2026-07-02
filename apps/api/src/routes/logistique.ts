@@ -549,7 +549,7 @@ logistiqueRouter.patch(
       }
     }
 
-    let paiementLivraisonRecu = false
+    let soldeApresPaiementLivraison = Number(readiness?.solde_restant_xaf ?? 0)
     if (lv.commande_id && nextStatut === 'livree') {
       const solde = Number(readiness?.solde_restant_xaf ?? 0)
       const paiement = body.paiement_livraison
@@ -562,16 +562,16 @@ logistiqueRouter.patch(
         }, 422)
       }
 
-      if (paiement && solde > 0 && Math.abs(Number(paiement.montant_xaf ?? 0) - solde) > 1) {
+      if (paiement && solde > 0 && Number(paiement.montant_xaf ?? 0) > solde + 1) {
         return c.json({
-          error: `Le montant encaisse doit correspondre au solde restant (${Math.round(solde).toLocaleString('fr-CM')} XAF).`,
+          error: `Le montant encaisse ne peut pas depasser le solde restant (${Math.round(solde).toLocaleString('fr-CM')} XAF).`,
           code:  'INVALID_DELIVERY_PAYMENT_AMOUNT',
           solde_restant_xaf: Math.round(solde),
         }, 422)
       }
 
       if (paiement && paiement.montant_xaf > 0) {
-        await enregistrerPaiementCommande({
+        const encaissement = await enregistrerPaiementCommande({
           commandeId:              lv.commande_id,
           montantXaf:              Math.round(paiement.montant_xaf),
           methode:                 paiement.methode,
@@ -582,7 +582,7 @@ logistiqueRouter.patch(
           ensureFacture:           true,
           factureStatutSiCreation: 'envoye',
         })
-        paiementLivraisonRecu = true
+        soldeApresPaiementLivraison = Number(encaissement.solde_restant_xaf ?? 0)
       }
     }
 
@@ -666,7 +666,7 @@ logistiqueRouter.patch(
         statut_commande: 'livree',
         updated_at:      new Date().toISOString(),
       }
-      if (paiementLivraisonRecu || Number(readiness?.solde_restant_xaf ?? 0) <= 0) {
+      if (soldeApresPaiementLivraison <= 0) {
         shopUpdate.statut_paiement = 'paye'
       }
       await db.from('commandes_shop')
@@ -676,7 +676,7 @@ logistiqueRouter.patch(
       try {
         const ensured = await ensureFactureForCommande({
           commandeId: lv.commande_id,
-          statut:    Number(readiness?.solde_restant_xaf ?? 0) <= 0 ? 'paye' : 'envoye',
+          statut:    soldeApresPaiementLivraison <= 0 ? 'paye' : 'envoye',
           userId:    user.id,
           notes:     'Facture verifiee automatiquement apres livraison logistique.',
         })
