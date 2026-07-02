@@ -515,12 +515,21 @@ export type SynchronisationWorkflowCible = 'factures' | 'livraisons' | 'tout'
 export type SynchronisationWorkflowResult = {
   cible: SynchronisationWorkflowCible
   total_bons_execute: number
+  total_commandes: number
   commandes_resolues: number
   factures_creees: number
   factures_existantes: number
   livraisons_creees: number
   livraisons_existantes: number
-  erreurs: Array<{ bon_id: string; numero?: string | null; message: string }>
+  details: Array<{
+    commande_id: string
+    reference: string
+    source: 'erp' | 'shop'
+    message: string
+    facture?: { action: 'creee' | 'existante'; numero?: string | null; statut?: string | null }
+    livraison?: { action: 'creee' | 'existante' | 'ignoree'; numero?: string | null; statut?: string | null }
+  }>
+  erreurs: Array<{ bon_id?: string | null; commande_id?: string | null; numero?: string | null; source?: 'erp' | 'shop'; etape?: string; message: string }>
 }
 
 async function ensureFacturePourContext(
@@ -564,7 +573,7 @@ async function ensureFacturePourContext(
   return ensured
 }
 
-export async function synchroniserBonsExecutesWorkflow(options: {
+export async function synchroniserCommandesWorkflow(options: {
   cible: SynchronisationWorkflowCible
   userId?: string | null
 }): Promise<SynchronisationWorkflowResult> {
@@ -572,11 +581,169 @@ export async function synchroniserBonsExecutesWorkflow(options: {
   const result: SynchronisationWorkflowResult = {
     cible,
     total_bons_execute: 0,
+    total_commandes: 0,
     commandes_resolues: 0,
     factures_creees: 0,
     factures_existantes: 0,
     livraisons_creees: 0,
     livraisons_existantes: 0,
+    details: [],
+    erreurs: [],
+  }
+
+  const [commandesRes, shopRes] = await Promise.all([
+    db
+      .from('commandes')
+      .select('id, numero, statut')
+      .not('statut', 'in', '("cancelled")')
+      .order('updated_at', { ascending: false }),
+    db
+      .from('commandes_shop')
+      .select('id, ref, statut_commande, erp_commande_id')
+      .not('statut_commande', 'in', '("annulee")')
+      .order('updated_at', { ascending: false }),
+  ])
+
+  if (commandesRes.error) throw new Error(commandesRes.error.message)
+  if (shopRes.error) throw new Error(shopRes.error.message)
+
+  const candidats: Array<{
+    source: 'erp' | 'shop'
+    commande_id?: string | null
+    commande_shop_id?: string | null
+    ref?: string | null
+    statut?: string | null
+  }> = [
+    ...((commandesRes.data ?? []) as Array<{ id: string; numero?: string | null; statut?: string | null }>).map((cmd) => ({
+      source: 'erp' as const,
+      commande_id: cmd.id,
+      ref: cmd.numero ?? cmd.id,
+      statut: cmd.statut ?? null,
+    })),
+    ...((shopRes.data ?? []) as Array<{ id: string; ref?: string | null; statut_commande?: string | null; erp_commande_id?: string | null }>).map((cmd) => ({
+      source: 'shop' as const,
+      commande_id: cmd.erp_commande_id ?? null,
+      commande_shop_id: cmd.id,
+      ref: cmd.ref ?? cmd.id,
+      statut: cmd.statut_commande ?? null,
+    })),
+  ]
+
+  result.total_commandes = candidats.length
+
+  const commandesTraitees = new Set<string>()
+
+  for (const candidat of candidats) {
+    const reference = candidat.ref ?? candidat.commande_id ?? candidat.commande_shop_id ?? 'commande inconnue'
+    try {
+      const context = await resolveCommandeContext({
+        commande_id:      candidat.commande_id ?? null,
+        ref:              candidat.ref ?? null,
+        commande_shop_id: candidat.commande_shop_id ?? null,
+        userId:           options.userId ?? null,
+      })
+
+      if (!context) {
+        const erreur = {
+          commande_id: candidat.commande_id ?? null,
+          numero:     reference,
+          source:     candidat.source,
+          etape:      'resolution_commande',
+          message:    `Commande ${reference} introuvable ou impossible a reconstruire.`,
+        }
+        result.erreurs.push(erreur)
+        console.error('[workflow-sync] erreur', erreur)
+        continue
+      }
+
+      if (commandesTraitees.has(context.commandeId)) continue
+      commandesTraitees.add(context.commandeId)
+      result.commandes_resolues += 1
+
+      const detail: SynchronisationWorkflowResult['details'][number] = {
+        commande_id: context.commandeId,
+        reference:   context.ref ?? context.commande.numero ?? reference,
+        source:      candidat.source,
+        message:     `Commande ${context.ref ?? context.commande.numero ?? reference} synchronisee.`,
+      }
+
+      if (cible === 'factures' || cible === 'tout') {
+        const existing = await getFactureActiveByCommande(context.commandeId)
+        const ensured = await ensureFacturePourContext(context, options.userId)
+        const facture = ensured.facture as { numero?: string | null; statut?: string | null } | null
+        if (existing || !ensured.created) {
+          result.factures_existantes += 1
+          detail.facture = { action: 'existante', numero: facture?.numero ?? null, statut: facture?.statut ?? null }
+          console.log(`[workflow-sync] Facture ${facture?.numero ?? '(sans numero)'} deja existante pour ${detail.reference}.`)
+        } else {
+          result.factures_creees += 1
+          detail.facture = { action: 'creee', numero: facture?.numero ?? null, statut: facture?.statut ?? null }
+          console.log(`[workflow-sync] Facture ${facture?.numero ?? '(sans numero)'} creee pour ${detail.reference}.`)
+        }
+      }
+
+      if (cible === 'livraisons' || cible === 'tout') {
+        if (!['pret', 'delivered'].includes(String(context.commande.statut ?? ''))) {
+          detail.livraison = {
+            action: 'ignoree',
+            statut: context.commande.statut ?? null,
+          }
+          detail.message = `Commande ${detail.reference} ignoree pour livraison : statut ERP ${context.commande.statut ?? 'inconnu'} non pret.`
+          console.log(`[workflow-sync] ${detail.message}`)
+        } else {
+          const livraison = await ensureLivraisonEnPreparationForCommande(context.commandeId, options.userId)
+          const livraisonRow = livraison.livraison as { numero?: string | null; statut?: string | null } | null
+          if (livraison.created) {
+            result.livraisons_creees += 1
+            detail.livraison = { action: 'creee', numero: livraisonRow?.numero ?? null, statut: livraisonRow?.statut ?? null }
+            console.log(`[workflow-sync] Livraison ${livraisonRow?.numero ?? '(sans numero)'} creee pour ${detail.reference}.`)
+          } else if (livraison.livraison) {
+            result.livraisons_existantes += 1
+            detail.livraison = { action: 'existante', numero: livraisonRow?.numero ?? null, statut: livraisonRow?.statut ?? null }
+            console.log(`[workflow-sync] Livraison ${livraisonRow?.numero ?? '(sans numero)'} deja existante pour ${detail.reference}.`)
+          }
+        }
+      }
+
+      result.details.push(detail)
+    } catch (e) {
+      const erreur = {
+        commande_id: candidat.commande_id ?? null,
+        numero:     reference,
+        source:     candidat.source,
+        etape:      cible,
+        message:    (e as Error).message,
+      }
+      result.erreurs.push(erreur)
+      console.error('[workflow-sync] erreur', erreur)
+    }
+  }
+
+  return result
+}
+
+export async function synchroniserBonsExecutesWorkflow(options: {
+  cible: SynchronisationWorkflowCible
+  userId?: string | null
+}) {
+  return synchroniserCommandesWorkflow(options)
+}
+
+export async function synchroniserBonsExecutesWorkflowLegacy(options: {
+  cible: SynchronisationWorkflowCible
+  userId?: string | null
+}): Promise<SynchronisationWorkflowResult> {
+  const cible = options.cible
+  const result: SynchronisationWorkflowResult = {
+    cible,
+    total_bons_execute: 0,
+    total_commandes: 0,
+    commandes_resolues: 0,
+    factures_creees: 0,
+    factures_existantes: 0,
+    livraisons_creees: 0,
+    livraisons_existantes: 0,
+    details: [],
     erreurs: [],
   }
 

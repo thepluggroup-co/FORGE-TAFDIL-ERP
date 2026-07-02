@@ -5,7 +5,7 @@ import { supabaseAdmin } from '@forge/db'
 import { requireRole } from '../middleware/rbac'
 import { checkPermission, writeAuditLog } from '../services/rbacService'
 import { enregistrerPaiementCommande, ensureFactureForCommande, getFactureActiveByCommande } from '../services/finance-core.service'
-import { synchroniserBonsExecutesWorkflow } from '../services/commande-workflow.service'
+import { synchroniserCommandesWorkflow } from '../services/commande-workflow.service'
 import type { HonoVariables } from '../types'
 
 const db = supabaseAdmin!
@@ -365,7 +365,7 @@ logistiqueRouter.post(
   requireRole(['admin', 'superviseur', 'operateur']),
   async (c) => {
     const user = c.get('user')
-    const result = await synchroniserBonsExecutesWorkflow({
+    const result = await synchroniserCommandesWorkflow({
       cible:  'livraisons',
       userId: user.id,
     })

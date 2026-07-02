@@ -452,12 +452,42 @@ export function useCreateLivraison() {
 interface SynchronisationWorkflowResult {
   cible: 'factures' | 'livraisons' | 'tout'
   total_bons_execute: number
+  total_commandes: number
   commandes_resolues: number
   factures_creees: number
   factures_existantes: number
   livraisons_creees: number
   livraisons_existantes: number
-  erreurs: Array<{ bon_id: string; numero?: string | null; message: string }>
+  details: Array<{
+    commande_id: string
+    reference: string
+    source: 'erp' | 'shop'
+    message: string
+    facture?: { action: 'creee' | 'existante'; numero?: string | null; statut?: string | null }
+    livraison?: { action: 'creee' | 'existante' | 'ignoree'; numero?: string | null; statut?: string | null }
+  }>
+  erreurs: Array<{ bon_id?: string | null; commande_id?: string | null; numero?: string | null; source?: 'erp' | 'shop'; etape?: string; message: string }>
+}
+
+function messageSynchronisationLivraisons(res: SynchronisationWorkflowResult) {
+  const creee = res.details.find((d) => d.livraison?.action === 'creee' && d.livraison.numero)
+  const existante = res.details.find((d) => d.livraison?.action === 'existante' && d.livraison.numero)
+  const ignoree = res.details.find((d) => d.livraison?.action === 'ignoree')
+  const erreur = res.erreurs[0]
+
+  if (creee?.livraison) {
+    return `Livraison ${creee.livraison.numero} creee pour ${creee.reference}. ${res.erreurs.length} erreur(s).`
+  }
+  if (existante?.livraison) {
+    return `Livraison ${existante.livraison.numero} deja existante pour ${existante.reference}. ${res.erreurs.length} erreur(s).`
+  }
+  if (erreur) {
+    return `Aucune livraison creee. ${erreur.numero ?? 'Commande'} : ${erreur.message}`
+  }
+  if (ignoree) {
+    return `${res.livraisons_creees} livraison(s) creee(s). Exemple ignore : ${ignoree.message}`
+  }
+  return `${res.livraisons_creees} livraison(s) creee(s), ${res.livraisons_existantes} deja existante(s).`
 }
 
 export function useSynchroniserLivraisons() {
@@ -468,8 +498,9 @@ export function useSynchroniserLivraisons() {
       void qc.invalidateQueries({ queryKey: ['livraisons'] })
       void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
       void qc.invalidateQueries({ queryKey: ['commandes'] })
-      const erreurs = res.erreurs.length > 0 ? `, ${res.erreurs.length} erreur(s)` : ''
-      toast.success(`${res.livraisons_creees} livraison(s) creee(s), ${res.livraisons_existantes} deja existante(s)${erreurs}`)
+      console.log('[sync livraisons] details', res.details)
+      if (res.erreurs.length > 0) console.error('[sync livraisons] erreurs', res.erreurs)
+      toast[res.erreurs.length > 0 ? 'warning' : 'success'](messageSynchronisationLivraisons(res))
     },
     onError: (err: Error) => toast.error(err.message),
   })

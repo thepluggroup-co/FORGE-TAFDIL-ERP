@@ -412,12 +412,38 @@ export function useCreerFacture() {
 export interface SynchronisationWorkflowResult {
   cible: 'factures' | 'livraisons' | 'tout'
   total_bons_execute: number
+  total_commandes: number
   commandes_resolues: number
   factures_creees: number
   factures_existantes: number
   livraisons_creees: number
   livraisons_existantes: number
-  erreurs: Array<{ bon_id: string; numero?: string | null; message: string }>
+  details: Array<{
+    commande_id: string
+    reference: string
+    source: 'erp' | 'shop'
+    message: string
+    facture?: { action: 'creee' | 'existante'; numero?: string | null; statut?: string | null }
+    livraison?: { action: 'creee' | 'existante' | 'ignoree'; numero?: string | null; statut?: string | null }
+  }>
+  erreurs: Array<{ bon_id?: string | null; commande_id?: string | null; numero?: string | null; source?: 'erp' | 'shop'; etape?: string; message: string }>
+}
+
+function messageSynchronisationFactures(res: SynchronisationWorkflowResult) {
+  const creee = res.details.find((d) => d.facture?.action === 'creee' && d.facture.numero)
+  const existante = res.details.find((d) => d.facture?.action === 'existante' && d.facture.numero)
+  const erreur = res.erreurs[0]
+
+  if (creee?.facture) {
+    return `Facture ${creee.facture.numero} creee pour ${creee.reference}. ${res.erreurs.length} erreur(s).`
+  }
+  if (existante?.facture) {
+    return `Facture ${existante.facture.numero} deja existante pour ${existante.reference}. ${res.erreurs.length} erreur(s).`
+  }
+  if (erreur) {
+    return `Aucune facture creee. ${erreur.numero ?? 'Commande'} : ${erreur.message}`
+  }
+  return `${res.factures_creees} facture(s) creee(s), ${res.factures_existantes} deja existante(s).`
 }
 
 export function useSynchroniserFactures() {
@@ -428,8 +454,9 @@ export function useSynchroniserFactures() {
       void qc.invalidateQueries({ queryKey: ['factures'] })
       void qc.invalidateQueries({ queryKey: ['credits'] })
       void qc.invalidateQueries({ queryKey: ['commandes'] })
-      const erreurs = res.erreurs.length > 0 ? `, ${res.erreurs.length} erreur(s)` : ''
-      toast.success(`${res.factures_creees} facture(s) creee(s), ${res.factures_existantes} deja existante(s)${erreurs}`)
+      console.log('[sync factures] details', res.details)
+      if (res.erreurs.length > 0) console.error('[sync factures] erreurs', res.erreurs)
+      toast[res.erreurs.length > 0 ? 'warning' : 'success'](messageSynchronisationFactures(res))
     },
     onError: (err: Error) => toast.error(err.message),
   })
