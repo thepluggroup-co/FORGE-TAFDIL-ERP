@@ -18,6 +18,7 @@ import { getFacturesLocal, getCreditsLocal, localCreateFacture, localCreateCredi
 import { withOfflineFallback } from '../services/offline-fallback'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 import { backfillCreditsClients, syncCreditForFacture } from '../services/finance-core.service'
+import { synchroniserBonsExecutesWorkflow } from '../services/commande-workflow.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
@@ -903,6 +904,27 @@ router.post('/factures', requireRole(['admin']), zValidator('json', factureSchem
   )
 
   return c.json(result, 201)
+})
+
+router.post('/factures/synchroniser-commandes', requireRole(['admin', 'superviseur']), async (c) => {
+  const user = c.get('user')
+  const result = await synchroniserBonsExecutesWorkflow({
+    cible:  'factures',
+    userId: user.id,
+  })
+
+  await notifyWorkflow({
+    event:    'finance.factures_synchronisees',
+    module:   'finance',
+    severite: result.erreurs.length > 0 ? 'warning' : 'success',
+    titre:    'Synchronisation factures',
+    message:  `${result.factures_creees} facture(s) creee(s), ${result.factures_existantes} deja existante(s).`,
+    ref:      'factures',
+    url:      '/finance',
+    data:     result,
+  }).catch(e => console.error('[finance] notify sync factures:', e))
+
+  return c.json(result)
 })
 
 router.get('/factures/:id', async (c) => {

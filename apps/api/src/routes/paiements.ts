@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { createHmac } from 'crypto'
 import { supabaseAdmin } from '@forge/db'
 import { enregistrerPaiementCommande } from '../services/finance-core.service'
+import { resolveCommandeContext } from '../services/commande-workflow.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 
 const db = supabaseAdmin!
@@ -392,10 +393,19 @@ paiementsRouter.post('/webhook', async (c) => {
     }
 
     // Synchronisation finance de la commande ERP liée
-    if (commande.erp_commande_id) {
+    const context = await resolveCommandeContext({
+      erp_commande_id: (commande as { erp_commande_id?: string | null }).erp_commande_id ?? null,
+      ref:             (commande as { ref?: string | null }).ref ?? null,
+      commande_shop_id:(commande as { id?: string | null }).id ?? null,
+    }).catch((e) => {
+      console.error('[webhook] resolution commande ERP:', e)
+      return null
+    })
+
+    if (context?.commandeId) {
       try {
         await enregistrerPaiementCommande({
-          commandeId:               commande.erp_commande_id,
+          commandeId:               context.commandeId,
           montantXaf:               amount,
           methode:                  'notchpay',
           referenceExt:             reference,
@@ -439,7 +449,7 @@ paiementsRouter.post('/webhook', async (c) => {
         montant_xaf: amount,
         total_xaf: totalCommande,
         mode_paiement: commande.mode_paiement,
-        erp_commande_id: commande.erp_commande_id,
+        erp_commande_id: context?.commandeId ?? commande.erp_commande_id,
       },
     })
 

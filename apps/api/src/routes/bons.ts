@@ -8,6 +8,10 @@ import { requireRole } from '../middleware/rbac'
 import { localCreateBon, localValiderBon, getBonsSortieLocal } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
 import { ensureFactureForCommande } from '../services/finance-core.service'
+import {
+  ensureWorkflowApresExecutionBon,
+  resolveCommandeContext,
+} from '../services/commande-workflow.service'
 import { genererEcritureBonSortieInterne } from '../services/comptabilite.service'
 import { creerBonApprovisionnementSiNecessaire } from '../services/stock-alerts.service'
 import { sendWhatsApp } from '../services/notifications'
@@ -162,38 +166,12 @@ async function resolveCommandeIdForBon(bon: {
   commande_id?: string | null
   demandeur?: string | null
 }) {
-  if (bon.commande_id) return bon.commande_id
-  const ref = String(bon.demandeur ?? '').trim()
-  if (!ref) return null
-
-  const { data: erpCmd } = await db
-    .from('commandes')
-    .select('id')
-    .eq('numero', ref)
-    .maybeSingle()
-
-  const erpCommandeId = (erpCmd as { id?: string | null } | null)?.id ?? null
-  if (erpCommandeId) {
-    await db.from('bons_sortie')
-      .update({ commande_id: erpCommandeId, updated_at: new Date().toISOString() })
-      .eq('id', bon.id)
-    return erpCommandeId
-  }
-
-  const { data: shopCmd } = await db
-    .from('commandes_shop')
-    .select('erp_commande_id')
-    .eq('ref', ref)
-    .not('erp_commande_id', 'is', null)
-    .maybeSingle()
-
-  const commandeId = (shopCmd as { erp_commande_id?: string | null } | null)?.erp_commande_id ?? null
-  if (commandeId) {
-    await db.from('bons_sortie')
-      .update({ commande_id: commandeId, updated_at: new Date().toISOString() })
-      .eq('id', bon.id)
-  }
-  return commandeId
+  const context = await resolveCommandeContext({
+    bon_id:      bon.id,
+    commande_id: bon.commande_id ?? null,
+    demandeur:   bon.demandeur ?? null,
+  })
+  return context?.commandeId ?? null
 }
 
 /** Liste des bons avec filtres */
@@ -658,13 +636,13 @@ router.patch(
 
     const { data: existing } = await db
       .from('bons_sortie')
-      .select('id, statut, statut_preparation, preparateur_id, commande_id, numero')
+      .select('id, statut, statut_preparation, preparateur_id, commande_id, numero, demandeur')
       .eq('id', id).single()
 
     if (!existing) return c.json({ error: 'Bon introuvable', code: 'NOT_FOUND' }, 404)
     const ex = existing as {
       id: string; statut: string; statut_preparation: string | null
-      preparateur_id: string | null; commande_id: string | null; numero: string
+      preparateur_id: string | null; commande_id: string | null; numero: string; demandeur?: string | null
     }
 
     if (ex.statut !== 'valide')
@@ -697,16 +675,27 @@ router.patch(
     })
 
     // Vérifier si tous les bons validés de la commande sont prêts → déclencher livraison auto
-    if (ex.commande_id) {
+    const resolvedContext = await resolveCommandeContext({
+      bon_id:      ex.id,
+      commande_id: ex.commande_id,
+      demandeur:   ex.demandeur ?? null,
+      userId:      user.id,
+    }).catch((e) => {
+      console.error('[bons] resolution commande preparation:', e)
+      return null
+    })
+    const commandeId = resolvedContext?.commandeId ?? ex.commande_id
+
+    if (commandeId) {
       const { count: bonsPending } = await db
         .from('bons_sortie')
         .select('*', { count: 'exact', head: true })
-        .eq('commande_id', ex.commande_id)
+        .eq('commande_id', commandeId)
         .eq('statut', 'valide')
         .in('statut_preparation', ['a_preparer', 'en_cours'])
 
       if ((bonsPending ?? 0) === 0) {
-        await ensureLivraisonEnPreparation(ex.commande_id, user.id)
+        await ensureLivraisonEnPreparation(commandeId, user.id)
           .catch(e => console.error('[bons] livraison auto:', e))
       }
     }
@@ -778,23 +767,24 @@ router.put(
 
     if (!rpcError) {
       // Si le bon est lié à une commande, garantir l'existence d'une facture Finance
-      const commandeId = await resolveCommandeIdForBon(b)
-      let facture: unknown = null
-      if (commandeId) {
-        try {
-          const ensured = await ensureFactureForCommande({
-            commandeId,
-            statut: 'brouillon',
-            userId: user.id,
-            notes:  'Facture generee automatiquement apres execution du bon de sortie.',
-          })
-          facture = ensured.facture
-        } catch (e) {
-          return c.json({
-            error: `Bon execute, mais la facture automatique n'a pas pu etre generee : ${(e as Error).message}`,
-            code:  'FACTURE_AUTO_FAILED',
-          }, 500)
-        }
+      let workflow: Awaited<ReturnType<typeof ensureWorkflowApresExecutionBon>> = {
+        commandeId: null,
+        facture: null,
+        livraison: null,
+        livraisonCreated: false,
+      }
+      try {
+        workflow = await ensureWorkflowApresExecutionBon({
+          bon_id:      b.id,
+          commande_id: b.commande_id,
+          demandeur:   b.demandeur ?? null,
+          userId:      user.id,
+        })
+      } catch (e) {
+        return c.json({
+          error: `Bon execute, mais l'automatisation facture/livraison a echoue : ${(e as Error).message}`,
+          code:  'WORKFLOW_AUTO_FAILED',
+        }, 500)
       }
 
       // Écriture comptable selon la nature de la transaction
@@ -805,7 +795,7 @@ router.put(
           montant_xaf:        b.montant_total_xaf,
           nature_transaction: b.nature_transaction,
           imputation_payeur:  b.imputation_payeur ?? 'entreprise_tafdil',
-          commande_id:        b.commande_id,
+          commande_id:        workflow.commandeId ?? b.commande_id,
           created_by:         user.id,
         }).catch(e => console.error('[bons/executer] ecriture comptable:', e))
       }
@@ -826,12 +816,20 @@ router.put(
         module:  'stock',
         severite:'success',
         titre:   'Bon de sortie execute',
-        message: `Bon ${b.numero} execute : le stock a ete mis a jour.`,
+        message: `Bon ${b.numero} execute : stock mis a jour, facture et livraison synchronisees si commande liee.`,
         ref:     b.numero,
         url:     '/stocks/bons-sortie',
-        data:    { bon_id: id },
+        data:    { bon_id: id, commande_id: workflow.commandeId, livraison_created: workflow.livraisonCreated },
       })
-      return c.json(rpcData ?? { success: true, bon_id: id, facture_triggered: !!commandeId, facture })
+      return c.json(rpcData ?? {
+        success: true,
+        bon_id: id,
+        commande_id: workflow.commandeId,
+        facture_triggered: Boolean(workflow.facture),
+        facture: workflow.facture,
+        livraison: workflow.livraison,
+        livraison_created: workflow.livraisonCreated,
+      })
     }
 
     // Fonction absente — migration non appliquée

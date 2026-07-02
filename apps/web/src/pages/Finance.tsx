@@ -4,7 +4,7 @@ import {
   FileText, ReceiptText,
   Plus, Download, MessageCircle, Printer,
   AlertCircle, CheckCircle, ChevronLeft, ChevronRight, X,
-  Phone, Paperclip, ExternalLink, Loader2, Trash2,
+  Phone, Paperclip, ExternalLink, Loader2, Trash2, RefreshCw,
 } from 'lucide-react'
 import { PageHeader, DataTable, StatusBadge, Button, Modal, SlideOver } from '@forge/ui'
 import type { Column } from '@forge/ui'
@@ -21,6 +21,7 @@ import {
   useCharges, useSortiesTresorerie, useChargesDashboard,
   useCreerCharge, useUpdateStatutCharge, useCreerSortieTresorerie,
   useAnnulerSortieTresorerie, useUploadJustificatifCharge, useUploadJustificatifSortie,
+  useSynchroniserFactures,
 } from '@/hooks/useFinance'
 import type { Facture as FactureApi, Credit as CreditApi, FactureLigne, Versement, Charge, SortieTresorerie, ModePaiementSortie } from '@/hooks/useFinance'
 import { useClients } from '@/hooks/useClients'
@@ -1737,6 +1738,7 @@ export default function Finance() {
   const { data: chargesDashboardData } = useChargesDashboard()
   const { data: declarationsData, isLoading: declarationsLoading } = useDeclarationsFiscales({ type: 'TVA' })
   const envoyerFacture = useEnvoyerFacture()
+  const synchroniserFactures = useSynchroniserFactures()
   const updateStatutFacture = useUpdateStatutFacture()
   const updateStatutCharge = useUpdateStatutCharge()
   const annulerSortie = useAnnulerSortieTresorerie()
@@ -2295,7 +2297,16 @@ export default function Finance() {
                       </div>
                     </div>
                   )}
-                  <div className="mx-4 mt-3 mb-1 flex items-center justify-end gap-2">
+                  <div className="mx-4 mt-3 mb-1 flex flex-wrap items-center justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={synchroniserFactures.isPending}
+                      onClick={() => synchroniserFactures.mutate()}
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${synchroniserFactures.isPending ? 'animate-spin' : ''}`} />
+                      Synchroniser factures
+                    </Button>
                     <label className="text-xs font-semibold uppercase text-gray-400" htmlFor="facture-status-sort">
                       Tri statut
                     </label>

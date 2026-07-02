@@ -5,6 +5,7 @@ import { supabaseAdmin } from '@forge/db'
 import { requireRole } from '../middleware/rbac'
 import { checkPermission, writeAuditLog } from '../services/rbacService'
 import { enregistrerPaiementCommande, ensureFactureForCommande, getFactureActiveByCommande } from '../services/finance-core.service'
+import { synchroniserBonsExecutesWorkflow } from '../services/commande-workflow.service'
 import type { HonoVariables } from '../types'
 
 const db = supabaseAdmin!
@@ -307,6 +308,69 @@ logistiqueRouter.get(
       per_page,
       total_pages: Math.ceil((count ?? 0) / per_page),
     })
+  },
+)
+
+// ── GET /commandes-pretes — commandes prêtes à planifier en livraison ─────────
+
+logistiqueRouter.get(
+  '/commandes-pretes',
+  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  async (c) => {
+    const { data: livraisonsActives } = await db
+      .from('livraisons')
+      .select('commande_id')
+      .in('statut', ['en_preparation', 'planifiee', 'en_route', 'en_transit', 'confirmed', 'pret'])
+      .not('commande_id', 'is', null)
+
+    const commandeIdsDejaPlanifiees = ((livraisonsActives ?? []) as { commande_id: string | null }[])
+      .map((l) => l.commande_id)
+      .filter(Boolean) as string[]
+
+    let query = db
+      .from('commandes')
+      .select('id, numero, client_id, client_nom, date_livraison_prevue, total_ttc_xaf, statut')
+      .eq('statut', 'pret')
+
+    if (commandeIdsDejaPlanifiees.length > 0) {
+      query = query.not('id', 'in', `(${commandeIdsDejaPlanifiees.join(',')})`)
+    }
+
+    const { data, error } = await query.order('date_livraison_prevue', { ascending: true, nullsFirst: false })
+    if (error) return c.json({ error: error.message }, 500)
+
+    const eligible = []
+    for (const commande of data ?? []) {
+      const readiness = await verifierCommandeLivrable(commande.id).catch((e) => {
+        console.error('[logistique] commandes-pretes:', e)
+        return null
+      })
+      if (readiness?.ok) {
+        eligible.push({
+          ...commande,
+          facture_statut: (readiness.facture as { statut?: string } | undefined)?.statut ?? null,
+          solde_restant_xaf: readiness.solde_restant_xaf ?? 0,
+        })
+      }
+    }
+
+    return c.json({ data: eligible, total: eligible.length })
+  },
+)
+
+// ── POST /synchroniser-livraisons — rattrapage livraisons manquantes ──────────
+
+logistiqueRouter.post(
+  '/synchroniser-livraisons',
+  requireRole(['admin', 'superviseur', 'operateur']),
+  async (c) => {
+    const user = c.get('user')
+    const result = await synchroniserBonsExecutesWorkflow({
+      cible:  'livraisons',
+      userId: user.id,
+    })
+
+    return c.json(result)
   },
 )
 

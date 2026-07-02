@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { AlertTriangle, CheckCircle, Clock, Package, Plus, Truck, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle, Clock, Package, Plus, RefreshCw, Truck, XCircle } from 'lucide-react'
 import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatDate, formatXAF } from '@/lib/utils'
@@ -8,6 +8,7 @@ import {
   useCommandesPretesLivraison,
   useCreateLivraison,
   useLivraisons,
+  useSynchroniserLivraisons,
   useUpdateLivraisonStatut,
 } from '@/hooks/useOperations'
 import type { CommandePreteLivraison, Livraison } from '@/hooks/useOperations'
@@ -97,6 +98,7 @@ export default function Logistique() {
   const { data, isLoading } = useLivraisons()
   const { data: commandesPretesData, isLoading: commandesLoading } = useCommandesPretesLivraison()
   const createLivraison = useCreateLivraison()
+  const synchroniserLivraisons = useSynchroniserLivraisons()
   const updateStatut = useUpdateLivraisonStatut()
 
   const livraisons = (data?.data ?? []) as LivraisonRecord[]
@@ -213,7 +215,22 @@ export default function Logistique() {
         title="Logistique"
         subtitle="Livraisons · Commandes prêtes · Transporteurs · Historique"
         breadcrumbs={[{ label: 'FORGE', href: '/' }, { label: 'Logistique' }]}
-        actions={<Button size="sm" onClick={() => { setForm(DEFAULT_FORM); setSlideOpen(true) }}><Plus className="h-3.5 w-3.5" /> Planifier livraison</Button>}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={synchroniserLivraisons.isPending}
+              onClick={() => synchroniserLivraisons.mutate()}
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${synchroniserLivraisons.isPending ? 'animate-spin' : ''}`} />
+              Synchroniser livraisons
+            </Button>
+            <Button size="sm" onClick={() => { setForm(DEFAULT_FORM); setSlideOpen(true) }}>
+              <Plus className="h-3.5 w-3.5" /> Planifier livraison
+            </Button>
+          </div>
+        }
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

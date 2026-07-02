@@ -449,6 +449,32 @@ export function useCreateLivraison() {
   })
 }
 
+interface SynchronisationWorkflowResult {
+  cible: 'factures' | 'livraisons' | 'tout'
+  total_bons_execute: number
+  commandes_resolues: number
+  factures_creees: number
+  factures_existantes: number
+  livraisons_creees: number
+  livraisons_existantes: number
+  erreurs: Array<{ bon_id: string; numero?: string | null; message: string }>
+}
+
+export function useSynchroniserLivraisons() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => apiClient.post<SynchronisationWorkflowResult>('/api/logistique/synchroniser-livraisons', {}),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ['livraisons'] })
+      void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
+      void qc.invalidateQueries({ queryKey: ['commandes'] })
+      const erreurs = res.erreurs.length > 0 ? `, ${res.erreurs.length} erreur(s)` : ''
+      toast.success(`${res.livraisons_creees} livraison(s) creee(s), ${res.livraisons_existantes} deja existante(s)${erreurs}`)
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
 export function useUpdateLivraisonStatut() {
   const qc = useQueryClient()
   return useMutation({

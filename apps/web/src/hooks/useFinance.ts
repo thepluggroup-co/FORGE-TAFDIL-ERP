@@ -409,6 +409,32 @@ export function useCreerFacture() {
   })
 }
 
+export interface SynchronisationWorkflowResult {
+  cible: 'factures' | 'livraisons' | 'tout'
+  total_bons_execute: number
+  commandes_resolues: number
+  factures_creees: number
+  factures_existantes: number
+  livraisons_creees: number
+  livraisons_existantes: number
+  erreurs: Array<{ bon_id: string; numero?: string | null; message: string }>
+}
+
+export function useSynchroniserFactures() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => apiClient.post<SynchronisationWorkflowResult>('/api/factures/synchroniser-commandes', {}),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ['factures'] })
+      void qc.invalidateQueries({ queryKey: ['credits'] })
+      void qc.invalidateQueries({ queryKey: ['commandes'] })
+      const erreurs = res.erreurs.length > 0 ? `, ${res.erreurs.length} erreur(s)` : ''
+      toast.success(`${res.factures_creees} facture(s) creee(s), ${res.factures_existantes} deja existante(s)${erreurs}`)
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
 export function useCredits(params?: { statut?: string }) {
   return useQuery({
     queryKey: ['credits', params],

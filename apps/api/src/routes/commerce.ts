@@ -16,6 +16,7 @@ import { enregistrerPaiementCommande, ensureFactureForCommande, solderCreditsFor
 import { enqueueEmail, notifyWhatsApp, sendEmailDirect } from '../services/email-queue.service'
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
 import { ensureClient } from '../services/client-sync.service'
+import { resolveCommandeContext } from '../services/commande-workflow.service'
 import type { TypeCommande } from '../services/credit-eligibility.service'
 import type { HonoVariables } from '../types'
 
@@ -2103,6 +2104,13 @@ router.patch(
       }, 422)
     }
 
+    if (body.statut_commande === 'expediee') {
+      return c.json({
+        error: 'Le statut expediee est defini automatiquement quand la livraison demarre depuis le module Logistique.',
+        code:  'EXPEDITION_ONLY_LOGISTICS',
+      }, 422)
+    }
+
     if (body.statut_commande === 'en_preparation' &&
         ['recue', 'confirmee'].includes(cmd.statut_commande)) {
       if (cmd.erp_commande_id) {
@@ -2135,14 +2143,23 @@ router.patch(
     }
 
     // Quand le paiement est confirmé : enregistrer en Finance + sync ERP
-    if (body.statut_paiement === 'paye' && cmd.statut_paiement !== 'paye' && cmd.erp_commande_id) {
+    if (body.statut_paiement === 'paye' && cmd.statut_paiement !== 'paye') {
+      const context = await resolveCommandeContext({
+        erp_commande_id: cmd.erp_commande_id,
+        ref:             cmd.ref,
+        commande_shop_id:cmd.id,
+        userId:          user.id,
+      }).catch((e) => {
+        console.error('[commerce/paiement] resolution commande ERP:', e)
+        return null
+      })
       const methodeMap: Record<string, 'mobile_money' | 'especes'> = {
         mtn_momo:     'mobile_money',
         orange_money: 'mobile_money',
         livraison:    'especes',
       }
-      enregistrerPaiementCommande({
-        commandeId:     cmd.erp_commande_id,
+      if (context?.commandeId) enregistrerPaiementCommande({
+        commandeId:     context.commandeId,
         montantXaf:     Math.round(cmd.montant_ttc ?? 0),
         methode:        methodeMap[cmd.mode_paiement] ?? 'mobile_money',
         referenceExt:   body.payment_reference ?? null,
