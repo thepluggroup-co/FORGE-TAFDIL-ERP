@@ -273,8 +273,8 @@ function DevisDetailPanel({
               onClick={() => {
                 envoyerApprobation.mutate(devis.id as string, {
                   onSuccess: (data) => {
-                    toast.success('Lien copié dans le presse-papier !')
-                    window.open(data.approval_url, '_blank')
+                    navigator.clipboard?.writeText(data.approval_url).catch(() => {})
+                    toast.success('Email envoyé au client. Lien d approbation copié.')
                   },
                 })
               }}

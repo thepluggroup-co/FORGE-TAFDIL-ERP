@@ -17,6 +17,7 @@ import { enqueueEmail, notifyWhatsApp, sendEmailDirect } from '../services/email
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
 import { ensureClient } from '../services/client-sync.service'
 import { resolveCommandeContext } from '../services/commande-workflow.service'
+import { notifyWorkflow } from '../services/workflow-notifications.service'
 import type { TypeCommande } from '../services/credit-eligibility.service'
 import type { HonoVariables } from '../types'
 
@@ -1079,21 +1080,6 @@ router.post('/devis/:id/envoyer-approbation', requireRole(['admin', 'superviseur
     return c.json({ error: `Devis "${d.statut}" — envoi d'approbation impossible`, code: 'INVALID_STATUS' }, 422)
   }
 
-  const token     = randomUUID()
-  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 jours
-  const expiryLabel = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-    .toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })
-
-  await db.from('devis').update({
-    token_approbation: token,
-    token_expires_at:  expiresAt,
-    statut:            'envoye',
-    updated_at:        new Date().toISOString(),
-  }).eq('id', id)
-
-  const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:5173'
-  const approvalUrl = `${frontendUrl}/devis/approuver/${token}`
-
   // Récupérer les détails du client pour le PDF et l'email
   let clientEmail:     string | null = null
   let clientAdresse:   string | null = null
@@ -1111,6 +1097,13 @@ router.post('/devis/:id/envoyer-approbation', requireRole(['admin', 'superviseur
     clientTelephone = cliRow?.telephone ?? null
     clientNiu      = cliRow?.niu      ?? null
     clientType     = cliRow?.type     ?? null
+  }
+
+  if (!clientEmail) {
+    return c.json({
+      error: 'Impossible d envoyer le devis : le client n a pas d adresse email enregistree.',
+      code:  'CLIENT_EMAIL_REQUIRED',
+    }, 422)
   }
 
   // Générer le PDF pour la pièce jointe
@@ -1134,8 +1127,31 @@ router.post('/devis/:id/envoyer-approbation', requireRole(['admin', 'superviseur
     console.error('[commerce] Erreur génération PDF pour email:', e)
   }
 
-  if (clientEmail) {
-    const lignesHtml = lignesSorted.map((l, i) => `
+  if (!pdfBuffer) {
+    return c.json({
+      error: 'Impossible d envoyer le devis : le PDF du devis n a pas pu etre genere.',
+      code:  'PDF_GENERATION_FAILED',
+    }, 500)
+  }
+
+  const token     = randomUUID()
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 jours
+  const expiryLabel = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+    .toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })
+
+  await db.from('devis').update({
+    token_approbation: token,
+    token_expires_at:  expiresAt,
+    statut:            'envoye',
+    updated_at:        new Date().toISOString(),
+  }).eq('id', id)
+
+  const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:5173'
+  const approvalUrl = `${frontendUrl}/devis/approuver/${token}`
+  const acceptUrl = `${approvalUrl}?decision=accepte`
+  const rejectUrl = `${approvalUrl}?decision=refuse`
+
+  const lignesHtml = lignesSorted.map((l, i) => `
       <tr style="background:${i % 2 === 0 ? '#F9FAFB' : '#ffffff'};">
         <td style="padding:9px 12px;color:#111827;font-size:13px;border-bottom:1px solid #F3F4F6;">${l.designation}</td>
         <td style="padding:9px 8px;color:#374151;font-size:13px;text-align:center;border-bottom:1px solid #F3F4F6;">${l.quantite}&nbsp;${l.unite}</td>
@@ -1204,12 +1220,29 @@ router.post('/devis/:id/envoyer-approbation', requireRole(['admin', 'superviseur
       </table>
     </td></tr>
   </table>
-  <div style="text-align:center;margin:30px 0 26px;">
+  <div style="text-align:center;margin:30px 0 18px;">
     <a href="${approvalUrl}" style="display:inline-block;background:#C62828;color:#ffffff;font-size:15px;font-weight:bold;padding:15px 44px;border-radius:8px;text-decoration:none;letter-spacing:.3px;">
-      Consulter &amp; Approuver le Devis
+      Consulter le devis
     </a>
     <p style="margin:12px 0 0;color:#9CA3AF;font-size:12px;">Lien sécurisé valable jusqu'au ${expiryLabel}</p>
   </div>
+  <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 26px;">
+    <tr>
+      <td align="right" width="50%" style="padding-right:6px;">
+        <a href="${acceptUrl}" style="display:inline-block;background:#15803d;color:#ffffff;font-size:14px;font-weight:bold;padding:13px 28px;border-radius:8px;text-decoration:none;">
+          Accepter le devis
+        </a>
+      </td>
+      <td align="left" width="50%" style="padding-left:6px;">
+        <a href="${rejectUrl}" style="display:inline-block;background:#ffffff;color:#C62828;font-size:14px;font-weight:bold;padding:12px 28px;border-radius:8px;text-decoration:none;border:1px solid #FCA5A5;">
+          Rejeter le devis
+        </a>
+      </td>
+    </tr>
+  </table>
+  <p style="margin:-14px 0 22px;color:#9CA3AF;font-size:11px;text-align:center;line-height:1.6;">
+    Par sécurité, ces boutons ouvrent une page de confirmation avant d'enregistrer votre décision.
+  </p>
   <div style="background:#EFF6FF;border-left:4px solid #1D4ED8;border-radius:4px;padding:13px 16px;margin-bottom:22px;">
     <p style="margin:0;color:#1E40AF;font-size:13px;font-weight:600;">📎 Le devis complet en PDF est joint à cet email.</p>
   </div>
@@ -1233,14 +1266,24 @@ router.post('/devis/:id/envoyer-approbation', requireRole(['admin', 'superviseur
 </table>
 </body></html>`
 
-    await sendEmailDirect({
+  const emailResult = await sendEmailDirect({
       to:      clientEmail,
       subject: `Devis N°${d.numero} — TAFDIL SARL`,
       html:    emailHtml,
-      attachments: pdfBuffer
-        ? [{ filename: `${d.numero}.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
-        : [],
+      attachments: [{ filename: `${d.numero}.pdf`, content: pdfBuffer, contentType: 'application/pdf' }],
     })
+
+  if (!emailResult.success) {
+    await db.from('devis').update({
+      token_approbation: null,
+      token_expires_at:  null,
+      statut:            d.statut,
+      updated_at:        new Date().toISOString(),
+    }).eq('id', id)
+    return c.json({
+      error: `Echec envoi email : ${emailResult.error ?? 'erreur SMTP inconnue'}`,
+      code:  'EMAIL_ERROR',
+    }, 502)
   }
 
   // WhatsApp immédiat au directeur
@@ -1354,7 +1397,7 @@ publicDevisRouter.post('/devis/approuver/:token', async (c) => {
       <p style="margin:0;color:#374151;font-size:13px;font-style:italic;">"${body.commentaire}"</p>
     </div>` : ''}
     ${isAccepted
-      ? '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;padding:14px 18px;"><p style="margin:0;color:#15803d;font-size:14px;font-weight:600;">Action requise : transformez ce devis en commande dans l\'ERP.</p></div>'
+      ? '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;padding:14px 18px;"><p style="margin:0;color:#15803d;font-size:14px;font-weight:600;">Action commerciale requise : contactez le client pour enclencher le paiement/acompte, puis transformez le devis en commande dans l\'ERP.</p></div>'
       : '<p style="margin:0;color:#6B7280;font-size:13px;">Prenez contact avec le client pour comprendre ses objections et établir un nouveau devis si nécessaire.</p>'
     }
   </td></tr>
@@ -1368,6 +1411,24 @@ publicDevisRouter.post('/devis/approuver/:token', async (c) => {
       reference_id:   d.id,
     })
   }
+
+  await notifyWorkflow({
+    event:    isAccepted ? 'devis.client_accepte' : 'devis.client_refuse',
+    module:   'boutique',
+    severite: isAccepted ? 'success' : 'warning',
+    titre:    isAccepted ? `Devis ${d.numero} accepté` : `Devis ${d.numero} refusé`,
+    message:  isAccepted
+      ? `${d.client_nom} a accepté le devis. Action commerciale requise : contacter le client pour enclencher le paiement/acompte.`
+      : `${d.client_nom} a refusé le devis.${body.commentaire ? ` Motif : ${body.commentaire}` : ' Contact commercial recommandé.'}`,
+    ref:      d.numero,
+    url:      '/devis',
+    data:     {
+      devis_id: d.id,
+      decision: body.decision,
+      client_nom: d.client_nom,
+      commentaire: body.commentaire ?? null,
+    },
+  })
 
   return c.json({ succes: true, decision: body.decision })
 })

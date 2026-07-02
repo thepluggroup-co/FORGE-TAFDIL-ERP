@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, CheckCircle, Loader, XCircle } from 'lucide-react'
 import { API_BASE } from '@/lib/api-client'
 import { DevisPreview } from '@/components/devis/DevisPreview'
@@ -21,10 +21,13 @@ type PageState = 'loading' | 'ready' | 'success_accept' | 'success_refuse' | 'er
 
 export default function ApprouverDevis() {
   const { token } = useParams<{ token: string }>()
+  const [searchParams] = useSearchParams()
+  const decisionParam = searchParams.get('decision')
+  const initialDecision = decisionParam === 'accepte' || decisionParam === 'refuse' ? decisionParam : null
   const [state, setState] = useState<PageState>('loading')
   const [devis, setDevis] = useState<DevisPublic | null>(null)
   const [commentaire, setCommentaire] = useState('')
-  const [showRefus, setShowRefus] = useState(false)
+  const [showRefus, setShowRefus] = useState(initialDecision === 'refuse')
   const [errorMsg, setErrorMsg] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -49,6 +52,7 @@ export default function ApprouverDevis() {
           setState('already_done')
           setErrorMsg('Ce devis a deja ete approuve.')
         } else {
+          setShowRefus(initialDecision === 'refuse')
           setState('ready')
         }
       })
@@ -152,7 +156,37 @@ export default function ApprouverDevis() {
           />
         </div>
 
-        {!showRefus ? (
+        {initialDecision === 'accepte' && !showRefus ? (
+          <div className="bg-white rounded-2xl shadow-sm border border-green-100 px-6 py-5">
+            <div className="flex items-start gap-3 mb-4">
+              <CheckCircle className="h-5 w-5 text-green-600 mt-0.5" />
+              <div>
+                <p className="text-sm font-bold text-green-800">Confirmer l'acceptation du devis</p>
+                <p className="text-sm text-gray-600 mt-1">
+                  En confirmant, TAFDIL sera notifie et un commercial vous contactera pour le paiement ou l'acompte.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <button
+                onClick={() => handleDecision('accepte')}
+                disabled={submitting}
+                className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold text-white bg-green-700 hover:bg-green-800 transition-colors disabled:opacity-50"
+              >
+                <CheckCircle className="h-4 w-4" />
+                {submitting ? 'Envoi...' : "Confirmer l'acceptation"}
+              </button>
+              <button
+                onClick={() => setShowRefus(true)}
+                disabled={submitting}
+                className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+              >
+                <XCircle className="h-4 w-4" />
+                Finalement refuser
+              </button>
+            </div>
+          </div>
+        ) : !showRefus ? (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 px-6 py-5">
             <p className="text-sm text-gray-600 mb-4 font-medium">Votre decision :</p>
             <div className="flex flex-col gap-3 sm:flex-row">
@@ -177,6 +211,15 @@ export default function ApprouverDevis() {
           </div>
         ) : (
           <div className="bg-white rounded-2xl shadow-sm border border-red-100 px-6 py-5">
+            <div className="flex items-start gap-3 mb-4">
+              <XCircle className="h-5 w-5 text-red-600 mt-0.5" />
+              <div>
+                <p className="text-sm font-bold text-red-700">Confirmer le refus du devis</p>
+                <p className="text-sm text-gray-600 mt-1">
+                  Votre retour sera transmis a l'equipe commerciale afin qu'elle puisse vous recontacter si necessaire.
+                </p>
+              </div>
+            </div>
             <p className="text-sm text-gray-600 mb-3 font-medium">Motif du refus (optionnel) :</p>
             <textarea
               value={commentaire}

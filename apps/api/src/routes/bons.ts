@@ -862,6 +862,11 @@ const statutApproSchema = z.object({
   statut: z.enum(['brouillon', 'valide', 'envoye', 'commande', 'recu_partiel', 'recu_total', 'recu', 'annule']),
 })
 
+const ligneApproUpdateSchema = z.object({
+  id: z.string().uuid(),
+  quantite_a_commander: z.number().positive().optional(),
+})
+
 const creerApproManuelSchema = z.object({
   produit_id:               z.string().uuid(),
   quantite:                 z.number().positive(),
@@ -870,6 +875,49 @@ const creerApproManuelSchema = z.object({
   date_livraison_souhaitee: z.string().optional(),
   notes:                    z.string().optional(),
 })
+
+const updateApproDetailsSchema = z.object({
+  fournisseur_id:           z.string().uuid().nullable().optional(),
+  fournisseur_nom:          z.string().nullable().optional(),
+  date_livraison_souhaitee: z.string().nullable().optional(),
+  notes:                    z.string().nullable().optional(),
+  lignes:                   z.array(ligneApproUpdateSchema).optional(),
+})
+
+const receptionApproSchema = z.object({
+  fournisseur_id: z.string().uuid().nullable().optional(),
+  fournisseur_nom: z.string().nullable().optional(),
+  commentaire: z.string().optional(),
+  lignes: z.array(z.object({
+    id: z.string().uuid(),
+    quantite_recue: z.number().min(0),
+  })).min(1),
+})
+
+function calcStatutProduit(stock: number, min: number, critique: number): 'normal' | 'alerte' | 'critique' | 'rupture' {
+  if (stock === 0) return 'rupture'
+  if (stock <= critique) return 'critique'
+  if (stock <= min) return 'alerte'
+  return 'normal'
+}
+
+async function hydrateBonAppro(id: string) {
+  const { data: bon, error } = await db
+    .from('bons_approvisionnement')
+    .select('*')
+    .eq('id', id)
+    .single()
+
+  if (error || !bon) return { bon: null, error }
+
+  const { data: lignes, error: lignesError } = await db
+    .from('bons_approvisionnement_lignes')
+    .select('*')
+    .eq('bon_id', id)
+
+  if (lignesError) return { bon: null, error: lignesError }
+  return { bon: { ...bon, bons_approvisionnement_lignes: lignes ?? [] }, error: null }
+}
 
 /** Nombre de bons d'appro en brouillon — pour badge UI */
 router.get('/appro/count', async (c) => {
@@ -1024,6 +1072,204 @@ router.post(
   },
 )
 
+/** Modifier les infos preparatoires d'un bon d'approvisionnement */
+router.patch(
+  '/appro/:id',
+  requireRole(['admin', 'superviseur']),
+  zValidator('json', updateApproDetailsSchema),
+  async (c) => {
+    const { id } = c.req.param()
+    const body = c.req.valid('json')
+
+    const { data: existing, error: existingErr } = await db
+      .from('bons_approvisionnement')
+      .select('id, statut')
+      .eq('id', id)
+      .single()
+
+    if (existingErr || !existing) return c.json({ error: 'Bon introuvable', code: 'NOT_FOUND' }, 404)
+
+    const current = existing as { statut: string }
+    if (['recu', 'recu_total', 'annule'].includes(current.statut)) {
+      return c.json({ error: `Impossible de modifier un bon en statut "${current.statut}".`, code: 'INVALID_TRANSITION' }, 422)
+    }
+
+    const update: Record<string, unknown> = { updated_at: new Date().toISOString() }
+    if (body.fournisseur_id !== undefined) update.fournisseur_id = body.fournisseur_id
+    if (body.fournisseur_nom !== undefined) update.fournisseur_nom = body.fournisseur_nom
+    if (body.date_livraison_souhaitee !== undefined) update.date_livraison_souhaitee = body.date_livraison_souhaitee
+    if (body.notes !== undefined) update.notes = body.notes
+
+    const { data: bon, error } = await db
+      .from('bons_approvisionnement')
+      .update(update)
+      .eq('id', id)
+      .select('id, statut')
+      .single()
+
+    if (error) return c.json({ error: error.message }, 400)
+    if (!bon) return c.json({ error: 'Bon introuvable', code: 'NOT_FOUND' }, 404)
+
+    for (const ligne of body.lignes ?? []) {
+      if (ligne.quantite_a_commander === undefined) continue
+      const { error: ligneErr } = await db
+        .from('bons_approvisionnement_lignes')
+        .update({ quantite_a_commander: ligne.quantite_a_commander })
+        .eq('id', ligne.id)
+        .eq('bon_id', id)
+
+      if (ligneErr) return c.json({ error: ligneErr.message }, 400)
+    }
+
+    const hydrated = await hydrateBonAppro(id)
+    if (hydrated.error) return c.json({ error: hydrated.error.message }, 400)
+    return c.json(hydrated.bon)
+  },
+)
+
+/** Receptionner un bon d'approvisionnement et incrementer le stock */
+router.post(
+  '/appro/:id/reception',
+  requireRole(['admin', 'superviseur', 'operateur']),
+  zValidator('json', receptionApproSchema),
+  async (c) => {
+    const { id } = c.req.param()
+    const user = c.get('user')
+    const body = c.req.valid('json')
+    const now = new Date().toISOString()
+
+    const { data: bon, error: bonErr } = await db
+      .from('bons_approvisionnement')
+      .select('id, numero, statut, notes')
+      .eq('id', id)
+      .single()
+
+    if (bonErr || !bon) return c.json({ error: 'Bon introuvable', code: 'NOT_FOUND' }, 404)
+
+    const b = bon as { numero: string; statut: string; notes: string | null }
+    if (['brouillon', 'annule', 'recu', 'recu_total'].includes(b.statut)) {
+      return c.json({
+        error: `Reception non autorisee pour un bon en statut "${b.statut}". Le bon doit etre valide, envoye ou commande.`,
+        code:  'INVALID_TRANSITION',
+      }, 422)
+    }
+
+    const { data: lignes, error: lignesErr } = await db
+      .from('bons_approvisionnement_lignes')
+      .select('id, produit_id, designation, unite, quantite_a_commander, quantite_recue')
+      .eq('bon_id', id)
+
+    if (lignesErr) return c.json({ error: lignesErr.message }, 400)
+    if (!lignes || lignes.length === 0) return c.json({ error: 'Aucune ligne a receptionner', code: 'NO_LINES' }, 422)
+
+    const lignesById = new Map((lignes as Array<{
+      id: string
+      produit_id: string | null
+      designation: string
+      unite: string
+      quantite_a_commander: number
+      quantite_recue: number | null
+    }>).map(l => [l.id, l]))
+
+    let totalDelta = 0
+    for (const input of body.lignes) {
+      const ligne = lignesById.get(input.id)
+      if (!ligne) return c.json({ error: `Ligne ${input.id} introuvable sur ce bon`, code: 'LINE_NOT_FOUND' }, 404)
+      if (!ligne.produit_id) return c.json({ error: `La ligne "${ligne.designation}" n'est liee a aucun produit stock.`, code: 'PRODUCT_NOT_LINKED' }, 422)
+
+      const ancienneQte = Number(ligne.quantite_recue ?? 0)
+      const nouvelleQte = Number(input.quantite_recue)
+      const delta = nouvelleQte - ancienneQte
+      if (delta < 0) {
+        return c.json({
+          error: `La quantite recue de "${ligne.designation}" ne peut pas diminuer (${ancienneQte} deja recu).`,
+          code:  'INVALID_RECEIVED_QTY',
+        }, 422)
+      }
+      totalDelta += delta
+    }
+
+    if (totalDelta <= 0) {
+      return c.json({ error: 'Aucune nouvelle quantite recue a enregistrer.', code: 'NO_RECEIVED_QTY' }, 422)
+    }
+
+    for (const input of body.lignes) {
+      const ligne = lignesById.get(input.id)!
+      const ancienneQte = Number(ligne.quantite_recue ?? 0)
+      const nouvelleQte = Number(input.quantite_recue)
+      const delta = nouvelleQte - ancienneQte
+      if (delta <= 0) continue
+
+      const { data: produit, error: prodErr } = await db
+        .from('produits')
+        .select('stock_actuel, stock_min, stock_critique')
+        .eq('id', ligne.produit_id)
+        .single()
+
+      if (prodErr || !produit) return c.json({ error: `Produit introuvable pour "${ligne.designation}"`, code: 'PRODUCT_NOT_FOUND' }, 404)
+
+      const p = produit as { stock_actuel: number; stock_min: number; stock_critique: number }
+      const nouveauStock = Number(p.stock_actuel ?? 0) + delta
+      const statutProduit = calcStatutProduit(nouveauStock, Number(p.stock_min ?? 0), Number(p.stock_critique ?? 0))
+
+      const [mvtRes, produitRes, ligneRes] = await Promise.all([
+        db.from('mouvements_stock').insert({
+          produit_id:  ligne.produit_id,
+          type:        'entree',
+          quantite:    delta,
+          reference:   b.numero,
+          notes:       body.commentaire ?? `Reception fournisseur ${b.numero}`,
+          created_by:  user.id,
+        }),
+        db.from('produits').update({
+          stock_actuel: nouveauStock,
+          statut:       statutProduit,
+          updated_at:   now,
+        }).eq('id', ligne.produit_id),
+        db.from('bons_approvisionnement_lignes').update({
+          quantite_recue: nouvelleQte,
+        }).eq('id', ligne.id),
+      ])
+
+      if (mvtRes.error) return c.json({ error: mvtRes.error.message }, 400)
+      if (produitRes.error) return c.json({ error: produitRes.error.message }, 400)
+      if (ligneRes.error) return c.json({ error: ligneRes.error.message }, 400)
+    }
+
+    const { data: lignesMaj } = await db
+      .from('bons_approvisionnement_lignes')
+      .select('quantite_a_commander, quantite_recue')
+      .eq('bon_id', id)
+
+    const receptionLignes = (lignesMaj ?? []) as Array<{ quantite_a_commander: number; quantite_recue: number | null }>
+    const totalCommande = receptionLignes.reduce((sum, l) => sum + Number(l.quantite_a_commander ?? 0), 0)
+    const totalRecu = receptionLignes.reduce((sum, l) => sum + Number(l.quantite_recue ?? 0), 0)
+    const statut = totalRecu >= totalCommande ? 'recu_total' : 'recu_partiel'
+    const commentaire = body.commentaire?.trim()
+    const notes = commentaire
+      ? [b.notes, `[Reception ${new Date().toLocaleDateString('fr-CM')}] ${commentaire}`].filter(Boolean).join('\n')
+      : b.notes
+
+    const { error: updateErr } = await db
+      .from('bons_approvisionnement')
+      .update({
+        statut,
+        quantite_recue: totalRecu,
+        ...(body.fournisseur_id !== undefined ? { fournisseur_id: body.fournisseur_id } : {}),
+        ...(body.fournisseur_nom !== undefined ? { fournisseur_nom: body.fournisseur_nom } : {}),
+        notes,
+        updated_at: now,
+      })
+      .eq('id', id)
+
+    if (updateErr) return c.json({ error: updateErr.message }, 400)
+
+    const hydrated = await hydrateBonAppro(id)
+    if (hydrated.error) return c.json({ error: hydrated.error.message }, 400)
+    return c.json(hydrated.bon)
+  },
+)
+
 /** Changer le statut d'un bon d'approvisionnement */
 router.patch(
   '/appro/:id/statut',
@@ -1032,6 +1278,51 @@ router.patch(
   async (c) => {
     const { id }     = c.req.param()
     const { statut } = c.req.valid('json')
+
+    if (['recu_partiel', 'recu_total', 'recu'].includes(statut)) {
+      return c.json({
+        error: 'La reception fournisseur doit passer par l action "Receptionner" afin de mettre le stock a jour.',
+        code:  'RECEPTION_REQUIRED',
+      }, 422)
+    }
+
+    const { data: existing, error: existingErr } = await db
+      .from('bons_approvisionnement')
+      .select('id, statut, fournisseur_id, fournisseur_nom')
+      .eq('id', id)
+      .single()
+
+    if (existingErr || !existing) return c.json({ error: 'Bon introuvable', code: 'NOT_FOUND' }, 404)
+
+    const current = existing as {
+      statut: string
+      fournisseur_id: string | null
+      fournisseur_nom: string | null
+    }
+
+    if (['annule', 'recu', 'recu_total'].includes(current.statut)) {
+      return c.json({ error: `Transition impossible depuis le statut "${current.statut}".`, code: 'INVALID_TRANSITION' }, 422)
+    }
+
+    if (['valide', 'envoye', 'commande'].includes(statut)) {
+      const { data: lignes, error: lignesErr } = await db
+        .from('bons_approvisionnement_lignes')
+        .select('id, quantite_a_commander')
+        .eq('bon_id', id)
+
+      if (lignesErr) return c.json({ error: lignesErr.message }, 400)
+
+      const fournisseurOk = Boolean(current.fournisseur_id || current.fournisseur_nom?.trim())
+      const lignesAppro = (lignes ?? []) as Array<{ id: string; quantite_a_commander: number | null }>
+      const lignesOk = lignesAppro.length > 0 && lignesAppro.every(l => Number(l.quantite_a_commander ?? 0) > 0)
+
+      if (!fournisseurOk) {
+        return c.json({ error: 'Selectionner un fournisseur avant de valider ce bon.', code: 'FOURNISSEUR_REQUIRED' }, 422)
+      }
+      if (!lignesOk) {
+        return c.json({ error: 'Chaque ligne doit avoir une quantite a commander superieure a zero.', code: 'QUANTITE_REQUIRED' }, 422)
+      }
+    }
 
     const { data, error } = await db
       .from('bons_approvisionnement')

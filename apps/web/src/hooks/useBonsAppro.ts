@@ -19,6 +19,7 @@ export interface BonApproLigne {
   designation: string
   unite: string
   quantite_a_commander: number
+  quantite_recue?: number | null
   quantite?: number
   stock_actuel_snap: number
   stock_min_snap: number
@@ -39,6 +40,29 @@ export interface BonAppro {
   created_at: string
   updated_at: string
   bons_approvisionnement_lignes: BonApproLigne[]
+}
+
+export interface UpdateApproDetailsPayload {
+  id: string
+  fournisseur_id?: string | null
+  fournisseur_nom?: string | null
+  date_livraison_souhaitee?: string | null
+  notes?: string | null
+  lignes?: Array<{
+    id: string
+    quantite_a_commander?: number
+  }>
+}
+
+export interface ReceptionApproPayload {
+  id: string
+  fournisseur_id?: string | null
+  fournisseur_nom?: string | null
+  commentaire?: string
+  lignes: Array<{
+    id: string
+    quantite_recue: number
+  }>
 }
 
 interface BonsApproResponse {
@@ -94,6 +118,34 @@ export function useUpdateStatutAppro() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['bons-appro'] })
       toast.success('Statut mis à jour')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateApproDetails() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...payload }: UpdateApproDetailsPayload) =>
+      apiClient.patch<BonAppro>(`/api/bons/appro/${id}`, payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['bons-appro'] })
+      toast.success('Bon mis a jour')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useReceptionAppro() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...payload }: ReceptionApproPayload) =>
+      apiClient.post<BonAppro>(`/api/bons/appro/${id}/reception`, payload),
+    onSuccess: (bon) => {
+      void qc.invalidateQueries({ queryKey: ['bons-appro'] })
+      void qc.invalidateQueries({ queryKey: ['stocks'] })
+      void qc.invalidateQueries({ queryKey: ['mouvements_stock'] })
+      toast.success(`Reception ${bon.numero} enregistree`)
     },
     onError: (err: Error) => toast.error(err.message),
   })
