@@ -86,6 +86,7 @@ const factureSchema = z.object({
   commande_id:          z.string().optional(),
   date_emission:        z.string(),
   date_echeance:        z.string(),
+  acompte_recu_xaf:     z.number().min(0).optional(),
   remise_globale_xaf:   z.number().min(0).default(0),
   remise_globale_motif: z.string().optional(),
   notes:                z.string().optional(),
@@ -879,15 +880,6 @@ router.post('/factures', requireRole(['admin']), zValidator('json', factureSchem
         pdf_url = await uploadPDF(pdfBuf, 'factures', `${numero}.pdf`)
       } catch (e) { console.error('[finance] PDF error:', e) }
 
-      const fRow = facture as { id: string; date_emission: string }
-      await syncCreditForFacture(facture, user.id)
-      genererEcritureVente({
-        id: fRow.id, numero, date_emission: fRow.date_emission,
-        client_nom: body.client_nom, total_ht_xaf, tva_xaf, total_ttc_xaf, created_by: user.id,
-        brut_ht_xaf:          remise_totale_ht > 0 ? brut_ht_xaf : undefined,
-        remise_totale_ht_xaf: remise_totale_ht > 0 ? remise_totale_ht : undefined,
-      }).catch(e => console.error('[compta] vente:', e))
-
       return enrichirFacture({ ...facture, lignes: lignesData, pdf_url })
     },
 
@@ -1046,6 +1038,29 @@ router.patch(
 
     if (error) return c.json({ error: error.message }, 400)
     await syncCreditForFacture(data, undefined)
+    if (['valide', 'envoye', 'paye'].includes(body.statut)) {
+      const facture = data as {
+        id: string
+        numero: string
+        date_emission: string
+        client_nom: string
+        total_ht_xaf: number
+        tva_xaf: number
+        frais_livraison_xaf?: number | null
+        total_ttc_xaf: number
+        remise_globale_xaf?: number | null
+      }
+      genererEcritureVente({
+        id:                  facture.id,
+        numero:              facture.numero,
+        date_emission:       facture.date_emission,
+        client_nom:          facture.client_nom,
+        total_ht_xaf:        facture.total_ht_xaf,
+        tva_xaf:             facture.tva_xaf,
+        frais_livraison_xaf: facture.frais_livraison_xaf ?? 0,
+        total_ttc_xaf:       facture.total_ttc_xaf,
+      }).catch(e => console.error('[compta] vente statut facture:', e))
+    }
     await notifyWorkflow({
       event:   body.statut === 'paye' ? 'finance.facture_payee' : `finance.facture_${body.statut}`,
       module:  'finance',

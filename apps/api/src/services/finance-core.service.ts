@@ -105,6 +105,47 @@ function factureStatutDepuisPaiement(total: number, montantPaye: number, fallbac
   return fallback
 }
 
+function factureEngageante(statut?: string | null) {
+  return ['valide', 'envoye', 'paye'].includes(String(statut ?? ''))
+}
+
+function statutRank(statut?: string | null) {
+  const ranks: Record<string, number> = {
+    brouillon: 0,
+    valide:    1,
+    envoye:    2,
+    paye:      3,
+    annule:    4,
+  }
+  return ranks[String(statut ?? 'brouillon')] ?? 0
+}
+
+async function engagerFactureSiNecessaire(
+  facture: FactureCreditRow & {
+    remise_globale_xaf?: number | null
+    total_ht_xaf?: number | null
+    tva_xaf?: number | null
+    frais_livraison_xaf?: number | null
+  },
+  userId?: string | null,
+) {
+  if (!factureEngageante(facture.statut)) return null
+
+  genererEcritureVente({
+    id:                  facture.id!,
+    numero:              facture.numero ?? facture.id!,
+    date_emission:       facture.date_emission ?? new Date().toISOString().slice(0, 10),
+    client_nom:          facture.client_nom ?? 'Client',
+    total_ht_xaf:        Number(facture.total_ht_xaf ?? 0),
+    tva_xaf:             Number(facture.tva_xaf ?? 0),
+    frais_livraison_xaf: Number(facture.frais_livraison_xaf ?? 0),
+    total_ttc_xaf:       Number(facture.total_ttc_xaf ?? 0),
+    created_by:          userId ?? facture.created_by ?? undefined,
+  }).catch(e => console.error('[compta] vente auto:', e))
+
+  return syncCreditForFacture(facture, userId)
+}
+
 function creditStatutDepuisEcheance(echeance: string) {
   const today = new Date().toISOString().slice(0, 10)
   return echeance < today ? 'echu' : 'en_cours'
@@ -172,6 +213,28 @@ export async function syncCreditForFacture(facture: FactureCreditRow | null, use
 
   const existing = await getCreditByFactureOrCommande(facture.id, facture.commande_id)
   const credit = existing as { id: string; montant_xaf?: number | null; client_id?: string | null } | null
+
+  if (facture.statut === 'brouillon') {
+    if (!credit) return null
+    const { data, error } = await db
+      .from('credits')
+      .update({
+        facture_id:         facture.id ?? null,
+        commande_id:        facture.commande_id ?? null,
+        solde_restant_xaf: 0,
+        statut:            'rembourse',
+        notes:             `Creance neutralisee : facture ${facture.numero ?? facture.id ?? ''} encore en brouillon.`.trim(),
+        updated_at:        now,
+        sync_status:       'synced',
+      })
+      .eq('id', credit.id)
+      .select()
+      .single()
+
+    if (error) throw new Error(error.message)
+    await syncEncoursCreditClient(credit.client_id ?? facture.client_id)
+    return data
+  }
 
   if (solde <= 0) {
     if (!credit) return null
@@ -283,7 +346,7 @@ export async function syncCreditForCommande(commandeId: string, userId?: string 
   const existing = await getCreditByFactureOrCommande(null, commande.id)
   const credit = existing as { id: string; montant_xaf?: number | null; client_id?: string | null } | null
 
-  if (solde <= 0 || !commande.condition_paiement_id || acomptePct >= 100) {
+  if (solde <= 0 || !commande.condition_paiement_id || (acomptePct ?? 100) >= 100) {
     if (!credit) return null
     const { data: updated, error: updateError } = await db
       .from('credits')
@@ -436,8 +499,36 @@ export async function getFactureActiveByCommande(commandeId: string) {
 export async function ensureFactureForCommande(options: EnsureFactureOptions) {
   const existing = await getFactureActiveByCommande(options.commandeId)
   if (existing) {
-    const credit = await syncCreditForFacture(existing, options.userId)
-    return { facture: enrichirFactureSolde({ ...existing, credit_auto: credit }), created: false }
+    const current = existing as FactureCreditRow
+    const total = Number(current.total_ttc_xaf ?? 0)
+    const montantPaye = Math.min(Number(options.montantPayeXaf ?? current.montant_paye_xaf ?? 0), total)
+    const requestedStatut = options.statut
+      ? factureStatutDepuisPaiement(total, montantPaye, options.statut)
+      : current.statut as FactureStatut | undefined
+    const updates: Record<string, unknown> = {}
+
+    if (requestedStatut && statutRank(requestedStatut) > statutRank(current.statut)) {
+      updates.statut = requestedStatut
+    }
+    if (montantPaye > Number(current.montant_paye_xaf ?? 0)) {
+      updates.montant_paye_xaf = montantPaye
+    }
+
+    let facture = existing
+    if (Object.keys(updates).length > 0) {
+      const { data: updated, error: updateError } = await db
+        .from('factures')
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq('id', current.id)
+        .select('*, factures_lignes(*)')
+        .single()
+      if (updateError) throw new Error(updateError.message)
+      facture = updated
+    }
+
+    const credit = await engagerFactureSiNecessaire(facture as FactureCreditRow, options.userId)
+      ?? await syncCreditForFacture(facture as FactureCreditRow, options.userId)
+    return { facture: enrichirFactureSolde({ ...facture, credit_auto: credit }), created: false }
   }
 
   const { data: commande, error } = await db
@@ -512,21 +603,24 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
   const remiseTotaleHtXaf = remiseLignesXaf + Math.round(Number(cmd.remise_globale_xaf ?? 0))
   const brutHtXaf = cmd.total_ht_xaf + remiseTotaleHtXaf
 
-  genererEcritureVente({
-    id:                    facId,
-    numero,
-    date_emission:         dateEmission,
-    client_nom:            cmd.client_nom,
-    total_ht_xaf:          cmd.total_ht_xaf,
-    tva_xaf:               cmd.tva_xaf,
-    frais_livraison_xaf:   Number(cmd.frais_livraison_xaf ?? 0),
-    total_ttc_xaf:         cmd.total_ttc_xaf,
-    brut_ht_xaf:           remiseTotaleHtXaf > 0 ? brutHtXaf : undefined,
-    remise_totale_ht_xaf:  remiseTotaleHtXaf > 0 ? remiseTotaleHtXaf : undefined,
-    created_by:            options.userId,
-  }).catch(e => console.error('[compta] vente auto:', e))
+  let credit = null
+  if (factureEngageante(statut)) {
+    genererEcritureVente({
+      id:                    facId,
+      numero,
+      date_emission:         dateEmission,
+      client_nom:            cmd.client_nom,
+      total_ht_xaf:          cmd.total_ht_xaf,
+      tva_xaf:               cmd.tva_xaf,
+      frais_livraison_xaf:   Number(cmd.frais_livraison_xaf ?? 0),
+      total_ttc_xaf:         cmd.total_ttc_xaf,
+      brut_ht_xaf:           remiseTotaleHtXaf > 0 ? brutHtXaf : undefined,
+      remise_totale_ht_xaf:  remiseTotaleHtXaf > 0 ? remiseTotaleHtXaf : undefined,
+      created_by:            options.userId,
+    }).catch(e => console.error('[compta] vente auto:', e))
 
-  const credit = await syncCreditForFacture(facture as FactureCreditRow, options.userId)
+    credit = await syncCreditForFacture(facture as FactureCreditRow, options.userId)
+  }
   return { facture: enrichirFactureSolde({ ...facture, factures_lignes: lignes, credit_auto: credit }), created: true }
 }
 

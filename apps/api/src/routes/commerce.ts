@@ -1527,6 +1527,13 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
     changed_by:     user.id,
   })
 
+  await ensureFactureForCommande({
+    commandeId: cmd.id,
+    statut:    'brouillon',
+    userId:    user.id,
+    notes:     `Facture brouillon generee automatiquement depuis le devis ${d.numero}.`,
+  })
+
   await syncCreditForCommande(cmd.id, user.id)
 
   return c.json({ commande, devis_numero: d.numero, commande_numero: cmd.numero }, 201)
@@ -1742,6 +1749,13 @@ router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zV
         nouveau_statut: 'confirmed', commentaire: 'Commande créée', changed_by: user.id,
       })
 
+      await ensureFactureForCommande({
+        commandeId: cmd.id,
+        statut:    'brouillon',
+        userId:    user.id,
+        notes:     'Facture brouillon generee automatiquement a la creation de la commande.',
+      })
+
       await syncCreditForCommande(cmd.id, user.id)
 
       const { data: full, error: fullErr } = await db.from('commandes')
@@ -1869,9 +1883,9 @@ router.patch(
       try {
         const ensured = await ensureFactureForCommande({
           commandeId: id,
-          statut:    'brouillon',
+          statut:    'envoye',
           userId:    user.id,
-          notes:     'Facture generee automatiquement apres livraison de la commande.',
+          notes:     'Facture verifiee automatiquement apres livraison de la commande.',
         })
         factureAuto = ensured.facture
       } catch (e) {

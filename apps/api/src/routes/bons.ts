@@ -7,9 +7,9 @@ const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import { localCreateBon, localValiderBon, getBonsSortieLocal } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
-import { ensureFactureForCommande } from '../services/finance-core.service'
 import {
   ensureWorkflowApresExecutionBon,
+  ensureWorkflowApresPreparationBon,
   resolveCommandeContext,
 } from '../services/commande-workflow.service'
 import { genererEcritureBonSortieInterne } from '../services/comptabilite.service'
@@ -452,34 +452,6 @@ router.put(
           data:    { bon_id: id, decision: body.decision },
         })
 
-        const commandeId = await resolveCommandeIdForBon(ex)
-
-        if (body.decision === 'valide' && commandeId) {
-          try {
-            await ensureFactureForCommande({
-              commandeId,
-              statut:    'brouillon',
-              userId:    user.id,
-              notes:     'Facture generee automatiquement apres validation du bon de sortie. Validation finance requise.',
-            })
-          } catch (e) {
-            return c.json({
-              error: `Bon valide, mais la facture automatique n'a pas pu etre generee : ${(e as Error).message}`,
-              code:  'FACTURE_AUTO_FAILED',
-            }, 500)
-          }
-          await notifyWorkflow({
-            event:   'finance.facture_brouillon_a_valider',
-            module:  'finance',
-            severite:'warning',
-            titre:   'Facture a valider',
-            message: `Bon ${(existing as { numero: string }).numero} valide : facture brouillon generee pour Finance.`,
-            ref:     (existing as { numero: string }).numero,
-            url:     '/finance',
-            data:    { bon_id: id, commande_id: commandeId },
-          })
-        }
-
         return data
       },
 
@@ -636,13 +608,14 @@ router.patch(
 
     const { data: existing } = await db
       .from('bons_sortie')
-      .select('id, statut, statut_preparation, preparateur_id, commande_id, numero, demandeur')
+      .select('id, statut, statut_preparation, preparateur_id, commande_id, numero, demandeur, bons_sortie_lignes(id, designation, quantite_demandee, produit_id)')
       .eq('id', id).single()
 
     if (!existing) return c.json({ error: 'Bon introuvable', code: 'NOT_FOUND' }, 404)
     const ex = existing as {
       id: string; statut: string; statut_preparation: string | null
       preparateur_id: string | null; commande_id: string | null; numero: string; demandeur?: string | null
+      bons_sortie_lignes?: Array<{ id: string; designation: string; quantite_demandee: number; produit_id: string | null }>
     }
 
     if (ex.statut !== 'valide')
@@ -654,6 +627,26 @@ router.patch(
       }, 422)
     if (!ex.preparateur_id)
       return c.json({ error: 'Aucun préparateur assigné', code: 'NO_PREPARATEUR' }, 422)
+
+    const insuffisants: string[] = []
+    for (const ligne of ex.bons_sortie_lignes ?? []) {
+      if (!ligne.produit_id) continue
+      const { data: produit } = await db
+        .from('produits')
+        .select('stock_actuel')
+        .eq('id', ligne.produit_id)
+        .maybeSingle()
+      const stock = Number((produit as { stock_actuel?: number | null } | null)?.stock_actuel ?? 0)
+      if (stock < Number(ligne.quantite_demandee ?? 0)) {
+        insuffisants.push(`${ligne.designation} (stock ${stock}, requis ${ligne.quantite_demandee})`)
+      }
+    }
+    if (insuffisants.length > 0) {
+      return c.json({
+        error: `Stock insuffisant pour marquer le bon pret : ${insuffisants.join(' | ')}`,
+        code:  'INSUFFICIENT_STOCK',
+      }, 422)
+    }
 
     const { data, error } = await db
       .from('bons_sortie')
@@ -695,8 +688,12 @@ router.patch(
         .in('statut_preparation', ['a_preparer', 'en_cours'])
 
       if ((bonsPending ?? 0) === 0) {
-        await ensureLivraisonEnPreparation(commandeId, user.id)
-          .catch(e => console.error('[bons] livraison auto:', e))
+        await ensureWorkflowApresPreparationBon({
+          bon_id:      ex.id,
+          commande_id: commandeId,
+          demandeur:   ex.demandeur ?? null,
+          userId:      user.id,
+        }).catch(e => console.error('[bons] workflow preparation:', e))
       }
     }
 

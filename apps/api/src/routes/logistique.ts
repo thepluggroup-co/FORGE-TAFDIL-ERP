@@ -29,11 +29,11 @@ function normalizeLivraisonStatut(statut: string) {
 }
 
 async function verifierCommandeLivrable(commandeId: string) {
-  const [bonExecuteRes, bonLatestRes, facture] = await Promise.all([
+  const [bonPretRes, bonLatestRes, facture] = await Promise.all([
     db.from('bons_sortie')
       .select('id, numero, statut, statut_preparation')
       .eq('commande_id', commandeId)
-      .eq('statut', 'execute')
+      .eq('statut_preparation', 'pret')
       .limit(1)
       .maybeSingle(),
     db.from('bons_sortie')
@@ -45,24 +45,24 @@ async function verifierCommandeLivrable(commandeId: string) {
     getFactureActiveByCommande(commandeId),
   ])
 
-  if (bonExecuteRes.error) throw new Error(bonExecuteRes.error.message)
+  if (bonPretRes.error) throw new Error(bonPretRes.error.message)
   if (bonLatestRes.error) throw new Error(bonLatestRes.error.message)
 
-  if (!bonExecuteRes.data) {
+  if (!bonPretRes.data) {
     const bon = bonLatestRes.data as { numero?: string; statut?: string; statut_preparation?: string | null } | null
     return {
       ok: false,
-      code: 'BON_SORTIE_NOT_EXECUTED',
-      error: 'Le bon de sortie doit etre execute avant la livraison.',
+      code: 'BON_SORTIE_NOT_READY',
+      error: 'Le bon de sortie doit etre prepare et marque pret avant la livraison.',
       document_requis: {
         type:   'bon_sortie',
         label:  bon?.numero ? `Bon de sortie ${bon.numero}` : 'Bon de sortie',
-        etat:   bon?.statut ?? 'absent',
+        etat:   bon?.statut_preparation ?? bon?.statut ?? 'absent',
         module: 'Stocks > Bons de sortie',
         url:    '/stocks/bons-sortie',
         action: bon
-          ? 'Assigner un preparateur, marquer la preparation prete, puis executer le bon.'
-          : 'Creer ou synchroniser le bon de sortie de cette commande, puis l executer.',
+          ? 'Assigner un preparateur, verifier le stock, puis marquer la preparation prete.'
+          : 'Creer ou synchroniser le bon de sortie de cette commande, puis le preparer.',
       },
     }
   }
@@ -429,6 +429,15 @@ logistiqueRouter.post(
       return c.json({ error: 'Commande introuvable', code: 'COMMANDE_NOT_FOUND' }, 422)
     }
 
+    const readiness = await verifierCommandeLivrable(body.commande_id)
+    if (!readiness.ok) {
+      return c.json({
+        error: readiness.error,
+        code:  readiness.code,
+        document_requis: readiness.document_requis,
+      }, 422)
+    }
+
     const numero = await genererNumeroLivraison()
 
     const { data: livraison, error } = await db
@@ -647,9 +656,9 @@ logistiqueRouter.patch(
       try {
         const ensured = await ensureFactureForCommande({
           commandeId: lv.commande_id,
-          statut:    'brouillon',
+          statut:    Number(readiness?.solde_restant_xaf ?? 0) <= 0 ? 'paye' : 'envoye',
           userId:    user.id,
-          notes:     'Facture generee automatiquement apres livraison logistique.',
+          notes:     'Facture verifiee automatiquement apres livraison logistique.',
         })
         facture = ensured.facture
       } catch (e) {

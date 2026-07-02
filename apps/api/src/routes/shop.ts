@@ -8,7 +8,7 @@ import { notifyCommandeSms } from '../services/sms.service'
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 import { ensureClient } from '../services/client-sync.service'
-import { solderCreditsForCommande, syncCreditForCommande } from '../services/finance-core.service'
+import { ensureFactureForCommande, solderCreditsForCommande, syncCreditForCommande } from '../services/finance-core.service'
 
 const db = supabaseAdmin!
 import type { HonoVariables } from '../types'
@@ -505,6 +505,11 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
       ordre:                i,
     }))
     await db.from('commandes_lignes').insert(lignesErp)
+    await ensureFactureForCommande({
+      commandeId: erpCommande.id,
+      statut:    'brouillon',
+      notes:     `Facture brouillon generee automatiquement a la creation de la commande shop ${ref}.`,
+    })
     await syncCreditForCommande(erpCommande.id, null)
 
     let bonSortie: unknown = null

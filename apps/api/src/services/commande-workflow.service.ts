@@ -220,6 +220,13 @@ async function createCommandeErpFromShop(shop: ShopCommandeRow, userId?: string 
     if (lignesError) console.error('[workflow] reconstruction lignes ERP:', lignesError.message)
   }
 
+  await ensureFactureForCommande({
+    commandeId: cmd.id,
+    statut:    'brouillon',
+    userId:    userId ?? undefined,
+    notes:     `Facture brouillon generee automatiquement a la reconstruction ERP de ${shop.ref}.`,
+  }).catch(e => console.error('[workflow] facture brouillon ERP reconstruite:', e))
+
   return cmd
 }
 
@@ -380,10 +387,10 @@ export async function ensureWorkflowApresExecutionBon(
 
   let ensured = await ensureFactureForCommande({
     commandeId:     context.commandeId,
-    statut:         shopPaid ? 'paye' : 'envoye',
+    statut:         shopPaid ? 'paye' : 'valide',
     montantPayeXaf: montantPaye,
     userId:         input.userId ?? undefined,
-    notes:          'Facture generee automatiquement apres execution du bon de sortie.',
+    notes:          'Facture verifiee automatiquement apres execution du bon de sortie.',
   })
 
   if (shopPaid) {
@@ -432,6 +439,77 @@ export async function ensureWorkflowApresExecutionBon(
   }
 }
 
+export async function ensureWorkflowApresPreparationBon(
+  input: CommandeContextInput,
+): Promise<{
+  commandeId: string | null
+  facture: unknown | null
+  livraison: unknown | null
+  livraisonCreated: boolean
+}> {
+  const context = await resolveCommandeContext(input)
+  if (!context) {
+    return { commandeId: null, facture: null, livraison: null, livraisonCreated: false }
+  }
+
+  const shopPaid = context.shopCommande?.statut_paiement === 'paye'
+  const montantPaye = shopPaid
+    ? Math.round(Number(context.shopCommande?.montant_ttc ?? context.commande.total_ttc_xaf ?? 0))
+    : undefined
+
+  let ensured = await ensureFactureForCommande({
+    commandeId:     context.commandeId,
+    statut:         shopPaid ? 'paye' : 'valide',
+    montantPayeXaf: montantPaye,
+    userId:         input.userId ?? undefined,
+    notes:          'Facture validee automatiquement apres preparation du bon de sortie.',
+  })
+
+  if (shopPaid) {
+    const factureId = (ensured.facture as { id?: string } | null)?.id ?? null
+    if (factureId) {
+      const { data: updatedFacture } = await db
+        .from('factures')
+        .update({
+          statut:           'paye',
+          montant_paye_xaf: montantPaye ?? 0,
+          updated_at:       new Date().toISOString(),
+        })
+        .eq('id', factureId)
+        .select('*, factures_lignes(*)')
+        .single()
+      if (updatedFacture) ensured = { ...ensured, facture: updatedFacture }
+    }
+    await db.from('commandes')
+      .update({ montant_paye_xaf: montantPaye ?? 0, updated_at: new Date().toISOString() })
+      .eq('id', context.commandeId)
+  }
+
+  if (context.commande.statut !== 'pret' && context.commande.statut !== 'delivered') {
+    await db.from('commandes')
+      .update({ statut: 'pret', updated_at: new Date().toISOString() })
+      .eq('id', context.commandeId)
+    await db.from('historique_commandes').insert({
+      commande_id:    context.commandeId,
+      ancien_statut:  context.commande.statut ?? null,
+      nouveau_statut: 'pret',
+      commentaire:    'Commande marquee prete automatiquement apres preparation du bon de sortie.',
+      changed_by:     input.userId ?? null,
+    })
+  }
+
+  await syncCreditForCommande(context.commandeId, input.userId ?? null)
+  const livraisonResult = await ensureLivraisonEnPreparationForCommande(context.commandeId, input.userId)
+  const facture = await getFactureActiveByCommande(context.commandeId)
+
+  return {
+    commandeId:       context.commandeId,
+    facture:          facture ?? ensured.facture,
+    livraison:        livraisonResult.livraison,
+    livraisonCreated: livraisonResult.created,
+  }
+}
+
 export type SynchronisationWorkflowCible = 'factures' | 'livraisons' | 'tout'
 
 export type SynchronisationWorkflowResult = {
@@ -456,10 +534,10 @@ async function ensureFacturePourContext(
 
   let ensured = await ensureFactureForCommande({
     commandeId:     context.commandeId,
-    statut:         shopPaid ? 'paye' : 'envoye',
+    statut:         shopPaid ? 'paye' : 'valide',
     montantPayeXaf: montantPaye,
     userId:         userId ?? undefined,
-    notes:          'Facture generee automatiquement par synchronisation workflow.',
+    notes:          'Facture synchronisee automatiquement par le workflow commande.',
   })
 
   if (shopPaid) {
