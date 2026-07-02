@@ -70,6 +70,17 @@ function xaf(n: number): string {
   return n.toLocaleString('fr-FR') + ' XAF'
 }
 
+function montantFactureAPayer(f: {
+  total_ttc_xaf?: number | null
+  montant_ttc_xaf?: number | null
+  net_a_payer_xaf?: number | null
+}) {
+  const candidats = [f.net_a_payer_xaf, f.total_ttc_xaf, f.montant_ttc_xaf]
+    .map((value) => Math.round(Number(value ?? 0)))
+    .filter((value) => value > 0)
+  return candidats[0] ?? 0
+}
+
 interface FactureLignePdf {
   designation:          string
   unite:                string
@@ -228,8 +239,9 @@ async function autoEchoirCredits(clientId?: string): Promise<number> {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function enrichirFacture(f: any): any {
-  const solde = Math.max(0, (f.total_ttc_xaf ?? 0) - (f.montant_paye_xaf ?? 0))
-  return { ...f, solde_restant_xaf: Math.round(solde) }
+  const total = montantFactureAPayer(f)
+  const solde = Math.max(0, total - Number(f.montant_paye_xaf ?? 0))
+  return { ...f, total_ttc_xaf: Number(f.total_ttc_xaf ?? 0) > 0 ? f.total_ttc_xaf : total, solde_restant_xaf: Math.round(solde) }
 }
 
 type PlanEntry = { compte: string; libelle: string; classe: number }
@@ -1096,19 +1108,23 @@ router.post(
 
     const { data: facture } = await db
       .from('factures')
-      .select('statut, total_ttc_xaf, montant_paye_xaf, numero, client_nom, client_id, commande_id, date_emission, date_echeance, created_by')
+      .select('statut, total_ttc_xaf, montant_ttc_xaf, net_a_payer_xaf, montant_paye_xaf, numero, client_nom, client_id, commande_id, date_emission, date_echeance, created_by')
       .eq('id', id)
       .single()
 
     if (!facture) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
 
-    const f = facture as { statut: string; total_ttc_xaf: number; montant_paye_xaf: number; numero: string; client_nom: string; client_id: string | null }
+    const f = facture as {
+      statut: string; total_ttc_xaf?: number | null; montant_ttc_xaf?: number | null; net_a_payer_xaf?: number | null
+      montant_paye_xaf: number; numero: string; client_nom: string; client_id: string | null
+    }
 
     if (f.statut === 'annule') {
       return c.json({ error: 'Facture annulée — paiements bloqués', code: 'ANNULE_IMMUTABLE' }, 422)
     }
 
-    const soldeActuel   = Math.max(0, f.total_ttc_xaf - f.montant_paye_xaf)
+    const totalFacture  = montantFactureAPayer(f)
+    const soldeActuel   = Math.max(0, totalFacture - Number(f.montant_paye_xaf ?? 0))
     if (body.montant_xaf > soldeActuel) {
       return c.json({
         error: `Montant (${xaf(body.montant_xaf)}) dépasse le solde restant (${xaf(soldeActuel)})`,
@@ -1116,13 +1132,14 @@ router.post(
       }, 422)
     }
 
-    const nouveauPaye   = Math.round(f.montant_paye_xaf + body.montant_xaf)
-    const nouveauSolde  = Math.max(0, f.total_ttc_xaf - nouveauPaye)
+    const nouveauPaye   = Math.round(Number(f.montant_paye_xaf ?? 0) + body.montant_xaf)
+    const nouveauSolde  = Math.max(0, totalFacture - nouveauPaye)
     const nouveauStatut = nouveauSolde <= 0 ? 'paye' : (f.statut === 'valide' || f.statut === 'envoye' ? f.statut : 'envoye')
 
     const { data, error } = await db
       .from('factures')
       .update({
+        ...(Number(f.total_ttc_xaf ?? 0) > 0 ? {} : { total_ttc_xaf: totalFacture }),
         montant_paye_xaf: nouveauPaye,
         statut:           nouveauStatut,
         updated_at:       new Date().toISOString(),
@@ -1197,14 +1214,15 @@ router.post(
 
     const { data: facture } = await db
       .from('factures')
-      .select('statut, total_ttc_xaf, montant_paye_xaf, numero, client_nom, client_id, commande_id, date_emission, date_echeance, created_by')
+      .select('statut, total_ttc_xaf, montant_ttc_xaf, net_a_payer_xaf, montant_paye_xaf, numero, client_nom, client_id, commande_id, date_emission, date_echeance, created_by')
       .eq('id', id)
       .single()
 
     if (!facture) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
 
     const f = facture as {
-      statut: string; total_ttc_xaf: number; montant_paye_xaf: number
+      statut: string; total_ttc_xaf?: number | null; montant_ttc_xaf?: number | null; net_a_payer_xaf?: number | null
+      montant_paye_xaf: number
       numero: string; client_nom: string; client_id: string | null
     }
 
@@ -1212,7 +1230,8 @@ router.post(
       return c.json({ error: 'Facture annulée — versements bloqués', code: 'ANNULE_IMMUTABLE' }, 422)
     }
 
-    const soldeActuel = Math.max(0, f.total_ttc_xaf - f.montant_paye_xaf)
+    const totalFacture = montantFactureAPayer(f)
+    const soldeActuel = Math.max(0, totalFacture - Number(f.montant_paye_xaf ?? 0))
     if (body.montant_xaf > soldeActuel) {
       return c.json({
         error: `Montant (${xaf(body.montant_xaf)}) dépasse le solde restant (${xaf(soldeActuel)})`,
@@ -1236,13 +1255,18 @@ router.post(
 
     if (vErr) return c.json({ error: vErr.message }, 500)
 
-    const nouveauPaye   = Math.round(f.montant_paye_xaf + body.montant_xaf)
-    const nouveauSolde  = Math.max(0, f.total_ttc_xaf - nouveauPaye)
+    const nouveauPaye   = Math.round(Number(f.montant_paye_xaf ?? 0) + body.montant_xaf)
+    const nouveauSolde  = Math.max(0, totalFacture - nouveauPaye)
     const nouveauStatut = nouveauSolde <= 0 ? 'paye' : (f.statut === 'valide' || f.statut === 'envoye' ? f.statut : 'envoye')
 
     const { data: factureUpdated, error: fErr } = await db
       .from('factures')
-      .update({ montant_paye_xaf: nouveauPaye, statut: nouveauStatut, updated_at: new Date().toISOString() })
+      .update({
+        ...(Number(f.total_ttc_xaf ?? 0) > 0 ? {} : { total_ttc_xaf: totalFacture }),
+        montant_paye_xaf: nouveauPaye,
+        statut:           nouveauStatut,
+        updated_at:       new Date().toISOString(),
+      })
       .eq('id', id)
       .select()
       .single()
