@@ -87,13 +87,6 @@ export function setupRealtime(queryClient: QueryClient): () => void {
     })
     .subscribe()
 
-  const commandesWebNouvelles = supabase
-    .channel('commandes_web_nouvelles')
-    .on('broadcast', { event: 'nouvelle_commande_web' }, () => {
-      inv(['commandes-shop'], ['commandes'], ['dashboard', 'kpis'], ['ai', 'alertes'])
-    })
-    .subscribe()
-
   const clients = supabase
     .channel('forge-clients')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'clients' }, () => {
@@ -197,7 +190,6 @@ export function setupRealtime(queryClient: QueryClient): () => void {
     void supabase.removeChannel(stock)
     void supabase.removeChannel(commandes)
     void supabase.removeChannel(commandesShop)
-    void supabase.removeChannel(commandesWebNouvelles)
     void supabase.removeChannel(clients)
     void supabase.removeChannel(devis)
     void supabase.removeChannel(finance)

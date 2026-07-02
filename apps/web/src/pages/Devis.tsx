@@ -742,10 +742,10 @@ function DevisFormPanel({
                       className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Conditions de paiement</label>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Conditions de paiement *</label>
                     <select value={form.conditionPaiementId} onChange={(e) => setForm((f) => ({ ...f, conditionPaiementId: e.target.value }))}
                       className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
-                      <option value="">— Choisir —</option>
+                      <option value="">— Choisir une condition —</option>
                       {conditionsList.map((cp) => (
                         <option key={cp.id} value={cp.id}>{cp.code} — {cp.libelle}</option>
                       ))}
@@ -789,7 +789,7 @@ function DevisFormPanel({
                 Suivant <ChevronRight className="h-3.5 w-3.5" />
               </Button>
             ) : (
-              <Button className="flex-1" disabled={isMutating || !form.clientNom.trim()} onClick={handleSubmit}>
+              <Button className="flex-1" disabled={isMutating || !stepValid} onClick={handleSubmit}>
                 {isMutating ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Enregistrement…</> : (editingDevis ? 'Enregistrer les modifications' : 'Créer le devis')}
               </Button>
             )}
