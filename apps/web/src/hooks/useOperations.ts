@@ -357,7 +357,7 @@ export interface Livraison {
   client_nom: string
   destination: string
   transporteur?: string | null
-  statut: 'planifiee' | 'en_transit' | 'livree' | 'annulee'
+  statut: 'en_preparation' | 'planifiee' | 'en_transit' | 'livree' | 'annulee' | 'confirmed' | 'pret' | 'delivered' | 'cancelled'
   date_depart?: string | null
   date_livraison_prevue?: string | null
   date_livraison_reelle?: string | null

@@ -21,14 +21,24 @@ type PaiementLivraison = {
 
 const TRANSPORTEURS = ['TRANSIT CM', 'CAMTRANS', 'PORT EXPRESS', 'Auto-livraison', 'ELITE TRANSPORT']
 
-const STATUT_LABELS: Record<Livraison['statut'], string> = {
+const STATUT_LABELS: Partial<Record<Livraison['statut'], string>> = {
+  en_preparation: 'En preparation',
   planifiee:  'Planifiée',
   en_transit: 'En transit',
   livree:     'Livrée',
   annulee:    'Annulée',
 }
 
+STATUT_LABELS.confirmed = 'Confirmee'
+STATUT_LABELS.pret = 'Prete'
+STATUT_LABELS.delivered = 'Livree'
+STATUT_LABELS.cancelled = 'Annulee'
+
 const NEXT_ACTIONS: Record<Livraison['statut'], Array<{ statut: Livraison['statut']; label: string; icon: JSX.Element }>> = {
+  en_preparation: [
+    { statut: 'planifiee', label: 'Planifier', icon: <Clock className="h-3.5 w-3.5" /> },
+    { statut: 'annulee', label: 'Annuler', icon: <XCircle className="h-3.5 w-3.5" /> },
+  ],
   planifiee: [
     { statut: 'en_transit', label: 'Départ', icon: <Truck className="h-3.5 w-3.5" /> },
     { statut: 'annulee', label: 'Annuler', icon: <XCircle className="h-3.5 w-3.5" /> },
@@ -39,6 +49,10 @@ const NEXT_ACTIONS: Record<Livraison['statut'], Array<{ statut: Livraison['statu
   ],
   livree: [],
   annulee: [],
+  confirmed: [],
+  pret: [],
+  delivered: [],
+  cancelled: [],
 }
 
 interface LivraisonForm {
@@ -173,6 +187,8 @@ export default function Logistique() {
     )
   }
 
+  const selectedActions = selected ? (NEXT_ACTIONS[selected.statut] ?? []) : []
+
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} className="space-y-6">
       <PageHeader
@@ -204,7 +220,7 @@ export default function Logistique() {
               <div>
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-sm font-black text-[#212121]">{selected.numero}</h3>
-                  <StatusBadge status={STATUT_LABELS[selected.statut]} />
+                  <StatusBadge status={STATUT_LABELS[selected.statut] ?? String(selected.statut ?? '-')} />
                 </div>
                 <p className="mt-1 text-xs text-gray-400">{selected.client_nom} · {selected.destination}</p>
               </div>
@@ -220,9 +236,9 @@ export default function Logistique() {
                 </div>
               </div>
 
-              {NEXT_ACTIONS[selected.statut].length > 0 && (
+              {selectedActions.length > 0 && (
                 <div className="flex flex-wrap gap-2">
-                  {NEXT_ACTIONS[selected.statut].map((action) => (
+                  {selectedActions.map((action) => (
                     <Button key={action.statut} size="sm" variant={action.statut === 'annulee' ? 'ghost' : 'primary'}
                       disabled={updateStatut.isPending}
                       onClick={() => handleStatut(selected, action.statut)}>
