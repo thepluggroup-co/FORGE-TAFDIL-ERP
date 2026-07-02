@@ -166,6 +166,20 @@ async function resolveCommandeIdForBon(bon: {
   const ref = String(bon.demandeur ?? '').trim()
   if (!ref) return null
 
+  const { data: erpCmd } = await db
+    .from('commandes')
+    .select('id')
+    .eq('numero', ref)
+    .maybeSingle()
+
+  const erpCommandeId = (erpCmd as { id?: string | null } | null)?.id ?? null
+  if (erpCommandeId) {
+    await db.from('bons_sortie')
+      .update({ commande_id: erpCommandeId, updated_at: new Date().toISOString() })
+      .eq('id', bon.id)
+    return erpCommandeId
+  }
+
   const { data: shopCmd } = await db
     .from('commandes_shop')
     .select('erp_commande_id')

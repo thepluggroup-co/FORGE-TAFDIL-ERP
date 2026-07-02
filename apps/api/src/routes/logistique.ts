@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
 import { requireRole } from '../middleware/rbac'
 import { checkPermission, writeAuditLog } from '../services/rbacService'
-import { ensureFactureForCommande } from '../services/finance-core.service'
+import { enregistrerPaiementCommande, ensureFactureForCommande, getFactureActiveByCommande } from '../services/finance-core.service'
 import type { HonoVariables } from '../types'
 
 const db = supabaseAdmin!
@@ -14,13 +14,105 @@ const db = supabaseAdmin!
 // en_preparation est l'état initial auto-créé quand tous les bons sont prêts
 
 const VALID_TRANSITIONS: Record<string, string[]> = {
-  en_preparation:  ['planifiee'],
-  planifiee:       ['en_route'],
+  en_preparation:  ['planifiee', 'annulee'],
+  planifiee:       ['en_route', 'annulee'],
   en_route:        ['livree', 'echec_livraison'],
   en_transit:      ['livree', 'echec_livraison'],  // backward-compat alias
   livree:          [],
   echec_livraison: [],
   annulee:         [],
+}
+
+function normalizeLivraisonStatut(statut: string) {
+  return statut === 'en_transit' ? 'en_route' : statut
+}
+
+async function verifierCommandeLivrable(commandeId: string) {
+  const [bonExecuteRes, bonLatestRes, facture] = await Promise.all([
+    db.from('bons_sortie')
+      .select('id, numero, statut, statut_preparation')
+      .eq('commande_id', commandeId)
+      .eq('statut', 'execute')
+      .limit(1)
+      .maybeSingle(),
+    db.from('bons_sortie')
+      .select('id, numero, statut, statut_preparation')
+      .eq('commande_id', commandeId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    getFactureActiveByCommande(commandeId),
+  ])
+
+  if (bonExecuteRes.error) throw new Error(bonExecuteRes.error.message)
+  if (bonLatestRes.error) throw new Error(bonLatestRes.error.message)
+
+  if (!bonExecuteRes.data) {
+    const bon = bonLatestRes.data as { numero?: string; statut?: string; statut_preparation?: string | null } | null
+    return {
+      ok: false,
+      code: 'BON_SORTIE_NOT_EXECUTED',
+      error: 'Le bon de sortie doit etre execute avant la livraison.',
+      document_requis: {
+        type:   'bon_sortie',
+        label:  bon?.numero ? `Bon de sortie ${bon.numero}` : 'Bon de sortie',
+        etat:   bon?.statut ?? 'absent',
+        module: 'Stocks > Bons de sortie',
+        url:    '/stocks/bons-sortie',
+        action: bon
+          ? 'Assigner un preparateur, marquer la preparation prete, puis executer le bon.'
+          : 'Creer ou synchroniser le bon de sortie de cette commande, puis l executer.',
+      },
+    }
+  }
+
+  const f = facture as {
+    numero?: string
+    statut?: string
+    total_ttc_xaf?: number
+    montant_paye_xaf?: number
+  } | null
+
+  if (!f) {
+    return {
+      ok: false,
+      code: 'FACTURE_MISSING',
+      error: 'La facture doit etre generee par Finance avant la livraison.',
+      document_requis: {
+        type:   'facture',
+        label:  'Facture client',
+        etat:   'absente',
+        module: 'Finance > Factures',
+        url:    '/finance',
+        action: 'Generer la facture de la commande, puis la valider ou l envoyer.',
+      },
+    }
+  }
+
+  if (!['valide', 'envoye', 'paye'].includes(String(f.statut))) {
+    return {
+      ok: false,
+      code: 'FACTURE_NOT_READY',
+      error: `La facture ${f.numero ?? ''} doit etre validee/envoyee avant la livraison.`,
+      document_requis: {
+        type:   'facture',
+        label:  f.numero ? `Facture ${f.numero}` : 'Facture client',
+        etat:   f.statut ?? 'brouillon',
+        module: 'Finance > Factures',
+        url:    '/finance',
+        action: 'Valider ou envoyer cette facture avant de demarrer la livraison.',
+      },
+    }
+  }
+
+  const total = Number(f.total_ttc_xaf ?? 0)
+  const paye = Number(f.montant_paye_xaf ?? 0)
+  return {
+    ok: true,
+    facture: f,
+    document_requis: null,
+    solde_restant_xaf: Math.max(0, Math.round(total - paye)),
+  }
 }
 
 // ── Schémas Zod ───────────────────────────────────────────────────────────────
@@ -38,9 +130,14 @@ const createLivraisonSchema = z.object({
 
 const patchStatutSchema = z.object({
   // 'planifiee' inclus pour la transition en_preparation → planifiee (logistique confirme)
-  statut:      z.enum(['planifiee', 'en_route', 'livree', 'echec_livraison']),
+  statut:      z.enum(['planifiee', 'en_route', 'en_transit', 'livree', 'echec_livraison', 'annulee']),
   commentaire: z.string().optional(),
   geoloc:      z.string().optional(),
+  paiement_livraison: z.object({
+    montant_xaf:   z.number().min(0),
+    methode:       z.enum(['mobile_money', 'especes']),
+    reference_ext: z.string().optional(),
+  }).optional(),
 })
 
 const assignerSchema = z.object({
@@ -162,8 +259,49 @@ logistiqueRouter.get(
       return c.json({ error: error.message }, 500)
     }
 
+    const enriched = []
+    for (const livraison of data ?? []) {
+      let livrable = true
+      let blocageLivraisonCode: string | null = null
+      let blocageLivraisonMessage: string | null = null
+      let documentRequis: unknown = null
+      let factureStatut: string | null = null
+      let soldeRestant = 0
+
+      if (livraison.commande_id) {
+        const readiness = await verifierCommandeLivrable(livraison.commande_id).catch((e) => {
+          console.error('[logistique] verification livrable:', e)
+          return null
+        }) as {
+          ok?: boolean
+          code?: string
+          error?: string
+          facture?: { statut?: string; total_ttc_xaf?: number; montant_paye_xaf?: number } | null
+          solde_restant_xaf?: number
+          document_requis?: unknown
+        } | null
+
+        livrable = Boolean(readiness?.ok)
+        blocageLivraisonCode = readiness?.ok ? null : readiness?.code ?? 'VERIFICATION_LIVRAISON_FAILED'
+        blocageLivraisonMessage = readiness?.ok ? null : readiness?.error ?? 'Verification des documents de livraison impossible.'
+        documentRequis = readiness?.ok ? null : readiness?.document_requis ?? null
+        factureStatut = readiness?.facture?.statut ?? null
+        soldeRestant = Number(readiness?.solde_restant_xaf ?? 0)
+      }
+
+      enriched.push({
+        ...livraison,
+        livrable,
+        blocage_livraison_code: blocageLivraisonCode,
+        blocage_livraison_message: blocageLivraisonMessage,
+        document_requis: documentRequis,
+        facture_statut: factureStatut,
+        solde_restant_xaf: soldeRestant,
+      })
+    }
+
     return c.json({
-      data:        data ?? [],
+      data:        enriched,
       total:       count ?? 0,
       page,
       per_page,
@@ -309,21 +447,71 @@ logistiqueRouter.patch(
     }
 
     // Valider la transition via la state machine
+    const nextStatut = normalizeLivraisonStatut(body.statut)
     const allowed = VALID_TRANSITIONS[lv.statut] ?? []
-    if (!allowed.includes(body.statut)) {
+    if (!allowed.includes(nextStatut)) {
       return c.json({
-        error:   `Transition invalide : ${lv.statut} → ${body.statut}`,
+        error:   `Transition invalide : ${lv.statut} → ${nextStatut}`,
         code:    'INVALID_TRANSITION',
         allowed,
       }, 422)
     }
 
+    let readiness: Awaited<ReturnType<typeof verifierCommandeLivrable>> | null = null
+    if (lv.commande_id && ['en_route', 'livree'].includes(nextStatut)) {
+      readiness = await verifierCommandeLivrable(lv.commande_id)
+      if (!readiness.ok) {
+        return c.json({
+          error: readiness.error,
+          code:  readiness.code,
+          document_requis: readiness.document_requis,
+        }, 422)
+      }
+    }
+
+    let paiementLivraisonRecu = false
+    if (lv.commande_id && nextStatut === 'livree') {
+      const solde = Number(readiness?.solde_restant_xaf ?? 0)
+      const paiement = body.paiement_livraison
+
+      if (solde > 0 && !paiement) {
+        return c.json({
+          error: `Paiement livraison requis : solde restant ${Math.round(solde).toLocaleString('fr-CM')} XAF.`,
+          code:  'DELIVERY_PAYMENT_REQUIRED',
+          solde_restant_xaf: Math.round(solde),
+        }, 422)
+      }
+
+      if (paiement && solde > 0 && Math.abs(Number(paiement.montant_xaf ?? 0) - solde) > 1) {
+        return c.json({
+          error: `Le montant encaisse doit correspondre au solde restant (${Math.round(solde).toLocaleString('fr-CM')} XAF).`,
+          code:  'INVALID_DELIVERY_PAYMENT_AMOUNT',
+          solde_restant_xaf: Math.round(solde),
+        }, 422)
+      }
+
+      if (paiement && paiement.montant_xaf > 0) {
+        await enregistrerPaiementCommande({
+          commandeId:              lv.commande_id,
+          montantXaf:              Math.round(paiement.montant_xaf),
+          methode:                 paiement.methode,
+          referenceExt:            paiement.reference_ext ?? null,
+          datePaiement:            new Date().toISOString(),
+          notes:                   body.commentaire ?? 'Paiement encaisse a la livraison.',
+          userId:                  user.id,
+          ensureFacture:           true,
+          factureStatutSiCreation: 'envoye',
+        })
+        paiementLivraisonRecu = true
+      }
+    }
+
     const updatePayload: Record<string, unknown> = {
-      statut:     body.statut,
+      statut:     nextStatut,
       updated_at: new Date().toISOString(),
     }
 
-    if (body.statut === 'livree') {
+    if (nextStatut === 'livree') {
       updatePayload.date_livraison_reelle = new Date().toISOString()
     }
 
@@ -343,14 +531,20 @@ logistiqueRouter.patch(
     await db.from('livraisons_historique').insert({
       livraison_id:   id,
       ancien_statut:  lv.statut,
-      nouveau_statut: body.statut,
+      nouveau_statut: nextStatut,
       commentaire:    body.commentaire ?? null,
       geoloc:         body.geoloc ?? null,
       changed_by:     user.id,
     })
 
     let facture: unknown = null
-    if (body.statut === 'livree' && lv.commande_id) {
+    if (nextStatut === 'en_route' && lv.commande_id) {
+      await db.from('commandes_shop')
+        .update({ statut_commande: 'expediee', updated_at: new Date().toISOString() })
+        .eq('erp_commande_id', lv.commande_id)
+    }
+
+    if (nextStatut === 'livree' && lv.commande_id) {
       const { data: commande } = await db
         .from('commandes')
         .select('statut, numero')
@@ -374,6 +568,17 @@ logistiqueRouter.patch(
           changed_by:     user.id,
         })
       }
+
+      const shopUpdate: Record<string, unknown> = {
+        statut_commande: 'livree',
+        updated_at:      new Date().toISOString(),
+      }
+      if (paiementLivraisonRecu || Number(readiness?.solde_restant_xaf ?? 0) <= 0) {
+        shopUpdate.statut_paiement = 'paye'
+      }
+      await db.from('commandes_shop')
+        .update(shopUpdate)
+        .eq('erp_commande_id', lv.commande_id)
 
       try {
         const ensured = await ensureFactureForCommande({

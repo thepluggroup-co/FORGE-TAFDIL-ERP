@@ -33,8 +33,10 @@ STATUT_LABELS.confirmed = 'Confirmee'
 STATUT_LABELS.pret = 'Prete'
 STATUT_LABELS.delivered = 'Livree'
 STATUT_LABELS.cancelled = 'Annulee'
+STATUT_LABELS.en_route = 'En route'
+STATUT_LABELS.echec_livraison = 'Echec livraison'
 
-const NEXT_ACTIONS: Record<Livraison['statut'], Array<{ statut: Livraison['statut']; label: string; icon: JSX.Element }>> = {
+const NEXT_ACTIONS: Partial<Record<Livraison['statut'], Array<{ statut: Livraison['statut']; label: string; icon: JSX.Element }>>> = {
   en_preparation: [
     { statut: 'planifiee', label: 'Planifier', icon: <Clock className="h-3.5 w-3.5" /> },
     { statut: 'annulee', label: 'Annuler', icon: <XCircle className="h-3.5 w-3.5" /> },
@@ -54,6 +56,20 @@ const NEXT_ACTIONS: Record<Livraison['statut'], Array<{ statut: Livraison['statu
   delivered: [],
   cancelled: [],
 }
+
+NEXT_ACTIONS.planifiee = [
+  { statut: 'en_route', label: 'Depart', icon: <Truck className="h-3.5 w-3.5" /> },
+  { statut: 'annulee', label: 'Annuler', icon: <XCircle className="h-3.5 w-3.5" /> },
+]
+NEXT_ACTIONS.en_route = [
+  { statut: 'livree', label: 'Livree', icon: <CheckCircle className="h-3.5 w-3.5" /> },
+  { statut: 'echec_livraison', label: 'Echec', icon: <XCircle className="h-3.5 w-3.5" /> },
+]
+NEXT_ACTIONS.en_transit = [
+  { statut: 'livree', label: 'Livree', icon: <CheckCircle className="h-3.5 w-3.5" /> },
+  { statut: 'echec_livraison', label: 'Echec', icon: <XCircle className="h-3.5 w-3.5" /> },
+]
+NEXT_ACTIONS.echec_livraison = []
 
 interface LivraisonForm {
   commandeId: string
@@ -111,7 +127,7 @@ export default function Logistique() {
 
   const today = new Date().toISOString().split('T')[0]
   const planifiees = livraisons.filter(l => l.statut === 'planifiee').length
-  const enTransit = livraisons.filter(l => l.statut === 'en_transit').length
+  const enTransit = livraisons.filter(l => l.statut === 'en_route' || l.statut === 'en_transit').length
   const livrees = livraisons.filter(l => l.statut === 'livree').length
 
   const handleCommandeChange = (commandeId: string) => {
@@ -274,8 +290,8 @@ export default function Logistique() {
                 <div className="flex flex-wrap gap-2">
                   {selectedActions.map((action) => (
                     <Button key={action.statut} size="sm" variant={action.statut === 'annulee' ? 'ghost' : 'primary'}
-                      disabled={updateStatut.isPending || (selectedBlocked && ['en_transit', 'livree'].includes(action.statut))}
-                      title={selectedBlocked && ['en_transit', 'livree'].includes(action.statut) ? 'Document requis avant de continuer' : undefined}
+                      disabled={updateStatut.isPending || (selectedBlocked && ['en_route', 'en_transit', 'livree'].includes(action.statut))}
+                      title={selectedBlocked && ['en_route', 'en_transit', 'livree'].includes(action.statut) ? 'Document requis avant de continuer' : undefined}
                       onClick={() => handleStatut(selected, action.statut)}>
                       {action.icon} {action.label}
                     </Button>
