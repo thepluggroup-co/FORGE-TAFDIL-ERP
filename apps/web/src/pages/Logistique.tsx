@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { AlertTriangle, CheckCircle, Clock, Package, Plus, RefreshCw, Truck, XCircle } from 'lucide-react'
 import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
-import type { Column } from '@forge/ui'
+import type { Column, StatusMap } from '@forge/ui'
 import { formatDate, formatXAF } from '@/lib/utils'
 import {
   useCommandesPretesLivraison,
@@ -45,6 +45,20 @@ STATUT_LABELS.delivered = 'Livree'
 STATUT_LABELS.cancelled = 'Annulee'
 STATUT_LABELS.en_route = 'En route'
 STATUT_LABELS.echec_livraison = 'Echec livraison'
+
+const LIVRAISON_STATUS_MAP: StatusMap = {
+  en_preparation:  { label: 'En preparation',  color: '#d97706', bgColor: '#fef3c7' },
+  planifiee:       { label: 'Planifiee',       color: '#1d4ed8', bgColor: '#dbeafe' },
+  en_route:        { label: 'En route',        color: '#0891b2', bgColor: '#cffafe' },
+  en_transit:      { label: 'En transit',      color: '#0891b2', bgColor: '#cffafe' },
+  livree:          { label: 'Livree',          color: '#15803d', bgColor: '#dcfce7' },
+  echec_livraison: { label: 'Echec livraison', color: '#dc2626', bgColor: '#fee2e2' },
+  annulee:         { label: 'Annulee',         color: '#6b7280', bgColor: '#f3f4f6' },
+  confirmed:       { label: 'Confirmee',       color: '#1d4ed8', bgColor: '#dbeafe' },
+  pret:            { label: 'Prete',           color: '#6d28d9', bgColor: '#ede9fe' },
+  delivered:       { label: 'Livree',          color: '#15803d', bgColor: '#dcfce7' },
+  cancelled:       { label: 'Annulee',         color: '#6b7280', bgColor: '#f3f4f6' },
+}
 
 const NEXT_ACTIONS: Partial<Record<Livraison['statut'], Array<{ statut: Livraison['statut']; label: string; icon: JSX.Element }>>> = {
   en_preparation: [
@@ -112,6 +126,10 @@ function toDateInput(value?: string | null) {
   return value ? String(value).slice(0, 10) : ''
 }
 
+function dateLivraisonAffichee(livraison: LivraisonRecord) {
+  return livraison.date_livraison_reelle ?? livraison.date_livraison_prevue ?? null
+}
+
 export default function Logistique() {
   const [slideOpen, setSlideOpen] = useState(false)
   const [selected, setSelected] = useState<LivraisonRecord | null>(null)
@@ -148,8 +166,16 @@ export default function Logistique() {
     { id: 'destination', header: 'Destination', accessor: 'destination', render: (v) => <span className="text-sm text-gray-500">{v as string}</span> },
     { id: 'transport', header: 'Transporteur', accessor: 'transporteur', render: (v) => <span className="text-sm">{(v as string) ?? '-'}</span> },
     { id: 'depart', header: 'Départ', accessor: 'date_depart', render: (v) => <span className="text-sm text-gray-500">{v ? formatDate(v as string) : '-'}</span> },
-    { id: 'livraison', header: 'Livraison', accessor: 'date_livraison_prevue', render: (v) => <span className="text-sm text-gray-500">{v ? formatDate(v as string) : '-'}</span> },
-    { id: 'statut', header: 'Statut', accessor: 'statut', render: (v) => <StatusBadge status={STATUT_LABELS[v as Livraison['statut']] ?? String(v)} /> },
+    {
+      id: 'livraison',
+      header: 'Livraison',
+      accessor: 'date_livraison_prevue',
+      render: (_, row) => {
+        const date = dateLivraisonAffichee(row)
+        return <span className="text-sm text-gray-500">{date ? formatDate(date) : '-'}</span>
+      },
+    },
+    { id: 'statut', header: 'Statut', accessor: 'statut', render: (v) => <StatusBadge status={String(v)} map={LIVRAISON_STATUS_MAP} /> },
   ], [])
 
   const livraisonsTriees = useMemo(() => {
@@ -405,7 +431,7 @@ export default function Logistique() {
               <div>
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-sm font-black text-[#212121]">{selected.numero}</h3>
-                  <StatusBadge status={STATUT_LABELS[selected.statut] ?? String(selected.statut ?? '-')} />
+                  <StatusBadge status={String(selected.statut ?? '-')} map={LIVRAISON_STATUS_MAP} />
                 </div>
                 <p className="mt-1 text-xs text-gray-400">{selected.client_nom} · {selected.destination}</p>
               </div>
@@ -416,8 +442,10 @@ export default function Logistique() {
                   <p className="font-semibold text-gray-700">{selected.date_depart ? formatDate(selected.date_depart) : '-'}</p>
                 </div>
                 <div className="rounded-lg bg-gray-50 p-3">
-                  <p className="text-gray-400">Livraison prévue</p>
-                  <p className="font-semibold text-gray-700">{selected.date_livraison_prevue ? formatDate(selected.date_livraison_prevue) : '-'}</p>
+                  <p className="text-gray-400">{selected.date_livraison_reelle ? 'Livraison reelle' : 'Livraison prevue'}</p>
+                  <p className="font-semibold text-gray-700">
+                    {dateLivraisonAffichee(selected) ? formatDate(dateLivraisonAffichee(selected) as string) : '-'}
+                  </p>
                 </div>
               </div>
 

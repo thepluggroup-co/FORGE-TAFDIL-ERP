@@ -498,7 +498,7 @@ logistiqueRouter.patch(
 
     const { data: livraison, error: fetchErr } = await db
       .from('livraisons')
-      .select('id, statut, commande_id, livreur_id, created_by')
+      .select('id, statut, commande_id, livreur_id, created_by, destination, transporteur, date_depart, date_livraison_prevue')
       .eq('id', id)
       .single()
 
@@ -509,6 +509,8 @@ logistiqueRouter.patch(
     const lv = livraison as {
       id: string; statut: string; commande_id: string | null
       livreur_id: string | null; created_by: string | null
+      destination?: string | null; transporteur?: string | null
+      date_depart?: string | null; date_livraison_prevue?: string | null
     }
 
     // Un operateur ne peut modifier que ses propres livraisons
@@ -605,6 +607,17 @@ logistiqueRouter.patch(
     }
 
     if (nextStatut === 'livree') {
+      const destination = String(body.destination ?? lv.destination ?? '').trim()
+      const transporteur = String(body.transporteur ?? lv.transporteur ?? '').trim()
+      const dateDepart = body.date_depart ?? lv.date_depart
+      const dateLivraisonPrevue = body.date_livraison_prevue ?? lv.date_livraison_prevue
+
+      if (!destination || destination.toLowerCase() === 'a definir' || !transporteur || !dateDepart || !dateLivraisonPrevue || !body.date_livraison_reelle) {
+        return c.json({
+          error: 'La destination, le transporteur, la date de depart, la date de livraison prevue et la date de livraison reelle sont requis avant de valider la livraison.',
+          code:  'DELIVERY_PLANNING_REQUIRED',
+        }, 422)
+      }
       updatePayload.date_livraison_reelle = body.date_livraison_reelle ?? new Date().toISOString()
     }
 

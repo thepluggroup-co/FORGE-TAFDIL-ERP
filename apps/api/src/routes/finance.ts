@@ -1106,16 +1106,17 @@ router.post(
     const user   = c.get('user')
     const body   = c.req.valid('json')
 
-    const { data: facture } = await db
+    const { data: facture, error: factureError } = await db
       .from('factures')
-      .select('statut, total_ttc_xaf, montant_ttc_xaf, net_a_payer_xaf, montant_paye_xaf, numero, client_nom, client_id, commande_id, date_emission, date_echeance, created_by')
+      .select('statut, total_ttc_xaf, net_a_payer_xaf, montant_paye_xaf, numero, client_nom, client_id, commande_id, date_emission, date_echeance, created_by')
       .eq('id', id)
       .single()
 
+    if (factureError) return c.json({ error: factureError.message }, 400)
     if (!facture) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
 
     const f = facture as {
-      statut: string; total_ttc_xaf?: number | null; montant_ttc_xaf?: number | null; net_a_payer_xaf?: number | null
+      statut: string; total_ttc_xaf?: number | null; net_a_payer_xaf?: number | null
       montant_paye_xaf: number; numero: string; client_nom: string; client_id: string | null
     }
 
@@ -1212,16 +1213,17 @@ router.post(
     const user   = c.get('user')
     const body   = c.req.valid('json')
 
-    const { data: facture } = await db
+    const { data: facture, error: factureError } = await db
       .from('factures')
-      .select('statut, total_ttc_xaf, montant_ttc_xaf, net_a_payer_xaf, montant_paye_xaf, numero, client_nom, client_id, commande_id, date_emission, date_echeance, created_by')
+      .select('statut, total_ttc_xaf, net_a_payer_xaf, montant_paye_xaf, numero, client_nom, client_id, commande_id, date_emission, date_echeance, created_by')
       .eq('id', id)
       .single()
 
+    if (factureError) return c.json({ error: factureError.message }, 400)
     if (!facture) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
 
     const f = facture as {
-      statut: string; total_ttc_xaf?: number | null; montant_ttc_xaf?: number | null; net_a_payer_xaf?: number | null
+      statut: string; total_ttc_xaf?: number | null; net_a_payer_xaf?: number | null
       montant_paye_xaf: number
       numero: string; client_nom: string; client_id: string | null
     }
