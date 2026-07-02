@@ -133,9 +133,14 @@ const createLivraisonSchema = z.object({
 
 const patchStatutSchema = z.object({
   // 'planifiee' inclus pour la transition en_preparation → planifiee (logistique confirme)
-  statut:      z.enum(['planifiee', 'en_route', 'en_transit', 'livree', 'echec_livraison', 'annulee']),
-  commentaire: z.string().optional(),
-  geoloc:      z.string().optional(),
+  statut:                z.enum(['planifiee', 'en_route', 'en_transit', 'livree', 'echec_livraison', 'annulee']),
+  commentaire:           z.string().optional(),
+  geoloc:                z.string().optional(),
+  destination:           z.string().optional(),
+  transporteur:          z.string().optional(),
+  date_depart:           z.string().optional(),
+  date_livraison_prevue: z.string().optional(),
+  date_livraison_reelle: z.string().optional(),
   paiement_livraison: z.object({
     montant_xaf:   z.number().min(0),
     methode:       z.enum(['mobile_money', 'especes']),
@@ -586,8 +591,21 @@ logistiqueRouter.patch(
       updated_at: new Date().toISOString(),
     }
 
+    if (nextStatut === 'planifiee') {
+      if (!body.date_depart || !body.date_livraison_prevue) {
+        return c.json({
+          error: 'La date de depart et la date de livraison prevue sont requises pour planifier la livraison.',
+          code:  'PLANNING_DATES_REQUIRED',
+        }, 422)
+      }
+      updatePayload.date_depart = body.date_depart
+      updatePayload.date_livraison_prevue = body.date_livraison_prevue
+      if (body.destination) updatePayload.destination = body.destination
+      if (body.transporteur) updatePayload.transporteur = body.transporteur
+    }
+
     if (nextStatut === 'livree') {
-      updatePayload.date_livraison_reelle = new Date().toISOString()
+      updatePayload.date_livraison_reelle = body.date_livraison_reelle ?? new Date().toISOString()
     }
 
     const { data: updated, error: updateErr } = await db

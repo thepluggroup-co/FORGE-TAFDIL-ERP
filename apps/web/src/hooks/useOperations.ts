@@ -509,17 +509,30 @@ export function useSynchroniserLivraisons() {
 export function useUpdateLivraisonStatut() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, statut, date_livraison_reelle, notes, paiement_livraison }: {
+    mutationFn: ({ id, statut, date_depart, date_livraison_prevue, date_livraison_reelle, destination, transporteur, notes, paiement_livraison }: {
       id: string
       statut: Livraison['statut']
+      date_depart?: string
+      date_livraison_prevue?: string
       date_livraison_reelle?: string
+      destination?: string
+      transporteur?: string
       notes?: string
       paiement_livraison?: {
         montant_xaf: number
         methode: 'mobile_money' | 'especes'
         reference_ext?: string
       }
-    }) => apiClient.patch<Livraison>(`/api/logistique/livraisons/${id}/statut`, { statut, date_livraison_reelle, notes, paiement_livraison }),
+    }) => apiClient.patch<Livraison>(`/api/logistique/livraisons/${id}/statut`, {
+      statut,
+      date_depart,
+      date_livraison_prevue,
+      date_livraison_reelle,
+      destination,
+      transporteur,
+      commentaire: notes,
+      paiement_livraison,
+    }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['livraisons'] })
       void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { AlertTriangle, CheckCircle, Clock, Package, Plus, RefreshCw, Truck, XCircle } from 'lucide-react'
-import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button } from '@forge/ui'
+import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatDate, formatXAF } from '@/lib/utils'
 import {
@@ -19,6 +19,14 @@ type PaiementLivraison = {
   montant_xaf: number
   methode: 'mobile_money' | 'especes'
   reference_ext?: string
+}
+type LivraisonActionForm = {
+  dateDepart: string
+  dateLivraisonPrevue: string
+  dateLivraisonReelle: string
+  destination: string
+  transporteur: string
+  notes: string
 }
 
 const TRANSPORTEURS = ['TRANSIT CM', 'CAMTRANS', 'PORT EXPRESS', 'Auto-livraison', 'ELITE TRANSPORT']
@@ -91,11 +99,26 @@ const DEFAULT_FORM: LivraisonForm = {
   notes: '',
 }
 
+const DEFAULT_ACTION_FORM: LivraisonActionForm = {
+  dateDepart: '',
+  dateLivraisonPrevue: '',
+  dateLivraisonReelle: '',
+  destination: '',
+  transporteur: '',
+  notes: '',
+}
+
+function toDateInput(value?: string | null) {
+  return value ? String(value).slice(0, 10) : ''
+}
+
 export default function Logistique() {
   const [slideOpen, setSlideOpen] = useState(false)
   const [selected, setSelected] = useState<LivraisonRecord | null>(null)
   const [livraisonSort, setLivraisonSort] = useState<LivraisonSort>('recent')
   const [form, setForm] = useState<LivraisonForm>(DEFAULT_FORM)
+  const [actionLivraison, setActionLivraison] = useState<{ livraison: LivraisonRecord; statut: Livraison['statut'] } | null>(null)
+  const [actionForm, setActionForm] = useState<LivraisonActionForm>(DEFAULT_ACTION_FORM)
 
   const { data, isLoading } = useLivraisons({ per_page: 500 })
   const { data: commandesPretesData, isLoading: commandesLoading } = useCommandesPretesLivraison()
@@ -204,7 +227,39 @@ export default function Logistique() {
     )
   }
 
-  const handleStatut = (livraison: LivraisonRecord, statut: Livraison['statut']) => {
+  const openActionForm = (livraison: LivraisonRecord, statut: Livraison['statut']) => {
+    const today = new Date().toISOString().slice(0, 10)
+    setActionLivraison({ livraison, statut })
+    setActionForm({
+      dateDepart:           toDateInput(livraison.date_depart) || today,
+      dateLivraisonPrevue:  toDateInput(livraison.date_livraison_prevue) || toDateInput(livraison.date_depart) || today,
+      dateLivraisonReelle:  toDateInput(livraison.date_livraison_reelle) || today,
+      destination:          String(livraison.destination ?? ''),
+      transporteur:         String(livraison.transporteur ?? ''),
+      notes:                '',
+    })
+  }
+
+  const handleActionClick = (livraison: LivraisonRecord, statut: Livraison['statut']) => {
+    if (statut === 'planifiee' || statut === 'livree') {
+      openActionForm(livraison, statut)
+      return
+    }
+    handleStatut(livraison, statut)
+  }
+
+  const handleStatut = (
+    livraison: LivraisonRecord,
+    statut: Livraison['statut'],
+    extra?: {
+      date_depart?: string
+      date_livraison_prevue?: string
+      date_livraison_reelle?: string
+      destination?: string
+      transporteur?: string
+      notes?: string
+    },
+  ) => {
     let paiement_livraison: PaiementLivraison | undefined
     if (statut === 'livree') {
       const solde = Number(livraison.solde_restant_xaf ?? 0)
@@ -230,17 +285,48 @@ export default function Logistique() {
       {
         id: livraison.id,
         statut,
+        date_depart: extra?.date_depart,
+        date_livraison_prevue: extra?.date_livraison_prevue,
+        date_livraison_reelle: extra?.date_livraison_reelle,
+        destination: extra?.destination,
+        transporteur: extra?.transporteur,
         paiement_livraison,
-        notes: statut === 'livree'
+        notes: extra?.notes || (statut === 'livree'
           ? paiement_livraison
             ? `Livraison confirmée avec paiement ${paiement_livraison.methode} de ${formatXAF(paiement_livraison.montant_xaf)}`
             : 'Livraison confirmée depuis le module logistique'
-          : `Statut mis à jour : ${STATUT_LABELS[statut]}`,
+          : `Statut mis à jour : ${STATUT_LABELS[statut]}`),
       },
       {
-        onSuccess: (updated) => setSelected(updated as LivraisonRecord),
+        onSuccess: (updated) => {
+          setSelected(updated as LivraisonRecord)
+          setActionLivraison(null)
+          setActionForm(DEFAULT_ACTION_FORM)
+        },
       },
     )
+  }
+
+  const submitActionForm = () => {
+    if (!actionLivraison) return
+    if (actionLivraison.statut === 'planifiee') {
+      if (!actionForm.dateDepart || !actionForm.dateLivraisonPrevue) return
+      handleStatut(actionLivraison.livraison, 'planifiee', {
+        date_depart:            actionForm.dateDepart,
+        date_livraison_prevue:  actionForm.dateLivraisonPrevue,
+        destination:            actionForm.destination.trim() || undefined,
+        transporteur:           actionForm.transporteur.trim() || undefined,
+        notes:                  actionForm.notes.trim() || `Livraison planifiée du ${actionForm.dateDepart} au ${actionForm.dateLivraisonPrevue}`,
+      })
+      return
+    }
+    if (actionLivraison.statut === 'livree') {
+      if (!actionForm.dateLivraisonReelle) return
+      handleStatut(actionLivraison.livraison, 'livree', {
+        date_livraison_reelle: actionForm.dateLivraisonReelle,
+        notes:                actionForm.notes.trim() || `Livraison validée le ${actionForm.dateLivraisonReelle}`,
+      })
+    }
   }
 
   const selectedActions = selected ? (NEXT_ACTIONS[selected.statut] ?? []) : []
@@ -373,7 +459,7 @@ export default function Logistique() {
                     <Button key={action.statut} size="sm" variant={action.statut === 'annulee' ? 'ghost' : 'primary'}
                       disabled={updateStatut.isPending || (selectedBlocked && ['en_route', 'en_transit', 'livree'].includes(action.statut))}
                       title={selectedBlocked && ['en_route', 'en_transit', 'livree'].includes(action.statut) ? 'Document requis avant de continuer' : undefined}
-                      onClick={() => handleStatut(selected, action.statut)}>
+                      onClick={() => handleActionClick(selected, action.statut)}>
                       {action.icon} {action.label}
                     </Button>
                   ))}
@@ -472,6 +558,134 @@ export default function Logistique() {
           </div>
         </div>
       </SlideOver>
+
+      <Modal
+        isOpen={Boolean(actionLivraison)}
+        onClose={() => { setActionLivraison(null); setActionForm(DEFAULT_ACTION_FORM) }}
+        title={actionLivraison?.statut === 'livree' ? 'Valider la livraison' : 'Planifier la livraison'}
+        size="md"
+      >
+        {actionLivraison?.statut === 'planifiee' && (
+          <div className="space-y-4">
+            <div className="rounded-lg bg-gray-50 p-3">
+              <div className="text-sm font-bold text-gray-800">{actionLivraison.livraison.numero}</div>
+              <div className="mt-0.5 text-xs text-gray-500">{actionLivraison.livraison.client_nom}</div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Date de depart *</label>
+                <input
+                  type="date"
+                  value={actionForm.dateDepart}
+                  onChange={(e) => setActionForm((f) => ({
+                    ...f,
+                    dateDepart: e.target.value,
+                    dateLivraisonPrevue: f.dateLivraisonPrevue && f.dateLivraisonPrevue < e.target.value ? e.target.value : f.dateLivraisonPrevue,
+                  }))}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#C62828]"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Livraison prevue *</label>
+                <input
+                  type="date"
+                  value={actionForm.dateLivraisonPrevue}
+                  min={actionForm.dateDepart}
+                  onChange={(e) => setActionForm((f) => ({ ...f, dateLivraisonPrevue: e.target.value }))}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#C62828]"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Destination</label>
+              <input
+                value={actionForm.destination}
+                onChange={(e) => setActionForm((f) => ({ ...f, destination: e.target.value }))}
+                placeholder="ex. Douala Akwa"
+                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#C62828]"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Transporteur</label>
+              <select
+                value={actionForm.transporteur}
+                onChange={(e) => setActionForm((f) => ({ ...f, transporteur: e.target.value }))}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#C62828]"
+              >
+                <option value="">A definir</option>
+                {TRANSPORTEURS.map((transporteur) => (
+                  <option key={transporteur} value={transporteur}>{transporteur}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Commentaire</label>
+              <textarea
+                value={actionForm.notes}
+                onChange={(e) => setActionForm((f) => ({ ...f, notes: e.target.value }))}
+                className="min-h-[76px] w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#C62828]"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-gray-100 pt-3">
+              <Button variant="ghost" onClick={() => { setActionLivraison(null); setActionForm(DEFAULT_ACTION_FORM) }}>
+                Annuler
+              </Button>
+              <Button
+                disabled={!actionForm.dateDepart || !actionForm.dateLivraisonPrevue || updateStatut.isPending}
+                onClick={submitActionForm}
+              >
+                Planifier
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {actionLivraison?.statut === 'livree' && (
+          <div className="space-y-4">
+            <div className="rounded-lg bg-gray-50 p-3">
+              <div className="text-sm font-bold text-gray-800">{actionLivraison.livraison.numero}</div>
+              <div className="mt-0.5 text-xs text-gray-500">{actionLivraison.livraison.client_nom}</div>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Date de livraison reelle *</label>
+              <input
+                type="date"
+                value={actionForm.dateLivraisonReelle}
+                onChange={(e) => setActionForm((f) => ({ ...f, dateLivraisonReelle: e.target.value }))}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#C62828]"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Commentaire</label>
+              <textarea
+                value={actionForm.notes}
+                onChange={(e) => setActionForm((f) => ({ ...f, notes: e.target.value }))}
+                placeholder="Etat de reception, reference client, observation..."
+                className="min-h-[90px] w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#C62828]"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-gray-100 pt-3">
+              <Button variant="ghost" onClick={() => { setActionLivraison(null); setActionForm(DEFAULT_ACTION_FORM) }}>
+                Annuler
+              </Button>
+              <Button
+                disabled={!actionForm.dateLivraisonReelle || updateStatut.isPending}
+                onClick={submitActionForm}
+              >
+                Valider livraison
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </motion.div>
   )
 }
