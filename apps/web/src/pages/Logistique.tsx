@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { CheckCircle, Clock, Package, Plus, Truck, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle, Clock, Package, Plus, Truck, XCircle } from 'lucide-react'
 import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatDate, formatXAF } from '@/lib/utils'
@@ -188,6 +188,8 @@ export default function Logistique() {
   }
 
   const selectedActions = selected ? (NEXT_ACTIONS[selected.statut] ?? []) : []
+  const selectedDocument = selected?.document_requis ?? null
+  const selectedBlocked = Boolean(selected?.commande_id && selected?.livrable === false && selectedDocument)
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }} className="space-y-6">
@@ -236,11 +238,44 @@ export default function Logistique() {
                 </div>
               </div>
 
+              {selectedBlocked && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold uppercase text-amber-800">Document requis avant depart</p>
+                      <p className="mt-1 text-sm font-semibold text-amber-900">{selectedDocument?.label ?? 'Document requis'}</p>
+                      <p className="mt-1 text-xs text-amber-800">
+                        {selected.blocage_livraison_message ?? 'La livraison ne peut pas demarrer tant que le document requis n est pas pret.'}
+                      </p>
+                      <p className="mt-2 text-xs text-amber-700">
+                        A traiter dans : <span className="font-semibold">{selectedDocument?.module ?? 'Module concerne'}</span>
+                        {selectedDocument?.etat ? ` - etat actuel : ${selectedDocument.etat}` : ''}
+                      </p>
+                      {selectedDocument?.action && (
+                        <p className="mt-1 text-xs text-amber-700">{selectedDocument.action}</p>
+                      )}
+                      {selectedDocument?.url && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="mt-2 border border-amber-200 bg-white text-amber-800 hover:bg-amber-100"
+                          onClick={() => { window.location.href = selectedDocument.url! }}
+                        >
+                          Ouvrir {selectedDocument.module ?? 'le module'}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {selectedActions.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {selectedActions.map((action) => (
                     <Button key={action.statut} size="sm" variant={action.statut === 'annulee' ? 'ghost' : 'primary'}
-                      disabled={updateStatut.isPending}
+                      disabled={updateStatut.isPending || (selectedBlocked && ['en_transit', 'livree'].includes(action.statut))}
+                      title={selectedBlocked && ['en_transit', 'livree'].includes(action.statut) ? 'Document requis avant de continuer' : undefined}
                       onClick={() => handleStatut(selected, action.statut)}>
                       {action.icon} {action.label}
                     </Button>

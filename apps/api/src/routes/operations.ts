@@ -1097,22 +1097,40 @@ const livraisonStatutSchema = z.object({
 })
 
 async function verifierCommandeLivrable(commandeId: string) {
-  const [bonRes, facture] = await Promise.all([
+  const [bonRes, bonLatestRes, facture] = await Promise.all([
     db.from('bons_sortie')
-      .select('id, numero, statut')
+      .select('id, numero, statut, statut_preparation')
       .eq('commande_id', commandeId)
       .eq('statut', 'execute')
+      .limit(1)
+      .maybeSingle(),
+    db.from('bons_sortie')
+      .select('id, numero, statut, statut_preparation')
+      .eq('commande_id', commandeId)
+      .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
     getFactureActiveByCommande(commandeId),
   ])
 
   if (bonRes.error) throw new Error(bonRes.error.message)
+  if (bonLatestRes.error) throw new Error(bonLatestRes.error.message)
   if (!bonRes.data) {
+    const bon = bonLatestRes.data as { id?: string; numero?: string; statut?: string; statut_preparation?: string | null } | null
     return {
       ok: false,
       code: 'BON_SORTIE_NOT_EXECUTED',
       error: 'Le bon de sortie doit etre execute avant la livraison.',
+      document_requis: {
+        type:    'bon_sortie',
+        label:   bon?.numero ? `Bon de sortie ${bon.numero}` : 'Bon de sortie',
+        etat:    bon?.statut ?? 'absent',
+        module:  'Stocks > Bons de sortie',
+        url:     '/stocks/bons-sortie',
+        action:  bon
+          ? 'Assigner un preparateur, marquer la preparation prete, puis executer le bon.'
+          : 'Creer ou synchroniser le bon de sortie de cette commande, puis l executer.',
+      },
     }
   }
 
@@ -1129,6 +1147,14 @@ async function verifierCommandeLivrable(commandeId: string) {
       ok: false,
       code: 'FACTURE_MISSING',
       error: 'La facture doit etre generee par Finance avant la livraison.',
+      document_requis: {
+        type:   'facture',
+        label:  'Facture client',
+        etat:   'absente',
+        module: 'Finance > Factures',
+        url:    '/finance',
+        action: 'Generer la facture de la commande, puis la valider ou l envoyer.',
+      },
     }
   }
 
@@ -1137,6 +1163,14 @@ async function verifierCommandeLivrable(commandeId: string) {
       ok: false,
       code: 'FACTURE_NOT_READY',
       error: `La facture ${f.numero ?? ''} doit etre validee/envoyee avant la livraison.`,
+      document_requis: {
+        type:   'facture',
+        label:  f.numero ? `Facture ${f.numero}` : 'Facture client',
+        etat:   f.statut ?? 'brouillon',
+        module: 'Finance > Factures',
+        url:    '/finance',
+        action: 'Valider ou envoyer cette facture avant de demarrer la livraison.',
+      },
     }
   }
 
@@ -1145,6 +1179,7 @@ async function verifierCommandeLivrable(commandeId: string) {
   return {
     ok: true,
     facture: f,
+    document_requis: null,
     solde_restant_xaf: Math.max(0, Math.round(total - paye)),
   }
 }
@@ -1208,17 +1243,35 @@ router.get('/logistique/livraisons', async (c) => {
   for (const livraison of livraisons) {
     let soldeRestant = 0
     let factureStatut: string | null = null
+    let livrable = true
+    let blocageLivraisonCode: string | null = null
+    let blocageLivraisonMessage: string | null = null
+    let documentRequis: unknown = null
     if (livraison.commande_id) {
-      const facture = await getFactureActiveByCommande(livraison.commande_id).catch(() => null) as {
-        statut?: string
-        total_ttc_xaf?: number
-        montant_paye_xaf?: number
+      const readiness = await verifierCommandeLivrable(livraison.commande_id).catch((e) => {
+        console.error('[logistique] verification livrable:', e)
+        return null
+      }) as {
+        ok?: boolean
+        code?: string
+        error?: string
+        facture?: { statut?: string; total_ttc_xaf?: number; montant_paye_xaf?: number } | null
+        solde_restant_xaf?: number
+        document_requis?: unknown
       } | null
-      factureStatut = facture?.statut ?? null
-      soldeRestant = Math.max(0, Math.round(Number(facture?.total_ttc_xaf ?? 0) - Number(facture?.montant_paye_xaf ?? 0)))
+      livrable = Boolean(readiness?.ok)
+      blocageLivraisonCode = readiness?.ok ? null : readiness?.code ?? 'VERIFICATION_LIVRAISON_FAILED'
+      blocageLivraisonMessage = readiness?.ok ? null : readiness?.error ?? 'Verification des documents de livraison impossible.'
+      documentRequis = readiness?.ok ? null : readiness?.document_requis ?? null
+      factureStatut = readiness?.facture?.statut ?? null
+      soldeRestant = Number(readiness?.solde_restant_xaf ?? 0)
     }
     enrichedData.push({
       ...livraison,
+      livrable,
+      blocage_livraison_code: blocageLivraisonCode,
+      blocage_livraison_message: blocageLivraisonMessage,
+      document_requis: documentRequis,
       facture_statut: factureStatut,
       solde_restant_xaf: soldeRestant,
       livraisons_historique: historiqueParLivraison.get(livraison.id) ?? [],

@@ -362,6 +362,19 @@ export interface Livraison {
   date_livraison_prevue?: string | null
   date_livraison_reelle?: string | null
   notes?: string | null
+  livrable?: boolean
+  blocage_livraison_code?: string | null
+  blocage_livraison_message?: string | null
+  document_requis?: {
+    type?: 'bon_sortie' | 'facture' | string
+    label?: string
+    etat?: string | null
+    module?: string
+    url?: string
+    action?: string
+  } | null
+  facture_statut?: string | null
+  solde_restant_xaf?: number
   created_at: string
   livraisons_historique?: Array<{
     id: string
