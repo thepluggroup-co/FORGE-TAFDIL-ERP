@@ -16,7 +16,7 @@ export function generateMetadata({ params }: Props) {
   const article = getArticleBySlug(params.slug)
   if (!article) return {}
   return {
-    title: `${article.title} | MetalForge`,
+    title: `${article.title} | TAFDIL`,
     description: article.excerpt,
   }
 }
@@ -35,7 +35,7 @@ export default function BlogArticlePage({ params }: Props) {
         <div className="mx-auto max-w-7xl px-4 py-5 text-xs font-semibold text-gray-500 sm:px-6 lg:px-8">
           <Link href="/" className="hover:text-forge-red">Accueil</Link>
           <span className="mx-2">/</span>
-          <Link href={`/blog/${article.slug}`} className="hover:text-forge-red">Blog</Link>
+          <Link href="/blog" className="hover:text-forge-red">Blog</Link>
           <span className="mx-2">/</span>
           <span className="text-forge-dark">{article.category}</span>
         </div>
@@ -152,10 +152,16 @@ export default function BlogArticlePage({ params }: Props) {
           <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
             <h2 className="text-lg font-black text-forge-dark">Categories</h2>
             <div className="mt-4 space-y-3">
-              {['Tous les articles', 'Conseils', 'Guides pratiques', 'Actualites', 'Produits', 'Tendances'].map((item, itemIndex) => (
-                <Link key={item} href={`/blog/${blogArticles[itemIndex % blogArticles.length].slug}`} className="flex items-center justify-between text-sm font-bold text-gray-600 hover:text-forge-red">
+              {[
+                ['Tous les articles', '/blog'],
+                ['Conseils', '/blog?categorie=Conseils'],
+                ['Guides pratiques', '/blog?categorie=Guide'],
+                ['Actualites', '/blog?categorie=Actualites'],
+                ['Tendances', '/blog?categorie=Tendances'],
+              ].map(([item, href], itemIndex) => (
+                <Link key={item} href={href} className="flex items-center justify-between text-sm font-bold text-gray-600 hover:text-forge-red">
                   {item}
-                  <span>{[48, 16, 12, 8, 7, 5][itemIndex]}</span>
+                  <span>{[blogArticles.length, 2, 2, 2, 1][itemIndex]}</span>
                 </Link>
               ))}
             </div>

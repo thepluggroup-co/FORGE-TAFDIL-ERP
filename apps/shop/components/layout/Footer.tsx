@@ -44,7 +44,7 @@ export function Footer() {
             ['Catalogue', '/catalogue'],
             ['Promotions', '/catalogue'],
             ['Suivre ma commande', '/suivi'],
-            ['Blog', '/blog/comment-bien-choisir-ses-profils-aluminium-pour-vos-menuiseries'],
+            ['Blog', '/blog'],
             ['A propos', '/contact'],
             ['Contact', '/contact'],
           ]} />

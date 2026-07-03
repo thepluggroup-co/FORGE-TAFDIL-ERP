@@ -9,7 +9,7 @@ import { MetalForgeLogo } from '@/components/ui/BrandLogo'
 
 const NAV_LINKS = [
   { href: '/contact', label: 'A propos' },
-  { href: '/blog/comment-bien-choisir-ses-profils-aluminium-pour-vos-menuiseries', label: 'Blog' },
+  { href: '/blog', label: 'Blog' },
   { href: '/contact', label: 'FAQ' },
   { href: '/contact', label: 'Contact' },
 ]
