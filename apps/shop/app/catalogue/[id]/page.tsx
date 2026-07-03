@@ -3,7 +3,6 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { ChevronRight } from 'lucide-react'
 import { ProductDetailClient } from './ProductDetailClient'
-import { ProductCard } from '../ProductCard'
 import { fetchCatalogueProduit, fetchCatalogueProduits } from '@/lib/catalogue'
 import type { Produit } from '@/lib/types'
 
@@ -14,8 +13,11 @@ async function fetchProduit(id: string): Promise<Produit | null> {
 }
 
 async function fetchSimilaires(categorie: string, excludeId: string): Promise<Produit[]> {
-  const produits = await fetchCatalogueProduits({ categorie })
-  return produits.filter((p) => p.id !== excludeId).slice(0, 3)
+  const produits = await fetchCatalogueProduits()
+  const disponibles = produits.filter((p) => p.id !== excludeId)
+  const memeCategorie = disponibles.filter((p) => p.categorie === categorie)
+  const autres = disponibles.filter((p) => p.categorie !== categorie)
+  return [...memeCategorie, ...autres].slice(0, 8)
 }
 
 export async function generateStaticParams() {
@@ -68,26 +70,19 @@ export default async function ProduitPage({ params }: { params: { id: string } }
   const similaires = await fetchSimilaires(produit.categorie, produit.id)
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-8">
+    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
       <ProductJsonLd produit={produit} />
       <nav className="mb-6 flex items-center gap-1.5 text-xs text-gray-400">
         <Link href="/" className="hover:text-forge-red transition-colors">Accueil</Link>
         <ChevronRight size={12} />
         <Link href="/catalogue" className="hover:text-forge-red transition-colors">Catalogue</Link>
         <ChevronRight size={12} />
-        <span className="text-forge-dark font-medium truncate max-w-[180px]">{produit.nom}</span>
+        <Link href={`/catalogue?categorie=${encodeURIComponent(produit.categorie)}`} className="hover:text-forge-red transition-colors">{produit.categorie}</Link>
+        <ChevronRight size={12} />
+        <span className="text-forge-dark font-medium truncate max-w-[220px]">{produit.nom}</span>
       </nav>
 
-      <ProductDetailClient produit={produit} />
-
-      {similaires.length > 0 && (
-        <section className="mt-16">
-          <h2 className="mb-6 text-xl font-black text-forge-dark">Produits similaires</h2>
-          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {similaires.map((p) => <ProductCard key={p.id} produit={p} />)}
-          </div>
-        </section>
-      )}
+      <ProductDetailClient produit={produit} similaires={similaires} />
     </main>
   )
 }
