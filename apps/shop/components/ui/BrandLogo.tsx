@@ -80,8 +80,8 @@ export function MetalForgeLogo({ size = 32, variant = 'color', showText = true, 
       <MetalForgeIcon size={size} variant={variant} />
       {showText && (
         <span className="font-black tracking-tight text-xl leading-none">
-          <span style={{ color: '#C62828' }}>METAL</span>
-          <span style={{ color: primaryText }}>FORGE</span>
+          <span style={{ color: primaryText }}>METAL</span>
+          <span style={{ color: '#C62828' }}>FORGE</span>
         </span>
       )}
     </span>
