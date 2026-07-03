@@ -37,7 +37,7 @@ export function ProductCard({ produit }: Props) {
   const { addItem } = useCart()
   const indisponible = produit.disponibilite === 'indisponible'
 
-  const whatsappUrl = `https://wa.me/${(process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '').replace(/\D/g, '')}?text=${encodeURIComponent(
+  const whatsappUrl = `https://wa.me/237695884528?text=${encodeURIComponent(
     `Bonjour TAFDIL, je souhaite un devis pour : ${produit.nom} (Réf. ${produit.ref})`
   )}`
 

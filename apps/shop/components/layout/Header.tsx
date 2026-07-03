@@ -20,7 +20,7 @@ export function Header() {
   const { items, openDrawer } = useCartStore()
   const router = useRouter()
   const count = computeTotal(items).lignes_count
-  const whatsapp = (process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '+237 658 84 52 8').replace(/\D/g, '')
+  const whatsapp = '237695884528'
 
   const submitSearch = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -70,7 +70,7 @@ export function Header() {
             <span className="flex h-9 w-9 items-center justify-center rounded-full border border-green-200 bg-green-50 text-green-600">W</span>
             <span className="leading-tight">
               <span className="block font-black text-forge-dark">WhatsApp</span>
-              <span className="text-xs text-gray-500">+237 658 84 52 8</span>
+              <span className="text-xs text-gray-500">+237 695884528</span>
             </span>
           </a>
 

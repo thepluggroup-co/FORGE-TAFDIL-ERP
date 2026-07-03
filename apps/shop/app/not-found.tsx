@@ -30,7 +30,7 @@ export default function NotFound() {
       </div>
 
       <a
-        href={`https://wa.me/${(process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '237958845').replace(/\D/g, '')}?text=Bonjour TAFDIL`}
+        href="https://wa.me/237695884528?text=Bonjour TAFDIL"
         target="_blank"
         rel="noopener noreferrer"
         className="mt-4 flex items-center gap-2 text-sm text-green-600 hover:underline"

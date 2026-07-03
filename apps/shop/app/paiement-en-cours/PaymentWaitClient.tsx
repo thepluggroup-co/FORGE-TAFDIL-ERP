@@ -120,7 +120,7 @@ export function PaymentWaitClient() {
     return () => clearInterval(id)
   }, [poll, state, paymentRef])
 
-  const whatsappBase = `https://wa.me/${(process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '').replace(/\D/g, '')}`
+  const whatsappBase = 'https://wa.me/237695884528'
 
   // ── État : SUCCÈS ───────────────────────────────────────────────────────────
 

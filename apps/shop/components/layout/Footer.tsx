@@ -3,7 +3,7 @@ import { Mail, MapPin, Phone, Send, ShieldCheck, Truck, Wallet, Headphones } fro
 import { MetalForgeLogo } from '@/components/ui/BrandLogo'
 
 export function Footer() {
-  const whatsapp = (process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '+23765884528').replace(/\D/g, '')
+  const whatsapp = '237695884528'
 
   return (
     <footer className="bg-[#111820] text-white">
@@ -62,7 +62,7 @@ export function Footer() {
             <p className="mb-4 text-sm font-black uppercase tracking-wider text-gray-300">Contact</p>
             <ul className="space-y-3 text-sm text-gray-400">
               <li className="flex gap-2"><MapPin size={16} className="mt-0.5 shrink-0 text-forge-red" /> Bonamoussadi, Douala Cameroun</li>
-              <li className="flex gap-2"><Phone size={16} className="shrink-0 text-forge-red" /> +237 658 84 52 8</li>
+              <li className="flex gap-2"><Phone size={16} className="shrink-0 text-forge-red" /> +237 695884528</li>
               <li className="flex gap-2"><Mail size={16} className="shrink-0 text-forge-red" /> contact@metalforge.cm</li>
               <li className="text-gray-500">Lun - Sam : 7h30 - 18h</li>
             </ul>

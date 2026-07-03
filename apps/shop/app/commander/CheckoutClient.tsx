@@ -835,7 +835,7 @@ function StepConfirmation({
   const [resendLoading, setResendLoading] = useState(false)
   const [cooldown, setCooldown] = useState(smsStatus?.ok ? 0 : smsStatus?.retry_after_seconds ?? 0)
 
-  const whatsappUrl = `https://wa.me/${(process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '').replace(/\D/g, '')}?text=${encodeURIComponent(
+  const whatsappUrl = `https://wa.me/237695884528?text=${encodeURIComponent(
     `Bonjour TAFDIL, je viens de passer la commande *${commandeRef}*.\nPouvez-vous me confirmer la livraison ?`
   )}`
 

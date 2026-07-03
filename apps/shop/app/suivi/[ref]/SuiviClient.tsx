@@ -38,7 +38,7 @@ type SmsStatus = {
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://shop.tafdil.cm'
-const WA_TEL   = (process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '+237 95 88 45 28').replace(/\D/g, '')
+const WA_TEL   = '237695884528'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 

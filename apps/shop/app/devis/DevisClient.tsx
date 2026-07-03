@@ -377,12 +377,12 @@ export function DevisClient() {
                   <div>
                     <p className="text-xs font-medium text-forge-dark">WhatsApp</p>
                     <a
-                      href={`https://wa.me/${(process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '').replace(/\D/g, '')}`}
+                      href="https://wa.me/237695884528"
                       className="text-sm text-forge-red hover:underline"
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      {process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '+237 6XX XXX XXX'}
+                      +237 695884528
                     </a>
                   </div>
                 </li>

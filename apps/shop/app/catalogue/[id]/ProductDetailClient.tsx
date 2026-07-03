@@ -245,11 +245,11 @@ export function ProductDetailClient({ produit, similaires }: Props) {
 
           <InfoCard title="Besoin d aide ?">
             <p className="text-sm leading-6 text-gray-600">Notre equipe est a votre ecoute pour vous conseiller sur ce produit.</p>
-            <a href={`https://wa.me/${(process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? '+23765884528').replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="mt-4 inline-flex items-center gap-2 rounded-md border border-gray-200 px-4 py-2 text-sm font-black text-forge-dark hover:border-forge-red hover:text-forge-red">
+            <a href="https://wa.me/237695884528" target="_blank" rel="noopener noreferrer" className="mt-4 inline-flex items-center gap-2 rounded-md border border-gray-200 px-4 py-2 text-sm font-black text-forge-dark hover:border-forge-red hover:text-forge-red">
               WhatsApp
             </a>
             <div className="mt-4 space-y-1 text-sm font-semibold text-gray-600">
-              <p>+237 658 84 52 8</p>
+              <p>+237 695884528</p>
               <p>Lun - Sam : 7h30 - 18h</p>
             </div>
           </InfoCard>
