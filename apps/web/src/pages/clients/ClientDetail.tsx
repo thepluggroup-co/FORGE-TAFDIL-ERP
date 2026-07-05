@@ -1,14 +1,29 @@
 import React, { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Phone, Mail, MapPin, Building2, User, Landmark, TrendingUp, CreditCard, FileText, Clock, OctagonX, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, Phone, Mail, MapPin, Building2, User, Landmark, TrendingUp, CreditCard, FileText, Clock, OctagonX, ShieldCheck, Loader2 } from 'lucide-react'
 import { PageHeader, StatusBadge, Button, Modal } from '@forge/ui'
 import { formatXAF } from '@/lib/utils'
 import { useClient, useUpdateClientStatut } from '@/hooks/useClients'
 import type { Client } from '@/hooks/useClients'
+import { useCommandes } from '@/hooks/useCommandes'
+import type { Commande } from '@/hooks/useCommandes'
 import { useAuth } from '@/context/AuthContext'
 import { ScoreFiabilite } from '../Clients'
 import type { ClientType } from '../Clients'
+
+const COMMANDE_STATUT: Record<Commande['statut'], { label: string; color: string; bg: string }> = {
+  confirmed:     { label: 'Confirmee',     color: '#1d4ed8', bg: '#dbeafe' },
+  in_production: { label: 'En production', color: '#7c3aed', bg: '#ede9fe' },
+  pret:          { label: 'Prete',         color: '#d97706', bg: '#fef3c7' },
+  delivered:     { label: 'Livree',        color: '#15803d', bg: '#dcfce7' },
+  cancelled:     { label: 'Annulee',       color: '#dc2626', bg: '#fee2e2' },
+}
+
+function formatDate(value: string | null) {
+  if (!value) return '-'
+  return new Date(value).toLocaleDateString('fr-FR')
+}
 
 // ── Tabs ───────────────────────────────────────────────────────────────────────
 
@@ -38,6 +53,7 @@ export default function ClientDetail() {
   const [showBlockConfirm, setShowBlockConfirm] = useState(false)
 
   const { data: client, isLoading } = useClient(id ?? '')
+  const { data: commandesData, isLoading: commandesLoading } = useCommandes({ client_id: id, enabled: !!id })
   const updateStatut = useUpdateClientStatut()
 
   const canChangeStatut = role === 'admin' || role === 'superviseur'
@@ -67,6 +83,11 @@ export default function ClientDetail() {
 
   const Icon = TYPE_ICONS[client.type as ClientType]
   const scoreColor = client.score_fiabilite >= 80 ? '#15803d' : client.score_fiabilite >= 50 ? '#d97706' : '#dc2626'
+  const commandes = commandesData?.data ?? []
+  const commandesTotal = commandesData?.total ?? client.commandes_count
+  const totalCa = commandes.length > 0
+    ? commandes.reduce((sum, commande) => sum + commande.montant_ttc_xaf, 0)
+    : client.total_ca_xaf
 
   return (
     <motion.div
@@ -78,7 +99,7 @@ export default function ClientDetail() {
     >
       <PageHeader
         title={client.nom}
-        subtitle={`${client.commandes_count} commandes · CA : ${formatXAF(client.total_ca_xaf)}`}
+        subtitle={`${commandesTotal} commandes · CA : ${formatXAF(totalCa)}`}
         breadcrumbs={[
           { label: 'FORGE', href: '/' },
           { label: 'Clients', href: '/clients' },
@@ -127,7 +148,8 @@ export default function ClientDetail() {
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-3">
               <div className="space-y-2">
-                <h2 className="text-lg font-bold text-[#212121]">{client.nom}</h2>
+                <p className="text-xs font-semibold uppercase text-gray-400">Client</p>
+                <h2 className="text-2xl font-black text-[#212121] leading-tight">{client.nom}</h2>
                 <StatusBadge status={client.statut} />
 
                 {/* Statut change buttons — admin/directeur only */}
@@ -204,8 +226,8 @@ export default function ClientDetail() {
         {/* KPIs */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-5 border-t border-gray-100">
           {[
-            { label: 'Commandes', value: String(client.commandes_count), color: '#1d4ed8' },
-            { label: 'CA total', value: formatXAF(client.total_ca_xaf), color: '#15803d' },
+            { label: 'Commandes', value: String(commandesTotal), color: '#1d4ed8' },
+            { label: 'CA total', value: formatXAF(totalCa), color: '#15803d' },
             { label: 'Encours crédit', value: client.encours_credit_xaf > 0 ? formatXAF(client.encours_credit_xaf) : '—', color: client.encours_credit_xaf > 0 ? '#dc2626' : '#6b7280' },
           ].map(({ label, value, color }) => (
             <div key={label} className="text-center">
@@ -271,7 +293,11 @@ export default function ClientDetail() {
               </div>
             )}
 
-            {activeTab !== 'Infos' && (
+            {activeTab === 'Commandes' && (
+              <CommandesClient commandes={commandes} isLoading={commandesLoading} />
+            )}
+
+            {activeTab !== 'Infos' && activeTab !== 'Commandes' && (
               <EmptyTabState
                 icon={activeTab === 'Commandes' ? <TrendingUp className="h-6 w-6" /> : activeTab === 'Crédits' ? <CreditCard className="h-6 w-6" /> : activeTab === 'Factures' ? <FileText className="h-6 w-6" /> : <Clock className="h-6 w-6" />}
                 label={`Données ${activeTab.toLowerCase()} disponibles via l'API`}
@@ -319,6 +345,57 @@ export default function ClientDetail() {
         </div>
       </Modal>
     </motion.div>
+  )
+}
+
+function CommandesClient({ commandes, isLoading }: { commandes: Commande[]; isLoading: boolean }) {
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-10 gap-2 text-sm text-gray-400">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Chargement des commandes...
+      </div>
+    )
+  }
+
+  if (commandes.length === 0) {
+    return (
+      <EmptyTabState
+        icon={<TrendingUp className="h-6 w-6" />}
+        label="Aucune commande enregistree pour ce client"
+      />
+    )
+  }
+
+  return (
+    <div className="divide-y divide-gray-100">
+      {commandes.map((commande) => {
+        const statut = COMMANDE_STATUT[commande.statut] ?? COMMANDE_STATUT.confirmed
+        return (
+          <div key={commande.id} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-mono text-sm font-bold text-[#212121]">{commande.reference}</p>
+                <span
+                  className="rounded-full px-2 py-0.5 text-[11px] font-bold"
+                  style={{ color: statut.color, backgroundColor: statut.bg }}
+                >
+                  {statut.label}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-gray-400">
+                Commandee le {formatDate(commande.date_commande)}
+                {commande.date_livraison_prevue ? ` · Livraison prevue le ${formatDate(commande.date_livraison_prevue)}` : ''}
+              </p>
+            </div>
+            <div className="text-left sm:text-right">
+              <p className="text-sm font-black text-[#15803d]">{formatXAF(commande.montant_ttc_xaf)}</p>
+              <p className="text-xs text-gray-400">{commande.lignes.length} ligne{commande.lignes.length > 1 ? 's' : ''}</p>
+            </div>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 

@@ -44,9 +44,9 @@ export interface CreateCommandePayload {
 }
 interface CommandesResponse { data: Commande[]; total: number }
 
-export function useCommandes(params?: { statut?: string; search?: string; enabled?: boolean }) {
+export function useCommandes(params?: { statut?: string; search?: string; client_id?: string; enabled?: boolean }) {
   return useQuery({
-    queryKey:  ['commandes', { statut: params?.statut, search: params?.search }],
+    queryKey:  ['commandes', { statut: params?.statut, search: params?.search, client_id: params?.client_id }],
     queryFn:   () => dbGetCommandes(params) as Promise<CommandesResponse>,
     staleTime: 20_000,
     enabled:   params?.enabled !== false,

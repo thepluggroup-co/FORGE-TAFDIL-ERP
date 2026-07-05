@@ -6,6 +6,7 @@ import { OfflineBanner } from '@forge/ui'
 import { useAiAlertes } from '@/hooks/useAI'
 import { useStockAlertes } from '@/hooks/useStocks'
 import { useBonsEnAttente } from '@/hooks/useBons'
+import { useClient } from '@/hooks/useClients'
 import type { AlerteIA } from '@/hooks/useAI'
 
 const ROUTE_LABELS: Record<string, string> = {
@@ -197,6 +198,8 @@ interface TopBarProps {
 export function TopBar({ onMobileMenuToggle, sidebarCollapsed, onSidebarToggle }: TopBarProps) {
   const { user, role, displayName: authName } = useAuth()
   const location = useLocation()
+  const segments = location.pathname.split('/').filter(Boolean)
+  const clientDetailId = segments[0] === 'clients' && segments.length === 2 ? segments[1] : ''
   const [isOnline, setIsOnline] = useState(navigator.onLine)
   const [showNotifs, setShowNotifs] = useState(false)
   const [showUser, setShowUser]     = useState(false)
@@ -208,6 +211,7 @@ export function TopBar({ onMobileMenuToggle, sidebarCollapsed, onSidebarToggle }
   const { data: aiAlertesData }  = useAiAlertes()
   const { data: stockAlertData } = useStockAlertes()
   const { data: bonsEnAttente = 0 } = useBonsEnAttente()
+  const { data: breadcrumbClient } = useClient(clientDetailId)
 
   const aiCount    = aiAlertesData?.alertes?.length ?? 0
   const stockCount = (stockAlertData?.data ?? []).filter(
@@ -244,11 +248,10 @@ export function TopBar({ onMobileMenuToggle, sidebarCollapsed, onSidebarToggle }
     setShowUser(false)
   }, [location.pathname])
 
-  const segments = location.pathname.split('/').filter(Boolean)
   const breadcrumbs = [
     { label: 'FORGE', path: '/' },
     ...segments.map((seg, i) => ({
-      label: ROUTE_LABELS[seg] ?? seg.charAt(0).toUpperCase() + seg.slice(1),
+      label: clientDetailId && i === 1 ? (breadcrumbClient?.nom ?? 'Client') : ROUTE_LABELS[seg] ?? seg.charAt(0).toUpperCase() + seg.slice(1),
       path: '/' + segments.slice(0, i + 1).join('/'),
     })),
   ]

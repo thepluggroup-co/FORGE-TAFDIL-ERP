@@ -680,12 +680,35 @@ export default function RH() {
   const bulletinsVires      = bulletins.filter(b => b.statut === 'vire').length
   const avancesEnAttente    = avances.filter(a => a.statut === 'payee').length
   const retenuesEnAttente   = retenues.filter(r => r.statut === 'active').length
+  const avancesEnAttenteParEmploye = new Map<string, number>()
+  avances
+    .filter(a => a.statut === 'payee')
+    .forEach(a => avancesEnAttenteParEmploye.set(a.employe_id, (avancesEnAttenteParEmploye.get(a.employe_id) ?? 0) + Number(a.montant_xaf ?? 0)))
+  const retenuesEnAttenteParEmploye = new Map<string, number>()
+  retenues
+    .filter(r => r.statut === 'active')
+    .forEach(r => retenuesEnAttenteParEmploye.set(r.employe_id, (retenuesEnAttenteParEmploye.get(r.employe_id) ?? 0) + Number(r.montant_xaf ?? 0)))
   const controlesErreur     = controlePaie?.controles.filter(c => c.niveau === 'error').length ?? 0
   const controlesAttention  = controlePaie?.controles.filter(c => c.niveau === 'warning').length ?? 0
   const tauxNetSurBrut      = totalBrut > 0 ? Math.round((totalMasseSalariale / totalBrut) * 100) : 0
-  const paieVerrouillee     = bulletins.some(b => ['valide', 'vire'].includes(b.statut)) || ['validee', 'viree'].includes(paiePeriode?.statut ?? '')
-  const paieRecalculable    = bulletins.length > 0 && !paieVerrouillee
+  const paieVerrouillee     = ['validee', 'viree'].includes(paiePeriode?.statut ?? '')
+  const paieRecalculable    = bulletins.length > 0 && !paieVerrouillee && bulletins.some(b => !['valide', 'vire'].includes(b.statut))
   const paieADeductionsEnAttente = paieRecalculable && (avancesEnAttente > 0 || retenuesEnAttente > 0)
+
+  const renderDeductionPaie = (deduit: unknown, attente: number) => {
+    const montantDeduit = Number(deduit ?? 0)
+    if (montantDeduit <= 0 && attente <= 0) return <span className="text-xs text-gray-400">-</span>
+    return (
+      <div className="space-y-1">
+        {montantDeduit > 0 && <div className="text-sm text-[#dc2626]">−{formatXAF(montantDeduit)}</div>}
+        {attente > 0 && (
+          <div className="inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+            {formatXAF(attente)} en attente
+          </div>
+        )}
+      </div>
+    )
+  }
 
   // Colonnes employés
   const employeColumns: Column<EmployeRecord>[] = [
@@ -728,8 +751,8 @@ export default function RH() {
     { id: 'brut',    header: 'Brut',    accessor: 'salaire_brut_xaf',  render: v => <span className="text-sm">{formatXAF(v as number)}</span> },
     { id: 'cnps',    header: 'CNPS salarié', accessor: 'cnps_salarie_xaf', render: v => <span className="text-sm text-[#dc2626]">−{formatXAF(v as number)}</span> },
     { id: 'irpp',    header: 'IRPP',    accessor: 'irpp_xaf',    render: v => <span className="text-sm text-[#dc2626]">−{formatXAF(v as number)}</span> },
-    { id: 'avance',  header: 'Avance',  accessor: 'avance_deduite_xaf', render: v => Number(v ?? 0) > 0 ? <span className="text-sm text-[#dc2626]">−{formatXAF(v as number)}</span> : <span className="text-xs text-gray-400">-</span> },
-    { id: 'retenue', header: 'Retenue', accessor: 'retenue_deduite_xaf', render: v => Number(v ?? 0) > 0 ? <span className="text-sm text-[#dc2626]">−{formatXAF(v as number)}</span> : <span className="text-xs text-gray-400">-</span> },
+    { id: 'avance',  header: 'Avance',  accessor: 'avance_deduite_xaf', render: (v, row) => renderDeductionPaie(v, avancesEnAttenteParEmploye.get(row.employe_id as string) ?? 0) },
+    { id: 'retenue', header: 'Retenue', accessor: 'retenue_deduite_xaf', render: (v, row) => renderDeductionPaie(v, retenuesEnAttenteParEmploye.get(row.employe_id as string) ?? 0) },
     { id: 'net',     header: 'Net à payer', accessor: 'salaire_net_xaf', render: v => <span className="text-sm font-bold text-[#15803d]">{formatXAF(v as number)}</span> },
     {
       id: 'statut', header: 'Statut', accessor: 'statut',

@@ -772,6 +772,7 @@ async function genererBulletinsMois(
 
   // ── Calcul en mémoire pour chaque employé ─────────────────────────────────
   const bulletinsCalc: BulletinCalc[] = []
+  const employesRecalcules = new Set<string>()
   const aInserer: Record<string, unknown>[] = []
   const aMetAJour: Array<{ id: string; data: Record<string, unknown> }> = []
   const pdfs: Array<{ employe_nom: string; pdf_url: string | null }> = []
@@ -805,6 +806,7 @@ async function genererBulletinsMois(
 
     const bulletin = calculerBulletin(emp, moisStr, heures_sup_xaf, 0, deductions_xaf, avance_deduite_xaf, retenue_deduite_xaf)
     bulletinsCalc.push(bulletin)
+    employesRecalcules.add(emp.id)
 
     const payload = {
       employe_id:          emp.id,
@@ -845,7 +847,7 @@ async function genererBulletinsMois(
   ])
 
   const avancesADeduire = ((avancesSalaire ?? []) as AvanceRow[])
-    .filter(a => a.statut === 'payee')
+    .filter(a => a.statut === 'payee' && employesRecalcules.has(a.employe_id))
     .map(a => ({
       id: a.id,
       montant: Math.round(Number(a.montant_xaf ?? 0)),
@@ -863,7 +865,7 @@ async function genererBulletinsMois(
   ))
 
   const retenuesADeduire = ((retenuesSalaire ?? []) as RetenueRow[])
-    .filter(r => r.statut === 'active')
+    .filter(r => r.statut === 'active' && employesRecalcules.has(r.employe_id))
     .map(r => ({
       id: r.id,
       montant: Math.round(Number(r.montant_xaf ?? 0)),
@@ -1637,20 +1639,13 @@ router.post('/rh/paie', requireRole(['admin']), zValidator('json', paieGenererSc
   const { mois, generer_pdf, forcer } = c.req.valid('json')
 
   if (forcer) {
-    const [{ data: bulletinsVerrouilles }, { data: periodeVerrouillee }] = await Promise.all([
-      db.from('bulletins_paie')
-        .select('id, statut')
-        .eq('mois', mois)
-        .in('statut', ['valide', 'vire'])
-        .limit(1),
-      db.from('paie_periodes')
-        .select('id, statut')
-        .eq('mois', mois)
-        .in('statut', ['validee', 'viree'])
-        .limit(1),
-    ])
+    const { data: periodeVerrouillee } = await db.from('paie_periodes')
+      .select('id, statut')
+      .eq('mois', mois)
+      .in('statut', ['validee', 'viree'])
+      .limit(1)
 
-    if ((bulletinsVerrouilles ?? []).length > 0 || (periodeVerrouillee ?? []).length > 0) {
+    if ((periodeVerrouillee ?? []).length > 0) {
       return c.json({
         error: 'Recalcul impossible : la paie de ce mois est deja validee ou viree.',
         code:  'PAIE_VERROUILLEE',
