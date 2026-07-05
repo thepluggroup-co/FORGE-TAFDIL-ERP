@@ -44,6 +44,10 @@ function quantiteLigne(ligne: BonAppro['bons_approvisionnement_lignes'][number])
   return ligne.quantite_a_commander ?? ligne.quantite ?? 0
 }
 
+function bonApproId(bon: BonAppro) {
+  return bon.bons_approvisionnement_lignes.find(l => l.bon_id)?.bon_id ?? bon.id
+}
+
 // ── SlideOver formulaire fournisseur ──────────────────────────────────────────
 
 interface FournisseurFormProps {
@@ -320,7 +324,7 @@ function EnvoyerBonModal({ fournisseur, onClose }: EnvoyerBonModalProps) {
   const [canal,    setCanal]    = useState<'email' | 'whatsapp'>('email')
   const [message,  setMessage]  = useState('')
   const bonsValides = bons?.data ?? []
-  console.log('[envoyer-bon] bons valides charges', bonsValides)
+  const emailFournisseur = fournisseur.email?.trim() ?? ''
   const { bonsAssocies, autresBons } = useMemo(() => {
     const fournisseurNom = normalizeText(fournisseur.nom)
     const matchesFournisseur = (bon: BonAppro) =>
@@ -343,15 +347,13 @@ function EnvoyerBonModal({ fournisseur, onClose }: EnvoyerBonModalProps) {
       canal,
       message_personnalise: message || undefined,
     }
-    console.log('[envoyer-bon] payload envoye', payload)
-
     const result = await envoyer.mutateAsync(payload)
 
     if (result.canal === 'whatsapp' && result.wa_link) {
       window.open(result.wa_link, '_blank', 'noopener,noreferrer')
       toast.success('Lien WhatsApp ouvert — envoyez le message au fournisseur')
     } else {
-      toast.success(`Bon envoyé par email à ${fournisseur.email}`)
+      toast.success(`Bon envoyé par email à ${emailFournisseur || fournisseur.nom}`)
     }
     onClose()
   }
@@ -395,11 +397,8 @@ function EnvoyerBonModal({ fournisseur, onClose }: EnvoyerBonModalProps) {
                       <BonApproChoice
                         key={b.id}
                         bon={b}
-                        selected={bonId === b.id}
-                        onSelect={() => {
-                          console.log('[envoyer-bon] bon selectionne', b)
-                          setBonId(b.id)
-                        }}
+                        selected={bonId === bonApproId(b)}
+                        onSelect={() => setBonId(bonApproId(b))}
                       />
                     ))}
                   </div>
@@ -414,11 +413,8 @@ function EnvoyerBonModal({ fournisseur, onClose }: EnvoyerBonModalProps) {
                       <BonApproChoice
                         key={b.id}
                         bon={b}
-                        selected={bonId === b.id}
-                        onSelect={() => {
-                          console.log('[envoyer-bon] bon selectionne', b)
-                          setBonId(b.id)
-                        }}
+                        selected={bonId === bonApproId(b)}
+                        onSelect={() => setBonId(bonApproId(b))}
                       />
                     ))}
                   </div>
@@ -448,9 +444,6 @@ function EnvoyerBonModal({ fournisseur, onClose }: EnvoyerBonModalProps) {
                 </button>
               ))}
             </div>
-            {canal === 'email' && !fournisseur.email && (
-              <p className="mt-1.5 text-xs text-amber-600">⚠️ Ce fournisseur n'a pas d'email enregistré</p>
-            )}
             {canal === 'whatsapp' && !fournisseur.whatsapp && !fournisseur.telephone && (
               <p className="mt-1.5 text-xs text-amber-600">⚠️ Ce fournisseur n'a pas de numéro WhatsApp</p>
             )}

@@ -312,21 +312,23 @@ router.post(
     // ── 2. Charger le bon d'approvisionnement ──────────────────────────────────
     const { data: bonRaw, error: bErr } = await db
       .from('bons_approvisionnement')
-      .select(`
-        id, numero, statut, fournisseur_id, fournisseur_nom, notes, created_at,
-        bons_approvisionnement_lignes (
-          designation, unite, quantite_a_commander, prix_unitaire_ht_xaf
-        )
-      `)
+      .select('id, numero, statut, fournisseur_id, fournisseur_nom, notes, created_at')
       .eq('id', body.bon_appro_id)
       .single()
 
     if (bErr || !bonRaw) return c.json({ error: 'Bon introuvable', code: 'NOT_FOUND' }, 404)
 
-    const bon = bonRaw as unknown as BonAppro & {
-      bons_approvisionnement_lignes: BonApproLigne[]
+    const { data: lignesRaw, error: lignesErr } = await db
+      .from('bons_approvisionnement_lignes')
+      .select('designation, unite, quantite_a_commander')
+      .eq('bon_id', body.bon_appro_id)
+
+    if (lignesErr) return c.json({ error: lignesErr.message, code: 'BON_LINES_ERROR' }, 500)
+
+    const bon = {
+      ...(bonRaw as unknown as Omit<BonAppro, 'lignes'>),
+      lignes: (lignesRaw ?? []) as BonApproLigne[],
     }
-    bon.lignes = bon.bons_approvisionnement_lignes ?? []
 
     if (bon.statut !== 'valide') {
       return c.json({
@@ -339,7 +341,8 @@ router.post(
 
     // ── 3. Canal email ─────────────────────────────────────────────────────────
     if (body.canal === 'email') {
-      if (!f.email) return c.json({ error: 'Ce fournisseur n\'a pas d\'adresse email', code: 'NO_EMAIL' }, 422)
+      const email = f.email?.trim()
+      if (!email) return c.json({ error: 'Ce fournisseur n\'a pas d\'adresse email', code: 'NO_EMAIL' }, 422)
 
       const pdfBuffer = await generateBonApproPdf(bon, nomFournisseur)
 
@@ -357,7 +360,7 @@ router.post(
       `
 
       const result = await sendEmailDirect({
-        to:      f.email,
+        to:      email,
         subject: `Bon de commande ${bon.numero} — ${CO.nom}`,
         html,
         attachments: [{

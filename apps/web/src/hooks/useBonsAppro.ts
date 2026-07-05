@@ -15,6 +15,7 @@ export interface CreerApproManuelPayload {
 
 export interface BonApproLigne {
   id: string
+  bon_id?: string | null
   produit_id: string | null
   designation: string
   unite: string
