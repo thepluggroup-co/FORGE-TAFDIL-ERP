@@ -183,7 +183,7 @@ export interface ConditionPaiement {
 export function useConditionsPaiement() {
   return useQuery({
     queryKey: ['conditions-paiement'],
-    queryFn:  () => apiClient.get<{ data: ConditionPaiement[] }>('/api/commerce/conditions-paiement'),
+    queryFn:  () => apiClient.get<{ data: ConditionPaiement[] }>('/api/conditions-paiement'),
     staleTime: 5 * 60_000,
   })
 }

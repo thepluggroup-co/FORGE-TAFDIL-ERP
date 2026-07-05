@@ -272,6 +272,10 @@ const jobAvancementSchema = z.object({
   notes:          z.string().optional(),
 })
 
+function isSchemaCacheColumnError(error?: { message?: string; code?: string } | null) {
+  return Boolean(error?.code === 'PGRST204' || error?.message?.includes('schema cache'))
+}
+
 router.get('/production/jobs', async (c) => {
   const { statut, commande_id, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
@@ -362,10 +366,55 @@ router.post('/production/jobs', requireRole(['admin', 'superviseur', 'operateur'
   const year      = new Date().getFullYear()
   const numero    = `JOB-${year}-${String((count ?? 0) + 1).padStart(3, '0')}`
 
-  const { data, error } = await db
+  const insertPayload = {
+    ...body,
+    type_job: typeJob,
+    numero,
+    statut: 'confirmed',
+    avancement_pct: 0,
+    created_by: user.id,
+    sync_status: 'synced',
+  }
+
+  const insertWithoutCategoriePayload = { ...insertPayload }
+  delete insertWithoutCategoriePayload.categorie
+
+  const insertMinimalPayload = {
+    numero,
+    produit_designation: body.produit_designation,
+    machine_nom: body.machine_nom ?? null,
+    technicien_nom: body.technicien_nom ?? null,
+    date_debut: body.date_debut ?? null,
+    date_fin_prevue: body.date_fin_prevue ?? null,
+    notes: body.notes ?? null,
+    statut: 'confirmed',
+    avancement_pct: 0,
+    created_by: user.id,
+    sync_status: 'synced',
+  }
+
+  let { data, error } = await db
     .from('jobs_production')
-    .insert({ ...body, type_job: typeJob, numero, statut: 'confirmed', avancement_pct: 0, created_by: user.id, sync_status: 'synced' })
+    .insert(insertPayload)
     .select().single()
+
+  if (isSchemaCacheColumnError(error)) {
+    const retry = await db
+      .from('jobs_production')
+      .insert(insertWithoutCategoriePayload)
+      .select().single()
+    data = retry.data
+    error = retry.error
+  }
+
+  if (isSchemaCacheColumnError(error)) {
+    const retry = await db
+      .from('jobs_production')
+      .insert(insertMinimalPayload)
+      .select().single()
+    data = retry.data
+    error = retry.error
+  }
 
   if (error) return c.json({ error: error.message, code: error.code }, 400)
   return c.json(data, 201)

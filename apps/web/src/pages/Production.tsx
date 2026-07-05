@@ -17,7 +17,7 @@ interface JobForm {
   typeJob: 'commande' | 'stock'
   produitId: string
   ref: string
-  produit: string; machine: string; technicien: string
+  produit: string; machines: string[]; techniciens: string[]
   categorie: string; unite: string
   quantitePrevue: string
   prixUnitaire: string
@@ -31,7 +31,7 @@ const DEFAULT_FORM: JobForm = {
   typeJob: 'commande',
   produitId: '',
   ref: '',
-  produit: '', machine: '', technicien: '',
+  produit: '', machines: [], techniciens: [],
   categorie: '',
   unite: 'unite',
   quantitePrevue: '',
@@ -62,8 +62,8 @@ const BASE_COLUMNS: Column<JobRecord>[] = [
       return <span className="text-sm text-gray-500">{qte ? `${qte} ${row.unite ?? ''}` : '-'}</span>
     },
   },
-  { id: 'machine', header: 'Machine', accessor: 'machine_nom', render: (v) => <span className="text-sm text-gray-500">{(v as string) ?? '—'}</span> },
-  { id: 'tech', header: 'Technicien', accessor: 'technicien_nom', render: (v) => <span className="text-sm">{(v as string) ?? '—'}</span> },
+  { id: 'machine', header: 'Machines', accessor: 'machine_nom', render: (v) => <span className="text-sm text-gray-500">{(v as string) ?? '—'}</span> },
+  { id: 'tech', header: 'Techniciens', accessor: 'technicien_nom', render: (v) => <span className="text-sm">{(v as string) ?? '—'}</span> },
   { id: 'fin', header: 'Fin prévue', accessor: 'date_fin_prevue', render: (v) => <span className="text-sm text-gray-500">{v ? formatDate(v as string) : '—'}</span> },
   {
     id: 'avancement', header: 'Avancement', accessor: 'avancement_pct',
@@ -96,8 +96,8 @@ export default function Production() {
   const stocks = stocksData?.data ?? []
   const formValid =
     form.produit.trim() !== '' &&
-    form.machine !== '' &&
-    form.technicien !== '' &&
+    form.machines.length > 0 &&
+    form.techniciens.length > 0 &&
     form.finPrevue !== '' &&
     Number(form.quantitePrevue) > 0
 
@@ -151,8 +151,8 @@ export default function Production() {
         prix_public_xaf: form.prixPublic ? Number(form.prixPublic) : undefined,
         publier_shop: form.publierShop,
         description_produit: form.description || undefined,
-        machine_nom: form.machine,
-        technicien_nom: form.technicien,
+        machine_nom: form.machines.join(', '),
+        technicien_nom: form.techniciens.join(', '),
         date_debut: form.debut,
         date_fin_prevue: form.finPrevue,
       },
@@ -323,24 +323,26 @@ export default function Production() {
             </>
           ) : null}
           <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Machine *</label>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Machines *</label>
             <select
-              value={form.machine}
-              onChange={(e) => setForm((f) => ({ ...f, machine: e.target.value }))}
+              multiple
+              size={Math.min(4, MACHINES.length)}
+              value={form.machines}
+              onChange={(e) => setForm((f) => ({ ...f, machines: Array.from(e.target.selectedOptions, (option) => option.value).filter(Boolean) }))}
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
             >
-              <option value="">Sélectionner…</option>
               {MACHINES.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Technicien *</label>
+            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Techniciens *</label>
             <select
-              value={form.technicien}
-              onChange={(e) => setForm((f) => ({ ...f, technicien: e.target.value }))}
+              multiple
+              size={Math.min(4, TECHNICIENS.length)}
+              value={form.techniciens}
+              onChange={(e) => setForm((f) => ({ ...f, techniciens: Array.from(e.target.selectedOptions, (option) => option.value).filter(Boolean) }))}
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
             >
-              <option value="">Sélectionner…</option>
               {TECHNICIENS.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>

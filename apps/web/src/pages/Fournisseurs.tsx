@@ -320,6 +320,7 @@ function EnvoyerBonModal({ fournisseur, onClose }: EnvoyerBonModalProps) {
   const [canal,    setCanal]    = useState<'email' | 'whatsapp'>('email')
   const [message,  setMessage]  = useState('')
   const bonsValides = bons?.data ?? []
+  console.log('[envoyer-bon] bons valides charges', bonsValides)
   const { bonsAssocies, autresBons } = useMemo(() => {
     const fournisseurNom = normalizeText(fournisseur.nom)
     const matchesFournisseur = (bon: BonAppro) =>
@@ -336,12 +337,15 @@ function EnvoyerBonModal({ fournisseur, onClose }: EnvoyerBonModalProps) {
     e.preventDefault()
     if (!bonId) { toast.error('Sélectionnez un bon d\'approvisionnement'); return }
 
-    const result = await envoyer.mutateAsync({
+    const payload = {
       fournisseurId:        fournisseur.id,
       bon_appro_id:         bonId,
       canal,
       message_personnalise: message || undefined,
-    })
+    }
+    console.log('[envoyer-bon] payload envoye', payload)
+
+    const result = await envoyer.mutateAsync(payload)
 
     if (result.canal === 'whatsapp' && result.wa_link) {
       window.open(result.wa_link, '_blank', 'noopener,noreferrer')
@@ -388,7 +392,15 @@ function EnvoyerBonModal({ fournisseur, onClose }: EnvoyerBonModalProps) {
                       Bons pour ce fournisseur
                     </p>
                     {bonsAssocies.map((b) => (
-                      <BonApproChoice key={b.id} bon={b} selected={bonId === b.id} onSelect={() => setBonId(b.id)} />
+                      <BonApproChoice
+                        key={b.id}
+                        bon={b}
+                        selected={bonId === b.id}
+                        onSelect={() => {
+                          console.log('[envoyer-bon] bon selectionne', b)
+                          setBonId(b.id)
+                        }}
+                      />
                     ))}
                   </div>
                 )}
@@ -399,7 +411,15 @@ function EnvoyerBonModal({ fournisseur, onClose }: EnvoyerBonModalProps) {
                       Autres bons valides
                     </p>
                     {autresBons.map((b) => (
-                      <BonApproChoice key={b.id} bon={b} selected={bonId === b.id} onSelect={() => setBonId(b.id)} />
+                      <BonApproChoice
+                        key={b.id}
+                        bon={b}
+                        selected={bonId === b.id}
+                        onSelect={() => {
+                          console.log('[envoyer-bon] bon selectionne', b)
+                          setBonId(b.id)
+                        }}
+                      />
                     ))}
                   </div>
                 )}

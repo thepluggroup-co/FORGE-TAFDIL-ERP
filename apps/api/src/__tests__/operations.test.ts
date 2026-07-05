@@ -132,6 +132,51 @@ describe('POST /api/production/jobs', () => {
     const body = await res.json() as { code: string }
     expect(body.code).toBe('MACHINE_PANNE')
   })
+
+  it('cree un job avec plusieurs ressources malgre categorie absente du schema cache', async () => {
+    const countChain = mkChain({ data: null, count: 2, error: null })
+    const firstInsertChain = mkChain({
+      data: null,
+      error: {
+        code: 'PGRST204',
+        message: "Could not find the 'categorie' column of 'jobs_production' in the schema cache",
+      },
+    })
+    const retryInsertChain = mkChain({
+      data: {
+        id: 'j3',
+        numero: 'JOB-2026-003',
+        produit_designation: 'Portail',
+        machine_nom: 'Pliage hydraulique, CNC Deckel',
+        technicien_nom: 'Mvondo Serge, Nkolo Pierre',
+      },
+      error: null,
+    })
+    vi.mocked(supabase.from)
+      .mockReturnValueOnce(countChain as never)
+      .mockReturnValueOnce(firstInsertChain as never)
+      .mockReturnValueOnce(retryInsertChain as never)
+
+    const res = await app.request('/api/production/jobs', {
+      method: 'POST', headers: new Headers(authHeaders('operateur')),
+      body: JSON.stringify({
+        type_job: 'stock',
+        produit_designation: 'Portail',
+        categorie: 'Ferronnerie',
+        quantite_prevue: 2,
+        machine_nom: 'Pliage hydraulique, CNC Deckel',
+        technicien_nom: 'Mvondo Serge, Nkolo Pierre',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(firstInsertChain.insert).toHaveBeenCalledWith(expect.objectContaining({ categorie: 'Ferronnerie' }))
+    expect(retryInsertChain.insert).toHaveBeenCalledWith(expect.not.objectContaining({ categorie: expect.anything() }))
+    expect(retryInsertChain.insert).toHaveBeenCalledWith(expect.objectContaining({
+      machine_nom: 'Pliage hydraulique, CNC Deckel',
+      technicien_nom: 'Mvondo Serge, Nkolo Pierre',
+    }))
+  })
 })
 
 // ── Projets ──────────────────────────────────────────────────────────────────
