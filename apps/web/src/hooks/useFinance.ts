@@ -462,6 +462,35 @@ export function useSynchroniserFactures() {
   })
 }
 
+type RegularisationLivraisonFacturesResult = {
+  factures_scanees: number
+  factures_regularisees: number
+  details: Array<{
+    id: string
+    numero: string | null
+    ancien_total_ttc_xaf: number
+    ancien_net_a_payer_xaf: number
+    ancien_frais_livraison_xaf: number
+    nouveau_total_ttc_xaf: number
+    montant_paye_xaf: number
+    statut: string
+  }>
+}
+
+export function useRegulariserLivraisonFactures() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => apiClient.post<RegularisationLivraisonFacturesResult>('/api/factures/regulariser-livraison', {}),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ['factures'] })
+      void qc.invalidateQueries({ queryKey: ['credits'] })
+      void qc.invalidateQueries({ queryKey: ['finance', 'dashboard'] })
+      toast.success(`${res.factures_regularisees} facture(s) regularisee(s) sur ${res.factures_scanees}.`)
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
 export function useCredits(params?: { statut?: string }) {
   return useQuery({
     queryKey: ['credits', params],

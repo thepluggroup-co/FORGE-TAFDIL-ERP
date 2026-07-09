@@ -21,7 +21,7 @@ import {
   useCharges, useSortiesTresorerie, useChargesDashboard,
   useCreerCharge, useUpdateStatutCharge, useCreerSortieTresorerie,
   useAnnulerSortieTresorerie, useUploadJustificatifCharge, useUploadJustificatifSortie,
-  useSynchroniserFactures,
+  useSynchroniserFactures, useRegulariserLivraisonFactures,
 } from '@/hooks/useFinance'
 import type { Facture as FactureApi, Credit as CreditApi, FactureLigne, Versement, Charge, SortieTresorerie, ModePaiementSortie } from '@/hooks/useFinance'
 import { useClients } from '@/hooks/useClients'
@@ -1740,6 +1740,7 @@ export default function Finance() {
   const { data: declarationsData, isLoading: declarationsLoading } = useDeclarationsFiscales({ type: 'TVA' })
   const envoyerFacture = useEnvoyerFacture()
   const synchroniserFactures = useSynchroniserFactures()
+  const regulariserLivraisonFactures = useRegulariserLivraisonFactures()
   const updateStatutFacture = useUpdateStatutFacture()
   const updateStatutCharge = useUpdateStatutCharge()
   const annulerSortie = useAnnulerSortieTresorerie()
@@ -2326,6 +2327,15 @@ export default function Finance() {
                     >
                       <RefreshCw className={`h-3.5 w-3.5 ${synchroniserFactures.isPending ? 'animate-spin' : ''}`} />
                       Synchroniser factures
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={regulariserLivraisonFactures.isPending}
+                      onClick={() => regulariserLivraisonFactures.mutate()}
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${regulariserLivraisonFactures.isPending ? 'animate-spin' : ''}`} />
+                      Synchroniser livraison
                     </Button>
                     <label className="text-xs font-semibold uppercase text-gray-400" htmlFor="facture-status-sort">
                       Tri

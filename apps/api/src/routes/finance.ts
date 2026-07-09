@@ -75,7 +75,7 @@ function montantFactureAPayer(f: {
   montant_ttc_xaf?: number | null
   net_a_payer_xaf?: number | null
 }) {
-  const candidats = [f.net_a_payer_xaf, f.total_ttc_xaf, f.montant_ttc_xaf]
+  const candidats = [f.total_ttc_xaf, f.montant_ttc_xaf, f.net_a_payer_xaf]
     .map((value) => Math.round(Number(value ?? 0)))
     .filter((value) => value > 0)
   return candidats[0] ?? 0
@@ -929,6 +929,117 @@ router.post('/factures/synchroniser-commandes', requireRole(['admin', 'supervise
   }).catch(e => console.error('[finance] notify sync factures:', e))
 
   return c.json(result)
+})
+
+router.post('/factures/regulariser-livraison', requireRole(['admin']), async (c) => {
+  const user = c.get('user')
+  const { data, error } = await db
+    .from('factures')
+    .select('id, numero, client_id, client_nom, commande_id, statut, total_ht_xaf, tva_xaf, frais_livraison_xaf, total_ttc_xaf, net_a_payer_xaf, montant_paye_xaf, date_emission, date_echeance, created_by')
+    .not('commande_id', 'is', null)
+    .neq('statut', 'annule')
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  type FactureLivraisonRow = {
+    id: string
+    numero?: string | null
+    client_id?: string | null
+    client_nom?: string | null
+    commande_id?: string | null
+    statut: string
+    total_ht_xaf?: number | null
+    tva_xaf?: number | null
+    frais_livraison_xaf?: number | null
+    total_ttc_xaf?: number | null
+    net_a_payer_xaf?: number | null
+    montant_paye_xaf?: number | null
+    date_emission?: string | null
+    date_echeance?: string | null
+    created_by?: string | null
+  }
+
+  const factures = (data ?? []) as FactureLivraisonRow[]
+  const details: Array<{
+    id: string
+    numero: string | null
+    ancien_total_ttc_xaf: number
+    ancien_net_a_payer_xaf: number
+    ancien_frais_livraison_xaf: number
+    nouveau_total_ttc_xaf: number
+    montant_paye_xaf: number
+    statut: string
+  }> = []
+
+  for (const facture of factures) {
+    const totalFacture = Math.round(Number(facture.total_ht_xaf ?? 0) + Number(facture.tva_xaf ?? 0))
+    if (totalFacture <= 0) continue
+
+    const ancienTotal = Math.round(Number(facture.total_ttc_xaf ?? 0))
+    const ancienNet = Math.round(Number(facture.net_a_payer_xaf ?? 0))
+    const ancienFrais = Math.round(Number(facture.frais_livraison_xaf ?? 0))
+    const montantPaye = Math.min(Math.round(Number(facture.montant_paye_xaf ?? 0)), totalFacture)
+    const nextStatut = montantPaye >= totalFacture
+      ? 'paye'
+      : facture.statut === 'paye'
+        ? 'envoye'
+        : facture.statut
+
+    const needsUpdate =
+      ancienTotal !== totalFacture ||
+      ancienNet !== totalFacture ||
+      ancienFrais !== 0 ||
+      Math.round(Number(facture.montant_paye_xaf ?? 0)) !== montantPaye ||
+      facture.statut !== nextStatut
+
+    if (!needsUpdate) continue
+
+    const { data: updated, error: updateError } = await db
+      .from('factures')
+      .update({
+        frais_livraison_xaf: 0,
+        total_ttc_xaf:       totalFacture,
+        net_a_payer_xaf:     totalFacture,
+        montant_paye_xaf:    montantPaye,
+        statut:              nextStatut,
+        updated_at:          new Date().toISOString(),
+        sync_status:         'synced',
+      })
+      .eq('id', facture.id)
+      .select()
+      .single()
+
+    if (updateError) return c.json({ error: updateError.message, facture_id: facture.id }, 500)
+    await syncCreditForFacture(updated, user.id)
+
+    details.push({
+      id: facture.id,
+      numero: facture.numero ?? null,
+      ancien_total_ttc_xaf: ancienTotal,
+      ancien_net_a_payer_xaf: ancienNet,
+      ancien_frais_livraison_xaf: ancienFrais,
+      nouveau_total_ttc_xaf: totalFacture,
+      montant_paye_xaf: montantPaye,
+      statut: nextStatut,
+    })
+  }
+
+  await notifyWorkflow({
+    event:    'finance.factures_livraison_regularisees',
+    module:   'finance',
+    severite: 'success',
+    titre:    'Factures regularisees',
+    message:  `${details.length} facture(s) regularisee(s) pour exclure les frais de livraison.`,
+    ref:      'factures',
+    url:      '/finance',
+    data:     { factures_scanees: factures.length, factures_regularisees: details.length, details },
+  }).catch(e => console.error('[finance] notify regularisation livraison:', e))
+
+  return c.json({
+    factures_scanees: factures.length,
+    factures_regularisees: details.length,
+    details,
+  })
 })
 
 router.get('/factures/:id', async (c) => {

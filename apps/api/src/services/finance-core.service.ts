@@ -92,6 +92,10 @@ export function enrichirFactureSolde<T extends { total_ttc_xaf?: number; montant
   return { ...facture, solde_restant_xaf: Math.round(solde) }
 }
 
+function totalFactureCommande(cmd: Pick<CommandeRow, 'total_ht_xaf' | 'tva_xaf'>) {
+  return Math.round(Number(cmd.total_ht_xaf ?? 0) + Number(cmd.tva_xaf ?? 0))
+}
+
 export function statutCreditDepuisSoldeEtEcheance(solde: number, echeance?: string | null) {
   if (solde <= 0) return 'rembourse'
   const today = new Date().toISOString().slice(0, 10)
@@ -549,8 +553,9 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
   const dateEmission = new Date().toISOString().slice(0, 10)
   const dateEcheance = cmd.date_echeance_solde
     ?? new Date(Date.now() + (options.dateEcheanceJours ?? 7) * 86400_000).toISOString().slice(0, 10)
-  const montantPaye = Math.min(Number(options.montantPayeXaf ?? cmd.montant_paye_xaf ?? 0), Number(cmd.total_ttc_xaf))
-  const statut = factureStatutDepuisPaiement(Number(cmd.total_ttc_xaf), montantPaye, options.statut ?? 'brouillon')
+  const totalFactureXaf = totalFactureCommande(cmd)
+  const montantPaye = Math.min(Number(options.montantPayeXaf ?? cmd.montant_paye_xaf ?? 0), totalFactureXaf)
+  const statut = factureStatutDepuisPaiement(totalFactureXaf, montantPaye, options.statut ?? 'brouillon')
 
   const { data: facture, error: factureError } = await db
     .from('factures')
@@ -568,9 +573,9 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
       remise_globale_motif:  cmd.remise_globale_motif ?? null,
       total_ht_xaf:          cmd.total_ht_xaf,
       tva_xaf:               cmd.tva_xaf,
-      frais_livraison_xaf:   Number(cmd.frais_livraison_xaf ?? 0),
-      total_ttc_xaf:         cmd.total_ttc_xaf,
-      net_a_payer_xaf:       cmd.total_ttc_xaf + Number(cmd.frais_livraison_xaf ?? 0),
+      frais_livraison_xaf:   0,
+      total_ttc_xaf:         totalFactureXaf,
+      net_a_payer_xaf:       totalFactureXaf,
       montant_paye_xaf:      montantPaye,
       notes:                 options.notes ?? null,
       created_by:            options.userId ?? null,
@@ -617,8 +622,8 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
       client_nom:            cmd.client_nom,
       total_ht_xaf:          cmd.total_ht_xaf,
       tva_xaf:               cmd.tva_xaf,
-      frais_livraison_xaf:   Number(cmd.frais_livraison_xaf ?? 0),
-      total_ttc_xaf:         cmd.total_ttc_xaf,
+      frais_livraison_xaf:   0,
+      total_ttc_xaf:         totalFactureXaf,
       brut_ht_xaf:           remiseTotaleHtXaf > 0 ? brutHtXaf : undefined,
       remise_totale_ht_xaf:  remiseTotaleHtXaf > 0 ? remiseTotaleHtXaf : undefined,
       created_by:            options.userId,
