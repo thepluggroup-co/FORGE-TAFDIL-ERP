@@ -47,7 +47,7 @@ const productFallbackImages = [
   'https://images.unsplash.com/photo-1518709268805-4e9042af2176?auto=format&fit=crop&w=700&q=80',
 ]
 
-function formatXAF(value: number | null) {
+function formatXAF(value: number | null | undefined) {
   if (!value) return 'Prix sur devis'
   return new Intl.NumberFormat('fr-CM', { style: 'currency', currency: 'XAF', maximumFractionDigits: 0 }).format(value)
 }
@@ -69,6 +69,7 @@ function buildCategoryCards(produits: Produit[]) {
 function ProductTile({ produit, index }: { produit: Produit; index: number }) {
   const image = produit.images?.[0] || productFallbackImages[index % productFallbackImages.length]
   const status = produit.disponibilite === 'stock_faible' ? 'Stock faible' : produit.disponibilite === 'indisponible' ? 'Sur commande' : 'Disponible'
+  const hasPromo = Boolean(produit.promotion && produit.prix_barre_xaf && produit.prix_public)
 
   return (
     <article className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
@@ -77,16 +78,19 @@ function ProductTile({ produit, index }: { produit: Produit; index: number }) {
         <span className={`absolute left-3 top-3 rounded-full px-2 py-1 text-[10px] font-black uppercase ${produit.disponibilite === 'stock_faible' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
           {status}
         </span>
+        {hasPromo && <span className="absolute right-3 top-3 rounded-full bg-forge-red px-2 py-1 text-[10px] font-black uppercase text-white">Promo</span>}
       </Link>
       <div className="p-4">
         <p className="font-mono text-[10px] uppercase text-gray-400">{produit.ref}</p>
         <Link href={`/catalogue/${produit.id}`} className="mt-1 block min-h-10 text-sm font-black leading-tight text-forge-dark hover:text-forge-red">
           {produit.nom}
         </Link>
-        <p className="mt-2 text-base font-black text-forge-red">
+        {hasPromo && <p className="mt-2 text-xs font-bold text-gray-400 line-through">{formatXAF(produit.prix_barre_xaf)}</p>}
+        <p className={`${hasPromo ? 'mt-0.5' : 'mt-2'} text-base font-black text-forge-red`}>
           {formatXAF(produit.prix_public)}
           {produit.prix_public ? <span className="text-xs font-semibold text-gray-500"> / {produit.unite}</span> : null}
         </p>
+        {produit.promotion && <p className="mt-1 text-[10px] font-black uppercase text-forge-red">{produit.promotion.nom}</p>}
       </div>
       <div className="grid grid-cols-3 border-t border-gray-100 text-gray-400">
         <Link href={`/catalogue/${produit.id}`} className="flex h-10 items-center justify-center hover:text-forge-red" aria-label="Voir le produit">
@@ -106,6 +110,7 @@ function ProductTile({ produit, index }: { produit: Produit; index: number }) {
 export default async function HomePage() {
   const produits = await fetchCatalogueProduits()
   const visibleProducts = produits.slice(0, 10)
+  const promoProducts = produits.filter((p) => p.promotion).slice(0, 5)
   const categories = buildCategoryCards(produits)
 
   return (
@@ -215,8 +220,8 @@ export default async function HomePage() {
       <section className="mx-auto max-w-7xl px-4 pb-8 sm:px-6 lg:px-8">
         <div className="mb-5 flex items-end justify-between gap-4">
           <div>
-            <p className="text-xs font-black uppercase tracking-widest text-forge-red">Produits populaires</p>
-            <h2 className="mt-2 text-2xl font-black text-forge-dark">Nos meilleures offres</h2>
+            <p className="text-xs font-black uppercase tracking-widest text-forge-red">{promoProducts.length > 0 ? 'Promotions actives' : 'Produits populaires'}</p>
+            <h2 className="mt-2 text-2xl font-black text-forge-dark">{promoProducts.length > 0 ? 'Offres du moment' : 'Nos meilleures offres'}</h2>
           </div>
           <Link href="/catalogue" className="hidden items-center gap-2 text-sm font-black text-forge-dark hover:text-forge-red sm:inline-flex">
             Voir tout le catalogue <ArrowRight size={15} />
@@ -224,7 +229,7 @@ export default async function HomePage() {
         </div>
         {visibleProducts.length > 0 ? (
           <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-5">
-            {visibleProducts.slice(0, 5).map((produit, index) => <ProductTile key={produit.id} produit={produit} index={index} />)}
+            {(promoProducts.length > 0 ? promoProducts : visibleProducts.slice(0, 5)).map((produit, index) => <ProductTile key={produit.id} produit={produit} index={index} />)}
           </div>
         ) : (
           <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-8 text-center text-sm font-semibold text-gray-500">

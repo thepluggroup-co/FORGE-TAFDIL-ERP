@@ -73,8 +73,8 @@ export function ProductDetailClient({ produit, similaires }: Props) {
   }, [produit.images])
   const indisponible = produit.disponibilite === 'indisponible'
   const status = statusConfig(produit.disponibilite)
-  const oldPrice = produit.prix_public ? Math.round(produit.prix_public * 1.18) : null
-  const discount = produit.prix_public ? Math.max(5, Math.round(((oldPrice! - produit.prix_public) / oldPrice!) * 100)) : null
+  const oldPrice = produit.prix_barre_xaf ?? null
+  const discount = oldPrice && produit.prix_public ? Math.round(((oldPrice - produit.prix_public) / oldPrice) * 100) : null
   const devisUrl = `/devis?ref=${encodeURIComponent(produit.ref)}&nom=${encodeURIComponent(produit.nom)}`
 
   const features = [
@@ -98,7 +98,7 @@ export function ProductDetailClient({ produit, similaires }: Props) {
           <div className="relative aspect-square overflow-hidden rounded-lg bg-gray-50">
             {discount && (
               <span className="absolute left-4 top-4 z-10 rounded-md bg-forge-red px-3 py-2 text-sm font-black text-white">
-                -{discount}%
+                {produit.promotion?.nom ?? `-${discount}%`}
               </span>
             )}
             <AnimatePresence mode="wait">
@@ -176,6 +176,7 @@ export function ProductDetailClient({ produit, similaires }: Props) {
               <div className="mt-2 flex items-center gap-3">
                 <span className="text-sm font-bold text-gray-400 line-through">{formatXAF(oldPrice)}</span>
                 <span className="rounded-md bg-forge-red px-2 py-1 text-xs font-black text-white">-{discount}%</span>
+                {produit.promotion && <span className="text-xs font-bold uppercase text-forge-red">{produit.promotion.nom}</span>}
               </div>
             )}
           </div>

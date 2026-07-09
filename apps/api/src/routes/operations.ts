@@ -1678,6 +1678,14 @@ const campagneStatutSchema = z.object({
   conversions_count:   z.number().int().min(0).optional(),
 })
 
+const campagneProduitSchema = z.object({
+  product_id:      z.string().uuid(),
+  remise_type:     z.enum(['pct', 'forfait']).default('pct'),
+  remise_valeur:   z.number().min(0).default(0),
+  prix_promo_xaf:  z.number().min(0).nullable().optional(),
+  priorite:        z.number().int().min(0).default(0),
+})
+
 router.get('/marketing/campagnes', async (c) => {
   const { statut, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
@@ -1717,6 +1725,71 @@ router.patch('/marketing/campagnes/:id/statut', requireRole(['admin', 'supervise
   if (error) return c.json({ error: error.message }, 400)
   if (!data)  return c.json({ error: 'Campagne introuvable', code: 'NOT_FOUND' }, 404)
   return c.json(data)
+})
+
+router.get('/marketing/campagnes/:id/produits', async (c) => {
+  const { id } = c.req.param()
+  const { data, error } = await db
+    .from('campagnes_produits')
+    .select(`
+      id,
+      campagne_id,
+      product_id,
+      remise_type,
+      remise_valeur,
+      prix_promo_xaf,
+      priorite,
+      created_at,
+      produits!inner(ref, designation, categorie, unite)
+    `)
+    .eq('campagne_id', id)
+    .order('priorite', { ascending: false })
+    .order('created_at', { ascending: false })
+
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data: data ?? [], total: data?.length ?? 0 })
+})
+
+router.post('/marketing/campagnes/:id/produits', requireRole(['admin', 'superviseur']), zValidator('json', campagneProduitSchema), async (c) => {
+  const { id } = c.req.param()
+  const body = c.req.valid('json')
+
+  const { data: campagne } = await db
+    .from('campagnes_marketing')
+    .select('id')
+    .eq('id', id)
+    .maybeSingle()
+
+  if (!campagne) return c.json({ error: 'Campagne introuvable', code: 'NOT_FOUND' }, 404)
+
+  const { data, error } = await db
+    .from('campagnes_produits')
+    .upsert({
+      campagne_id:     id,
+      product_id:      body.product_id,
+      remise_type:     body.remise_type,
+      remise_valeur:   body.remise_valeur,
+      prix_promo_xaf:  body.prix_promo_xaf ?? null,
+      priorite:        body.priorite,
+      updated_at:      new Date().toISOString(),
+    }, { onConflict: 'campagne_id,product_id' })
+    .select()
+    .single()
+
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+  return c.json(data, 201)
+})
+
+router.delete('/marketing/campagnes/:campagneId/produits/:productId', requireRole(['admin', 'superviseur']), async (c) => {
+  const { campagneId, productId } = c.req.param()
+  const { error } = await db
+    .from('campagnes_produits')
+    .delete()
+    .eq('campagne_id', campagneId)
+    .eq('product_id', productId)
+
+  if (error) return c.json({ error: error.message }, 400)
+  return c.json({ success: true })
 })
 
 // ══════════════════════════════════════════════════════════════════════════════

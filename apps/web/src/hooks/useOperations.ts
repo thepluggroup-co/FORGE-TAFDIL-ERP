@@ -551,6 +551,17 @@ export interface Campagne {
   statut: 'planifie' | 'active' | 'pause' | 'termine' | 'annule'
   date_debut: string; date_fin: string; created_at: string
 }
+export interface CampagneProduit {
+  id: string
+  campagne_id: string
+  product_id: string
+  remise_type: 'pct' | 'forfait'
+  remise_valeur: number
+  prix_promo_xaf: number | null
+  priorite: number
+  produits?: { ref: string; designation: string; categorie: string; unite: string }
+  produits_shop?: { prix_public: number | null; visible_shop: boolean; images?: string[] | null } | null
+}
 export interface CreateCampagnePayload {
   nom: string; description?: string; canal: string; budget_xaf?: number
   date_debut: string; date_fin: string
@@ -588,6 +599,53 @@ export function useUpdateCampagneStatut() {
     }) => dbUpdateStatut('campagnes_marketing', id, statut, { reach, leads_count, conversions_count }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['campagnes'] }),
     onError:   (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useCampagneProduits(campagneId?: string | null) {
+  return useQuery({
+    queryKey: ['campagne-produits', campagneId],
+    queryFn: () => apiClient.get<{ data: CampagneProduit[]; total: number }>(`/api/marketing/campagnes/${campagneId}/produits`),
+    enabled: Boolean(campagneId),
+    staleTime: 30_000,
+  })
+}
+
+export function useAjouterProduitCampagne() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: {
+      campagneId: string
+      product_id: string
+      remise_type: 'pct' | 'forfait'
+      remise_valeur: number
+      prix_promo_xaf?: number | null
+      priorite?: number
+    }) => apiClient.post(`/api/marketing/campagnes/${payload.campagneId}/produits`, {
+      product_id: payload.product_id,
+      remise_type: payload.remise_type,
+      remise_valeur: payload.remise_valeur,
+      prix_promo_xaf: payload.prix_promo_xaf ?? null,
+      priorite: payload.priorite ?? 0,
+    }),
+    onSuccess: (_, payload) => {
+      void qc.invalidateQueries({ queryKey: ['campagne-produits', payload.campagneId] })
+      toast.success('Produit ajoute a la campagne')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useRetirerProduitCampagne() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ campagneId, productId }: { campagneId: string; productId: string }) =>
+      apiClient.delete(`/api/marketing/campagnes/${campagneId}/produits/${productId}`),
+    onSuccess: (_, payload) => {
+      void qc.invalidateQueries({ queryKey: ['campagne-produits', payload.campagneId] })
+      toast.success('Produit retire de la campagne')
+    },
+    onError: (err: Error) => toast.error(err.message),
   })
 }
 

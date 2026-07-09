@@ -62,7 +62,7 @@ interface FormData {
   nom: string
   telephone: string
   email: string
-  type_projet: string
+  type_projet: string[]
   description: string
 }
 
@@ -75,7 +75,7 @@ function DevisForm() {
     nom:          '',
     telephone:    '',
     email:        '',
-    type_projet:  produitNom ? 'Devis produit catalogue' : '',
+    type_projet:  produitNom ? ['Produit du catalogue'] : [],
     description:  produitNom
       ? `Je souhaite un devis pour le produit : ${produitNom}${produitRef ? ` (Réf. ${produitRef})` : ''}.\n\n`
       : '',
@@ -111,7 +111,7 @@ function DevisForm() {
       telephone:   form.telephone,
       email:       form.email || undefined,
       description: form.description,
-      type_projet: form.type_projet || undefined,
+      type_projet: form.type_projet.length > 0 ? form.type_projet.join(', ') : undefined,
       produit_ref: produitRef || undefined,
     })
     setLoading(false)
@@ -143,7 +143,7 @@ function DevisForm() {
         </p>
         <div className="mt-6 flex flex-col items-center gap-3 sm:flex-row">
           <button
-            onClick={() => { setSuccess(false); setForm({ nom: '', telephone: '', email: '', type_projet: '', description: '' }); setFichiers([]) }}
+            onClick={() => { setSuccess(false); setForm({ nom: '', telephone: '', email: '', type_projet: [], description: '' }); setFichiers([]) }}
             className="text-sm text-forge-steel underline hover:text-forge-red"
           >
             Envoyer une autre demande
@@ -219,10 +219,10 @@ function DevisForm() {
         <div>
           <label className="mb-1.5 block text-xs font-semibold text-forge-steel">
             Type de projet
-            {form.type_projet && (
+            {form.type_projet.length > 0 && (
               <button
                 type="button"
-                onClick={() => setForm((f) => ({ ...f, type_projet: '' }))}
+                onClick={() => setForm((f) => ({ ...f, type_projet: [] }))}
                 className="ml-2 text-[10px] font-medium text-forge-red underline"
               >
                 effacer
@@ -232,12 +232,17 @@ function DevisForm() {
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {TYPES_PROJET.map((t) => {
               const Icon = t.icon
-              const selected = form.type_projet === t.label
+              const selected = form.type_projet.includes(t.label)
               return (
                 <button
                   key={t.label}
                   type="button"
-                  onClick={() => setForm((f) => ({ ...f, type_projet: selected ? '' : t.label }))}
+                  onClick={() => setForm((f) => ({
+                    ...f,
+                    type_projet: selected
+                      ? f.type_projet.filter((item) => item !== t.label)
+                      : [...f.type_projet, t.label],
+                  }))}
                   className={`flex flex-col items-start gap-1 rounded-xl border p-3 text-left transition-all ${
                     selected
                       ? 'border-forge-red bg-forge-red/5 ring-1 ring-forge-red/30'
@@ -399,7 +404,7 @@ export function DevisClient() {
                   <MapPin size={15} className="mt-0.5 shrink-0 text-forge-red" />
                   <div>
                     <p className="text-xs font-medium text-forge-dark">Atelier</p>
-                    <p className="text-sm text-forge-steel">Bonamoussadi, Douala, Cameroun</p>
+                    <p className="text-sm text-forge-steel">KOTTO, derriere l'ecole Mauryvanas, Douala</p>
                     <p className="text-xs text-gray-400">Lun–Sam · 7h30–18h00</p>
                   </div>
                 </li>

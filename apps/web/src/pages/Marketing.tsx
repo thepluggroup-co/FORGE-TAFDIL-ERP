@@ -1,11 +1,13 @@
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Megaphone, Users, TrendingUp, Target, Plus, ExternalLink, MessageCircle, Share2 } from 'lucide-react'
+import { Megaphone, Users, TrendingUp, Target, Plus, ExternalLink, MessageCircle, Share2, Package, Trash2 } from 'lucide-react'
 import { PageHeader, KpiCard, DataTable, SlideOver, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatNombre, formatDate } from '@/lib/utils'
-import { useCampagnes, useCreateCampagne } from '@/hooks/useOperations'
-import type { Campagne } from '@/hooks/useOperations'
+import { useAjouterProduitCampagne, useCampagneProduits, useCampagnes, useCreateCampagne, useRetirerProduitCampagne } from '@/hooks/useOperations'
+import type { Campagne, CampagneProduit } from '@/hooks/useOperations'
+import { useProduitsShop } from '@/hooks/useProduitsShop'
+import type { ProduitShopErp } from '@/hooks/useProduitsShop'
 
 type CampagneRecord = Campagne & Record<string, unknown>
 
@@ -81,14 +83,178 @@ function QuickPostWhatsApp() {
   )
 }
 
+function prixPromoPreview(prix: number | null | undefined, row: { remise_type: 'pct' | 'forfait'; remise_valeur: number; prix_promo_xaf?: number | null }) {
+  const base = Math.round(Number(prix ?? 0))
+  if (base <= 0) return null
+  const forced = Math.round(Number(row.prix_promo_xaf ?? 0))
+  if (forced > 0) return Math.min(base, forced)
+  const remise = row.remise_type === 'pct'
+    ? Math.round(base * Math.min(100, Number(row.remise_valeur ?? 0)) / 100)
+    : Math.round(Number(row.remise_valeur ?? 0))
+  return Math.max(0, base - remise)
+}
+
+function CampagneProduitsPanel({
+  campagne,
+  produits,
+  onClose,
+}: {
+  campagne: CampagneRecord | null
+  produits: ProduitShopErp[]
+  onClose: () => void
+}) {
+  const [productId, setProductId] = useState('')
+  const [remiseType, setRemiseType] = useState<'pct' | 'forfait'>('pct')
+  const [remiseValeur, setRemiseValeur] = useState(10)
+  const [prixPromo, setPrixPromo] = useState('')
+  const { data, isLoading } = useCampagneProduits(campagne?.id)
+  const ajouter = useAjouterProduitCampagne()
+  const retirer = useRetirerProduitCampagne()
+
+  const lignes = (data?.data ?? []) as CampagneProduit[]
+  const produitsVisibles = produits.filter((p) => p.visible_shop && Number(p.prix_public ?? 0) > 0)
+  const selectedProduct = produitsVisibles.find((p) => p.id === productId)
+  const preview = prixPromoPreview(selectedProduct?.prix_public, {
+    remise_type: remiseType,
+    remise_valeur: remiseValeur,
+    prix_promo_xaf: prixPromo ? Number(prixPromo) : null,
+  })
+
+  const handleAdd = () => {
+    if (!campagne || !productId) return
+    ajouter.mutate({
+      campagneId: campagne.id,
+      product_id: productId,
+      remise_type: remiseType,
+      remise_valeur: remiseValeur,
+      prix_promo_xaf: prixPromo ? Number(prixPromo) : null,
+    }, {
+      onSuccess: () => {
+        setProductId('')
+        setPrixPromo('')
+        setRemiseValeur(10)
+        setRemiseType('pct')
+      },
+    })
+  }
+
+  return (
+    <SlideOver isOpen={Boolean(campagne)} onClose={onClose} title="Produits en promotion" width="lg">
+      {campagne && (
+        <div className="space-y-5">
+          <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+            <div className="text-sm font-bold text-gray-800">{campagne.nom}</div>
+            <div className="mt-1 text-xs text-gray-500">
+              Active du {formatDate(campagne.date_debut)} au {formatDate(campagne.date_fin)}
+            </div>
+          </div>
+
+          <div className="grid gap-3 rounded-lg border border-gray-100 p-4 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-semibold uppercase text-gray-500 mb-1.5">Produit shop</label>
+              <select value={productId} onChange={(e) => setProductId(e.target.value)}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]">
+                <option value="">Selectionner un produit visible...</option>
+                {produitsVisibles.map((p) => (
+                  <option key={p.id} value={p.id}>{p.ref} - {p.nom} - {formatXAF(Number(p.prix_public ?? 0))}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase text-gray-500 mb-1.5">Type remise</label>
+              <select value={remiseType} onChange={(e) => setRemiseType(e.target.value as 'pct' | 'forfait')}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]">
+                <option value="pct">Pourcentage</option>
+                <option value="forfait">Montant fixe</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase text-gray-500 mb-1.5">Valeur remise</label>
+              <input type="number" min="0" value={remiseValeur} onChange={(e) => setRemiseValeur(Number(e.target.value))}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase text-gray-500 mb-1.5">Prix promo force</label>
+              <input type="number" min="0" value={prixPromo} onChange={(e) => setPrixPromo(e.target.value)}
+                placeholder="Optionnel" className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+            </div>
+            <div className="flex items-end justify-between gap-3">
+              <div className="text-xs text-gray-500">
+                Apercu : <span className="font-bold text-[#C62828]">{preview ? formatXAF(preview) : '-'}</span>
+              </div>
+              <Button size="sm" disabled={!productId || ajouter.isPending} onClick={handleAdd}>
+                <Plus className="h-3.5 w-3.5" /> Ajouter
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <h3 className="text-sm font-bold text-gray-800">Produits lies</h3>
+            {isLoading ? (
+              <div className="rounded-lg border border-gray-100 p-5 text-center text-sm text-gray-400">Chargement...</div>
+            ) : lignes.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-gray-200 p-5 text-center text-sm text-gray-400">Aucun produit lie a cette campagne.</div>
+            ) : (
+              lignes.map((ligne) => {
+                const produitShop = produits.find((p) => p.id === ligne.product_id)
+                const base = Number(produitShop?.prix_public ?? 0)
+                const next = prixPromoPreview(base, ligne)
+                return (
+                  <div key={ligne.id} className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 p-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-bold text-gray-800">{ligne.produits?.designation ?? ligne.product_id}</div>
+                        <div className="mt-0.5 text-xs text-gray-500">
+                        {ligne.produits?.ref} - {base > 0 ? formatXAF(base) : 'Prix non defini'} {'->'} <span className="font-bold text-[#C62828]">{next ? formatXAF(next) : 'Sans remise'}</span>
+                      </div>
+                    </div>
+                    <button
+                      className="flex h-9 w-9 items-center justify-center rounded-lg text-red-600 hover:bg-red-50"
+                      title="Retirer"
+                      disabled={retirer.isPending}
+                      onClick={() => retirer.mutate({ campagneId: campagne.id, productId: ligne.product_id })}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </SlideOver>
+  )
+}
+
 export default function Marketing() {
   const [slideOpen, setSlideOpen] = useState(false)
   const [form, setForm] = useState<CampagneForm>(DEFAULT_FORM)
+  const [selectedCampagne, setSelectedCampagne] = useState<CampagneRecord | null>(null)
 
   const { data, isLoading } = useCampagnes()
+  const { data: produitsShop = [] } = useProduitsShop()
   const createCampagne = useCreateCampagne()
 
   const campagnes = (data?.data ?? []) as CampagneRecord[]
+  const columns = useMemo<Column<CampagneRecord>[]>(() => [
+    ...COLUMNS,
+    {
+      id: 'produits',
+      header: 'Shop',
+      accessor: 'id',
+      render: (_, row) => (
+        <button
+          className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-600 hover:border-[#C62828] hover:text-[#C62828]"
+          onClick={(event) => {
+            event.stopPropagation()
+            setSelectedCampagne(row)
+          }}
+        >
+          <Package className="h-3.5 w-3.5" /> Produits
+        </button>
+      ),
+    },
+  ], [])
   const formValid = form.nom.trim() !== '' && form.canal !== '' && form.dateFin !== ''
 
   const handleCreate = () => {
@@ -132,7 +298,7 @@ export default function Marketing() {
       </div>
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-        <DataTable<CampagneRecord> columns={COLUMNS} data={campagnes} keyField="id" loading={isLoading} />
+        <DataTable<CampagneRecord> columns={columns} data={campagnes} keyField="id" loading={isLoading} onRowClick={setSelectedCampagne} />
       </div>
 
       {/* ── Réseaux sociaux TAFDIL (Gap 6 CDC MOD-07) ─────────────────────────── */}
@@ -241,6 +407,11 @@ export default function Marketing() {
           </div>
         </div>
       </SlideOver>
+      <CampagneProduitsPanel
+        campagne={selectedCampagne}
+        produits={produitsShop}
+        onClose={() => setSelectedCampagne(null)}
+      />
     </motion.div>
   )
 }

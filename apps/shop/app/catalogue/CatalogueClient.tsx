@@ -471,6 +471,7 @@ function CheckRow({ label, count, checked, onClick }: { label: string; count?: n
 function CatalogueProductCard({ produit, index, viewMode, onAdd }: { produit: Produit; index: number; viewMode: ViewMode; onAdd: () => void }) {
   const image = productImage(produit, index)
   const unavailable = produit.disponibilite === 'indisponible'
+  const hasPromo = Boolean(produit.promotion && produit.prix_barre_xaf && produit.prix_public)
 
   if (viewMode === 'list') {
     return (
@@ -485,7 +486,11 @@ function CatalogueProductCard({ produit, index, viewMode, onAdd }: { produit: Pr
           <p className="mt-2 line-clamp-2 text-sm leading-6 text-gray-500">{produit.description_longue || produit.categorie}</p>
         </div>
         <div className="flex flex-col justify-between gap-4 sm:items-end">
-          <p className="text-xl font-black text-forge-red">{formatXAF(produit.prix_public)} {produit.prix_public ? <span className="text-xs font-semibold text-gray-500">/ {produit.unite}</span> : null}</p>
+          <div className="text-right">
+            {hasPromo && <p className="text-xs font-bold text-gray-400 line-through">{formatXAF(produit.prix_barre_xaf)}</p>}
+            <p className="text-xl font-black text-forge-red">{formatXAF(produit.prix_public)} {produit.prix_public ? <span className="text-xs font-semibold text-gray-500">/ {produit.unite}</span> : null}</p>
+            {produit.promotion && <p className="mt-1 text-[10px] font-black uppercase text-forge-red">{produit.promotion.nom}</p>}
+          </div>
           <button onClick={onAdd} disabled={unavailable} className="inline-flex items-center justify-center gap-2 rounded-md bg-forge-red px-5 py-3 text-sm font-black text-white hover:bg-forge-red-dark disabled:cursor-not-allowed disabled:opacity-40">
             <ShoppingCart size={15} /> Panier
           </button>
@@ -499,14 +504,17 @@ function CatalogueProductCard({ produit, index, viewMode, onAdd }: { produit: Pr
       <Link href={`/catalogue/${produit.id}`} className="relative block aspect-[1.18] overflow-hidden bg-gray-50">
         <Image src={image} alt={produit.nom} fill sizes="(max-width: 768px) 50vw, 25vw" className="object-cover transition duration-500 group-hover:scale-105" />
         <span className={`absolute left-3 top-3 rounded-full px-2 py-1 text-[10px] font-black uppercase ${statusClass(produit.disponibilite)}`}>{statusLabel(produit.disponibilite)}</span>
+        {hasPromo && <span className="absolute right-3 top-3 rounded-full bg-forge-red px-2 py-1 text-[10px] font-black uppercase text-white">Promo</span>}
       </Link>
       <div className="p-4">
         <p className="font-mono text-xs text-gray-400">{produit.ref}</p>
         <Link href={`/catalogue/${produit.id}`} className="mt-1 block min-h-10 text-sm font-black leading-tight text-forge-dark hover:text-forge-red">{produit.nom}</Link>
-        <p className="mt-3 text-lg font-black text-forge-red">
+        {hasPromo && <p className="mt-3 text-xs font-bold text-gray-400 line-through">{formatXAF(produit.prix_barre_xaf)}</p>}
+        <p className={`${hasPromo ? 'mt-0.5' : 'mt-3'} text-lg font-black text-forge-red`}>
           {formatXAF(produit.prix_public)}
           {produit.prix_public ? <span className="text-xs font-semibold text-gray-500"> / {produit.unite}</span> : null}
         </p>
+        {produit.promotion && <p className="mt-1 text-[10px] font-black uppercase text-forge-red">{produit.promotion.nom}</p>}
         <p className={`mt-2 text-xs font-semibold ${produit.disponibilite === 'stock_faible' ? 'text-amber-600' : unavailable ? 'text-gray-500' : 'text-green-700'}`}>
           {unavailable ? 'Sur commande' : produit.disponibilite === 'stock_faible' ? 'Stock faible' : 'En stock'}
         </p>

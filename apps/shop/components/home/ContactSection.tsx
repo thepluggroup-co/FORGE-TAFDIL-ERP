@@ -258,7 +258,7 @@ export function ContactSection() {
                   <MapPin size={16} className="mt-0.5 shrink-0 text-forge-red" />
                   <div>
                     <p className="text-sm font-medium text-forge-dark">Adresse</p>
-                    <p className="text-sm text-forge-steel">Bonamoussadi, Douala, Cameroun</p>
+                    <p className="text-sm text-forge-steel">KOTTO, derriere l'ecole Mauryvanas, Douala</p>
                   </div>
                 </li>
                 <li className="flex items-start gap-3">
@@ -298,7 +298,7 @@ export function ContactSection() {
             {/* Google Maps embed */}
             <div className="overflow-hidden rounded-2xl shadow-sm">
               <iframe
-                src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d15921.41!2d9.7679!3d4.0511!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x1061128becc62781%3A0x69e3f41f5e3a33ae!2sBonamoussadi%2C%20Douala!5e0!3m2!1sfr!2scm!4v1700000000000"
+                src="https://www.google.com/maps?q=KOTTO%2C%20derriere%20l%27ecole%20Mauryvanas%2C%20Douala%2C%20Cameroun&output=embed"
                 width="100%"
                 height="220"
                 style={{ border: 0 }}

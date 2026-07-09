@@ -36,6 +36,7 @@ interface Props {
 export function ProductCard({ produit }: Props) {
   const { addItem } = useCart()
   const indisponible = produit.disponibilite === 'indisponible'
+  const hasPromo = Boolean(produit.promotion && produit.prix_barre_xaf && produit.prix_public)
 
   const whatsappUrl = `https://wa.me/237695884528?text=${encodeURIComponent(
     `Bonjour TAFDIL, je souhaite un devis pour : ${produit.nom} (Réf. ${produit.ref})`
@@ -76,6 +77,11 @@ export function ProductCard({ produit }: Props) {
         <div className="absolute right-3 top-3">
           <BadgeDisponibilite dispo={produit.disponibilite} />
         </div>
+        {hasPromo && (
+          <div className="absolute bottom-3 left-3 rounded-full bg-forge-red px-2.5 py-1 text-[10px] font-black uppercase text-white shadow">
+            Promo
+          </div>
+        )}
       </Link>
 
       {/* Corps */}
@@ -111,10 +117,18 @@ export function ProductCard({ produit }: Props) {
         {/* Prix */}
         <div className="mt-auto">
           {produit.prix_public ? (
-            <p className="text-xl font-black text-forge-red">
-              {new Intl.NumberFormat('fr-CM', { style: 'currency', currency: 'XAF', maximumFractionDigits: 0 }).format(produit.prix_public)}
-              <span className="ml-1 text-xs font-normal text-forge-steel">/ {produit.unite}</span>
-            </p>
+            <div>
+              {hasPromo && (
+                <p className="text-xs font-bold text-gray-400 line-through">
+                  {new Intl.NumberFormat('fr-CM', { style: 'currency', currency: 'XAF', maximumFractionDigits: 0 }).format(produit.prix_barre_xaf!)}
+                </p>
+              )}
+              <p className="text-xl font-black text-forge-red">
+                {new Intl.NumberFormat('fr-CM', { style: 'currency', currency: 'XAF', maximumFractionDigits: 0 }).format(produit.prix_public)}
+                <span className="ml-1 text-xs font-normal text-forge-steel">/ {produit.unite}</span>
+              </p>
+              {produit.promotion && <p className="mt-0.5 text-[10px] font-bold uppercase text-forge-red">{produit.promotion.nom}</p>}
+            </div>
           ) : (
             <p className="text-sm font-semibold italic text-forge-steel">Prix sur devis</p>
           )}

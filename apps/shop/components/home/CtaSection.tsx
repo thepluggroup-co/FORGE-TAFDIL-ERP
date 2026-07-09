@@ -49,7 +49,7 @@ export function CtaSection() {
         </div>
 
         <p className="mt-8 text-xs text-white/50">
-          Lun–Sam · 7h30–18h00 · Bonamoussadi, Douala
+          Lun–Sam · 7h30–18h00 · KOTTO, Douala
         </p>
       </div>
     </section>

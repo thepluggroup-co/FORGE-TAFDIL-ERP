@@ -8,8 +8,71 @@ function disponibilite(stock: number, seuil: number): Disponibilite {
   return 'disponible'
 }
 
-function mapProduitShop(row: any): Produit {
+type PromoActive = {
+  campagne_id: string
+  campagne_nom: string
+  product_id: string
+  remise_type: 'pct' | 'forfait'
+  remise_valeur: number
+  prix_promo_xaf: number | null
+  date_fin: string
+}
+
+function computePromoPrice(base: number | null | undefined, promo?: PromoActive) {
+  const prixBase = Math.round(Number(base ?? 0))
+  if (!promo || prixBase <= 0) return null
+  const prixForce = Math.round(Number(promo.prix_promo_xaf ?? 0))
+  if (prixForce > 0 && prixForce < prixBase) return prixForce
+  const remise = promo.remise_type === 'pct'
+    ? Math.round(prixBase * Math.min(100, Number(promo.remise_valeur ?? 0)) / 100)
+    : Math.round(Number(promo.remise_valeur ?? 0))
+  const next = Math.max(0, prixBase - remise)
+  return next > 0 && next < prixBase ? next : null
+}
+
+async function fetchPromosDirect(productIds: string[]) {
+  if (productIds.length === 0) return new Map<string, PromoActive>()
+  const today = new Date().toISOString().slice(0, 10)
+  const db = createPublicClient()
+  const { data, error } = await db
+    .from('campagnes_produits')
+    .select(`
+      campagne_id,
+      product_id,
+      remise_type,
+      remise_valeur,
+      prix_promo_xaf,
+      priorite,
+      campagnes_marketing!inner(nom, statut, date_debut, date_fin)
+    `)
+    .in('product_id', productIds)
+    .eq('campagnes_marketing.statut', 'active')
+    .lte('campagnes_marketing.date_debut', today)
+    .gte('campagnes_marketing.date_fin', today)
+    .order('priorite', { ascending: false })
+    .order('created_at', { ascending: false })
+
+  if (error || !data) return new Map<string, PromoActive>()
+
+  const map = new Map<string, PromoActive>()
+  for (const row of data as any[]) {
+    if (map.has(row.product_id)) continue
+    map.set(row.product_id, {
+      campagne_id: row.campagne_id,
+      campagne_nom: row.campagnes_marketing?.nom ?? 'Promotion',
+      product_id: row.product_id,
+      remise_type: row.remise_type === 'forfait' ? 'forfait' : 'pct',
+      remise_valeur: Number(row.remise_valeur ?? 0),
+      prix_promo_xaf: row.prix_promo_xaf === null || row.prix_promo_xaf === undefined ? null : Number(row.prix_promo_xaf),
+      date_fin: row.campagnes_marketing?.date_fin ?? today,
+    })
+  }
+  return map
+}
+
+function mapProduitShop(row: any, promo?: PromoActive): Produit {
   const p = row.produits
+  const promoPrice = computePromoPrice(row.prix_public, promo)
   return {
     id: row.product_id,
     ref: p.ref,
@@ -19,7 +82,17 @@ function mapProduitShop(row: any): Produit {
     unite: p.unite,
     stock_actuel: p.stock_actuel,
     seuil_alerte: p.stock_min,
-    prix_public: row.prix_public,
+    prix_public: promoPrice ?? row.prix_public,
+    prix_barre_xaf: promoPrice ? row.prix_public : null,
+    promotion: promoPrice && promo ? {
+      campagne_id: promo.campagne_id,
+      nom: promo.campagne_nom,
+      remise_type: promo.remise_type,
+      remise_valeur: promo.remise_valeur,
+      prix_original_xaf: row.prix_public,
+      prix_promo_xaf: promoPrice,
+      date_fin: promo.date_fin,
+    } : null,
     description_longue: row.description_longue,
     images: row.images ?? [],
     tags: row.tags ?? [],
@@ -73,7 +146,8 @@ export async function fetchCatalogueProduits(params?: { categorie?: string; q?: 
 
     const { data, error } = await query
     if (error || !data) return []
-    return data.map(mapProduitShop)
+    const promos = await fetchPromosDirect(data.map((row: any) => row.product_id))
+    return data.map((row: any) => mapProduitShop(row, promos.get(row.product_id)))
   } catch {
     return []
   }
@@ -104,7 +178,8 @@ export async function fetchCatalogueProduit(id: string): Promise<Produit | null>
       .single()
 
     if (error || !data) return null
-    return mapProduitShop(data)
+    const promos = await fetchPromosDirect([data.product_id])
+    return mapProduitShop(data, promos.get(data.product_id))
   } catch {
     return null
   }
