@@ -541,7 +541,7 @@ router.get('/finance/dashboard', requireRole(['admin', 'superviseur']), async (c
   }
   const brouillons = factures.filter((f) => f.statut === 'brouillon')
   const banqueCaisse = ecritures
-    .filter((e) => ['521', '571'].includes(e.compte_syscohada))
+    .filter((e) => ['521', '571', '5521', '5522'].includes(e.compte_syscohada))
     .reduce((s, e) => s + Number(e.debit_xaf ?? 0) - Number(e.credit_xaf ?? 0), 0)
 
   return c.json({
@@ -1209,7 +1209,7 @@ router.post(
   zValidator('json', z.object({
     montant_xaf:   z.number().positive(),
     date_paiement: z.string(),
-    mode:          z.enum(['banque', 'caisse']).default('banque'),
+    mode:          z.enum(['banque', 'caisse', 'virement', 'especes', 'mtn_momo', 'orange_money']).default('banque'),
     notes:         z.string().optional(),
   })),
   async (c) => {
@@ -1387,8 +1387,7 @@ router.post(
     if (fErr) return c.json({ error: fErr.message }, 500)
     await syncCreditForFacture(factureUpdated, user.id)
 
-    const modeCompta = ['virement', 'cheque'].includes(body.mode_paiement) ? 'banque' : 'caisse'
-    const refLabel   = [f.numero, body.mode_paiement, body.reference].filter(Boolean).join(' — ')
+    const refLabel = [f.numero, versement.id, body.mode_paiement, body.reference].filter(Boolean).join(' — ')
 
     genererEcritureEncaissement({
       facture_id:  id,
@@ -1396,7 +1395,7 @@ router.post(
       date:        body.date_versement,
       montant_xaf: body.montant_xaf,
       client_nom:  f.client_nom,
-      mode:        modeCompta as 'banque' | 'caisse',
+      mode:        body.mode_paiement,
       created_by:  user.id,
     }).catch(e => console.error('[compta] versement facture:', e))
 

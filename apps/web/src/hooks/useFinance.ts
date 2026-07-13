@@ -824,6 +824,8 @@ export function useUpdateStatutFacture() {
   })
 }
 
+export type ModeEncaissementFacture = 'virement' | 'especes' | 'mtn_momo' | 'orange_money'
+
 export function usePaiementFacture() {
   const qc = useQueryClient()
   return useMutation({
@@ -831,11 +833,17 @@ export function usePaiementFacture() {
       id: string
       montant_xaf: number
       date_paiement: string
-      mode: 'banque' | 'caisse'
+      mode: ModeEncaissementFacture
       notes?: string
-    }) => apiClient.post(`/api/factures/${id}/paiement`, { montant_xaf, date_paiement, mode, notes }),
-    onSuccess: () => {
+    }) => apiClient.post(`/api/factures/${id}/versements`, {
+      montant_xaf,
+      date_versement: date_paiement,
+      mode_paiement: mode,
+      note: notes,
+    }),
+    onSuccess: (_, variables) => {
       void qc.invalidateQueries({ queryKey: ['factures'] })
+      void qc.invalidateQueries({ queryKey: ['versements-facture', variables.id] })
       void qc.invalidateQueries({ queryKey: ['ecritures'] })
       toast.success('Paiement facture enregistre')
     },
@@ -848,7 +856,7 @@ export interface Versement {
   facture_id: string
   montant_xaf: number
   date_versement: string
-  mode_paiement: 'orange_money' | 'mtn_momo' | 'virement' | 'especes' | 'cheque' | 'autre'
+  mode_paiement: ModeEncaissementFacture | 'cheque' | 'autre'
   reference: string | null
   note: string | null
   enregistre_par: string | null

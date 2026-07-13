@@ -23,7 +23,7 @@ import {
   useAnnulerSortieTresorerie, useUploadJustificatifCharge, useUploadJustificatifSortie,
   useSynchroniserFactures, useRegulariserLivraisonFactures,
 } from '@/hooks/useFinance'
-import type { Facture as FactureApi, Credit as CreditApi, FactureLigne, Versement, Charge, SortieTresorerie, ModePaiementSortie } from '@/hooks/useFinance'
+import type { Facture as FactureApi, Credit as CreditApi, FactureLigne, Versement, Charge, SortieTresorerie, ModePaiementSortie, ModeEncaissementFacture } from '@/hooks/useFinance'
 import { useClients } from '@/hooks/useClients'
 import { useCommandes } from '@/hooks/useCommandes'
 import { API_BASE, apiClient } from '@/lib/api-client'
@@ -57,6 +57,8 @@ const SYSCOHADA = [
   { code: '411', label: '411 — Clients' },
   { code: '401', label: '401 — Fournisseurs' },
   { code: '521', label: '521 — Banque' },
+  { code: '5521', label: '5521 — MTN Mobile Money' },
+  { code: '5522', label: '5522 — Orange Money' },
   { code: '571', label: '571 — Caisse' },
   { code: '601', label: '601 — Achats matières premières' },
   { code: '641', label: '641 — Charges de personnel' },
@@ -814,7 +816,7 @@ function PaiementFactureModal({ isOpen, onClose, facture }: { isOpen: boolean; o
   const [type, setType] = useState<'total' | 'partiel'>('total')
   const [montant, setMontant] = useState('')
   const [date, setDate] = useState(new Date().toISOString().split('T')[0])
-  const [mode, setMode] = useState<'banque' | 'caisse'>('banque')
+  const [mode, setMode] = useState<ModeEncaissementFacture>('virement')
   const paiement = usePaiementFacture()
 
   useEffect(() => {
@@ -822,7 +824,7 @@ function PaiementFactureModal({ isOpen, onClose, facture }: { isOpen: boolean; o
       setType('total')
       setMontant('')
       setDate(new Date().toISOString().split('T')[0])
-      setMode('banque')
+      setMode('virement')
     }
   }, [isOpen, facture?.id])
 
@@ -882,10 +884,11 @@ function PaiementFactureModal({ isOpen, onClose, facture }: { isOpen: boolean; o
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Mode</label>
-            <select value={mode} onChange={(e) => setMode(e.target.value as 'banque' | 'caisse')}
+            <select value={mode} onChange={(e) => setMode(e.target.value as ModeEncaissementFacture)}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30 bg-white">
-              <option value="banque">Banque</option>
-              <option value="caisse">Caisse</option>
+              {MODES_ENCAISSEMENT.map(({ value, label }) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
             </select>
           </div>
         </div>
@@ -1166,12 +1169,19 @@ function OrderSelectorModal({ isOpen, onClose, onSelect }: {
 
 const MODE_VERSEMENT_LABELS: Record<Versement['mode_paiement'], string> = {
   orange_money: 'Orange Money',
-  mtn_momo:     'MTN MoMo',
-  virement:     'Virement',
-  especes:      'Espèces',
+  mtn_momo:     'Mobile Money (MTN)',
+  virement:     'Banque',
+  especes:      'Caisse',
   cheque:       'Chèque',
   autre:        'Autre',
 }
+
+const MODES_ENCAISSEMENT: ReadonlyArray<{ value: ModeEncaissementFacture; label: string }> = [
+  { value: 'virement',     label: MODE_VERSEMENT_LABELS.virement },
+  { value: 'especes',      label: MODE_VERSEMENT_LABELS.especes },
+  { value: 'mtn_momo',     label: MODE_VERSEMENT_LABELS.mtn_momo },
+  { value: 'orange_money', label: MODE_VERSEMENT_LABELS.orange_money },
+]
 
 function NouveauVersementModal({
   isOpen,
@@ -1260,8 +1270,8 @@ function NouveauVersementModal({
             onChange={e => setMode(e.target.value as Versement['mode_paiement'])}
             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30 bg-white"
           >
-            {(Object.entries(MODE_VERSEMENT_LABELS) as [Versement['mode_paiement'], string][]).map(([val, label]) => (
-              <option key={val} value={val}>{label}</option>
+            {MODES_ENCAISSEMENT.map(({ value, label }) => (
+              <option key={value} value={value}>{label}</option>
             ))}
           </select>
         </div>
@@ -1821,7 +1831,7 @@ export default function Finance() {
     const creditsOuverts = credits.filter((c) => c.statut !== 'rembourse')
     const creditsSolde = creditsOuverts.reduce((s, c) => s + Number(c.solde_restant_xaf ?? 0), 0)
     const banqueCaisse = dashboardEcritures
-      .filter((e) => ['521', '571'].includes(String(e.compte_syscohada ?? e.compte ?? '')))
+      .filter((e) => ['521', '571', '5521', '5522'].includes(String(e.compte_syscohada ?? e.compte ?? '')))
       .reduce((s, e) => s + Number(e.debit_xaf ?? 0) - Number(e.credit_xaf ?? 0), 0)
     const tauxEncaissement = caFacture > 0 ? Math.round((encaisse / caFacture) * 100) : 0
 

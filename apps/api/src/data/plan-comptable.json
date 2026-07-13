@@ -55,6 +55,9 @@
   { "compte": "512",  "libelle": "Chèques à encaisser",                                   "classe": 5 },
   { "compte": "521",  "libelle": "Banques — Comptes courants",                            "classe": 5 },
   { "compte": "531",  "libelle": "Comptes courants postaux (CCP)",                        "classe": 5 },
+  { "compte": "552",  "libelle": "Monnaie électronique — Téléphone portable",             "classe": 5 },
+  { "compte": "5521", "libelle": "Monnaie électronique — MTN Mobile Money",              "classe": 5 },
+  { "compte": "5522", "libelle": "Monnaie électronique — Orange Money",                  "classe": 5 },
   { "compte": "571",  "libelle": "Caisse",                                                 "classe": 5 },
   { "compte": "581",  "libelle": "Virements internes",                                     "classe": 5 },
 

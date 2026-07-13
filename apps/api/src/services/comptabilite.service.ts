@@ -143,8 +143,25 @@ export async function genererEcritureVente(facture: {
 // ══════════════════════════════════════════════════════════════════════════════
 //
 // Règlement d'une créance client
-//   Dr 521 Banque (ou 571 Caisse)  (montant encaissé)
-//   Cr 411 Clients                 (montant encaissé)
+//   Dr 521 Banque, 571 Caisse ou 552x Mobile Money (montant encaissé)
+//   Cr 411 Clients                                      (montant encaissé)
+
+export type ModeEncaissementComptable =
+  | 'banque'
+  | 'caisse'
+  | 'virement'
+  | 'especes'
+  | 'mtn_momo'
+  | 'orange_money'
+  | 'cheque'
+  | 'autre'
+
+export function compteEncaissement(mode: ModeEncaissementComptable = 'banque'): string {
+  if (mode === 'caisse' || mode === 'especes') return '571'
+  if (mode === 'mtn_momo') return '5521'
+  if (mode === 'orange_money') return '5522'
+  return '521'
+}
 
 export async function genererEcritureEncaissement(params: {
   facture_id?:  string
@@ -153,14 +170,14 @@ export async function genererEcritureEncaissement(params: {
   date:         string
   montant_xaf:  number
   client_nom:   string
-  mode?:        'banque' | 'caisse'
+  mode?:        ModeEncaissementComptable
   created_by?:  string
 }): Promise<ComptaResult> {
   const ref   = `ENC-${params.reference}`
   const dejaFait = await ecrituresExistent('reference_doc', ref)
   if (dejaFait) return { ok: true, inserts: 0 }
 
-  const compteTreso = params.mode === 'caisse' ? '571' : '521'
+  const compteTreso = compteEncaissement(params.mode)
   const libelle = `Encaissement — ${params.reference} — ${params.client_nom}`
 
   return insertEcritures([
