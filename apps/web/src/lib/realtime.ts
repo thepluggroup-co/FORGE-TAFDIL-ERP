@@ -19,8 +19,20 @@ const WORKFLOW_KEYS: Record<string, string[][]> = {
 }
 
 export function setupRealtime(queryClient: QueryClient): () => void {
+  const invalidateTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const inv = (...keys: string[][]) => {
     for (const key of keys) void queryClient.invalidateQueries({ queryKey: key })
+  }
+  const invDebounced = (delayMs: number, ...keys: string[][]) => {
+    for (const key of keys) {
+      const timerKey = key.join(':')
+      const previous = invalidateTimers.get(timerKey)
+      if (previous) clearTimeout(previous)
+      invalidateTimers.set(timerKey, setTimeout(() => {
+        invalidateTimers.delete(timerKey)
+        void queryClient.invalidateQueries({ queryKey: key })
+      }, delayMs))
+    }
   }
 
   const produits = supabase
@@ -152,7 +164,7 @@ export function setupRealtime(queryClient: QueryClient): () => void {
       inv(['projets'])
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'livraisons' }, () => {
-      inv(['livraisons'], ['logistique', 'commandes-pretes'])
+      invDebounced(750, ['livraisons'], ['logistique', 'commandes-pretes'])
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'campagnes_marketing' }, () => {
       inv(['campagnes'])
@@ -185,6 +197,8 @@ export function setupRealtime(queryClient: QueryClient): () => void {
     .subscribe()
 
   return () => {
+    for (const timer of invalidateTimers.values()) clearTimeout(timer)
+    invalidateTimers.clear()
     void supabase.removeChannel(produits)
     void supabase.removeChannel(bons)
     void supabase.removeChannel(stock)

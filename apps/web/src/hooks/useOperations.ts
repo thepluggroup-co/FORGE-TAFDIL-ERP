@@ -408,7 +408,13 @@ export interface CreateLivraisonPayload {
   notes?: string
 }
 
-interface LivraisonsResponse { data: Livraison[]; total: number }
+interface LivraisonsResponse {
+  data: Livraison[]
+  total: number
+  page: number
+  per_page: number
+  total_pages: number
+}
 
 function queryString(params?: Record<string, string | number | undefined>) {
   const qs = new URLSearchParams()
@@ -424,6 +430,7 @@ export function useLivraisons(params?: { statut?: string; search?: string; page?
     queryKey:  ['livraisons', params],
     queryFn:   () => apiClient.get<LivraisonsResponse>(`/api/logistique/livraisons${queryString(params)}`),
     staleTime: 20_000,
+    retry:     false,
   })
 }
 
@@ -493,7 +500,7 @@ function messageSynchronisationLivraisons(res: SynchronisationWorkflowResult) {
 export function useSynchroniserLivraisons() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: () => apiClient.post<SynchronisationWorkflowResult>('/api/logistique/synchroniser-livraisons', {}),
+    mutationFn: () => apiClient.post<SynchronisationWorkflowResult>('/api/logistique/synchroniser-livraisons', {}, 60_000),
     onSuccess: (res) => {
       void qc.invalidateQueries({ queryKey: ['livraisons'] })
       void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })

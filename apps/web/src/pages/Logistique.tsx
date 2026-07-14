@@ -30,6 +30,7 @@ type LivraisonActionForm = {
 }
 
 const TRANSPORTEURS = ['TRANSIT CM', 'CAMTRANS', 'PORT EXPRESS', 'Auto-livraison', 'ELITE TRANSPORT']
+const LIVRAISONS_PAGE_SIZE = 50
 
 const STATUT_LABELS: Partial<Record<Livraison['statut'], string>> = {
   en_preparation: 'En preparation',
@@ -134,17 +135,22 @@ export default function Logistique() {
   const [slideOpen, setSlideOpen] = useState(false)
   const [selected, setSelected] = useState<LivraisonRecord | null>(null)
   const [livraisonSort, setLivraisonSort] = useState<LivraisonSort>('recent')
+  const [livraisonPage, setLivraisonPage] = useState(1)
   const [form, setForm] = useState<LivraisonForm>(DEFAULT_FORM)
   const [actionLivraison, setActionLivraison] = useState<{ livraison: LivraisonRecord; statut: Livraison['statut'] } | null>(null)
   const [actionForm, setActionForm] = useState<LivraisonActionForm>(DEFAULT_ACTION_FORM)
 
-  const { data, isLoading } = useLivraisons({ per_page: 500 })
+  const { data, isLoading } = useLivraisons({ page: livraisonPage, per_page: LIVRAISONS_PAGE_SIZE })
   const { data: commandesPretesData, isLoading: commandesLoading } = useCommandesPretesLivraison()
   const createLivraison = useCreateLivraison()
   const synchroniserLivraisons = useSynchroniserLivraisons()
   const updateStatut = useUpdateLivraisonStatut()
 
   const livraisons = (data?.data ?? []) as LivraisonRecord[]
+  const totalLivraisons = data?.total ?? 0
+  const totalLivraisonPages = Math.max(1, data?.total_pages ?? 1)
+  const livraisonRangeStart = totalLivraisons === 0 ? 0 : (livraisonPage - 1) * LIVRAISONS_PAGE_SIZE + 1
+  const livraisonRangeEnd = Math.min(livraisonPage * LIVRAISONS_PAGE_SIZE, totalLivraisons)
   const commandesPretes = commandesPretesData?.data ?? []
   const selectedCommande = commandesPretes.find((c) => c.id === form.commandeId)
   const formValid = Boolean(selectedCommande && form.destination.trim() && form.transporteur && form.dateLivraison)
@@ -423,6 +429,32 @@ export default function Logistique() {
             initialPageSize="all"
             pageSizeOptions={['all', 10, 25, 50]}
           />
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-5 py-3">
+            <p className="text-xs text-gray-500">
+              {livraisonRangeStart}-{livraisonRangeEnd} sur {totalLivraisons} livraison(s)
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={livraisonPage <= 1 || isLoading}
+                onClick={() => { setSelected(null); setLivraisonPage((page) => Math.max(1, page - 1)) }}
+              >
+                Precedent
+              </Button>
+              <span className="min-w-20 text-center text-xs font-semibold text-gray-600">
+                Page {livraisonPage} / {totalLivraisonPages}
+              </span>
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={livraisonPage >= totalLivraisonPages || isLoading}
+                onClick={() => { setSelected(null); setLivraisonPage((page) => Math.min(totalLivraisonPages, page + 1)) }}
+              >
+                Suivant
+              </Button>
+            </div>
+          </div>
         </div>
 
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 min-h-[320px]">

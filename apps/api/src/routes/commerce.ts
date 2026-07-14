@@ -920,11 +920,24 @@ router.post('/devis', requireRole(['admin', 'superviseur', 'operateur']), zValid
 router.put('/devis/:id', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', devisSchema.partial()), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
+  const user   = c.get('user')
 
-  const { data: existing } = await db.from('devis').select('statut').eq('id', id).single()
+  const { data: existing, error: existingError } = await db
+    .from('devis')
+    .select('statut, client_id, client_nom')
+    .eq('id', id)
+    .single()
+
+  if (existingError) {
+    if (existingError.code === 'PGRST116') {
+      return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
+    }
+    return c.json({ error: existingError.message, code: existingError.code }, 500)
+  }
   if (!existing) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
 
-  const currentStatut = (existing as { statut: string }).statut
+  const existingDevis = existing as { statut: string; client_id: string | null; client_nom: string }
+  const currentStatut = existingDevis.statut
   // Bloquer modification si déjà transformé ou expiré/refusé définitif
   if (['transforme', 'expire'].includes(currentStatut)) {
     return c.json({
@@ -948,8 +961,62 @@ router.put('/devis/:id', requireRole(['admin', 'superviseur', 'operateur']), zVa
       commentaire_client:   null,
     } : {}),
   }
-  const { lignes, ...devisFields } = body
-  Object.assign(updates, devisFields)
+
+  // Les coordonnees appartiennent a la table clients, pas a la table devis.
+  // Une liste blanche empeche qu'un champ du schema HTTP soit ajoute par erreur
+  // a l'UPDATE Supabase si le payload evolue a l'avenir.
+  const hasClientInput = [
+    body.client_id,
+    body.client_nom,
+    body.client_telephone,
+    body.client_email,
+    body.client_adresse,
+    body.client_ville,
+  ].some((value) => value !== undefined)
+
+  if (hasClientInput) {
+    const clientId = await ensureClient({
+      clientId:  body.client_id ?? existingDevis.client_id,
+      nom:       body.client_nom ?? existingDevis.client_nom,
+      telephone: body.client_telephone,
+      email:     body.client_email,
+      adresse:   body.client_adresse,
+      ville:     body.client_ville,
+      type:      'particulier',
+      createdBy: user.id,
+    })
+
+    if (clientId) {
+      const clientUpdates: Record<string, unknown> = { updated_at: new Date().toISOString() }
+      if (body.client_nom !== undefined)       clientUpdates.nom       = body.client_nom
+      if (body.client_telephone !== undefined) clientUpdates.telephone = body.client_telephone
+      if (body.client_email !== undefined)     clientUpdates.email     = body.client_email.toLowerCase()
+      if (body.client_adresse !== undefined)   clientUpdates.adresse   = body.client_adresse
+      if (body.client_ville !== undefined)     clientUpdates.ville     = body.client_ville
+
+      const { error: clientError } = await db.from('clients').update(clientUpdates).eq('id', clientId)
+      if (clientError) return c.json({ error: clientError.message, code: clientError.code }, 400)
+      updates.client_id = clientId
+    }
+  }
+
+  if (body.client_nom !== undefined) updates.client_nom = body.client_nom
+
+  const devisFieldNames = [
+    'date_emission',
+    'date_validite',
+    'validite_jours',
+    'acompte_pct',
+    'condition_paiement_id',
+    'remise_globale_xaf',
+    'remise_globale_motif',
+    'notes',
+  ] as const
+  for (const field of devisFieldNames) {
+    if (body[field] !== undefined) updates[field] = body[field]
+  }
+
+  const { lignes } = body
 
   if (lignes) {
     const lignesAvecRemise = lignes.map((l) => ({
