@@ -22,6 +22,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mkChain, authHeaders } from './helpers'
 
+const testEnv = vi.hoisted(() => {
+  process.env.NODE_ENV = 'test'
+  process.env.SUPABASE_JWT_SECRET = 'forge-test-jwt-secret-x0x0x0x0x0x0x0x0x0x0'
+  process.env.SUPABASE_URL = 'http://localhost:54321'
+  process.env.SUPABASE_ANON_KEY = 'test-anon-key'
+  process.env.SUPABASE_SERVICE_ROLE_KEY = ''
+  return {}
+})
+
 vi.mock('@forge/db/supabase', () => {
   const safeChain = () => {
     const c: Record<string, unknown> = {}
@@ -53,11 +62,30 @@ vi.mock('@forge/db/supabase', () => {
 vi.mock('../services/credit-eligibility.service', () => ({
   verifierEligibiliteCredit: vi.fn().mockResolvedValue({ eligible: true, raison: null }),
 }))
+vi.mock('../services/client-sync.service', () => ({
+  ensureClient: vi.fn().mockResolvedValue('client-123'),
+}))
 vi.mock('../services/sms.service', () => ({
   notifyCommandeSms: vi.fn().mockResolvedValue({ ok: true, skipped: false }),
 }))
 vi.mock('../services/workflow-notifications.service', () => ({
   notifyWorkflow: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('../services/finance-core.service', () => ({
+  ensureFactureForCommande: vi.fn().mockResolvedValue(undefined),
+  solderCreditsForCommande: vi.fn().mockResolvedValue(undefined),
+  syncCreditForCommande: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('../middleware/auth', () => ({
+  authMiddleware: async (c: any, next: () => Promise<void>) => {
+    const authHeader = c.req.header('Authorization')
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ error: 'Token manquant', code: 'MISSING_TOKEN' }, 401)
+    }
+    c.set('user', { id: 'test-user', email: 'test@tafdil.cm', role: 'admin' })
+    c.set('requestId', 'test-request')
+    await next()
+  },
 }))
 
 import app from '../app'
@@ -184,6 +212,32 @@ describe('POST /api/shop/commandes', () => {
     expect(body.code).toBe('ACOMPTE_LIVRAISON_REQUIS')
   })
 
+  it('accepte un retrait en boutique sans adresse de livraison', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: { id: 'p1', designation: 'Profilé', stock_actuel: 100, unite: 'm' }, error: null,
+    }) as never)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: { id: 'p1', designation: 'Profilé', stock_actuel: 100, unite: 'm' }, error: null,
+    }) as never)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: [{ id: 'cs1', ref: 'WEB-2026-1234' }], error: null,
+    }) as never)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: null, error: { message: 'erp skip' },
+    }) as never)
+
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS,
+      body: JSON.stringify({
+        ...VALID_COMMANDE,
+        client_adresse: undefined,
+        mode_livraison: 'retrait_boutique',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+  })
+
   it('retourne 404 PRODUCT_NOT_FOUND si produit inexistant', async () => {
     // fetch produit → null
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
@@ -214,13 +268,25 @@ describe('POST /api/shop/commandes', () => {
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
       data: { id: 'p1', designation: 'Profilé', stock_actuel: 100, unite: 'm' }, error: null,
     }) as never)
-    // 2. insert commandes_shop
+    // 2. lecture condition de paiement
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
-      data: { id: 'cs1', ref: 'WEB-2026-1234' }, error: null,
+      data: { id: 'cp1', acompte_pct: 50, delai_solde_jours: 14 }, error: null,
     }) as never)
-    // 3. insert commande ERP → on simule une erreur pour court-circuiter la suite (bon de sortie)
+    // 3. insert commandes_shop
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
-      data: null, error: { message: 'erp skip' },
+      data: [{ id: 'cs1', ref: 'WEB-2026-1234' }], error: null,
+    }) as never)
+    // 4. insert commande ERP
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: { id: 'erp-1' }, error: null,
+    }) as never)
+    // 5. update commande_shop (liaison ERP)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: [{ id: 'cs1', ref: 'WEB-2026-1234' }], error: null,
+    }) as never)
+    // 6. insert lignes ERP
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: [{ id: 'line-1' }], error: null,
     }) as never)
     // Les appels suivants retombent sur safeChain par défaut
 

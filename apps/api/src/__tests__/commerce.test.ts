@@ -6,6 +6,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mkChain, authHeaders } from './helpers'
 
+const testEnv = vi.hoisted(() => {
+  process.env.NODE_ENV = 'test'
+  process.env.SUPABASE_JWT_SECRET = 'forge-test-jwt-secret-x0x0x0x0x0x0x0x0x0x0'
+  process.env.SUPABASE_URL = 'http://localhost:54321'
+  process.env.SUPABASE_ANON_KEY = 'test-anon-key'
+  process.env.SUPABASE_SERVICE_ROLE_KEY = ''
+  return {}
+})
+
 vi.mock('@forge/db/supabase', () => {
   const safeChain = () => {
     const c: Record<string, unknown> = {}
@@ -205,6 +214,27 @@ describe('C3 — POST /api/clients : création client', () => {
     expect(res.status).toBe(201)
     const body = await res.json() as { nom: string }
     expect(body.nom).toBe('SODECOTON')
+  })
+
+  it('normalise un score numérique vers une valeur compatible avec la contrainte DB', async () => {
+    let insertedPayload: Record<string, unknown> | undefined
+    const chain: any = {}
+    chain.insert = vi.fn().mockImplementation((payload: Record<string, unknown>) => {
+      insertedPayload = payload
+      return chain
+    })
+    chain.select = vi.fn().mockImplementation(() => chain)
+    chain.single = vi.fn().mockResolvedValue({ data: { ...CLIENT, score_fiabilite: 'tres_bon' }, error: null })
+    vi.mocked(supabase.from).mockReturnValueOnce(chain as never)
+
+    const res = await app.request('/api/clients', {
+      method:  'POST',
+      headers: new Headers(authHeaders('operateur')),
+      body:    JSON.stringify({ ...CREATE_BODY, score_fiabilite: 65 }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(insertedPayload?.score_fiabilite).toBe('tres_bon')
   })
 
   it('retourne 400 si nom manquant (Zod)', async () => {

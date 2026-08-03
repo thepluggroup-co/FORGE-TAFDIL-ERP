@@ -12,13 +12,14 @@ import { z } from 'zod'
 import { toast } from 'sonner'
 import { useCartStore, computeTotal } from '@/lib/cart'
 import type { CartItem, CartTotals } from '@/lib/cart'
-import { FRAIS_LIVRAISON } from '@forge/shared'
+import { FRAIS_LIVRAISON, BOUTIQUE_RETRAIT } from '@forge/shared'
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
 type Step = 1 | 2 | 3 | 4
 type Ville = 'Douala' | 'Yaounde' | 'Bafoussam' | 'Autres'
 type ModePaiement = 'mtn' | 'orange' | 'livraison' | 'credit'
+type ModeLivraison = 'livraison' | 'retrait_boutique'
 type AdvancePct = 30 | 50 | 70
 type CreditInstallments = 2 | 3 | 4
 type SmsStatus = {
@@ -313,22 +314,32 @@ function StepPanier({ onNext }: { onNext: () => void }) {
 
 function StepCoordonnees({
   coordonnees, onChange, onNext, onBack, totals,
+  modeLivraison, setModeLivraison,
 }: {
   coordonnees: Coordonnees
   onChange: (c: Coordonnees) => void
   onNext: () => void
   onBack: () => void
   totals: CartTotals
+  modeLivraison: ModeLivraison
+  setModeLivraison: (m: ModeLivraison) => void
 }) {
   const [errors, setErrors] = useState<Record<string, string>>({})
-  const frais = FRAIS[coordonnees.ville]
-  const total = grandTotal(totals, coordonnees.ville)
+  const frais = modeLivraison === 'livraison' ? FRAIS[coordonnees.ville] : 0
+  const total = modeLivraison === 'livraison' ? grandTotal(totals, coordonnees.ville) : totals.ttc
 
   const set = (field: keyof Coordonnees) => (value: string | boolean) =>
     onChange({ ...coordonnees, [field]: value })
 
   const handleNext = () => {
-    const result = CoordSchema.safeParse(coordonnees)
+    const normalized = modeLivraison === 'retrait_boutique'
+      ? {
+          ...coordonnees,
+          adresse: `${BOUTIQUE_RETRAIT.nom} — ${BOUTIQUE_RETRAIT.ligne1}, ${BOUTIQUE_RETRAIT.ville}`,
+          ville: 'Douala' as Ville,
+        }
+      : coordonnees
+    const result = CoordSchema.safeParse(normalized)
     if (!result.success) {
       const errs: Record<string, string> = {}
       result.error.issues.forEach(i => { errs[String(i.path[0])] = i.message })
@@ -348,6 +359,30 @@ function StepCoordonnees({
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="sm:col-span-2">
+          <div className="rounded-2xl border border-gray-200 p-4">
+            <p className="text-xs font-black uppercase tracking-wide text-forge-steel">Mode d&apos;obtention</p>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setModeLivraison('livraison')}
+                className={`rounded-xl border p-3 text-left transition ${modeLivraison === 'livraison' ? 'border-forge-red bg-forge-red-light' : 'border-gray-200 bg-white hover:border-forge-red/40'}`}
+              >
+                <p className="font-bold text-forge-dark">Livraison</p>
+                <p className="mt-1 text-xs text-forge-steel">Votre commande vous est acheminée à votre adresse.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setModeLivraison('retrait_boutique')}
+                className={`rounded-xl border p-3 text-left transition ${modeLivraison === 'retrait_boutique' ? 'border-forge-red bg-forge-red-light' : 'border-gray-200 bg-white hover:border-forge-red/40'}`}
+              >
+                <p className="font-bold text-forge-dark">Retrait en boutique</p>
+                <p className="mt-1 text-xs text-forge-steel">Vous récupérez votre commande directement à TAFDIL.</p>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="sm:col-span-2">
           <Field
             label="Nom complet *" error={errors.nom}
             value={coordonnees.nom} onChange={v => set('nom')(v)}
@@ -364,51 +399,69 @@ function StepCoordonnees({
           value={coordonnees.email} onChange={v => set('email')(v)}
           placeholder="email@exemple.com" type="email"
         />
-        <div className="sm:col-span-2">
-          <Field
-            label="Adresse de livraison *" error={errors.adresse}
-            value={coordonnees.adresse} onChange={v => set('adresse')(v)}
-            placeholder="Rue, Quartier — ex : Rue Castelnau, Bonamoussadi"
-          />
-        </div>
 
-        {/* Ville + frais de livraison */}
-        <div>
-          <label className="mb-1.5 block text-xs font-semibold text-forge-dark">
-            Ville *{errors.ville && <span className="ml-2 font-normal text-red-500">{errors.ville}</span>}
-          </label>
-          <select
-            value={coordonnees.ville}
-            onChange={e => set('ville')(e.target.value)}
-            className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-forge-dark outline-none focus:border-forge-red focus:ring-2 focus:ring-forge-red/10"
-          >
-            <option value="Douala">Douala</option>
-            <option value="Yaounde">Yaoundé</option>
-            <option value="Bafoussam">Bafoussam</option>
-            <option value="Autres">Autre ville</option>
-          </select>
-          <p className="mt-1.5 text-xs text-forge-steel">
-            Frais de livraison :{' '}
-            {frais != null
-              ? <span className="font-bold text-forge-dark">{fmt(frais)}</span>
-              : <span className="italic">sur devis à la commande</span>
-            }
-          </p>
-        </div>
+        {modeLivraison === 'livraison' ? (
+          <>
+            <div className="sm:col-span-2">
+              <Field
+                label="Adresse de livraison *" error={errors.adresse}
+                value={coordonnees.adresse} onChange={v => set('adresse')(v)}
+                placeholder="Rue, Quartier — ex : Rue Castelnau, Bonamoussadi"
+              />
+            </div>
 
-        {/* Notes */}
-        <div>
-          <label className="mb-1.5 block text-xs font-semibold text-forge-dark">
-            Instructions livraison (optionnel)
-          </label>
-          <textarea
-            value={coordonnees.notes}
-            onChange={e => set('notes')(e.target.value)}
-            placeholder="Sonnez deux fois, 2ème étage bâtiment B…"
-            rows={3}
-            className="w-full resize-none rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-forge-dark outline-none focus:border-forge-red focus:ring-2 focus:ring-forge-red/10"
-          />
-        </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold text-forge-dark">
+                Ville *{errors.ville && <span className="ml-2 font-normal text-red-500">{errors.ville}</span>}
+              </label>
+              <select
+                value={coordonnees.ville}
+                onChange={e => set('ville')(e.target.value)}
+                className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-forge-dark outline-none focus:border-forge-red focus:ring-2 focus:ring-forge-red/10"
+              >
+                <option value="Douala">Douala</option>
+                <option value="Yaounde">Yaoundé</option>
+                <option value="Bafoussam">Bafoussam</option>
+                <option value="Autres">Autre ville</option>
+              </select>
+              <p className="mt-1.5 text-xs text-forge-steel">
+                Frais de livraison :{' '}
+                {frais != null
+                  ? <span className="font-bold text-forge-dark">{fmt(frais)}</span>
+                  : <span className="italic">sur devis à la commande</span>
+                }
+              </p>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold text-forge-dark">
+                Instructions livraison (optionnel)
+              </label>
+              <textarea
+                value={coordonnees.notes}
+                onChange={e => set('notes')(e.target.value)}
+                placeholder="Sonnez deux fois, 2ème étage bâtiment B…"
+                rows={3}
+                className="w-full resize-none rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-forge-dark outline-none focus:border-forge-red focus:ring-2 focus:ring-forge-red/10"
+              />
+            </div>
+          </>
+        ) : (
+          <div className="sm:col-span-2 rounded-xl border border-emerald-100 bg-emerald-50 p-4 text-sm text-emerald-800">
+            <p className="font-black">Retrait en boutique sélectionné</p>
+            <p className="mt-1">Votre commande sera prête à récupérer à l&apos;accueil de TAFDIL. Aucun frais de livraison ne sera appliqué.</p>
+            <div className="mt-3 rounded-lg bg-white/60 p-3 text-[12px] leading-relaxed">
+              <p className="font-bold text-emerald-900">{BOUTIQUE_RETRAIT.nom}</p>
+              <p>{BOUTIQUE_RETRAIT.ligne1}</p>
+              <p>{BOUTIQUE_RETRAIT.ligne2}</p>
+              <p>{BOUTIQUE_RETRAIT.ville} — {BOUTIQUE_RETRAIT.pays}</p>
+              <p className="mt-1.5 text-emerald-700">
+                <span className="font-semibold">Horaires :</span> {BOUTIQUE_RETRAIT.horaires}
+              </p>
+              <p className="mt-1 italic text-emerald-700/90">{BOUTIQUE_RETRAIT.instructions}</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Facture */}
@@ -452,14 +505,14 @@ function StepCoordonnees({
       </div>
 
       {/* Total avec livraison */}
-      {frais != null && (
-        <div className="flex items-center justify-between rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
-          <span className="text-sm text-blue-700">
-            Total TTC avec livraison ({coordonnees.ville})
-          </span>
-          <span className="text-lg font-black text-blue-800">{fmt(total)}</span>
-        </div>
-      )}
+      <div className="flex items-center justify-between rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+        <span className="text-sm text-blue-700">
+          {modeLivraison === 'livraison'
+            ? `Total TTC avec livraison (${coordonnees.ville})`
+            : 'Total TTC — retrait en boutique'}
+        </span>
+        <span className="text-lg font-black text-blue-800">{fmt(total)}</span>
+      </div>
 
       <div className="flex gap-3">
         <button
@@ -526,6 +579,7 @@ function StepPaiement({
   onConfirm, onBack, totals, loading,
   conditionCode, setConditionCode, conditionOptions,
   creditInstallments, setCreditInstallments, creditEligibility, creditLoading,
+  modeLivraison,
 }: {
   coordonnees:           Coordonnees
   modePaiement:          ModePaiement | null
@@ -545,9 +599,10 @@ function StepPaiement({
   setCreditInstallments: (n: CreditInstallments) => void
   creditEligibility:     CreditEligibility | null
   creditLoading:         boolean
+  modeLivraison:         ModeLivraison
 }) {
-  const frais = FRAIS[coordonnees.ville]
-  const total = grandTotal(totals, coordonnees.ville)
+  const frais = modeLivraison === 'livraison' ? FRAIS[coordonnees.ville] : 0
+  const total = modeLivraison === 'livraison' ? grandTotal(totals, coordonnees.ville) : totals.ttc
   const isDouala = coordonnees.ville === 'Douala'
   const avanceLivraison = avanceLivraisonPct ? Math.round(total * avanceLivraisonPct / 100) : 0
 
@@ -653,22 +708,23 @@ function StepPaiement({
         </PaymentCard>
 
         {/* Paiement à la livraison */}
-        <PaymentCard
-          selected={modePaiement === 'livraison'}
-          onClick={() => setModePaiement('livraison')}
-          emoji="💵"
-          label="Paiement à la livraison"
-          description={
-            isDouala
-              ? 'Réservez avec une avance Mobile Money, solde à la livraison'
-              : 'Disponible uniquement pour les livraisons à Douala'
-          }
-          disabled={!isDouala}
-        >
-          {modePaiement === 'livraison' && (
-            <div className="mt-3 space-y-3">
-              <div className="grid grid-cols-3 gap-2">
-                {([30, 50, 70] as AdvancePct[]).map((pct) => (
+        {modeLivraison === 'livraison' && (
+          <PaymentCard
+            selected={modePaiement === 'livraison'}
+            onClick={() => setModePaiement('livraison')}
+            emoji="💵"
+            label="Paiement à la livraison"
+            description={
+              isDouala
+                ? 'Réservez avec une avance Mobile Money, solde à la livraison'
+                : 'Disponible uniquement pour les livraisons à Douala'
+            }
+            disabled={!isDouala}
+          >
+            {modePaiement === 'livraison' && (
+              <div className="mt-3 space-y-3">
+                <div className="grid grid-cols-3 gap-2">
+                  {([30, 50, 70] as AdvancePct[]).map((pct) => (
                   <button
                     key={pct}
                     type="button"
@@ -682,23 +738,24 @@ function StepPaiement({
                     {pct}%
                   </button>
                 ))}
+                </div>
+                <input
+                  type="tel"
+                  value={numeroPaiement}
+                  onChange={e => setNumeroPaiement(e.target.value)}
+                  placeholder="Numero Mobile Money pour l'avance"
+                  className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-forge-red focus:ring-2 focus:ring-forge-red/10"
+                />
+                <div className="rounded-xl bg-white px-3 py-2 text-xs text-forge-steel ring-1 ring-gray-100">
+                  Avance à payer : <span className="font-black text-forge-dark">{fmt(avanceLivraison)}</span>
+                  {avanceLivraisonPct && (
+                    <span> · Solde livraison : {fmt(total - avanceLivraison)}</span>
+                  )}
+                </div>
               </div>
-              <input
-                type="tel"
-                value={numeroPaiement}
-                onChange={e => setNumeroPaiement(e.target.value)}
-                placeholder="Numero Mobile Money pour l'avance"
-                className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-forge-red focus:ring-2 focus:ring-forge-red/10"
-              />
-              <div className="rounded-xl bg-white px-3 py-2 text-xs text-forge-steel ring-1 ring-gray-100">
-                Avance à payer : <span className="font-black text-forge-dark">{fmt(avanceLivraison)}</span>
-                {avanceLivraisonPct && (
-                  <span> · Solde livraison : {fmt(total - avanceLivraison)}</span>
-                )}
-              </div>
-            </div>
-          )}
-        </PaymentCard>
+            )}
+          </PaymentCard>
+        )}
 
         {/* Paiement fractionné TAFDIL */}
         {creditLoading ? (
@@ -770,7 +827,7 @@ function StepPaiement({
           <span>TVA (19,25%)</span>
           <span>{fmt(totals.tva)}</span>
         </div>
-        {frais != null && (
+        {modeLivraison === 'livraison' && frais != null && (
           <div className="flex justify-between text-sm text-forge-steel">
             <span>Livraison ({coordonnees.ville})</span>
             <span>{fmt(frais)}</span>
@@ -819,7 +876,7 @@ function StepPaiement({
 // ── ÉTAPE 4 — Confirmation ─────────────────────────────────────────────────────
 
 function StepConfirmation({
-  commandeRef, coordonnees, modePaiement, totals, smsStatus, creditPlanId,
+  commandeRef, coordonnees, modePaiement, totals, smsStatus, creditPlanId, modeLivraison,
 }: {
   commandeRef:   string
   coordonnees:   Coordonnees
@@ -827,9 +884,10 @@ function StepConfirmation({
   totals:        CartTotals
   smsStatus:     SmsStatus | null
   creditPlanId?: string | null
+  modeLivraison: ModeLivraison
 }) {
-  const frais = FRAIS[coordonnees.ville]
-  const total = grandTotal(totals, coordonnees.ville)
+  const frais = modeLivraison === 'livraison' ? FRAIS[coordonnees.ville] : 0
+  const total = modeLivraison === 'livraison' ? grandTotal(totals, coordonnees.ville) : totals.ttc
   const prenom = coordonnees.nom.split(' ')[0]
   const [smsNotice, setSmsNotice] = useState<SmsStatus | null>(smsStatus)
   const [resendLoading, setResendLoading] = useState(false)
@@ -904,7 +962,9 @@ function StepConfirmation({
         <p className="mt-2 text-sm text-forge-steel">
           {creditPlanId
             ? 'Votre plan de crédit a été créé. Le premier versement (acompte 30 %) sera traité sous 24h par notre équipe.'
-            : 'Votre commande a bien été reçue. Notre équipe vous contactera sous 24h pour confirmer la livraison.'
+            : modeLivraison === 'retrait_boutique'
+              ? 'Votre commande a bien été reçue. Vous pourrez la retirer en boutique dès confirmation.'
+              : 'Votre commande a bien été reçue. Notre équipe vous contactera sous 24h pour confirmer la livraison.'
           }
         </p>
       </motion.div>
@@ -951,12 +1011,20 @@ function StepConfirmation({
             </p>
           </div>
           <div>
-            <p className="text-[10px] font-semibold uppercase text-gray-400">Adresse</p>
-            <p className="text-forge-dark">{coordonnees.adresse}, {coordonnees.ville}</p>
+            <p className="text-[10px] font-semibold uppercase text-gray-400">{modeLivraison === 'retrait_boutique' ? 'Retrait' : 'Adresse'}</p>
+            {modeLivraison === 'retrait_boutique' ? (
+              <div className="text-forge-dark">
+                <p className="font-bold">{BOUTIQUE_RETRAIT.nom}</p>
+                <p className="text-xs">{BOUTIQUE_RETRAIT.ligne1} · {BOUTIQUE_RETRAIT.ville}</p>
+                <p className="text-[11px] text-forge-steel">{BOUTIQUE_RETRAIT.horaires}</p>
+              </div>
+            ) : (
+              <p className="text-forge-dark">{`${coordonnees.adresse}, ${coordonnees.ville}`}</p>
+            )}
           </div>
           <div>
             <p className="text-[10px] font-semibold uppercase text-gray-400">Délai estimé</p>
-            <p className="font-semibold text-forge-dark">2 – 5 jours ouvrés</p>
+            <p className="font-semibold text-forge-dark">{modeLivraison === 'retrait_boutique' ? 'À l’accueil de la boutique' : '2 – 5 jours ouvrés'}</p>
           </div>
           {frais != null && (
             <div>
@@ -1031,6 +1099,7 @@ export function CheckoutClient() {
   const totals = computeTotal(items)
 
   const [coordonnees, setCoordonnees] = useState<Coordonnees>(DEFAULT_COORDONNEES)
+  const [modeLivraison, setModeLivraison] = useState<ModeLivraison>('livraison')
   const [modePaiement, setModePaiement] = useState<ModePaiement | null>(null)
   const [numeroPaiement, setNumeroPaiement] = useState('')
   const [avanceLivraisonPct, setAvanceLivraisonPct] = useState<AdvancePct | null>(null)
@@ -1082,8 +1151,8 @@ export function CheckoutClient() {
 
   const handleConfirm = async () => {
     setLoading(true)
-    const frais = FRAIS[coordonnees.ville]
-    const total = grandTotal(totals, coordonnees.ville)
+    const frais = modeLivraison === 'livraison' ? FRAIS[coordonnees.ville] : 0
+    const total = modeLivraison === 'livraison' ? grandTotal(totals, coordonnees.ville) : totals.ttc
 
     const modeApi =
       modePaiement === 'mtn'    ? 'mtn_momo' :
@@ -1108,11 +1177,14 @@ export function CheckoutClient() {
           client_nom:              coordonnees.nom,
           client_telephone:        coordonnees.telephone,
           client_email:            coordonnees.email || undefined,
-          client_adresse:          coordonnees.adresse,
-          client_ville:            coordonnees.ville,
+          client_adresse:          modeLivraison === 'livraison'
+            ? coordonnees.adresse
+            : `${BOUTIQUE_RETRAIT.nom} — ${BOUTIQUE_RETRAIT.ligne1}, ${BOUTIQUE_RETRAIT.ville}`,
+          client_ville:            modeLivraison === 'livraison' ? coordonnees.ville : BOUTIQUE_RETRAIT.ville,
           notes_client:            notesClient,
-          frais_livraison:         frais ?? 0,
+          frais_livraison:         modeLivraison === 'livraison' ? (frais ?? 0) : 0,
           mode_paiement:           modeApi,
+          mode_livraison:          modeLivraison,
           condition_paiement_code: conditionCode,
           avance_livraison_pct: modePaiement === 'livraison' ? avanceLivraisonPct : undefined,
           lignes: items.map(i => ({
@@ -1208,7 +1280,9 @@ export function CheckoutClient() {
         montant_total:       total,
         montant_a_payer:     montantPaiement,
         avance_livraison_pct: modePaiement === 'livraison' ? avanceLivraisonPct : undefined,
-        adresse:             `${coordonnees.adresse}, ${coordonnees.ville}`,
+        adresse:             modeLivraison === 'retrait_boutique'
+          ? `${BOUTIQUE_RETRAIT.nom} — ${BOUTIQUE_RETRAIT.ville}`
+          : `${coordonnees.adresse}, ${coordonnees.ville}`,
         mode_paiement_label: MODE_LABEL[modePaiement!],
       }))
 
@@ -1257,6 +1331,8 @@ export function CheckoutClient() {
               onNext={() => goTo(3)}
               onBack={() => goTo(1)}
               totals={totals}
+              modeLivraison={modeLivraison}
+              setModeLivraison={setModeLivraison}
             />
           )}
           {step === 3 && (
@@ -1279,6 +1355,7 @@ export function CheckoutClient() {
               setCreditInstallments={setCreditInstallments}
               creditEligibility={creditEligibility}
               creditLoading={creditLoading}
+              modeLivraison={modeLivraison}
             />
           )}
           {step === 4 && (
@@ -1289,6 +1366,7 @@ export function CheckoutClient() {
               totals={confirmedTotals ?? totals}
               smsStatus={smsStatus}
               creditPlanId={creditPlanId}
+              modeLivraison={modeLivraison}
             />
           )}
         </motion.div>

@@ -277,10 +277,11 @@ const commandeShopSchema = z.object({
   client_nom:              z.string().min(2).max(200),
   client_telephone:        z.string().min(8).max(20),
   client_email:            z.string().email().optional(),
-  client_adresse:          z.string().min(5),
+  client_adresse:          z.string().min(5).optional(),
   client_ville:            z.string().optional(),
   lignes:                  z.array(ligneCommandeSchema).min(1),
   mode_paiement:           z.enum(['mtn_momo', 'orange_money', 'livraison']),
+  mode_livraison:          z.enum(['livraison', 'retrait_boutique']).default('livraison'),
   avance_livraison_pct:    z.enum(['30', '50', '70']).or(z.number().refine((v) => [30, 50, 70].includes(v))).optional(),
   notes_client:            z.string().max(500).optional(),
   frais_livraison:         z.number().min(0).default(0),
@@ -420,6 +421,13 @@ shopRouter.get('/categories', async (c) => {
 shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) => {
   const body = c.req.valid('json')
 
+  if (body.mode_livraison === 'livraison' && (!body.client_adresse || body.client_adresse.trim().length < 5)) {
+    return c.json({
+      error: 'L\'adresse de livraison est obligatoire pour une commande livrée',
+      code: 'ADRESSE_LIVRAISON_REQUISE',
+    }, 422)
+  }
+
   if (body.mode_paiement === 'livraison' && !body.avance_livraison_pct) {
     return c.json({
       error: 'Le paiement à la livraison exige une avance de 30%, 50% ou 70%',
@@ -518,14 +526,15 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
       client_nom:       body.client_nom,
       client_telephone: body.client_telephone,
       client_email:     body.client_email ?? null,
-      client_adresse:   body.client_adresse,
-      client_ville:     body.client_ville ?? null,
+      client_adresse:   body.client_adresse ?? 'Retrait en boutique',
+      client_ville:     body.client_ville ?? (body.mode_livraison === 'retrait_boutique' ? 'Retrait en boutique' : null),
       lignes:           lignesJson,
       montant_ht,
       tva,
       montant_ttc,
       frais_livraison,
       mode_paiement:    body.mode_paiement,
+      mode_livraison:   body.mode_livraison ?? 'livraison',
       notes_client:     body.notes_client ?? null,
       statut_commande:  'recue',
       statut_paiement:  'en_attente',

@@ -9,6 +9,7 @@ import {
   writeAuditLog,
   invalidatePermissionCache,
 } from '../services/rbacService'
+import { resolveInviteRedirectUrl } from '../utils/inviteRedirect'
 
 // ── Schémas Zod ───────────────────────────────────────────────────────────────
 
@@ -157,9 +158,12 @@ adminRouter.post('/users/invite', async (c) => {
     ? RBAC_TO_LEGACY[rbacRoleName]!
     : 'operateur'
 
+  const redirectTo = resolveInviteRedirectUrl()
+
   // Invite user (sends magic-link email)
   const { data, error } = await supabaseAdmin.auth.admin.inviteUserByEmail(email, {
     data: { role: legacyRole, nom },
+    redirectTo,
   })
 
   if (error) return c.json({ error: error.message }, 400)
@@ -327,6 +331,54 @@ adminRouter.patch('/rbac/users/:id/deactivate', async (c) => {
 
   writeAuditLog({
     userId: caller.id, actionType: 'USER_DEACTIVATED',
+    resourceType: 'user', resourceId: targetId,
+  })
+
+  return c.json({ success: true })
+})
+
+// ── DELETE /api/admin/rbac/users/:id ───────────────────────────────────────
+adminRouter.delete('/rbac/users/:id', async (c) => {
+  const targetId = c.req.param('id')
+  const caller   = c.get('user')
+
+  if (caller.id === targetId) {
+    return c.json({ error: 'Vous ne pouvez pas supprimer votre propre compte' }, 400)
+  }
+
+  const permCheck = await checkPermission(caller.id, 'ADMIN', 'DELETE', caller.role)
+  if (!permCheck.allowed) {
+    // Les règles immuables du RBAC refusent toutes les actions ADMIN:DELETE au niveau global.
+    // Pour la suppression de comptes utilisateurs, on autorise explicitement l'accès aux admins
+    // qui ont déjà un rôle de gestion de l'administration.
+    if (permCheck.reason === 'IMMUTABLE_RULE:ADMIN_DELETE') {
+      const fallbackCheck = await checkPermission(caller.id, 'ADMIN', 'UPDATE', caller.role)
+      if (!fallbackCheck.allowed) {
+        return c.json({ error: 'Accès refusé', code: 'FORBIDDEN' }, 403)
+      }
+    } else {
+      return c.json({ error: 'Accès refusé', code: 'FORBIDDEN' }, 403)
+    }
+  }
+
+  const { error: authError } = await supabaseAdmin!.auth.admin.deleteUser(targetId)
+  if (authError) {
+    return c.json({ error: authError.message }, 400)
+  }
+
+  const [{ error: rbacError }, { error: profileError }] = await Promise.all([
+    db.from('rbac_user_profiles').delete().eq('profile_id', targetId).throwOnError(),
+    db.from('profiles').delete().eq('id', targetId).throwOnError(),
+  ])
+
+  if (rbacError || profileError) {
+    console.error('[admin] delete user cleanup failed', { targetId, rbacError, profileError })
+  }
+
+  invalidatePermissionCache(targetId)
+
+  writeAuditLog({
+    userId: caller.id, actionType: 'USER_DELETED',
     resourceType: 'user', resourceId: targetId,
   })
 

@@ -20,7 +20,7 @@ export type RbacAction =
   | 'READ' | 'CREATE' | 'UPDATE' | 'DELETE' | 'VALIDATE' | 'CONFIGURE' | 'EXPORT'
 
 export type AuditActionType =
-  | 'ACCESS_DENIED' | 'USER_CREATED' | 'USER_UPDATED' | 'USER_DEACTIVATED'
+  | 'ACCESS_DENIED' | 'USER_CREATED' | 'USER_UPDATED' | 'USER_DEACTIVATED' | 'USER_DELETED'
   | 'ROLE_CHANGED' | 'PERMISSION_CHANGED' | 'SETTINGS_CHANGED'
   | 'LOGIN_SUCCESS' | 'LOGIN_FAILED' | 'LOGOUT' | 'DATA_EXPORT'
   | 'PASSWORD_RESET' | 'PASSWORD_CHANGED' | 'SESSION_EXPIRED'
@@ -202,7 +202,21 @@ export function useUpdateRbacUser() {
     }
   }, [])
 
-  return { loading, update, deactivate, resetPassword }
+  const deleteUser = useCallback(async (userId: string) => {
+    setLoading(true)
+    try {
+      await apiClient.delete(`/api/admin/rbac/users/${userId}`)
+      toast.success('Utilisateur supprimé')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Erreur suppression'
+      toast.error(msg)
+      throw e
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  return { loading, update, deactivate, resetPassword, deleteUser }
 }
 
 // ── useRolePermissions ────────────────────────────────────────────────────────

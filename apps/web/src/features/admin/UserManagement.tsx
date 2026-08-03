@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Users, Shield, ShieldOff, KeyRound,
+  Users, Shield, ShieldOff, KeyRound, Trash2,
   Plus, Search, ChevronDown, X, Check,
 } from 'lucide-react'
 import { Button, Badge } from '@forge/ui'
@@ -125,7 +125,7 @@ function EditModal({ user, onClose, onSaved }: EditModalProps) {
 
 export function UserManagement() {
   const { data: users, loading, refetch } = useRbacUsers()
-  const { deactivate, resetPassword, loading: actionLoading } = useUpdateRbacUser()
+  const { deactivate, resetPassword, deleteUser, loading: actionLoading } = useUpdateRbacUser()
   const [search, setSearch]       = useState('')
   const [editUser, setEditUser]   = useState<RbacUserRow | null>(null)
   const [roleFilter, setRoleFilter] = useState<RbacRoleName | 'ALL'>('ALL')
@@ -255,6 +255,19 @@ export function UserManagement() {
                             <ShieldOff className="w-4 h-4" />
                           </button>
                         )}
+                        <button
+                          onClick={async () => {
+                            const confirmed = window.confirm(`Supprimer l'utilisateur ${user.nom || user.email} ?`)
+                            if (!confirmed) return
+                            await deleteUser(user.id)
+                            refetch()
+                          }}
+                          disabled={actionLoading}
+                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Supprimer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </td>
                   </tr>

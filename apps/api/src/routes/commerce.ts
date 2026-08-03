@@ -50,6 +50,34 @@ const publicRouter = new Hono()
 // SCHÉMAS ZOD
 // ══════════════════════════════════════════════════════════════════════════════
 
+const VALID_SCORE_FIABILITE = ['nouveau', 'bon', 'tres_bon', 'vip', 'bloque'] as const
+
+type ScoreFiabilite = (typeof VALID_SCORE_FIABILITE)[number]
+
+function normalizeScoreFiabilite(value: unknown): ScoreFiabilite {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'tres-bon' || normalized === 'tres bon' || normalized === 'très_bon' || normalized === 'très bon') return 'tres_bon'
+    if ((VALID_SCORE_FIABILITE as readonly string[]).includes(normalized)) {
+      return normalized as ScoreFiabilite
+    }
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value >= 80) return 'vip'
+    if (value >= 60) return 'tres_bon'
+    if (value >= 40) return 'bon'
+    return 'nouveau'
+  }
+
+  return 'nouveau'
+}
+
+const scoreFiabiliteSchema = z.union([
+  z.enum(['nouveau', 'bon', 'tres_bon', 'vip', 'bloque']),
+  z.number().int().min(0).max(100),
+]).optional().transform((value) => normalizeScoreFiabilite(value))
+
 const clientSchema = z.object({
   nom:              z.string().min(1).max(200),
   type:             z.enum(['entreprise', 'particulier', 'institution']),
@@ -59,7 +87,7 @@ const clientSchema = z.object({
   ville:            z.string().optional(),
   pays:             z.string().default('Cameroun'),
   statut:           z.enum(['actif', 'inactif', 'bloque']).default('actif'),
-  score_fiabilite:  z.enum(['nouveau', 'bon', 'tres_bon', 'vip', 'bloque']).optional(),
+  score_fiabilite:  scoreFiabiliteSchema,
   notes:            z.string().optional(),
 })
 
@@ -686,10 +714,16 @@ router.get('/clients/:id', async (c) => {
 router.post('/clients', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', clientSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
+  const payload = {
+    ...body,
+    score_fiabilite: normalizeScoreFiabilite(body.score_fiabilite),
+    created_by: user.id,
+    sync_status: 'synced',
+  }
 
   const { data, error } = await db
     .from('clients')
-    .insert({ ...body, created_by: user.id, sync_status: 'synced' })
+    .insert(payload)
     .select()
     .single()
 
@@ -700,10 +734,15 @@ router.post('/clients', requireRole(['admin', 'superviseur', 'operateur']), zVal
 router.put('/clients/:id', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', clientSchema.partial()), async (c) => {
   const { id }  = c.req.param()
   const body    = c.req.valid('json')
+  const payload = {
+    ...body,
+    ...(body.score_fiabilite !== undefined ? { score_fiabilite: normalizeScoreFiabilite(body.score_fiabilite) } : {}),
+    updated_at: new Date().toISOString(),
+  }
 
   const { data, error } = await db
     .from('clients')
-    .update({ ...body, updated_at: new Date().toISOString() })
+    .update(payload)
     .eq('id', id)
     .select()
     .single()

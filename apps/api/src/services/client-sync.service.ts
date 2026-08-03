@@ -33,6 +33,25 @@ function mergeMissing<T extends Record<string, unknown>>(existing: T, update: Re
   return patch
 }
 
+function normalizeScoreFiabilite(value: unknown): 'nouveau' | 'bon' | 'tres_bon' | 'vip' | 'bloque' {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'tres-bon' || normalized === 'tres bon' || normalized === 'très_bon' || normalized === 'très bon') return 'tres_bon'
+    if (['nouveau', 'bon', 'tres_bon', 'vip', 'bloque'].includes(normalized)) {
+      return normalized as 'nouveau' | 'bon' | 'tres_bon' | 'vip' | 'bloque'
+    }
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value >= 80) return 'vip'
+    if (value >= 60) return 'tres_bon'
+    if (value >= 40) return 'bon'
+    return 'nouveau'
+  }
+
+  return 'nouveau'
+}
+
 export async function ensureClient(input: EnsureClientInput): Promise<string | null> {
   const nom = clean(input.nom)
   if (!nom) return input.clientId ?? null
@@ -113,6 +132,7 @@ export async function ensureClient(input: EnsureClientInput): Promise<string | n
       ville,
       pays,
       statut: 'actif',
+      score_fiabilite: normalizeScoreFiabilite('nouveau'),
       created_by: input.createdBy ?? null,
       sync_status: 'synced',
     })

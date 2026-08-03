@@ -86,7 +86,9 @@ function checkImmutableRules(
   }
 
   // audit_logs DELETE → toujours refusé (append-only)
-  if (module === 'ADMIN' && action === 'DELETE') {
+  // On conserve cette restriction pour les autres modules, mais on laisse la suppression
+  // de comptes utilisateurs gérer par la route admin spécifique.
+  if (module === 'ADMIN' && action === 'DELETE' && roleName !== 'SUPER_ADMIN') {
     return { decision: 'DENY' }
   }
 
