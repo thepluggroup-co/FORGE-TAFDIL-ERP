@@ -50,6 +50,34 @@ export function calcStatutStock(
   return 'normal'
 }
 
+/** Labels autorisés par la contrainte chk_clients_score_fiabilite */
+export const SCORE_FIABILITE_LABELS = ['nouveau', 'bon', 'tres_bon', 'vip', 'bloque'] as const
+export type ScoreFiabilite = typeof SCORE_FIABILITE_LABELS[number]
+
+/**
+ * Normalise une valeur `score_fiabilite` (string label OU entier 0-100) vers
+ * l'un des 5 labels acceptés par la base. Indispensable avant tout `.insert()`
+ * ou `.update()` direct sur Supabase sinon la contrainte CHECK
+ * `chk_clients_score_fiabilite` rejette la ligne.
+ */
+export function normalizeScoreFiabilite(value: unknown): ScoreFiabilite {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'tres-bon' || normalized === 'tres bon' ||
+        normalized === 'très_bon' || normalized === 'très bon') return 'tres_bon'
+    if ((SCORE_FIABILITE_LABELS as readonly string[]).includes(normalized)) {
+      return normalized as ScoreFiabilite
+    }
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value >= 80) return 'vip'
+    if (value >= 60) return 'tres_bon'
+    if (value >= 40) return 'bon'
+    return 'nouveau'
+  }
+  return 'nouveau'
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // PRODUITS / STOCKS
 // ══════════════════════════════════════════════════════════════════════════════
@@ -191,16 +219,27 @@ export async function dbGetClient(id: string) {
 export async function dbCreateClient(payload: Record<string, unknown>) {
   const { data, error } = await supabase
     .from('clients')
-    .insert({ ...payload, sync_status: 'synced' })
+    .insert({
+      ...payload,
+      score_fiabilite: normalizeScoreFiabilite(payload.score_fiabilite),
+      sync_status: 'synced',
+    })
     .select().single()
   if (error) raise(error, 'créer client')
   return data!
 }
 
 export async function dbUpdateClient(id: string, payload: Record<string, unknown>) {
+  const updates: Record<string, unknown> = {
+    ...payload,
+    updated_at: new Date().toISOString(),
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'score_fiabilite')) {
+    updates.score_fiabilite = normalizeScoreFiabilite(payload.score_fiabilite)
+  }
   const { data, error } = await supabase
     .from('clients')
-    .update({ ...payload, updated_at: new Date().toISOString() })
+    .update(updates)
     .eq('id', id).select().single()
   if (error) raise(error, 'modifier client')
   return data!

@@ -6,6 +6,7 @@ import { requireRole } from '../middleware/rbac'
 import { checkPermission, writeAuditLog } from '../services/rbacService'
 import { enregistrerPaiementCommande, ensureFactureForCommande, getFactureActiveByCommande } from '../services/finance-core.service'
 import { resolveBonSortieLivrableForCommande, synchroniserCommandesWorkflow } from '../services/commande-workflow.service'
+import { signerBonLivraison, telechargerBonLivraison, getBonLivraisonInfo, SignatureError } from '../services/bl.service'
 import type { HonoVariables } from '../types'
 
 const db = supabaseAdmin!
@@ -151,6 +152,19 @@ const patchStatutSchema = z.object({
 const assignerSchema = z.object({
   livreur_id:   z.string().uuid(),
   transporteur: z.string().optional(),
+})
+
+// ── T03 — Signature bon de livraison ─────────────────────────────────────────
+
+const signatureSchema = z.object({
+  signature_data_url: z.string().regex(/^data:image\/png;base64,/, {
+    message: 'Format attendu : data:image/png;base64,<...>',
+  }),
+  signataire_nom: z.string().min(2, 'Nom du signataire requis').max(120),
+  geoloc:         z.string().max(64).optional(),
+  date_livraison_reelle: z.string().datetime({ offset: true }).optional(),
+  device_info:    z.string().max(300).optional(),
+  notifier:       z.boolean().optional(),
 })
 
 const livraisonsQuerySchema = z.object({
@@ -880,5 +894,148 @@ logistiqueRouter.patch(
     })
 
     return c.json(updated)
+  },
+)
+
+// ── T03 — POST /livraisons/:id/signature — signer le BL (livreur) ──────────────
+
+logistiqueRouter.post(
+  '/livraisons/:id/signature',
+  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  zValidator('json', signatureSchema),
+  async (c) => {
+    const user  = c.get('user')
+    const { id } = c.req.param()
+    const body  = c.req.valid('json')
+
+    // Vérifier que la livraison existe + récupérer le livreur assigné
+    const { data: lv, error: lvErr } = await db
+      .from('livraisons')
+      .select('id, statut, livreur_id, created_by')
+      .eq('id', id)
+      .single()
+
+    if (lvErr || !lv) {
+      return c.json({ error: 'Livraison introuvable', code: 'NOT_FOUND' }, 404)
+    }
+
+    const lvRow = lv as { id: string; statut: string; livreur_id: string | null; created_by: string | null }
+
+    // RBAC livreur : doit être l'assigné (ou admin/superviseur via requireRole)
+    if (user.role === 'livreur' || user.role === 'operateur') {
+      const isOwner = lvRow.livreur_id === user.id || lvRow.created_by === user.id
+      if (!isOwner) {
+        writeAuditLog({
+          userId:       user.id,
+          actionType:   'ACCESS_DENIED',
+          module:       'LOGISTICS',
+          resourceType: 'livraison',
+          resourceId:   id,
+        })
+        return c.json({
+          error: 'Seul le livreur assigné peut signer ce BL',
+          code:  'FORBIDDEN_NOT_OWN_LIVRAISON',
+        }, 403)
+      }
+    }
+
+    try {
+      const result = await signerBonLivraison({
+        livraison_id:          id,
+        user_id:               user.id,
+        signature_data_url:    body.signature_data_url,
+        signataire_nom:        body.signataire_nom,
+        geoloc:                body.geoloc ?? null,
+        date_livraison_reelle: body.date_livraison_reelle ?? null,
+        device_info:           body.device_info ?? c.req.header('user-agent') ?? null,
+        notifier:              body.notifier,
+      })
+
+      // L'audit est déjà tracé via livraisons_historique (cf. bl.service.ts)
+      // Le writeAuditLog n'utilise pas un AuditActionType pour ce cas, on l'évite.
+
+      return c.json(result, 201)
+    } catch (e) {
+      if (e instanceof SignatureError) {
+        return c.json({ error: e.message, code: e.code }, e.status as 400 | 404 | 409 | 422 | 500)
+      }
+      console.error('[logistique] signature BL:', e)
+      return c.json({ error: 'Erreur interne signature BL', code: 'INTERNAL_ERROR' }, 500)
+    }
+  },
+)
+
+// ── T03 — GET /livraisons/:id/bl.pdf — télécharger le BL signé ────────────────
+
+logistiqueRouter.get(
+  '/livraisons/:id/bl.pdf',
+  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  async (c) => {
+    const user  = c.get('user')
+    const { id } = c.req.param()
+
+    const { data: lv, error: lvErr } = await db
+      .from('livraisons')
+      .select('id, livreur_id, created_by')
+      .eq('id', id)
+      .single()
+
+    if (lvErr || !lv) {
+      return c.json({ error: 'Livraison introuvable', code: 'NOT_FOUND' }, 404)
+    }
+
+    const lvRow = lv as { id: string; livreur_id: string | null; created_by: string | null }
+    if (user.role === 'livreur' || user.role === 'operateur') {
+      const isOwner = lvRow.livreur_id === user.id || lvRow.created_by === user.id
+      if (!isOwner) {
+        return c.json({ error: 'Accès refusé', code: 'FORBIDDEN' }, 403)
+      }
+    }
+
+    const dl = await telechargerBonLivraison(id)
+    if (!dl) {
+      return c.json({ error: 'Aucun BL signé pour cette livraison', code: 'BL_NOT_FOUND' }, 404)
+    }
+
+    c.header('Content-Type',        'application/pdf')
+    c.header('Content-Disposition', `inline; filename="${dl.filename}"`)
+    c.header('Content-Length',      String(dl.buffer.length))
+    return c.body(dl.buffer as unknown as ArrayBuffer)
+  },
+)
+
+// ── T03 — GET /livraisons/:id/bl — métadonnées du BL (info + URL signée) ──────
+
+logistiqueRouter.get(
+  '/livraisons/:id/bl',
+  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  async (c) => {
+    const user  = c.get('user')
+    const { id } = c.req.param()
+
+    const { data: lv, error: lvErr } = await db
+      .from('livraisons')
+      .select('id, livreur_id, created_by')
+      .eq('id', id)
+      .single()
+
+    if (lvErr || !lv) {
+      return c.json({ error: 'Livraison introuvable', code: 'NOT_FOUND' }, 404)
+    }
+
+    const lvRow = lv as { id: string; livreur_id: string | null; created_by: string | null }
+    if (user.role === 'livreur' || user.role === 'operateur') {
+      const isOwner = lvRow.livreur_id === user.id || lvRow.created_by === user.id
+      if (!isOwner) {
+        return c.json({ error: 'Accès refusé', code: 'FORBIDDEN' }, 403)
+      }
+    }
+
+    const info = await getBonLivraisonInfo(id)
+    if (!info) {
+      return c.json({ error: 'Aucun BL signé pour cette livraison', code: 'BL_NOT_FOUND' }, 404)
+    }
+
+    return c.json(info)
   },
 )

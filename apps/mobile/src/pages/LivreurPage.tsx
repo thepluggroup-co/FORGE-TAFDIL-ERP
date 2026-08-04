@@ -1,6 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { TopBar } from '../components/TopBar'
-import { fetchMesLivraisons, updateLivraisonStatut, type Livraison, type LivraisonStatut } from '../lib/api'
+import { SignaturePad } from '../components/SignaturePad'
+import {
+  fetchMesLivraisons,
+  updateLivraisonStatut,
+  signLivraison,
+  type Livraison,
+  type LivraisonStatut,
+} from '../lib/api'
 
 // Transitions disponibles depuis un statut donné
 const NEXT_STATUT: Record<string, LivraisonStatut | null> = {
@@ -42,6 +49,10 @@ export function LivreurPage() {
   const [submitting, setSubmitting] = useState(false)
   const [toast, setToast]           = useState<string | null>(null)
 
+  // ── T03 — Signature BL ───────────────────────────────────────────────────
+  const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null)
+  const [signataireNom, setSignataireNom]       = useState('')
+
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -63,23 +74,69 @@ export function LivreurPage() {
 
   function openAction(livraisonId: string, targetStatut: LivraisonStatut) {
     setMotif('')
+    setSignatureDataUrl(null)
+    setSignataireNom('')
     setAction({ livraisonId, targetStatut })
   }
 
   async function handleConfirm() {
     if (!action) return
-    if (action.targetStatut === 'annulee' && !motif.trim()) return
+
+    // Validation T03 : pour passer en `livree`, signature + nom obligatoires
+    if (action.targetStatut === 'livree') {
+      if (!signatureDataUrl) {
+        showToast('⚠️ La signature du client est obligatoire pour clôturer la livraison.')
+        return
+      }
+      if (signataireNom.trim().length < 2) {
+        showToast('⚠️ Veuillez saisir le nom du signataire (au moins 2 caractères).')
+        return
+      }
+    }
+
+    if (action.targetStatut === 'annulee' && !motif.trim()) {
+      showToast('⚠️ Motif d\'échec requis.')
+      return
+    }
+
     setSubmitting(true)
     try {
-      const notes = action.targetStatut === 'annulee' ? motif.trim() : undefined
-      await updateLivraisonStatut(action.livraisonId, action.targetStatut, notes)
-      const msgs: Record<LivraisonStatut, string> = {
-        planifiee:  'Statut mis à jour.',
-        en_transit: 'Livraison démarrée.',
-        livree:     'Livraison confirmée ✓',
-        annulee:    'Livraison annulée.',
+      // T03 — Flux signature : appel dédié, l'API gère le statut + historique
+      if (action.targetStatut === 'livree' && signatureDataUrl) {
+        // Tentative géoloc navigateur (best-effort, non bloquant)
+        let geoloc: string | null = null
+        if (typeof navigator !== 'undefined' && 'geolocation' in navigator) {
+          try {
+            const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+              navigator.geolocation.getCurrentPosition(resolve, reject, {
+                timeout: 3000,
+                maximumAge: 60_000,
+              })
+            })
+            geoloc = `${pos.coords.latitude.toFixed(6)},${pos.coords.longitude.toFixed(6)}`
+          } catch {
+            geoloc = null
+          }
+        }
+
+        await signLivraison(action.livraisonId, signatureDataUrl, signataireNom.trim(), {
+          geoloc,
+          notifier: true,
+        })
+        showToast(`✅ Livraison signée — BL archivé.`)
+      } else {
+        // Autres transitions : patch statut classique
+        const notes = action.targetStatut === 'annulee' ? motif.trim() : undefined
+        await updateLivraisonStatut(action.livraisonId, action.targetStatut, notes)
+        const msgs: Record<LivraisonStatut, string> = {
+          planifiee:  'Statut mis à jour.',
+          en_transit: 'Livraison démarrée.',
+          livree:     'Livraison confirmée ✓',
+          annulee:    'Livraison annulée.',
+        }
+        showToast(msgs[action.targetStatut])
       }
-      showToast(msgs[action.targetStatut])
+
       setAction(null)
       await load()
     } catch (e) {
@@ -109,9 +166,13 @@ export function LivreurPage() {
       {action && pendingLivraison && (
         <div className="fixed inset-0 z-40 flex items-end">
           <div className="absolute inset-0 bg-black/40" onClick={() => setAction(null)} />
-          <div className="relative w-full bg-white rounded-t-2xl p-6 space-y-4">
+          <div className="relative max-h-[90vh] w-full overflow-y-auto bg-white rounded-t-2xl p-6 space-y-4">
             <h3 className="text-base font-bold text-gray-900">
-              {action.targetStatut === 'annulee' ? '❌ Signaler un échec' : ACTION_LABEL[action.targetStatut]} — {pendingLivraison.numero}
+              {action.targetStatut === 'annulee'
+                ? '❌ Signaler un échec'
+                : action.targetStatut === 'livree'
+                  ? '✍️ Signature client — Bon de livraison'
+                  : ACTION_LABEL[action.targetStatut]} — {pendingLivraison.numero}
             </h3>
             <p className="text-sm text-gray-500">{pendingLivraison.client_nom}</p>
 
@@ -130,23 +191,64 @@ export function LivreurPage() {
               </div>
             )}
 
-            <div className="flex gap-3">
+            {/* T03 — Étape signature obligatoire pour clôturer la livraison */}
+            {action.targetStatut === 'livree' && (
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Nom du signataire <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={signataireNom}
+                    onChange={e => setSignataireNom(e.target.value)}
+                    placeholder="Ex : M. Mbarga ou Gardien"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                  />
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    Nom de la personne qui réceptionne la commande (client, gardien, réceptionniste…).
+                  </p>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-gray-600">
+                    Signature <span className="text-red-500">*</span>
+                  </label>
+                  <SignaturePad
+                    onChange={setSignatureDataUrl}
+                    disabled={submitting}
+                  />
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    Faites signer le client sur le téléphone. Un BL PDF horodaté sera généré et
+                    envoyé automatiquement au client.
+                  </p>
+                </div>
+              </>
+            )}
+
+            <div className="flex gap-3 pt-2">
               <button
                 onClick={() => setAction(null)}
-                className="flex-1 border border-gray-200 rounded-xl py-3 text-sm font-medium text-gray-600"
+                disabled={submitting}
+                className="flex-1 border border-gray-200 rounded-xl py-3 text-sm font-medium text-gray-600 disabled:opacity-50"
               >
                 Annuler
               </button>
               <button
                 onClick={handleConfirm}
-                disabled={submitting || (action.targetStatut === 'annulee' && !motif.trim())}
+                disabled={submitting || (action.targetStatut === 'annulee' && !motif.trim())
+                  || (action.targetStatut === 'livree' && (!signatureDataUrl || signataireNom.trim().length < 2))}
                 className={`flex-1 rounded-xl py-3 text-sm font-semibold text-white transition-colors disabled:opacity-50 ${
                   action.targetStatut === 'annulee'
                     ? 'bg-[#C62828] active:bg-[#B71C1C]'
                     : 'bg-green-600 active:bg-green-700'
                 }`}
               >
-                {submitting ? '…' : 'Confirmer'}
+                {submitting
+                  ? '…'
+                  : action.targetStatut === 'livree'
+                    ? 'Valider la livraison'
+                    : 'Confirmer'}
               </button>
             </div>
           </div>

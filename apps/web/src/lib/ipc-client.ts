@@ -39,6 +39,29 @@ async function exec(sql: string, params?: unknown[]) {
   return ipc().db.execute(sql, params)
 }
 
+/** Labels acceptés par la contrainte chk_clients_score_fiabilite côté Supabase. */
+const SCORE_FIABILITE_LABELS = ['nouveau', 'bon', 'tres_bon', 'vip', 'bloque'] as const
+type ScoreFiabilite = typeof SCORE_FIABILITE_LABELS[number]
+
+/** Convertit un score (label ou entier 0-100) en label valide pour la sync Supabase. */
+function normalizeScoreFiabilite(value: unknown): ScoreFiabilite {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'tres-bon' || normalized === 'tres bon' ||
+        normalized === 'très_bon' || normalized === 'très bon') return 'tres_bon'
+    if ((SCORE_FIABILITE_LABELS as readonly string[]).includes(normalized)) {
+      return normalized as ScoreFiabilite
+    }
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value >= 80) return 'vip'
+    if (value >= 60) return 'tres_bon'
+    if (value >= 40) return 'bon'
+    return 'nouveau'
+  }
+  return 'nouveau'
+}
+
 function now() { return new Date().toISOString() }
 function uid() { return crypto.randomUUID() }
 
@@ -201,6 +224,7 @@ export async function ipcGetClients(params?: {
 
 export async function ipcCreateClient(payload: Omit<IpcClient, 'id' | 'commandes_count' | 'total_ca_xaf' | 'encours_credit_xaf'>) {
   const id = uid(); const ts = now()
+  const scoreLabel = normalizeScoreFiabilite(payload.score_fiabilite)
   await exec(
     `INSERT INTO clients (id, nom, type, telephone, email, adresse, ville, pays, statut, score_fiabilite, notes, sync_status, updated_at)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending',?)`,
@@ -208,8 +232,15 @@ export async function ipcCreateClient(payload: Omit<IpcClient, 'id' | 'commandes
      payload.adresse ?? null, payload.ville ?? null, payload.pays ?? 'Cameroun',
      payload.statut ?? 'actif', payload.score_fiabilite ?? 50, payload.notes ?? null, ts],
   )
-  await enqueueSync('clients', 'INSERT', id, { id, ...payload, sync_status: 'pending', updated_at: ts })
-  return { id, ...payload, commandes_count: 0, total_ca_xaf: 0, encours_credit_xaf: 0, updated_at: ts }
+  // Le payload poussé vers Supabase doit respecter la contrainte CHECK
+  // chk_clients_score_fiabilite (5 labels TEXT), d'où la conversion.
+  await enqueueSync('clients', 'INSERT', id, {
+    id, ...payload,
+    score_fiabilite: scoreLabel,
+    sync_status: 'pending',
+    updated_at: ts,
+  })
+  return { id, ...payload, score_fiabilite: scoreLabel, commandes_count: 0, total_ca_xaf: 0, encours_credit_xaf: 0, updated_at: ts }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

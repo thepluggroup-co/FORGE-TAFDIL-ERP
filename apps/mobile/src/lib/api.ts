@@ -90,3 +90,52 @@ export async function updateLivraisonStatut(
     body: JSON.stringify({ statut, notes }),
   })
 }
+
+// ── T03 — Signature bon de livraison ─────────────────────────────────────────
+
+export interface BonLivraisonInfo {
+  id:               string
+  numero:           string
+  signataire_nom:   string
+  created_at:       string
+  pdf_signed_url:   string | null
+}
+
+export interface SignatureResult {
+  ok: true
+  bon_livraison: {
+    id:             string
+    numero:         string
+    pdf_signed_url: string
+    signature_path: string
+  }
+  livraison: {
+    id:     string
+    statut: string
+  }
+}
+
+export async function signLivraison(
+  livraisonId:      string,
+  signatureDataUrl: string,
+  signataireNom:    string,
+  opts?: { geoloc?: string | null; notifier?: boolean },
+): Promise<SignatureResult> {
+  return apiFetch<SignatureResult>(`/api/logistique/livraisons/${livraisonId}/signature`, {
+    method: 'POST',
+    body: JSON.stringify({
+      signature_data_url: signatureDataUrl,
+      signataire_nom:     signataireNom,
+      geoloc:             opts?.geoloc ?? null,
+      notifier:           opts?.notifier ?? true,
+    }),
+  })
+}
+
+export async function fetchBonLivraison(livraisonId: string): Promise<BonLivraisonInfo | null> {
+  try {
+    return await apiFetch<BonLivraisonInfo>(`/api/logistique/livraisons/${livraisonId}/bl`)
+  } catch {
+    return null
+  }
+}

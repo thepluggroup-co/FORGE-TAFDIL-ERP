@@ -164,7 +164,7 @@ function drawFooter(doc: InstanceType<typeof PDFDocument>, page: number) {
 
 function drawHeader(
   doc:      InstanceType<typeof PDFDocument>,
-  docType:  'FACTURE' | 'DEVIS',
+  docType:  'FACTURE' | 'DEVIS' | 'BON DE LIVRAISON',
   numero:   string,
   dateLeft: string,
   dateRight:string,
@@ -862,4 +862,271 @@ export async function uploadPDF(
     .createSignedUrl(filename, SIGNED_URL_TTL)
 
   return data?.signedUrl ?? db.storage.from(bucket).getPublicUrl(filename).data.publicUrl
+}
+
+/**
+ * Upload une image PNG (signature client) dans le bucket spécifié.
+ * Renvoie le chemin storage (sans URL — sera servi via signed URL séparée).
+ */
+export async function uploadPng(
+  buffer:   Buffer,
+  bucket:   string,
+  filename: string,
+): Promise<string> {
+  const { error: upErr } = await db.storage
+    .from(bucket)
+    .upload(filename, buffer, { contentType: 'image/png', upsert: true })
+
+  if (upErr) {
+    throw new Error(`Storage upload PNG failed (${bucket}/${filename}): ${upErr.message}`)
+  }
+  return filename
+}
+
+export async function getSignedUrl(bucket: string, path: string): Promise<string> {
+  const { data } = await db.storage
+    .from(bucket)
+    .createSignedUrl(path, SIGNED_URL_TTL)
+  return data?.signedUrl ?? db.storage.from(bucket).getPublicUrl(path).data.publicUrl
+}
+
+// ── Bon de livraison (T03) ────────────────────────────────────────────────────
+
+export interface PdfBonLivraisonLigne {
+  designation: string
+  unite:       string
+  quantite:    number
+}
+
+export interface PdfBonLivraisonClient {
+  nom:       string
+  adresse?:   string | null
+  telephone?: string | null
+  email?:     string | null
+}
+
+export interface PdfBonLivraison {
+  numero:           string
+  date_emission:    string
+  commande_numero?: string | null
+  client:           PdfBonLivraisonClient
+  destination:      string
+  transporteur?:    string | null
+  livreur_nom?:     string | null
+  lignes:           PdfBonLivraisonLigne[]
+  signataire_nom:   string
+  signature_png_buffer: Buffer
+  geoloc?:          string | null
+}
+
+function drawBlHeader(
+  doc:      InstanceType<typeof PDFDocument>,
+  numero:   string,
+  dateLeft: string,
+  dateRight:string,
+  labelLeft: string,
+  labelRight: string,
+) {
+  drawHeader(doc, 'BON DE LIVRAISON', numero, dateLeft, dateRight, labelLeft, dateRight)
+}
+
+function drawBlClientBox(
+  doc:        InstanceType<typeof PDFDocument>,
+  client:     PdfBonLivraisonClient,
+  destination:string,
+  transporteur: string | null | undefined,
+  commandeNumero: string | null | undefined,
+) {
+  doc.rect(ML, 126, W, 64).fill(C.gray)
+  doc.rect(ML, 126, 3, 64).fill(C.red)
+
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
+    .text('DESTINATAIRE', ML + 12, 133)
+
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(C.dark)
+    .text(client.nom, ML + 12, 144)
+
+  const details = [
+    client.adresse,
+    client.telephone,
+    client.email,
+    commandeNumero ? `Réf. commande : ${commandeNumero}` : null,
+  ].filter(Boolean).join('  ·  ')
+
+  if (details) {
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.mid)
+      .text(details, ML + 12, 158, { width: W - 20 })
+  }
+
+  // Addresse de livraison (peut différer de l'adresse client — ex: lieu de chantier)
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
+    .text('ADRESSE DE LIVRAISON', ML + 12, 174)
+  doc.font('Helvetica').fontSize(8).fillColor(C.dark)
+    .text(destination, ML + 12, 184, { width: W - 20 })
+
+  if (transporteur) {
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.muted)
+      .text(`Transporteur : ${transporteur}`, ML + 12, 196)
+  }
+}
+
+function drawBlTable(
+  doc:   InstanceType<typeof PDFDocument>,
+  lignes: PdfBonLivraisonLigne[],
+  startY: number,
+): number {
+  // En-tête —Design identique à la facture pour cohérence
+  const COL_BL = {
+    num: ML,
+    des: ML + 28,
+    qty: ML + 333,
+    uni: ML + 373,
+    tot: ML + 423,
+  }
+  doc.rect(ML, startY, W, 20).fill(C.red)
+  doc.font('Helvetica-Bold').fontSize(7.5).fillColor('white')
+  doc.text('N°',           COL_BL.num + 2,  startY + 6)
+  doc.text('DÉSIGNATION',  COL_BL.des + 2,  startY + 6, { width: 300 })
+  doc.text('QTÉ',          COL_BL.qty + 2,  startY + 6)
+  doc.text('UNITÉ',        COL_BL.uni + 2,  startY + 6)
+  doc.text('QTÉ LIVRÉE',   COL_BL.tot + 2,  startY + 6)
+  let y = startY + 20
+
+  for (let i = 0; i < lignes.length; i++) {
+    if (y + ROW_H > PAGE_END) {
+      drawFooter(doc, 1) // simplifié — pas de multi-page pour un BL
+      doc.addPage()
+      y = 40
+    }
+    const l = lignes[i]
+    doc.rect(ML, y, W, ROW_H).fill(i % 2 === 0 ? C.grayRow : C.white)
+    doc.font('Helvetica').fontSize(8).fillColor(C.dark)
+    doc.text(String(i + 1),        COL_BL.num + 2, y + 5)
+    doc.text(l.designation,        COL_BL.des + 2, y + 5, { width: 300, ellipsis: true })
+    doc.text(String(l.quantite),   COL_BL.qty + 2, y + 5)
+    doc.text(l.unite,              COL_BL.uni + 2, y + 5)
+    doc.text(String(l.quantite),   COL_BL.tot + 2, y + 5)
+    doc.moveTo(ML, y + ROW_H).lineTo(ML + W, y + ROW_H)
+      .strokeColor(C.border).lineWidth(0.3).stroke()
+    y += ROW_H
+  }
+  return y
+}
+
+function drawBlSignatureBlock(
+  doc: InstanceType<typeof PDFDocument>,
+  startY: number,
+  signataireNom: string,
+  geoloc: string | null | undefined,
+  signatureBuffer: Buffer,
+  dateEmission: string,
+  livreurNom: string | null | undefined,
+): number {
+  let y = startY + 10
+
+  // Cadre signature client
+  const sigBoxW = 260
+  const sigBoxH = 110
+  doc.rect(ML, y, sigBoxW, sigBoxH).stroke()
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
+    .text('SIGNATURE CLIENT — BON POUR RÉCEPTION', ML + 6, y + 5)
+
+  // Embed PNG (max width = sigBoxW - 8, preserve aspect ratio)
+  try {
+    const targetW = sigBoxW - 12
+    const targetH = sigBoxH - 36
+    doc.image(signatureBuffer, ML + 6, y + 18, {
+      fit: [targetW, targetH],
+      align: 'center',
+      valign: 'center',
+    })
+  } catch (e) {
+    doc.font('Helvetica').fontSize(7).fillColor(C.red)
+      .text(`[Signature illisible : ${(e as Error).message}]`, ML + 6, y + 30, { width: sigBoxW - 12 })
+  }
+
+  doc.font('Helvetica-Bold').fontSize(8).fillColor(C.dark)
+    .text(signataireNom, ML + 6, y + sigBoxH - 14)
+  doc.font('Helvetica').fontSize(6.5).fillColor(C.muted)
+    .text(`Reçu le ${dateEmission}${geoloc ? ` · géoloc : ${geoloc}` : ''}`,
+      ML + 6, y + sigBoxH - 6, { width: sigBoxW - 12 })
+
+  // Cadre livreur (droite)
+  const livreurX = ML + W - sigBoxW
+  doc.rect(livreurX, y, sigBoxW, sigBoxH).stroke()
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
+    .text('LIVREUR', livreurX + 6, y + 5)
+  doc.font('Helvetica').fontSize(7).fillColor(C.mid)
+    .text('Document validé et remis au client à la date ci-dessus.',
+      livreurX + 6, y + 22, { width: sigBoxW - 12 })
+  if (livreurNom) {
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.dark)
+      .text(livreurNom, livreurX + 6, y + sigBoxH - 14)
+    doc.font('Helvetica').fontSize(6.5).fillColor(C.muted)
+      .text('Signature / Tampon', livreurX + 6, y + sigBoxH - 6)
+  }
+
+  y += sigBoxH + 10
+
+  // Mention juridique opposable
+  doc.rect(ML, y, W, 28).fill(C.redLight)
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.red)
+    .text('DOCUMENT OPPOSABLE — Mentions légales',
+      ML + 8, y + 4)
+  doc.font('Helvetica').fontSize(6.5).fillColor(C.muted)
+    .text(
+      'Le présent bon de livraison, signé par le client ou son représentant, ' +
+      'vaut accusé de réception et preuve de livraison conformément au Code de Commerce Cameroun. ' +
+      'Document à conserver 10 ans. Toute réclamation doit être adressée à TAFDIL SARL dans les 48h suivant la réception.',
+      ML + 8, y + 14, { width: W - 16 },
+    )
+  y += 36
+
+  return y
+}
+
+export async function generateBonLivraisonPDF(
+  bl: PdfBonLivraison,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: 0,
+      info: { Title: bl.numero, Author: CO.nom, Subject: 'BON DE LIVRAISON' },
+      bufferPages: true,
+    })
+
+    const chunks: Buffer[] = []
+    doc.on('data',  (c: Buffer) => chunks.push(c))
+    doc.on('end',   () => resolve(Buffer.concat(chunks)))
+    doc.on('error', reject)
+
+    drawBlHeader(
+      doc,
+      bl.numero,
+      bl.date_emission,
+      bl.commande_numero ? `Commande ${bl.commande_numero}` : '',
+      'Émission',
+      'Réf. cde',
+    )
+    drawBlClientBox(doc, bl.client, bl.destination, bl.transporteur, bl.commande_numero ?? null)
+
+    // Articles
+    const tableTopY = 220
+    const endY = drawBlTable(doc, bl.lignes, tableTopY)
+
+    // Signature
+    drawBlSignatureBlock(
+      doc,
+      endY,
+      bl.signataire_nom,
+      bl.geoloc ?? null,
+      bl.signature_png_buffer,
+      bl.date_emission,
+      bl.livreur_nom ?? null,
+    )
+
+    drawFooter(doc, 1)
+    doc.end()
+  })
 }

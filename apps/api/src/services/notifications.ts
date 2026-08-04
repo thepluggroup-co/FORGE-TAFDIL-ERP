@@ -118,3 +118,51 @@ export async function notifyPaiementEchoue(
 
   await sendWhatsApp(client_telephone, message)
 }
+
+// ── Notification livraison confirmée avec BL signé (T03) ──────────────────────
+
+export interface LivraisonConfirmeeBLPayload {
+  client_nom:        string
+  client_telephone:  string | null
+  client_email?:     string | null
+  commande_ref:      string
+  numero_bl:         string
+  bl_signed_url:     string
+}
+
+/**
+ * Notifie le client qu'il a reçu sa commande et lui transmet le bon de livraison
+ * signé sous forme de lien signé 7 jours (SMS + WhatsApp).
+ * L'email complet est envoyé séparément via sendBlEmail().
+ */
+export async function notifyLivraisonConfirmeeAvecBL(payload: LivraisonConfirmeeBLPayload): Promise<void> {
+  const { client_nom, client_telephone, commande_ref, numero_bl, bl_signed_url } = payload
+  const prenom = client_nom.split(' ')[0] || 'client'
+
+  const smsMessage =
+    `TAFDIL: Bonjour ${prenom}, votre commande ${commande_ref} a été livrée. ` +
+    `Bon de livraison signé ${numero_bl} : ${bl_signed_url} ` +
+    `(lien valide 7 jours).`
+
+  const whatsappMessage =
+    `✅ *TAFDIL FORGE* — Bonjour ${prenom} !\n\n` +
+    `Votre commande *${commande_ref}* a bien été livrée.\n` +
+    `📄 *Bon de livraison signé* : ${numero_bl}\n` +
+    `🔗 Téléchargez votre BL : ${bl_signed_url}\n\n` +
+    `Ce lien est valable 7 jours. Conservez le document pour toute réclamation.\n` +
+    `Merci pour votre confiance !`
+
+  if (client_telephone) {
+    await sendWhatsApp(client_telephone, whatsappMessage)
+    // Le SMS est en backup (le canal WhatsApp peut être down)
+    await notifyCommandeSms(
+      {
+        numero:    commande_ref,
+        client_nom,
+        telephone: client_telephone,
+        total_ttc_xaf: null,
+      },
+      'commande_livree',
+    ).catch((e) => console.warn('[notif] sms livraison mybe failed:', e))
+  }
+}
