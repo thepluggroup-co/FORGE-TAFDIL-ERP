@@ -51,6 +51,15 @@ export function BottomNav() {
         </svg>
       ),
     }] : []),
+    ...(!isLivreur ? [{
+      to: '/boutique',
+      label: 'Boutique',
+      icon: (active: boolean) => (
+        <svg viewBox="0 0 24 24" fill={active ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={active ? 0 : 1.8} className="w-6 h-6">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h18v4H3V3zm2 7v11h14V10H5zM8 14h8v2H8v-2z" />
+        </svg>
+      ),
+    }] : []),
     ...(isLivreur ? [{
       to: '/livraisons',
       label: 'Livraisons',
@@ -71,8 +80,8 @@ export function BottomNav() {
       ),
     }] : []),
     ...(!isLivreur ? [{
-      to: '/products',
-      label: 'Produits',
+      to: '/stocks',
+      label: 'Stocks',
       icon: (active: boolean) => (
         <svg viewBox="0 0 24 24" fill={active ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={active ? 0 : 1.8} className="w-6 h-6">
           <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />

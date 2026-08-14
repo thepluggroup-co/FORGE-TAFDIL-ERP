@@ -5,7 +5,9 @@ import { BottomNav } from './components/BottomNav'
 import { LoginPage } from './pages/LoginPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { OrdersPage } from './pages/OrdersPage'
-import { ProductsPage } from './pages/ProductsPage'
+import { StocksPage } from './pages/StocksPage'
+import { StockDetailPage } from './pages/StockDetailPage'
+import { BoutiquePage } from './pages/BoutiquePage'
 import { ProfilePage } from './pages/ProfilePage'
 import { ApprobationPage } from './pages/ApprobationPage'
 import { LivreurPage } from './pages/LivreurPage'
@@ -20,8 +22,10 @@ function AuthenticatedApp() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/orders" element={<OrdersPage />} />
+          <Route path="/boutique" element={<BoutiquePage />} />
           <Route path="/approbation" element={<ApprobationPage />} />
-          <Route path="/products" element={<ProductsPage />} />
+          <Route path="/stocks" element={<StocksPage />} />
+          <Route path="/stocks/:id" element={<StockDetailPage />} />
           <Route path="/profile" element={<ProfilePage />} />
           {user?.role === 'livreur' && (
             <Route path="/livraisons" element={<LivreurPage />} />

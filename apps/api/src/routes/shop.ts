@@ -280,7 +280,8 @@ const commandeShopSchema = z.object({
   client_adresse:          z.string().min(5).optional(),
   client_ville:            z.string().optional(),
   lignes:                  z.array(ligneCommandeSchema).min(1),
-  mode_paiement:           z.enum(['mtn_momo', 'orange_money', 'livraison']),
+  source:                  z.enum(['shop', 'boutique']).default('shop'),
+  mode_paiement:           z.enum(['mtn_momo', 'orange_money', 'livraison', 'especes']),
   mode_livraison:          z.enum(['livraison', 'retrait_boutique']).default('livraison'),
   avance_livraison_pct:    z.enum(['30', '50', '70']).or(z.number().refine((v) => [30, 50, 70].includes(v))).optional(),
   notes_client:            z.string().max(500).optional(),
@@ -523,6 +524,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     .from('commandes_shop')
     .insert({
       ref,
+      source:           body.source,
       client_nom:       body.client_nom,
       client_telephone: body.client_telephone,
       client_email:     body.client_email ?? null,
@@ -547,71 +549,101 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     return c.json({ error: 'Erreur création commande', code: 'DB_ERROR' }, 500)
   }
 
-  // 8. Créer la commande ERP en miroir (source web)
-  const today = new Date().toISOString().split('T')[0]
-  const { data: erpCommande, error: errErpCommande } = await db
-    .from('commandes')
-    .insert({
-      numero:              ref,
-      client_id:           clientId,
-      client_nom:          body.client_nom,
-      statut:              'confirmed',
-      date_commande:       today,
-      total_ht_xaf:        montant_ht,
-      tva_xaf:             tva,
-      frais_livraison_xaf: frais_livraison,
-      total_ttc_xaf:       montant_ttc,
-      condition_paiement_id: cp?.id ?? null,
-      montant_acompte:     montantAcompte,
-      date_echeance_solde: dateEcheanceSolde,
-      notes:               `[SOURCE WEB] ${body.notes_client ?? ''}`.trim(),
-    })
-    .select('id')
-    .single()
+  const isBoutiqueSale = body.source === 'boutique'
 
-  if (errErpCommande) {
-    console.error('[shop] insert commande ERP:', errErpCommande.message)
-  }
-
-  // 9. Lier commande_shop → commande ERP
-  if (erpCommande?.id) {
-    await db
-      .from('commandes_shop')
-      .update({ erp_commande_id: erpCommande.id })
-      .eq('id', commandeShop.id)
-
-    // Insérer les lignes ERP
-    const lignesErp = body.lignes.map((l, i) => ({
-      commande_id:          erpCommande.id,
-      produit_id:           l.product_id,
-      designation:          l.designation,
-      quantite:             l.quantite,
-      prix_unitaire_ht_xaf: l.prix_unitaire,
-      total_ht_xaf:         Math.round(l.quantite * l.prix_unitaire),
-      ordre:                i,
-    }))
-    await db.from('commandes_lignes').insert(lignesErp)
-    await ensureFactureForCommande({
-      commandeId: erpCommande.id,
-      statut:    'brouillon',
-      notes:     `Facture brouillon generee automatiquement a la creation de la commande shop ${ref}.`,
-    })
-    await syncCreditForCommande(erpCommande.id, null)
-
-    let bonSortie: unknown = null
-    try {
-      bonSortie = await creerBonSortieShop({
-        commandeId:      erpCommande.id,
-        ref,
-        clientNom:       body.client_nom,
-        clientTelephone: body.client_telephone,
-        montantTtc:      montant_ttc,
-        lignes:          body.lignes,
+  if (!isBoutiqueSale) {
+    // 8. Créer la commande ERP en miroir (source web)
+    const today = new Date().toISOString().split('T')[0]
+    const { data: erpCommande, error: errErpCommande } = await db
+      .from('commandes')
+      .insert({
+        numero:              ref,
+        client_id:           clientId,
+        client_nom:          body.client_nom,
+        statut:              'confirmed',
+        date_commande:       today,
+        total_ht_xaf:        montant_ht,
+        tva_xaf:             tva,
+        frais_livraison_xaf: frais_livraison,
+        total_ttc_xaf:       montant_ttc,
+        condition_paiement_id: cp?.id ?? null,
+        montant_acompte:     montantAcompte,
+        date_echeance_solde: dateEcheanceSolde,
+        notes:               `[SOURCE WEB] ${body.notes_client ?? ''}`.trim(),
       })
-    } catch (e) {
-      console.error('[shop] auto bon sortie:', e)
+      .select('id')
+      .single()
+
+    if (errErpCommande) {
+      console.error('[shop] insert commande ERP:', errErpCommande.message)
+    }
+
+    // 9. Lier commande_shop → commande ERP
+    if (erpCommande?.id) {
+      await db
+        .from('commandes_shop')
+        .update({ erp_commande_id: erpCommande.id })
+        .eq('id', commandeShop.id)
+
+      // Insérer les lignes ERP
+      const lignesErp = body.lignes.map((l, i) => ({
+        commande_id:          erpCommande.id,
+        produit_id:           l.product_id,
+        designation:          l.designation,
+        quantite:             l.quantite,
+        prix_unitaire_ht_xaf: l.prix_unitaire,
+        total_ht_xaf:         Math.round(l.quantite * l.prix_unitaire),
+        ordre:                i,
+      }))
+      await db.from('commandes_lignes').insert(lignesErp)
+      await ensureFactureForCommande({
+        commandeId: erpCommande.id,
+        statut:    'brouillon',
+        notes:     `Facture brouillon generee automatiquement a la creation de la commande shop ${ref}.`,
+      })
+      await syncCreditForCommande(erpCommande.id, null)
+
+      let bonSortie: unknown = null
       try {
         bonSortie = await creerBonSortieShop({
+          commandeId:      erpCommande.id,
+          ref,
+          clientNom:       body.client_nom,
+          clientTelephone: body.client_telephone,
+          montantTtc:      montant_ttc,
+          lignes:          body.lignes,
+        })
+      } catch (e) {
+        console.error('[shop] auto bon sortie:', e)
+        try {
+          bonSortie = await creerBonSortieShop({
+            commandeId:      null,
+            ref,
+            clientNom:       body.client_nom,
+            clientTelephone: body.client_telephone,
+            montantTtc:      montant_ttc,
+            lignes:          body.lignes,
+          })
+        } catch (fallbackError) {
+          console.error('[shop] auto bon sortie fallback:', fallbackError)
+        }
+      }
+
+      if (bonSortie) {
+        await notifyWorkflow({
+          event:   'stock.bon_sortie_a_preparer',
+          module:  'stock',
+          severite:'warning',
+          titre:   'Bon de sortie a preparer',
+          message: `Commande shop ${ref} : verifier les articles et preparer la sortie stock.`,
+          ref,
+          url:     '/stocks/bons-sortie',
+          data:    { commande_id: erpCommande.id, bon_id: (bonSortie as { id?: string }).id },
+        })
+      }
+    } else {
+      try {
+        const bonSortie = await creerBonSortieShop({
           commandeId:      null,
           ref,
           clientNom:       body.client_nom,
@@ -619,9 +651,33 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
           montantTtc:      montant_ttc,
           lignes:          body.lignes,
         })
-      } catch (fallbackError) {
-        console.error('[shop] auto bon sortie fallback:', fallbackError)
+        await notifyWorkflow({
+          event:   'stock.bon_sortie_a_preparer',
+          module:  'stock',
+          severite:'warning',
+          titre:   'Bon de sortie a preparer',
+          message: `Commande shop ${ref} : verifier les articles et preparer la sortie stock.`,
+          ref,
+          url:     '/stocks/bons-sortie',
+          data:    { commande_id: null, bon_id: (bonSortie as { id?: string }).id },
+        })
+      } catch (e) {
+        console.error('[shop] auto bon sortie fallback sans ERP:', e)
       }
+    }
+  } else {
+    let bonSortie: unknown = null
+    try {
+      bonSortie = await creerBonSortieShop({
+        commandeId:      null,
+        ref,
+        clientNom:       body.client_nom,
+        clientTelephone: body.client_telephone,
+        montantTtc:      montant_ttc,
+        lignes:          body.lignes,
+      })
+    } catch (e) {
+      console.error('[shop] auto bon sortie boutique:', e)
     }
 
     if (bonSortie) {
@@ -630,34 +686,11 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
         module:  'stock',
         severite:'warning',
         titre:   'Bon de sortie a preparer',
-        message: `Commande shop ${ref} : verifier les articles et preparer la sortie stock.`,
-        ref,
-        url:     '/stocks/bons-sortie',
-        data:    { commande_id: erpCommande.id, bon_id: (bonSortie as { id?: string }).id },
-      })
-    }
-  } else {
-    try {
-      const bonSortie = await creerBonSortieShop({
-        commandeId:      null,
-        ref,
-        clientNom:       body.client_nom,
-        clientTelephone: body.client_telephone,
-        montantTtc:      montant_ttc,
-        lignes:          body.lignes,
-      })
-      await notifyWorkflow({
-        event:   'stock.bon_sortie_a_preparer',
-        module:  'stock',
-        severite:'warning',
-        titre:   'Bon de sortie a preparer',
-        message: `Commande shop ${ref} : verifier les articles et preparer la sortie stock.`,
+        message: `Vente boutique ${ref} : verifier les articles et preparer la sortie stock.`,
         ref,
         url:     '/stocks/bons-sortie',
         data:    { commande_id: null, bon_id: (bonSortie as { id?: string }).id },
       })
-    } catch (e) {
-      console.error('[shop] auto bon sortie fallback sans ERP:', e)
     }
   }
 
@@ -690,6 +723,92 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   })
 
   return c.json({ ref, montant_ttc, statut: 'recue', sms: smsStatusPayload(smsResult) }, 201)
+})
+
+shopRouter.get('/commandes', async (c) => {
+  const { page, per_page, statut_commande, statut_paiement, search, source } = c.req.query()
+  const pageNum = Math.max(1, Number(page ?? 1))
+  const perPageNum = Math.min(50, Math.max(1, Number(per_page ?? 10)))
+
+  let query = db
+    .from('commandes_shop')
+    .select(
+      `id, ref, source, client_nom, client_telephone, client_adresse, client_ville, lignes, montant_ht, tva, montant_ttc, frais_livraison, mode_paiement, mode_livraison, avance_livraison_pct, statut_commande, statut_paiement, payment_reference, erp_commande_id, created_at, updated_at`,
+      { count: 'exact' },
+    )
+    .order('created_at', { ascending: false })
+    .range((pageNum - 1) * perPageNum, pageNum * perPageNum - 1)
+
+  if (source) {
+    query = query.eq('source', String(source))
+  }
+
+  if (statut_commande) {
+    query = query.eq('statut_commande', String(statut_commande))
+  }
+
+  if (statut_paiement) {
+    query = query.eq('statut_paiement', String(statut_paiement))
+  }
+
+  if (search && String(search).trim().length > 0) {
+    const term = `%${String(search).trim().replace(/%/g, '\\%')}%`
+    query = query.or(`ref.ilike.${term},client_nom.ilike.${term},client_telephone.ilike.${term}`)
+  }
+
+  const { data, count, error } = await query
+  if (error) {
+    return c.json({ error: 'Erreur lecture commandes boutique', code: 'DB_ERROR' }, 500)
+  }
+
+  const normalized = (data ?? []).map((row: any) => {
+    const montantTtc = Number(row.montant_ttc ?? 0)
+    const avancePct = row.avance_livraison_pct ? Number(row.avance_livraison_pct) : null
+    const avanceMontant = row.mode_paiement === 'livraison' && avancePct
+      ? Math.round(montantTtc * (avancePct / 100))
+      : 0
+    const resteMontant = row.statut_paiement === 'paye'
+      ? 0
+      : (row.mode_paiement === 'livraison' && avanceMontant > 0
+        ? montantTtc - avanceMontant
+        : montantTtc)
+
+    return {
+      id: row.id,
+      ref: row.ref,
+      source: row.source,
+      client: {
+        nom: row.client_nom,
+        telephone: row.client_telephone ?? null,
+      },
+      client_adresse: row.client_adresse,
+      client_ville: row.client_ville,
+      lignes: row.lignes,
+      montant_ht: Number(row.montant_ht ?? 0),
+      tva: Number(row.tva ?? 0),
+      montant_ttc: montantTtc,
+      frais_livraison: Number(row.frais_livraison ?? 0),
+      mode_paiement: row.mode_paiement,
+      mode_livraison: row.mode_livraison,
+      avance_livraison_pct: avancePct,
+      avance_montant: avanceMontant,
+      reste_montant: resteMontant,
+      statut_commande: row.statut_commande,
+      statut_paiement: row.statut_paiement,
+      payment_reference: row.payment_reference ?? null,
+      erp_commande_id: row.erp_commande_id ?? null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    }
+  })
+
+  return c.json({
+    data: normalized,
+    total: count ?? 0,
+    page: pageNum,
+    per_page: perPageNum,
+    total_pages: Math.ceil((count ?? 0) / perPageNum),
+  })
 })
 
 // ══════════════════════════════════════════════════════════════════════════════

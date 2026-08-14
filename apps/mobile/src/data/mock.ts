@@ -1,6 +1,6 @@
 import type { Order, Product } from '@forge/shared'
 
-export const mockProducts: Product[] = [
+export const mockStocks: Product[] = [
   {
     id: '11111111-0000-0000-0000-000000000001',
     sku: 'TFD-001',
