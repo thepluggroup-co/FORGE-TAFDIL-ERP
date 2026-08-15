@@ -899,3 +899,82 @@ export const mesuresIoT = sqliteTable('mesures_iot', {
 
 export type MesureIoT       = typeof mesuresIoT.$inferSelect
 export type NouvelleMesureIoT = typeof mesuresIoT.$inferInsert
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CAISSE — VENTE AU COMPTOIR
+// Tous les montants sont en entiers FCFA (integer, pas real).
+// Réutilise mouvements_stock (décrément stock), clients, produits,
+// conditions_paiement, customer_credit_limits — non recréés ici.
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const caisseSessions = sqliteTable('caisse_sessions', {
+  id:               id(),
+  caissierId:       text('caissier_id').notNull().references(() => profiles.id),
+  dateOuverture:    ts('date_ouverture'),
+  dateFermeture:    text('date_fermeture'),
+  fondOuvertureXaf: integer('fond_ouverture_xaf').notNull(),
+  totalEspecesXaf:  integer('total_especes_xaf').notNull().default(0),
+  totalOmXaf:       integer('total_om_xaf').notNull().default(0),
+  totalMomoXaf:     integer('total_momo_xaf').notNull().default(0),
+  totalCreditXaf:   integer('total_credit_xaf').notNull().default(0),
+  ecartXaf:         integer('ecart_xaf'),
+  statut:           text('statut', { enum: ['ouverte', 'fermee'] }).notNull().default('ouverte'),
+  notes:            text('notes'),
+  updatedAt:        tsUp('updated_at'),
+  syncStatus:       sync(),
+})
+
+export type CaisseSession         = typeof caisseSessions.$inferSelect
+export type NouvelleCaisseSession = typeof caisseSessions.$inferInsert
+
+export const ticketsVente = sqliteTable('tickets_vente', {
+  id:            id(),
+  opId:          text('op_id').notNull().unique(),
+  numeroLocal:   text('numero_local'),
+  numeroFacture: text('numero_facture'),
+  sessionId:     text('session_id').notNull().references(() => caisseSessions.id),
+  caissierId:    text('caissier_id').notNull().references(() => profiles.id),
+  clientId:      text('client_id').references(() => clients.id),
+  clientNom:     text('client_nom'),
+  totalHtXaf:    integer('total_ht_xaf').notNull(),
+  tvaXaf:        integer('tva_xaf').notNull(),
+  totalTtcXaf:   integer('total_ttc_xaf').notNull(),
+  remiseXaf:     integer('remise_xaf').notNull().default(0),
+  statut:        text('statut', { enum: ['paye', 'annule', 'rembourse'] }).notNull().default('paye'),
+  createdAt:     ts('created_at'),
+  updatedAt:     tsUp('updated_at'),
+  syncStatus:    sync(),
+})
+
+export type TicketVente         = typeof ticketsVente.$inferSelect
+export type NouveauTicketVente  = typeof ticketsVente.$inferInsert
+
+export const lignesTicket = sqliteTable('lignes_ticket', {
+  id:              id(),
+  ticketId:        text('ticket_id').notNull().references(() => ticketsVente.id),
+  produitId:       text('produit_id').references(() => produits.id),
+  designation:     text('designation').notNull(),
+  unite:           text('unite').notNull().default('unité'),
+  quantite:        real('quantite').notNull(),
+  prixUnitaireXaf: integer('prix_unitaire_xaf').notNull(),
+  totalLigneXaf:   integer('total_ligne_xaf').notNull(),
+  ordre:           integer('ordre').notNull().default(0),
+})
+
+export type LigneTicket         = typeof lignesTicket.$inferSelect
+export type NouvelleLigneTicket = typeof lignesTicket.$inferInsert
+
+export const paiementsTicket = sqliteTable('paiements_ticket', {
+  id:             id(),
+  ticketId:       text('ticket_id').notNull().references(() => ticketsVente.id),
+  mode:           text('mode', { enum: ['espece', 'orange_money', 'mtn_momo', 'credit', 'carte'] }).notNull(),
+  montantXaf:     integer('montant_xaf').notNull(),
+  montantRecuXaf: integer('montant_recu_xaf'),
+  renduXaf:       integer('rendu_xaf'),
+  reference:      text('reference'),
+  createdAt:      ts('created_at'),
+  syncStatus:     sync(),
+})
+
+export type PaiementTicket         = typeof paiementsTicket.$inferSelect
+export type NouveauPaiementTicket  = typeof paiementsTicket.$inferInsert

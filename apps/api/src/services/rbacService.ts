@@ -67,6 +67,13 @@ export function invalidateAllPermissionCaches(): void {
   console.info('[rbac:cache] cache complet effacé')
 }
 
+// ── Caisse — plafond de remise caissier ───────────────────────────────────────
+// Au-delà de ce seuil, seuls superviseur/admin (MANAGER/SUPER_ADMIN) peuvent
+// valider une remise. Consommé par les futures routes du module Caisse
+// (création de ticket / application d'une remise) — pas encore de table
+// tickets_vente/remise en base, donc rien à vérifier ici pour l'instant.
+export const CAISSIER_REMISE_MAX_PCT = 5
+
 // ── IMMUTABLE_RULES (vérifiées avant toute DB query) ─────────────────────────
 // Ces règles ne peuvent jamais être contredites par la DB.
 
@@ -92,6 +99,20 @@ function checkImmutableRules(
     return { decision: 'DENY' }
   }
 
+  // CAISSIER : jamais d'accès RH / Finance (paie, marges, prix d'achat) —
+  // même si une permission DB existait par erreur, ce garde-fou prévaut.
+  // Le rôle "responsable" (MANAGER/SUPER_ADMIN via superviseur/admin) garde
+  // l'accès complet, plus les remises fortes, annulations, avoirs et le
+  // rapport Z (gérés au niveau des futures routes Caisse, pas ici).
+  if (roleName === 'CAISSIER' && (module === 'HR' || module === 'FINANCE')) {
+    return { decision: 'DENY' }
+  }
+
+  // CAISSIER : lecture seule sur le stock (pas de modification de prix d'achat)
+  if (roleName === 'CAISSIER' && module === 'STOCK' && action !== 'READ') {
+    return { decision: 'DENY' }
+  }
+
   return { decision: 'PASS' }
 }
 
@@ -104,6 +125,8 @@ const LEGACY_ROLE_MAP: Record<string, string> = {
   operateur:   'COMMERCIAL',
   technicien:  'READONLY',
   apprenant:   'READONLY',   // legacy alias
+  caissier:    'CAISSIER',
+  livreur:     'LIVREUR',
 }
 
 // ── Chargement des permissions depuis la DB ───────────────────────────────────

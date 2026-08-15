@@ -47,6 +47,9 @@ export const natureTransactionEnum  = pgEnum('nature_transaction_enum', ['compta
 export const imputationPayeurEnum   = pgEnum('imputation_payeur_enum',  ['entreprise_tafdil', 'atelier', 'administration'])
 export const statutPreparationEnum  = pgEnum('statut_preparation_enum', ['a_preparer', 'en_cours', 'pret'])
 export const remiseTypeEnum         = pgEnum('remise_type_enum',        ['pct', 'forfait'])
+export const caisseSessionStatutEnum = pgEnum('caisse_session_statut', ['ouverte', 'fermee'])
+export const ticketVenteStatutEnum   = pgEnum('ticket_vente_statut',   ['paye', 'annule', 'rembourse'])
+export const paiementTicketModeEnum  = pgEnum('paiement_ticket_mode',  ['espece', 'orange_money', 'mtn_momo', 'credit', 'carte'])
 
 // ══════════════════════════════════════════════════════════════════════════════
 // AUTH / PROFILS
@@ -975,3 +978,82 @@ export const mesuresIoTPg = pgTable('mesures_iot', {
 })
 
 export type MesureIoTPg = typeof mesuresIoTPg.$inferSelect
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CAISSE — VENTE AU COMPTOIR
+// Tous les montants sont en entiers FCFA (integer, pas real).
+// Réutilise mouvements_stock (décrément stock), clients, produits,
+// conditions_paiement, customer_credit_limits — non recréés ici.
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const caisseSessionsPg = pgTable('caisse_sessions', {
+  id:               id(),
+  caissierId:       uuid('caissier_id').notNull().references(() => profilesPg.id),
+  dateOuverture:    ts('date_ouverture'),
+  dateFermeture:    tsN('date_fermeture'),
+  fondOuvertureXaf: integer('fond_ouverture_xaf').notNull(),
+  totalEspecesXaf:  integer('total_especes_xaf').notNull().default(0),
+  totalOmXaf:       integer('total_om_xaf').notNull().default(0),
+  totalMomoXaf:     integer('total_momo_xaf').notNull().default(0),
+  totalCreditXaf:   integer('total_credit_xaf').notNull().default(0),
+  ecartXaf:         integer('ecart_xaf'),
+  statut:           caisseSessionStatutEnum('statut').notNull().default('ouverte'),
+  notes:            text('notes'),
+  updatedAt:        ts('updated_at'),
+  syncStatus:       syncStatusEnum('sync_status').notNull().default('pending'),
+})
+
+export type CaisseSessionPg         = typeof caisseSessionsPg.$inferSelect
+export type NouvelleCaisseSessionPg = typeof caisseSessionsPg.$inferInsert
+
+export const ticketsVentePg = pgTable('tickets_vente', {
+  id:            id(),
+  opId:          text('op_id').notNull().unique(),
+  numeroLocal:   text('numero_local'),
+  numeroFacture: text('numero_facture'),
+  sessionId:     uuid('session_id').notNull().references(() => caisseSessionsPg.id),
+  caissierId:    uuid('caissier_id').notNull().references(() => profilesPg.id),
+  clientId:      uuid('client_id').references(() => clientsPg.id),
+  clientNom:     text('client_nom'),
+  totalHtXaf:    integer('total_ht_xaf').notNull(),
+  tvaXaf:        integer('tva_xaf').notNull(),
+  totalTtcXaf:   integer('total_ttc_xaf').notNull(),
+  remiseXaf:     integer('remise_xaf').notNull().default(0),
+  statut:        ticketVenteStatutEnum('statut').notNull().default('paye'),
+  createdAt:     ts('created_at'),
+  updatedAt:     ts('updated_at'),
+  syncStatus:    syncStatusEnum('sync_status').notNull().default('pending'),
+})
+
+export type TicketVentePg        = typeof ticketsVentePg.$inferSelect
+export type NouveauTicketVentePg = typeof ticketsVentePg.$inferInsert
+
+export const lignesTicketPg = pgTable('lignes_ticket', {
+  id:              id(),
+  ticketId:        uuid('ticket_id').notNull().references(() => ticketsVentePg.id),
+  produitId:       uuid('produit_id').references(() => produitsPg.id),
+  designation:     text('designation').notNull(),
+  unite:           text('unite').notNull().default('unité'),
+  quantite:        real('quantite').notNull(),
+  prixUnitaireXaf: integer('prix_unitaire_xaf').notNull(),
+  totalLigneXaf:   integer('total_ligne_xaf').notNull(),
+  ordre:           integer('ordre').notNull().default(0),
+})
+
+export type LigneTicketPg         = typeof lignesTicketPg.$inferSelect
+export type NouvelleLigneTicketPg = typeof lignesTicketPg.$inferInsert
+
+export const paiementsTicketPg = pgTable('paiements_ticket', {
+  id:             id(),
+  ticketId:       uuid('ticket_id').notNull().references(() => ticketsVentePg.id),
+  mode:           paiementTicketModeEnum('mode').notNull(),
+  montantXaf:     integer('montant_xaf').notNull(),
+  montantRecuXaf: integer('montant_recu_xaf'),
+  renduXaf:       integer('rendu_xaf'),
+  reference:      text('reference'),
+  createdAt:      ts('created_at'),
+  syncStatus:     syncStatusEnum('sync_status').notNull().default('pending'),
+})
+
+export type PaiementTicketPg        = typeof paiementsTicketPg.$inferSelect
+export type NouveauPaiementTicketPg = typeof paiementsTicketPg.$inferInsert

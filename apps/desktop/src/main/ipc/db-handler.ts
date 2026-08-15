@@ -569,6 +569,80 @@ function runMigrations(database: InstanceType<typeof Database>) {
       `)
       log.info('[db] migration 006 : credit_module (payment_plans, installments, limits)')
     },
+
+    // ── 007: module Caisse — vente au comptoir ────────────────────────────────
+    // Offline-first : op_id est la clé d'idempotence générée côté client pour
+    // qu'un ticket créé hors-ligne ne soit jamais dupliqué à la synchro.
+    // Tous les montants XAF en INTEGER (pas de float).
+    '007_pos_module': (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS caisse_sessions (
+          id                  TEXT PRIMARY KEY,
+          caissier_id         TEXT NOT NULL,
+          date_ouverture      TEXT,
+          date_fermeture      TEXT,
+          fond_ouverture_xaf  INTEGER NOT NULL,
+          total_especes_xaf   INTEGER DEFAULT 0,
+          total_om_xaf        INTEGER DEFAULT 0,
+          total_momo_xaf      INTEGER DEFAULT 0,
+          total_credit_xaf    INTEGER DEFAULT 0,
+          ecart_xaf           INTEGER,
+          statut              TEXT DEFAULT 'ouverte',
+          notes               TEXT,
+          updated_at          TEXT,
+          sync_status         TEXT DEFAULT 'pending'
+        );
+
+        CREATE TABLE IF NOT EXISTS tickets_vente (
+          id              TEXT PRIMARY KEY,
+          op_id           TEXT NOT NULL UNIQUE,
+          numero_local    TEXT,
+          numero_facture  TEXT,
+          session_id      TEXT NOT NULL,
+          caissier_id     TEXT NOT NULL,
+          client_id       TEXT,
+          client_nom      TEXT,
+          total_ht_xaf    INTEGER NOT NULL,
+          tva_xaf         INTEGER NOT NULL,
+          total_ttc_xaf   INTEGER NOT NULL,
+          remise_xaf      INTEGER DEFAULT 0,
+          statut          TEXT DEFAULT 'paye',
+          created_at      TEXT,
+          updated_at      TEXT,
+          sync_status     TEXT DEFAULT 'pending'
+        );
+
+        CREATE TABLE IF NOT EXISTS lignes_ticket (
+          id                 TEXT PRIMARY KEY,
+          ticket_id          TEXT NOT NULL,
+          produit_id         TEXT,
+          designation        TEXT NOT NULL,
+          unite              TEXT DEFAULT 'unité',
+          quantite           REAL NOT NULL,
+          prix_unitaire_xaf  INTEGER NOT NULL,
+          total_ligne_xaf    INTEGER NOT NULL,
+          ordre              INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS paiements_ticket (
+          id                TEXT PRIMARY KEY,
+          ticket_id         TEXT NOT NULL,
+          mode              TEXT NOT NULL,
+          montant_xaf       INTEGER NOT NULL,
+          montant_recu_xaf  INTEGER,
+          rendu_xaf         INTEGER,
+          reference         TEXT,
+          created_at        TEXT,
+          sync_status       TEXT DEFAULT 'pending'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_caisse_sessions_caissier ON caisse_sessions(caissier_id);
+        CREATE INDEX IF NOT EXISTS idx_tickets_vente_session    ON tickets_vente(session_id);
+        CREATE INDEX IF NOT EXISTS idx_lignes_ticket_ticket     ON lignes_ticket(ticket_id);
+        CREATE INDEX IF NOT EXISTS idx_paiements_ticket_ticket  ON paiements_ticket(ticket_id);
+      `)
+      log.info('[db] migration 007 : pos_module (caisse_sessions, tickets_vente, lignes_ticket, paiements_ticket)')
+    },
   }
 
   const alreadyRan = new Set(
