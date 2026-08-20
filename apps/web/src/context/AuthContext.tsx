@@ -3,15 +3,16 @@ import type { User, Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import { setApiToken } from '@/lib/api-client'
 
-export type AppRole = 'admin' | 'superviseur' | 'operateur' | 'technicien'
+export type AppRole = 'admin' | 'superviseur' | 'operateur' | 'technicien' | 'caissier'
 
-const VALID_ROLES: AppRole[] = ['admin', 'superviseur', 'operateur', 'technicien']
+const VALID_ROLES: AppRole[] = ['admin', 'superviseur', 'operateur', 'technicien', 'caissier']
 
 const LEGACY_ROLE_MAP: Record<string, AppRole> = {
   directeur:   'admin',
   superviseur: 'superviseur',
   operateur:   'operateur',
   technicien:  'technicien',
+  caissier:    'caissier',
   apprenant:   'technicien',   // legacy
   viewer:      'technicien',   // legacy
 }

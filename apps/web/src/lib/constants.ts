@@ -6,6 +6,8 @@ export const USER_ROLE_LABELS: Record<UserRole, string> = {
   superviseur: 'Superviseur',
   operateur:   'Opérateur',
   technicien:  'Technicien',
+  caissier:    'Caissier',
+  livreur:     'Livreur',
 }
 
 export const USER_ROLE_COLORS: Record<UserRole, string> = {
@@ -13,6 +15,8 @@ export const USER_ROLE_COLORS: Record<UserRole, string> = {
   superviseur: 'text-blue-700 bg-blue-50',
   operateur:   'text-green-700 bg-green-50',
   technicien:  'text-gray-600 bg-gray-100',
+  caissier:    'text-amber-700 bg-amber-50',
+  livreur:     'text-purple-700 bg-purple-50',
 }
 
 // --- Statuts commandes ---

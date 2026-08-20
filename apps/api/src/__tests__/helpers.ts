@@ -28,7 +28,7 @@ export function mkClient() {
 }
 
 export function makeToken(
-  role: 'admin' | 'superviseur' | 'operateur' | 'apprenant' | 'livreur' = 'admin',
+  role: 'admin' | 'superviseur' | 'operateur' | 'apprenant' | 'livreur' | 'caissier' = 'admin',
   userId = 'test-user-uid-001',
 ): string {
   return jwt.sign(

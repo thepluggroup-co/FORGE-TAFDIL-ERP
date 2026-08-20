@@ -58,6 +58,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, EBState> {
 const Login        = lazy(() => import('@/pages/Login'))
 const Dashboard    = lazy(() => import('@/pages/Dashboard'))
 const Stocks       = lazy(() => import('@/pages/Stocks'))
+const Caisse       = lazy(() => import('@/pages/Caisse'))
 const BonsSortie   = lazy(() => import('@/pages/stocks/BonsSortie'))
 const BonsAppro    = lazy(() => import('@/pages/stocks/BonsAppro'))
 const Commandes    = lazy(() => import('@/pages/Commandes'))
@@ -164,6 +165,9 @@ function AppRoutes() {
 
           {/* Dashboard */}
           <Route path="/dashboard" element={<Shell><Dashboard /></Shell>} />
+
+          {/* Caisse — vente au comptoir */}
+          <Route path="/caisse" element={<Shell><Caisse /></Shell>} />
 
           {/* Stocks + sous-routes */}
           <Route path="/stocks" element={<Shell><Stocks /></Shell>} />

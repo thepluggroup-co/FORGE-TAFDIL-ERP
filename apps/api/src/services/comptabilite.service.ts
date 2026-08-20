@@ -621,3 +621,82 @@ export async function genererEcritureBonSortieInterne(bon: {
 
   return insertEcritures(ecritures)
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ÉCRITURE VENTE CAISSE (comptoir) — vente et encaissement en un seul passage
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Contrairement à une facture (vente à crédit, encaissée plus tard via
+// genererEcritureEncaissement), un ticket de caisse est déjà réglé au moment
+// de l'émission — sauf la part éventuellement payée en mode 'credit', qui
+// reste une créance client (411), exactement comme une facture non soldée.
+//
+//   par mode de paiement espèces/mobile money/carte : Dr 571/552x/521 (montant)
+//   par part payée en 'credit'                       : Dr 411 Clients (montant)
+//   Cr 701 Ventes marchandises                        HT
+//   Cr 4431 TVA collectée                              TVA
+//
+// Équilibré par construction : somme(paiements) = total_ttc_xaf = HT + TVA
+// (déjà garanti par apps/api/src/routes/caisse.ts avant l'appel).
+
+function compteEncaissementCaisse(mode: 'espece' | 'orange_money' | 'mtn_momo' | 'carte'): ModeEncaissementComptable {
+  if (mode === 'espece') return 'especes'
+  if (mode === 'carte')  return 'banque'
+  return mode
+}
+
+export async function genererEcritureVenteCaisse(ticket: {
+  id:            string
+  numero:        string
+  date:          string
+  client_nom?:   string | null
+  total_ht_xaf:  number
+  tva_xaf:       number
+  created_by?:   string
+  paiements:     Array<{ mode: 'espece' | 'orange_money' | 'mtn_momo' | 'credit' | 'carte'; montant_xaf: number }>
+}): Promise<ComptaResult> {
+  const refDoc = `CAI-${ticket.numero}`
+  if (await ecrituresExistent('reference_doc', refDoc)) return { ok: true, inserts: 0 }
+
+  const date    = ticket.date.slice(0, 10)
+  const libelle = `Vente comptoir — ${ticket.numero}${ticket.client_nom ? ` — ${ticket.client_nom}` : ''}`
+  const common  = { date, libelle, reference_doc: refDoc, created_by: ticket.created_by }
+
+  const ecritures: EcritureInsert[] = []
+
+  for (const p of ticket.paiements) {
+    const montant = Math.round(p.montant_xaf)
+    if (montant <= 0) continue
+    const compte = p.mode === 'credit' ? '411' : compteEncaissement(compteEncaissementCaisse(p.mode))
+    ecritures.push({
+      ...common,
+      compte_syscohada: compte,
+      compte_label:     libelleCompte(compte),
+      debit_xaf:        montant,
+      credit_xaf:       0,
+    })
+  }
+
+  ecritures.push({
+    ...common,
+    compte_syscohada: '701',
+    compte_label:     libelleCompte('701'),
+    debit_xaf:        0,
+    credit_xaf:       Math.round(ticket.total_ht_xaf),
+  })
+
+  // TVA désactivée temporairement côté Caisse (apps/api/src/routes/caisse.ts,
+  // TVA_RATE = 0) — pas d'écriture 4431 à montant nul.
+  if (ticket.tva_xaf > 0) {
+    ecritures.push({
+      ...common,
+      libelle:          `TVA collectée — ${ticket.numero}`,
+      compte_syscohada: '4431',
+      compte_label:     libelleCompte('4431'),
+      debit_xaf:        0,
+      credit_xaf:       Math.round(ticket.tva_xaf),
+    })
+  }
+
+  return insertEcritures(ecritures)
+}

@@ -719,6 +719,8 @@ export async function dbGetDashboardKpis() {
     apprenants_actifs: number
     bons_en_attente:   number
     credits_echus:     number
+    caisse_ventes_jour_count: number
+    caisse_ventes_jour_xaf:   number
     recent_commandes:  { id: string; numero: string; client_nom: string; total_ttc_xaf: number; statut: string; date_commande: string }[]
     ca_data:           { total_ttc_xaf: number; date_commande: string }[]
     recent_mouvements: { id: string; type: 'entree' | 'sortie'; quantite: number; created_at: string; produits: { designation: string; unite: string } | null }[]
@@ -745,6 +747,8 @@ export async function dbGetDashboardKpis() {
       apprenants_actifs: d.apprenants_actifs ?? 0,
       bons_en_attente:   d.bons_en_attente   ?? 0,
       credits_echus:     d.credits_echus     ?? 0,
+      caisse_ventes_jour_count: d.caisse_ventes_jour_count ?? 0,
+      caisse_ventes_jour_xaf:   d.caisse_ventes_jour_xaf   ?? 0,
     },
     recent_commandes:  d.recent_commandes  ?? [],
     recent_mouvements: d.recent_mouvements ?? [],

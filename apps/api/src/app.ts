@@ -15,6 +15,7 @@ import { aiRouter } from './routes/ai'
 import { rapportsRouter } from './routes/rapports'
 import { shopRouter, shopErpRouter } from './routes/shop'
 import { paiementsRouter } from './routes/paiements'
+import { caisseRouter } from './routes/caisse'
 import { operationsRouter } from './routes/operations'
 import { adminRouter } from './routes/admin'
 import { equipementsRouter } from './routes/equipements'
@@ -25,6 +26,7 @@ import { logistiqueRouter } from './routes/logistique'
 import { demarrerCronRelances } from './services/relances-cron.service'
 import { demarrerCronReappro } from './services/reappro-cron.service'
 import { checkOverdueInstallments } from './services/creditService'
+import { checkOverdueCaisseCredits } from './services/caisse-credit.service'
 import { sendUpcomingReminders } from './services/notificationService'
 import { HTTPException } from 'hono/http-exception'
 
@@ -125,6 +127,7 @@ api.route('/admin',       adminRouter)
 api.route('/credit',      creditRouter)
 api.route('/profile',     profileRouter)
 api.route('/fournisseurs', fournisseursRouter)
+api.route('/caisse',      caisseRouter)
 
 app.route('/api', api)
 
@@ -185,6 +188,14 @@ demarrerCronReappro()
     sendUpcomingReminders()
       .then(r => console.info('[cron:credit:reminders]', r))
       .catch(e => console.error('[cron:credit:reminders] erreur', e))
+  })
+
+  // Crédit comptoir (Caisse) : échéances dépassées → score de fiabilité
+  // caisse pénalisé, blocage 30 jours sous le seuil (caisse-credit.service.ts)
+  scheduleAt(7, () => {
+    checkOverdueCaisseCredits()
+      .then(r => console.info('[cron:caisse-credit:overdue]', r))
+      .catch(e => console.error('[cron:caisse-credit:overdue] erreur', e))
   })
 })()
 

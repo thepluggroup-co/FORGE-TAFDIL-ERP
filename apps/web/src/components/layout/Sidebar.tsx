@@ -6,11 +6,12 @@ import {
   LayoutDashboard, Wrench, Package, ShoppingCart, FileText, DollarSign, Users,
   GraduationCap, Kanban, Truck, Megaphone, Shield, Brain, Wifi,
   Store, LogOut, ChevronLeft, ChevronRight, ChevronDown, Settings, Crown, Hammer, Building2,
+  Receipt,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
 
-type AppRole = 'admin' | 'superviseur' | 'operateur' | 'technicien'
+type AppRole = 'admin' | 'superviseur' | 'operateur' | 'technicien' | 'caissier'
 
 interface NavItem {
   path: string
@@ -31,6 +32,7 @@ interface NavGroup {
 const ALL: AppRole[] = ['admin', 'superviseur', 'operateur', 'technicien']
 const NO_TECHNICIEN: AppRole[] = ['admin', 'superviseur', 'operateur']
 const ADMIN_SUPERVISEUR: AppRole[] = ['admin', 'superviseur']
+const CAISSIER_RESPONSABLE: AppRole[] = ['caissier', 'admin', 'superviseur']
 
 const DASHBOARD_ITEM: NavItem = { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard }
 
@@ -39,6 +41,7 @@ const NAV_GROUPS: NavGroup[] = [
     id: 'activite',
     label: 'Activité',
     items: [
+      { path: '/caisse',       label: 'Caisse',       icon: Receipt,       roles: CAISSIER_RESPONSABLE },
       { path: '/boutique',     label: 'Boutique',     icon: Store, dynamicBadge: true, roles: ALL },
       { path: '/production',   label: 'Production',   icon: Wrench,        roles: ALL },
       { path: '/commandes',    label: 'Commandes',    icon: ShoppingCart,  roles: ALL },
@@ -155,6 +158,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     superviseur: 'Superviseur',
     operateur:   'Opérateur',
     technicien:  'Technicien',
+    caissier:    'Caissier',
   }
   const roleLabel = roleLabels[appRole ?? ''] ?? (appRole ?? 'Utilisateur')
 

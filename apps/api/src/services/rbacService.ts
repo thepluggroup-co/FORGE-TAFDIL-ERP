@@ -8,7 +8,7 @@
  *   3. DB PostgreSQL / Supabase
  *   4. Fallback rôle JWT legacy si pas de rbac_user_profiles
  */
-import { supabaseAdmin } from '@forge/db'
+import { supabaseAdmin, RBAC_MODULES, RBAC_ACTIONS } from '@forge/db'
 import type { RbacModule, RbacAction, AuditActionType } from '@forge/db'
 
 const db = supabaseAdmin!
@@ -188,11 +188,12 @@ async function loadPermissionsFromDb(userId: string, legacyRole?: string): Promi
     }
   }
 
-  // SUPER_ADMIN a tout (guard-rail côté cache)
+  // SUPER_ADMIN a tout (guard-rail côté cache) — dérivé de RBAC_MODULES/RBAC_ACTIONS
+  // (packages/db/src/schema-rbac.ts) pour ne jamais désynchroniser cette liste
+  // quand un nouveau module est ajouté (bug vécu avec CAISSE : liste figée ici
+  // n'incluait pas le module, un admin se voyait refuser CAISSE:READ/CREATE).
   if (roleName === 'SUPER_ADMIN') {
-    const MODULES = ['STOCK','COMMERCIAL','FINANCE','HR','PRODUCTION','LOGISTICS','ADMIN','REPORTS','RECEIVABLES']
-    const ACTIONS = ['READ','CREATE','UPDATE','DELETE','VALIDATE','CONFIGURE','EXPORT']
-    for (const m of MODULES) for (const a of ACTIONS) perms.add(`${m}:${a}`)
+    for (const m of RBAC_MODULES) for (const a of RBAC_ACTIONS) perms.add(`${m}:${a}`)
   }
 
   const entry: CacheEntry = { perms, roleName, expiresAt: Date.now() + CACHE_TTL_MS }

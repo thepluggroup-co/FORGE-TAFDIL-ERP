@@ -7,9 +7,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // ── Mock Supabase ──────────────────────────────────────────────────────────────
 
-vi.mock('@forge/db', () => ({
-  supabaseAdmin: { from: vi.fn() },
-}))
+vi.mock('@forge/db', async (importOriginal) => {
+  // RBAC_MODULES/RBAC_ACTIONS doivent rester les vraies constantes : le guard-rail
+  // SUPER_ADMIN de rbacService.ts (checkPermission) les itère à l'exécution pour
+  // dériver le wildcard de permissions — un mock figé se désynchroniserait dès
+  // qu'un nouveau module RBAC est ajouté (cf. bug CAISSE:READ vécu en prod).
+  const actual = await importOriginal<typeof import('@forge/db')>()
+  return {
+    ...actual,
+    supabaseAdmin: { from: vi.fn() },
+  }
+})
 
 import { supabaseAdmin } from '@forge/db'
 import {

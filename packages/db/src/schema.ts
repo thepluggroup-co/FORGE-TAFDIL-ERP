@@ -56,6 +56,13 @@ export const clients = sqliteTable('clients', {
   commandesCount:   integer('commandes_count').notNull().default(0),
   totalCaXaf:       real('total_ca_xaf').notNull().default(0),
   encoursCreditXaf: real('encours_credit_xaf').notNull().default(0),
+  // ── Score fiabilité Caisse — dédié au crédit comptoir (distinct de
+  // scoreFiabilite ci-dessus, qui a un sens différent selon SQLite/Postgres —
+  // cf. packages/db/src/schema.pg.ts). Sur 10 : décrémenté à chaque échéance
+  // crédit caisse non honorée à temps ; sous 5, crédit comptoir bloqué 30
+  // jours (apps/api/src/services/caisse-credit.service.ts).
+  scoreFiabiliteCaisse:      integer('score_fiabilite_caisse').notNull().default(10),
+  creditCaisseBloqueJusquAu: text('credit_caisse_bloque_jusqu_au'),
   notes:            text('notes'),
   createdBy:        text('created_by').references(() => profiles.id),
   createdAt:        ts('created_at'),
@@ -917,6 +924,7 @@ export const caisseSessions = sqliteTable('caisse_sessions', {
   totalOmXaf:       integer('total_om_xaf').notNull().default(0),
   totalMomoXaf:     integer('total_momo_xaf').notNull().default(0),
   totalCreditXaf:   integer('total_credit_xaf').notNull().default(0),
+  fondFermetureXaf: integer('fond_fermeture_xaf'),
   ecartXaf:         integer('ecart_xaf'),
   statut:           text('statut', { enum: ['ouverte', 'fermee'] }).notNull().default('ouverte'),
   notes:            text('notes'),
@@ -941,6 +949,8 @@ export const ticketsVente = sqliteTable('tickets_vente', {
   totalTtcXaf:   integer('total_ttc_xaf').notNull(),
   remiseXaf:     integer('remise_xaf').notNull().default(0),
   statut:        text('statut', { enum: ['paye', 'annule', 'rembourse'] }).notNull().default('paye'),
+  oversell:      integer('oversell', { mode: 'boolean' }).notNull().default(false),
+  notes:         text('notes'),
   createdAt:     ts('created_at'),
   updatedAt:     tsUp('updated_at'),
   syncStatus:    sync(),
@@ -972,6 +982,10 @@ export const paiementsTicket = sqliteTable('paiements_ticket', {
   montantRecuXaf: integer('montant_recu_xaf'),
   renduXaf:       integer('rendu_xaf'),
   reference:      text('reference'),
+  // ── Suivi crédit caisse (mode='credit' uniquement) ────────────────────────
+  dateEcheance:         text('date_echeance'),
+  statutRemboursement:  text('statut_remboursement', { enum: ['en_attente', 'paye', 'en_retard'] }),
+  dateRemboursement:    text('date_remboursement'),
   createdAt:      ts('created_at'),
   syncStatus:     sync(),
 })

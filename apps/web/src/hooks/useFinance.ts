@@ -540,6 +540,8 @@ export interface DashboardKpis {
     apprenants_actifs: number
     bons_en_attente: number
     credits_echus: number
+    caisse_ventes_jour_count: number
+    caisse_ventes_jour_xaf: number
   }
   recent_commandes: { id: string; numero: string; client_nom: string; total_ttc_xaf: number; statut: string; date_commande: string }[]
   recent_mouvements: { id: string; type: string; quantite: number; created_at: string; produits: { designation: string; unite: string } | null }[]

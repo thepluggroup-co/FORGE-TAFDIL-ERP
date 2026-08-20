@@ -586,6 +586,7 @@ function runMigrations(database: InstanceType<typeof Database>) {
           total_om_xaf        INTEGER DEFAULT 0,
           total_momo_xaf      INTEGER DEFAULT 0,
           total_credit_xaf    INTEGER DEFAULT 0,
+          fond_fermeture_xaf  INTEGER,
           ecart_xaf           INTEGER,
           statut              TEXT DEFAULT 'ouverte',
           notes               TEXT,
@@ -607,6 +608,8 @@ function runMigrations(database: InstanceType<typeof Database>) {
           total_ttc_xaf   INTEGER NOT NULL,
           remise_xaf      INTEGER DEFAULT 0,
           statut          TEXT DEFAULT 'paye',
+          oversell        INTEGER DEFAULT 0,
+          notes           TEXT,
           created_at      TEXT,
           updated_at      TEXT,
           sync_status     TEXT DEFAULT 'pending'
@@ -632,6 +635,9 @@ function runMigrations(database: InstanceType<typeof Database>) {
           montant_recu_xaf  INTEGER,
           rendu_xaf         INTEGER,
           reference         TEXT,
+          date_echeance         TEXT,
+          statut_remboursement  TEXT,
+          date_remboursement    TEXT,
           created_at        TEXT,
           sync_status       TEXT DEFAULT 'pending'
         );
@@ -642,6 +648,13 @@ function runMigrations(database: InstanceType<typeof Database>) {
         CREATE INDEX IF NOT EXISTS idx_paiements_ticket_ticket  ON paiements_ticket(ticket_id);
       `)
       log.info('[db] migration 007 : pos_module (caisse_sessions, tickets_vente, lignes_ticket, paiements_ticket)')
+    },
+
+    // ── 008: score de fiabilité crédit caisse (clients) ───────────────────────
+    '008_caisse_credit_score': (db) => {
+      safeAddColumn(db, 'clients', 'score_fiabilite_caisse',       'INTEGER DEFAULT 10')
+      safeAddColumn(db, 'clients', 'credit_caisse_bloque_jusqu_au', 'TEXT')
+      log.info('[db] migration 008 : score_fiabilite_caisse + credit_caisse_bloque_jusqu_au sur clients')
     },
   }
 

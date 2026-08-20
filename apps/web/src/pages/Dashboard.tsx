@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
-import { TrendingUp, ShoppingCart, Package, GraduationCap, AlertTriangle, ArrowRight, Loader2 } from 'lucide-react'
+import { TrendingUp, ShoppingCart, Package, GraduationCap, AlertTriangle, ArrowRight, Loader2, Receipt } from 'lucide-react'
 import { KpiCard, PageHeader, StatusBadge } from '@forge/ui'
 import { useAuth } from '@/context/AuthContext'
 import { formatXAF, formatDate } from '@/lib/utils'
@@ -132,7 +132,16 @@ export default function Dashboard() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+        <KpiCard
+          title="Ventes caisse (jour)"
+          value={isLoading ? '…' : formatXAF(dashboard?.kpis.caisse_ventes_jour_xaf ?? 0)}
+          trend={(dashboard?.kpis.caisse_ventes_jour_count ?? 0) > 0 ? 'up' : 'neutral'}
+          trendValue={isLoading ? '' : `${dashboard?.kpis.caisse_ventes_jour_count ?? 0} transaction(s)`}
+          icon={<Receipt className="h-5 w-5" />}
+          color="#0891b2"
+          delay={0}
+        />
         <KpiCard
           title="CA du mois"
           value={isLoading ? '…' : formatXAF(caMoisActuel)}
@@ -140,7 +149,7 @@ export default function Dashboard() {
           trendValue={isLoading ? '' : chartTrend ?? 'Aucune donnée'}
           icon={<TrendingUp className="h-5 w-5" />}
           color="#16a34a"
-          delay={0}
+          delay={0.05}
         />
         <KpiCard
           title="Commandes en cours"
@@ -149,7 +158,7 @@ export default function Dashboard() {
           trendValue={isLoading ? '' : `Confirmed + En prod + Prêt`}
           icon={<ShoppingCart className="h-5 w-5" />}
           color="#1d4ed8"
-          delay={0.05}
+          delay={0.1}
         />
         <KpiCard
           title="Stocks critiques"
@@ -159,7 +168,7 @@ export default function Dashboard() {
           trendValue={isLoading ? '' : dashboard?.kpis.stocks_en_alerte ? 'Alerte active' : 'Niveaux OK'}
           icon={<Package className="h-5 w-5" />}
           color="#C62828"
-          delay={0.1}
+          delay={0.15}
         />
         <KpiCard
           title="Apprenants actifs"
@@ -168,7 +177,7 @@ export default function Dashboard() {
           trendValue="En formation TAFDIL"
           icon={<GraduationCap className="h-5 w-5" />}
           color="#6d28d9"
-          delay={0.15}
+          delay={0.2}
         />
       </div>
 

@@ -17,7 +17,7 @@ const tsUp = (col: string) => text(col).notNull().$defaultFn(now)
 
 export const RBAC_MODULES = [
   'STOCK', 'COMMERCIAL', 'FINANCE', 'HR', 'PRODUCTION',
-  'LOGISTICS', 'ADMIN', 'REPORTS', 'RECEIVABLES',
+  'LOGISTICS', 'ADMIN', 'REPORTS', 'RECEIVABLES', 'CAISSE',
 ] as const
 
 export const RBAC_ACTIONS = [

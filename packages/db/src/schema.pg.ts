@@ -50,6 +50,7 @@ export const remiseTypeEnum         = pgEnum('remise_type_enum',        ['pct', 
 export const caisseSessionStatutEnum = pgEnum('caisse_session_statut', ['ouverte', 'fermee'])
 export const ticketVenteStatutEnum   = pgEnum('ticket_vente_statut',   ['paye', 'annule', 'rembourse'])
 export const paiementTicketModeEnum  = pgEnum('paiement_ticket_mode',  ['espece', 'orange_money', 'mtn_momo', 'credit', 'carte'])
+export const remboursementCaisseStatutEnum = pgEnum('remboursement_caisse_statut', ['en_attente', 'paye', 'en_retard'])
 
 // ══════════════════════════════════════════════════════════════════════════════
 // AUTH / PROFILS
@@ -89,6 +90,8 @@ export const clientsPg = pgTable('clients', {
   commandesCount:   integer('commandes_count').notNull().default(0),
   totalCaXaf:       real('total_ca_xaf').notNull().default(0),
   encoursCreditXaf: real('encours_credit_xaf').notNull().default(0),
+  scoreFiabiliteCaisse:      integer('score_fiabilite_caisse').notNull().default(10),
+  creditCaisseBloqueJusquAu: text('credit_caisse_bloque_jusqu_au'),
   notes:            text('notes'),
   createdBy:        uuid('created_by').references(() => profilesPg.id),
   createdAt:        ts('created_at'),
@@ -996,6 +999,7 @@ export const caisseSessionsPg = pgTable('caisse_sessions', {
   totalOmXaf:       integer('total_om_xaf').notNull().default(0),
   totalMomoXaf:     integer('total_momo_xaf').notNull().default(0),
   totalCreditXaf:   integer('total_credit_xaf').notNull().default(0),
+  fondFermetureXaf: integer('fond_fermeture_xaf'),
   ecartXaf:         integer('ecart_xaf'),
   statut:           caisseSessionStatutEnum('statut').notNull().default('ouverte'),
   notes:            text('notes'),
@@ -1020,6 +1024,8 @@ export const ticketsVentePg = pgTable('tickets_vente', {
   totalTtcXaf:   integer('total_ttc_xaf').notNull(),
   remiseXaf:     integer('remise_xaf').notNull().default(0),
   statut:        ticketVenteStatutEnum('statut').notNull().default('paye'),
+  oversell:      boolean('oversell').notNull().default(false),
+  notes:         text('notes'),
   createdAt:     ts('created_at'),
   updatedAt:     ts('updated_at'),
   syncStatus:    syncStatusEnum('sync_status').notNull().default('pending'),
@@ -1051,6 +1057,9 @@ export const paiementsTicketPg = pgTable('paiements_ticket', {
   montantRecuXaf: integer('montant_recu_xaf'),
   renduXaf:       integer('rendu_xaf'),
   reference:      text('reference'),
+  dateEcheance:         text('date_echeance'),
+  statutRemboursement:  remboursementCaisseStatutEnum('statut_remboursement'),
+  dateRemboursement:    text('date_remboursement'),
   createdAt:      ts('created_at'),
   syncStatus:     syncStatusEnum('sync_status').notNull().default('pending'),
 })
