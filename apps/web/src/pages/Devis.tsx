@@ -18,6 +18,7 @@ import {
 import { apiClient } from '@/lib/api-client'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/context/AuthContext'
+import { usePermissions } from '@/hooks/useRbac'
 import type { Devis as DevisApi, DevisLigne, CreateDevisPayload } from '@/hooks/useDevis'
 import type { Client } from '@/hooks/useClients'
 import { DevisPreview } from '@/components/devis/DevisPreview'
@@ -124,6 +125,7 @@ function DevisDetailPanel({
   const envoyerApprobation = useEnvoyerApprobation()
   const transformer        = useTransformerDevis()
   const updateStatut       = useUpdateStatutDevis()
+  const { hasPermission }  = usePermissions()
 
   const statut         = devis.statut as string
   const approuve       = devis.approuve_par_client as boolean
@@ -132,8 +134,8 @@ function DevisDetailPanel({
   const lignes         = devis.lignes as DevisLigne[]
   const client         = devis.client as DevisApi['client']
   const joursRestants  = devis.jours_restants as number | null
-  const canAdmin       = role === 'admin' || role === 'superviseur'
-  const canSendApproval = role === 'admin' || role === 'superviseur' || role === 'operateur'
+  const canAdmin       = hasPermission('COMMERCIAL', 'VALIDATE')
+  const canSendApproval = hasPermission('COMMERCIAL', 'UPDATE')
   const canEdit        = canAdmin && ['brouillon', 'envoye', 'refuse', 'accepte'].includes(statut)
   const canDelete      = canAdmin && ['brouillon', 'refuse'].includes(statut)
   const canEnvoyerAppr = canSendApproval && ['brouillon', 'envoye'].includes(statut)
@@ -804,7 +806,8 @@ function DevisFormPanel({
 
 export default function Devis() {
   const { role } = useAuth()
-  const canAdmin = role === 'admin' || role === 'superviseur'
+  const { hasPermission } = usePermissions()
+  const canAdmin = hasPermission('COMMERCIAL', 'VALIDATE')
 
   const [formOpen,      setFormOpen]      = useState(false)
   const [selectedDevis, setSelectedDevis] = useState<DevisRecord | null>(null)

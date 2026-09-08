@@ -1,9 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { supabase } from '@/lib/supabase'
-import { dbGetBons, dbUpdateStatut, genererNumero } from '@/lib/db'
-import { useAuth } from '@/context/AuthContext'
 import { apiClient } from '@/lib/api-client'
+
+function queryString(params?: Record<string, string | number | boolean | undefined>) {
+  const qs = new URLSearchParams()
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') qs.set(key, String(value))
+  })
+  const value = qs.toString()
+  return value ? `?${value}` : ''
+}
 
 export interface BonLigne {
   id?: string; produit_id?: string | null; designation: string; quantite?: number
@@ -39,7 +45,7 @@ interface PreparateursResponse { data: BonPreparateur[]; total: number }
 export function useBons(params?: { statut?: string }) {
   return useQuery({
     queryKey:  ['bons', params],
-    queryFn:   () => dbGetBons(params) as Promise<BonsResponse>,
+    queryFn:   () => apiClient.get<BonsResponse>(`/api/bons${queryString(params)}`),
     staleTime: 15_000,
   })
 }
@@ -47,30 +53,23 @@ export function useBons(params?: { statut?: string }) {
 export function usePreparateursBons() {
   return useQuery({
     queryKey: ['bons', 'preparateurs'],
-    queryFn: async (): Promise<PreparateursResponse> => {
-      const { data, error } = await supabase
-        .from('employes')
-        .select('id, nom, poste, departement, telephone, statut')
-        .eq('statut', 'actif')
-        .order('nom', { ascending: true })
-      if (error) throw new Error(error.message)
-      return { data: (data ?? []) as BonPreparateur[], total: data?.length ?? 0 }
-    },
+    queryFn:  () => apiClient
+      .get<{ data: BonPreparateur[]; total: number }>('/api/rh/employes?statut=actif&per_page=100')
+      .then((r): PreparateursResponse => ({ data: r.data, total: r.total })),
     staleTime: 60_000,
   })
 }
 
-/** Retourne le nombre de bons en statut 'en_attente' — utilisé pour le badge magasinier */
+/** Retourne le nombre de bons en statut 'en_attente'/'soumis' — utilisé pour le badge magasinier */
 export function useBonsEnAttente() {
   return useQuery({
     queryKey:   ['bons', 'en_attente', 'count'],
     queryFn:    async () => {
-      const { data, error } = await supabase
-        .from('bons_sortie')
-        .select('id', { count: 'exact', head: false })
-        .in('statut', ['en_attente', 'soumis'])
-      if (error) throw new Error(error.message)
-      return (data ?? []).length
+      const [enAttente, soumis] = await Promise.all([
+        apiClient.get<BonsResponse>('/api/bons?statut=en_attente&per_page=1'),
+        apiClient.get<BonsResponse>('/api/bons?statut=soumis&per_page=1'),
+      ])
+      return enAttente.total + soumis.total
     },
     staleTime:  10_000,
     refetchInterval: 30_000,
@@ -93,46 +92,33 @@ export function useBackfillBons() {
 }
 
 export function useCreateBon() {
-  const qc   = useQueryClient()
-  const auth = useAuth()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (payload: {
+    // NOTE : l'API (POST /api/bons) ne persiste pas encore `type`/`devis_id`
+    // (createBonSchema ne les accepte pas) — écart pré-existant côté API, pas
+    // introduit par ce rebranchement. Un bon lié à un devis (plutôt qu'une
+    // commande) perdra ce lien tant que l'API n'est pas étendue.
+    mutationFn: (payload: {
       technicien_nom?: string; demandeur?: string; motif?: string; notes?: string
       type?: 'manuel' | 'commande' | 'devis'
       commande_id?: string | null; devis_id?: string | null
       nature_transaction: 'comptant' | 'credit' | 'deduction_acompte'
       imputation_payeur:  'entreprise_tafdil' | 'atelier' | 'administration'
       lignes: Array<{ produit_id?: string; designation?: string; unite?: string; quantite?: number; quantite_demandee?: number }>
-    }) => {
-      const numero = await genererNumero('bons_sortie', 'TAF')
-      const { data: bon, error: bonErr } = await supabase.from('bons_sortie').insert({
-        numero,
-        demandeur:          payload.demandeur ?? payload.technicien_nom ?? 'Technicien',
-        motif:              payload.motif ?? 'Sortie de stock',
-        notes:              payload.notes ?? null,
-        statut:             'soumis',
-        type:               payload.type ?? 'manuel',
-        nature_transaction: payload.nature_transaction,
-        imputation_payeur:  payload.imputation_payeur,
-        ...(payload.commande_id ? { commande_id: payload.commande_id } : {}),
-        ...(payload.devis_id ? { devis_id: payload.devis_id } : {}),
-        created_by: auth.user?.id,
-        sync_status: 'synced',
-      }).select().single()
-      if (bonErr || !bon) throw new Error(bonErr?.message ?? 'Erreur création bon')
-      const bonId = (bon as { id: string }).id
-      const lignes = payload.lignes.map(l => ({
-        bon_id:            bonId,
-        produit_id:        l.produit_id ?? null,
+    }) => apiClient.post<BonSortie>('/api/bons', {
+      demandeur:          payload.demandeur ?? payload.technicien_nom ?? 'Technicien',
+      motif:              payload.motif ?? 'Sortie de stock',
+      notes:              payload.notes ?? undefined,
+      commande_id:        payload.commande_id ?? undefined,
+      nature_transaction: payload.nature_transaction,
+      imputation_payeur:  payload.imputation_payeur,
+      lignes: payload.lignes.map((l) => ({
+        produit_id:        l.produit_id ?? undefined,
         designation:       l.designation ?? 'Article',
         unite:             l.unite ?? 'unité',
         quantite_demandee: l.quantite_demandee ?? l.quantite ?? 1,
-        quantite_servie:   0,
-      }))
-      const { error: ligErr } = await supabase.from('bons_sortie_lignes').insert(lignes)
-      if (ligErr) { await supabase.from('bons_sortie').delete().eq('id', bonId); throw new Error(ligErr.message) }
-      return { ...bon, lignes }
-    },
+      })),
+    }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['bons'] }); toast.success('Bon de sortie créé') },
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -149,39 +135,21 @@ export function useValidateBon() {
       imputation_payeur?: 'entreprise_tafdil' | 'atelier' | 'administration'
     }) => {
       const id       = typeof arg === 'string' ? arg : arg.id
-      const decision = (typeof arg === 'string' ? 'valide' : (arg.decision ?? 'valide')) as 'valide' | 'refuse'
+      const decision = typeof arg === 'string' ? 'valide' : (arg.decision ?? 'valide')
       const nature   = typeof arg !== 'string' ? arg.nature_transaction : undefined
       const payeur   = typeof arg !== 'string' ? arg.imputation_payeur  : undefined
 
-      // Lire le statut et les champs actuels
-      const { data: existing, error: fetchErr } = await supabase
-        .from('bons_sortie')
-        .select('statut, nature_transaction, imputation_payeur')
-        .eq('id', id).single()
-      if (fetchErr || !existing) throw new Error('Bon introuvable')
-
-      const ex = existing as { statut: string; nature_transaction: string | null; imputation_payeur: string | null }
-      if (!['en_attente', 'soumis'].includes(ex.statut))
-        throw new Error(`Impossible de valider un bon en statut "${ex.statut}"`)
-
-      const finalNature = nature ?? ex.nature_transaction
-      const finalPayeur = payeur ?? ex.imputation_payeur
-      if (!finalNature || !finalPayeur)
-        throw new Error('Nature de transaction et imputation payeur sont requis')
-
-      const { data, error } = await supabase
-        .from('bons_sortie')
-        .update({
-          statut:             decision,
-          nature_transaction: finalNature,
-          imputation_payeur:  finalPayeur,
-          updated_at:         new Date().toISOString(),
-          ...(decision === 'valide' ? { statut_preparation: 'a_preparer' } : {}),
+      // PUT /:id/valider exige déjà nature_transaction/imputation_payeur en
+      // base et ne les accepte pas en override — pour les bons legacy qui en
+      // sont dépourvus, on les renseigne d'abord via ce PATCH dédié.
+      if (nature || payeur) {
+        await apiClient.patch(`/api/bons/${id}/nature-payeur`, {
+          nature_transaction: nature,
+          imputation_payeur:  payeur,
         })
-        .eq('id', id).select().single()
+      }
 
-      if (error) throw new Error(error.message)
-      return data as BonSortie
+      return apiClient.put<BonSortie>(`/api/bons/${id}/valider`, { decision })
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['bons'] })

@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
+import { requirePermission } from '../middleware/permission.middleware'
 import { generateDevisPDF, uploadPDF } from '../services/pdf.service'
 import { localCreateDevis, localCreateCommande, getClientsLocal, getCommandesLocal } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
@@ -633,20 +634,36 @@ async function recalculerScoreFiabilite(clientId: string): Promise<void> {
  * Recherche clients par nom uniquement, résultats classés par pertinence :
  * exact → préfixe → contient.
  */
-router.get('/clients/recherche', async (c) => {
+router.get('/clients/recherche', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const q     = (c.req.query('q') ?? '').trim()
   const limit = Math.min(20, parseInt(c.req.query('limit') ?? '10'))
 
   if (q.length < 2) return c.json({ data: [] })
 
-  const { data, error } = await db
-    .from('clients')
-    .select('id, nom, telephone, type, statut, score_fiabilite')
-    .ilike('nom', `%${q}%`)
-    .order('nom')
-    .limit(limit * 3)
+  // Un `.ilike()` supabase-js peut REJETER (TypeError: fetch failed) plutôt que
+  // résoudre avec { error } quand le réseau tombe pendant l'appel — try/catch
+  // nécessaire en plus du check `error` pour que le fallback SQLite s'applique
+  // dans les deux cas (cf. isNetworkError dans offline-fallback.ts).
+  let data: Record<string, unknown>[] | null = null
+  let queryError: { message: string } | null = null
+  try {
+    const res = await db
+      .from('clients')
+      .select('id, nom, telephone, type, statut, score_fiabilite')
+      .ilike('nom', `%${q}%`)
+      .order('nom')
+      .limit(limit * 3)
+    data = res.data
+    queryError = res.error
+  } catch (err) {
+    queryError = { message: err instanceof Error ? err.message : String(err) }
+  }
 
-  if (error) return c.json({ error: error.message }, 500)
+  if (queryError) {
+    console.warn('[commerce] GET /clients/recherche Supabase error — fallback SQLite:', queryError.message)
+    const local = getClientsLocal({ search: q })
+    return c.json({ data: local.data.slice(0, limit), offline: true })
+  }
 
   const ql = q.toLowerCase()
   const ranked = (data ?? [])
@@ -664,7 +681,7 @@ router.get('/clients/recherche', async (c) => {
   return c.json({ data: ranked })
 })
 
-router.get('/clients', async (c) => {
+router.get('/clients', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { statut, type, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, Math.max(1, parseInt(c.req.query('per_page') ?? '20')))
@@ -698,7 +715,7 @@ router.get('/clients', async (c) => {
   })
 })
 
-router.get('/clients/:id', async (c) => {
+router.get('/clients/:id', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { id } = c.req.param()
 
   const { data, error } = await db
@@ -711,7 +728,7 @@ router.get('/clients/:id', async (c) => {
   return c.json(data)
 })
 
-router.post('/clients', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', clientSchema), async (c) => {
+router.post('/clients', requirePermission('COMMERCIAL', 'CREATE'), zValidator('json', clientSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
   const payload = {
@@ -731,7 +748,7 @@ router.post('/clients', requireRole(['admin', 'superviseur', 'operateur']), zVal
   return c.json(data, 201)
 })
 
-router.put('/clients/:id', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', clientSchema.partial()), async (c) => {
+router.put('/clients/:id', requirePermission('COMMERCIAL', 'UPDATE'), zValidator('json', clientSchema.partial()), async (c) => {
   const { id }  = c.req.param()
   const body    = c.req.valid('json')
   const payload = {
@@ -777,7 +794,7 @@ router.delete('/clients/:id', requireRole(['admin']), async (c) => {
 // DEVIS
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/devis', async (c) => {
+router.get('/devis', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { statut, client_id, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, Math.max(1, parseInt(c.req.query('per_page') ?? '20')))
@@ -824,7 +841,7 @@ router.get('/devis', async (c) => {
   })
 })
 
-router.get('/devis/:id', async (c) => {
+router.get('/devis/:id', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { id } = c.req.param()
 
   const { data, error } = await db
@@ -859,7 +876,7 @@ router.get('/devis/:id', async (c) => {
   return c.json(mapDevis(data))
 })
 
-router.post('/devis', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', devisSchema), async (c) => {
+router.post('/devis', requirePermission('COMMERCIAL', 'CREATE'), zValidator('json', devisSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -956,7 +973,7 @@ router.post('/devis', requireRole(['admin', 'superviseur', 'operateur']), zValid
   return c.json(result, 201)
 })
 
-router.put('/devis/:id', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', devisSchema.partial()), async (c) => {
+router.put('/devis/:id', requirePermission('COMMERCIAL', 'UPDATE'), zValidator('json', devisSchema.partial()), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
   const user   = c.get('user')
@@ -1104,7 +1121,7 @@ router.put('/devis/:id', requireRole(['admin', 'superviseur', 'operateur']), zVa
   return c.json(data)
 })
 
-router.patch('/devis/:id/statut', requireRole(['admin', 'superviseur']), zValidator('json', z.object({
+router.patch('/devis/:id/statut', requirePermission('COMMERCIAL', 'VALIDATE'), zValidator('json', z.object({
   statut: z.enum(['brouillon', 'envoye', 'accepte', 'refuse', 'expire']),
 })), async (c) => {
   const { id }     = c.req.param()
@@ -1135,7 +1152,7 @@ router.patch('/devis/:id/statut', requireRole(['admin', 'superviseur']), zValida
   return c.json(mapDevis(data))
 })
 
-router.delete('/devis/:id', requireRole(['admin', 'superviseur']), async (c) => {
+router.delete('/devis/:id', requirePermission('COMMERCIAL', 'DELETE'), async (c) => {
   const { id } = c.req.param()
 
   const { data: existing } = await db.from('devis').select('statut').eq('id', id).single()
@@ -1154,7 +1171,7 @@ router.delete('/devis/:id', requireRole(['admin', 'superviseur']), async (c) => 
  * POST /devis/:id/envoyer-approbation
  * Génère un token 30 jours, envoie email avec PDF joint + WhatsApp immédiat.
  */
-router.post('/devis/:id/envoyer-approbation', requireRole(['admin', 'superviseur', 'operateur']), async (c) => {
+router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'UPDATE'), async (c) => {
   const { id } = c.req.param()
 
   // Fetch full devis data (needed for PDF and professional email)
@@ -1544,7 +1561,7 @@ const transformerCommandeBodySchema = z.object({
   condition_paiement_id: z.string().uuid().optional(),
 })
 
-router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseur', 'operateur']), async (c) => {
+router.post('/devis/:id/transformer-commande', requirePermission('COMMERCIAL', 'CREATE'), async (c) => {
   const { id }   = c.req.param()
   const user     = c.get('user')
   const body     = await c.req.json().then(j => transformerCommandeBodySchema.parse(j)).catch(() => ({}))
@@ -1710,7 +1727,7 @@ router.post('/devis/:id/transformer-commande', requireRole(['admin', 'superviseu
 // CONDITIONS DE PAIEMENT
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/conditions-paiement/eligibles', async (c) => {
+router.get('/conditions-paiement/eligibles', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { client_id, montant, type } = c.req.query()
   const montantNum = Math.round(Math.max(0, parseFloat(montant ?? '0') || 0))
   const typeCmd = (['web', 'devis', 'projet'].includes(type ?? '') ? type : 'devis') as TypeCommande
@@ -1738,7 +1755,7 @@ router.get('/conditions-paiement/eligibles', async (c) => {
   return c.json({ data: results })
 })
 
-router.get('/conditions-paiement', async (c) => {
+router.get('/conditions-paiement', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { data, error } = await db
     .from('conditions_paiement')
     .select('id, code, libelle, acompte_pct, delai_solde_jours')
@@ -1752,7 +1769,7 @@ router.get('/conditions-paiement', async (c) => {
 // COMMANDES
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/commandes', async (c) => {
+router.get('/commandes', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { statut, client_id, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, Math.max(1, parseInt(c.req.query('per_page') ?? '20')))
@@ -1783,7 +1800,7 @@ router.get('/commandes', async (c) => {
   })
 })
 
-router.get('/commandes/:id', async (c) => {
+router.get('/commandes/:id', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { id } = c.req.param()
 
   const { data, error } = await db
@@ -1802,7 +1819,7 @@ router.get('/commandes/:id', async (c) => {
   return c.json(mapCommande(data))
 })
 
-router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', commandeSchema), async (c) => {
+router.post('/commandes', requirePermission('COMMERCIAL', 'CREATE'), zValidator('json', commandeSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -1948,7 +1965,7 @@ router.post('/commandes', requireRole(['admin', 'superviseur', 'operateur']), zV
 /** Changer le statut avec validation des transitions */
 router.patch(
   '/commandes/:id/statut',
-  requireRole(['admin', 'superviseur', 'operateur']),
+  requirePermission('COMMERCIAL', 'VALIDATE'),
   zValidator('json', statutCommandeSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -2133,7 +2150,7 @@ const paiementCommandeSchema = z.object({
   notes:         z.string().optional(),
 })
 
-router.get('/commandes/:id/paiements', async (c) => {
+router.get('/commandes/:id/paiements', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data, error } = await db
     .from('paiements_commande')
@@ -2146,7 +2163,7 @@ router.get('/commandes/:id/paiements', async (c) => {
 
 router.post(
   '/commandes/:id/paiements',
-  requireRole(['admin', 'superviseur', 'operateur']),
+  requirePermission('RECEIVABLES', 'CREATE'),
   zValidator('json', paiementCommandeSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -2253,7 +2270,7 @@ const statutCommandeWebSchema = z.object({
 
 router.patch(
   '/commandes/web/:id/statut',
-  requireRole(['admin', 'superviseur', 'operateur']),
+  requirePermission('COMMERCIAL', 'VALIDATE'),
   zValidator('json', statutCommandeWebSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -2477,7 +2494,7 @@ if (erpStatut) {
 
 router.get(
   '/commandes/backfill-bons/debug',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('ADMIN', 'READ'),
   async (c) => {
     const userId = c.get('user').id
 
@@ -2612,7 +2629,7 @@ async function creerBonDepuisLignesJsonb(params: {
 
 router.post(
   '/commandes/backfill-bons',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('ADMIN', 'CREATE'),
   async (c) => {
     const user   = c.get('user')
     let created  = 0

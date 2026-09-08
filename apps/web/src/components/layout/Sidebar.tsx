@@ -10,8 +10,8 @@ import {
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
-
-type AppRole = 'admin' | 'superviseur' | 'operateur' | 'technicien' | 'caissier'
+import { usePermissions } from '@/hooks/useRbac'
+import type { RbacModule } from '@/hooks/useRbac'
 
 interface NavItem {
   path: string
@@ -19,64 +19,63 @@ interface NavItem {
   icon: React.ElementType
   badge?: number
   dynamicBadge?: boolean
-  roles?: AppRole[]   // undefined = tous les rôles
+  /** Module RBAC dont la permission READ pilote la visibilité — undefined = toujours visible */
+  requiredModule?: RbacModule
 }
 
 interface NavGroup {
   id: string
   label: string
   items: NavItem[]
-  roles?: AppRole[]   // filtre le groupe entier si tous ses items sont cachés
 }
-
-const ALL: AppRole[] = ['admin', 'superviseur', 'operateur', 'technicien']
-const NO_TECHNICIEN: AppRole[] = ['admin', 'superviseur', 'operateur']
-const ADMIN_SUPERVISEUR: AppRole[] = ['admin', 'superviseur']
-const CAISSIER_RESPONSABLE: AppRole[] = ['caissier', 'admin', 'superviseur']
 
 const DASHBOARD_ITEM: NavItem = { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard }
 
+// Mapping module ← domaine métier. Plusieurs pages partagent le même module
+// RBAC quand le backend ne distingue pas plus finement (ex: Projets/Équipements/
+// IoT → PRODUCTION, Marketing → COMMERCIAL, Sécurité/HSE → HR — aucun de ces
+// domaines n'a de module RBAC dédié, cf. plan de migration RBAC).
 const NAV_GROUPS: NavGroup[] = [
   {
     id: 'activite',
     label: 'Activité',
     items: [
-      { path: '/caisse',       label: 'Caisse',       icon: Receipt,       roles: CAISSIER_RESPONSABLE },
-      { path: '/boutique',     label: 'Boutique',     icon: Store, dynamicBadge: true, roles: ALL },
-      { path: '/production',   label: 'Production',   icon: Wrench,        roles: ALL },
-      { path: '/commandes',    label: 'Commandes',    icon: ShoppingCart,  roles: ALL },
-      { path: '/stocks',       label: 'Stocks',       icon: Package,       roles: ALL },
-      { path: '/fournisseurs', label: 'Fournisseurs', icon: Building2,     roles: ALL },
+      { path: '/caisse',       label: 'Caisse',       icon: Receipt,       requiredModule: 'CAISSE' },
+      { path: '/boutique',     label: 'Boutique',     icon: Store, dynamicBadge: true, requiredModule: 'COMMERCIAL' },
+      { path: '/production',   label: 'Production',   icon: Wrench,        requiredModule: 'PRODUCTION' },
+      { path: '/commandes',    label: 'Commandes',    icon: ShoppingCart,  requiredModule: 'COMMERCIAL' },
+      { path: '/stocks',       label: 'Stocks',       icon: Package,       requiredModule: 'STOCK' },
+      { path: '/fournisseurs', label: 'Fournisseurs', icon: Building2,     requiredModule: 'STOCK' },
     ],
   },
   {
     id: 'commercial',
     label: 'Commercial',
     items: [
-      { path: '/devis',      label: 'Devis',      icon: FileText, roles: ALL },
-      { path: '/clients',    label: 'Clients',    icon: Users,    roles: ALL },
-      { path: '/logistique', label: 'Logistique', icon: Truck,    roles: ALL },
+      { path: '/devis',      label: 'Devis',      icon: FileText, requiredModule: 'COMMERCIAL' },
+      { path: '/clients',    label: 'Clients',    icon: Users,    requiredModule: 'COMMERCIAL' },
+      { path: '/logistique', label: 'Logistique', icon: Truck,    requiredModule: 'LOGISTICS' },
     ],
   },
   {
     id: 'gestion',
     label: 'Gestion',
     items: [
-      { path: '/finance',     label: 'Finance',     icon: DollarSign,   roles: ADMIN_SUPERVISEUR },
-      { path: '/rh',          label: 'RH',          icon: Users,        roles: ADMIN_SUPERVISEUR },
-      { path: '/formation',   label: 'Formation',   icon: GraduationCap, roles: NO_TECHNICIEN },
-      { path: '/equipements', label: 'Équipements', icon: Hammer,       roles: NO_TECHNICIEN },
-      { path: '/projets',     label: 'Projets',     icon: Kanban,       roles: ADMIN_SUPERVISEUR },
+      { path: '/finance',     label: 'Finance',     icon: DollarSign,   requiredModule: 'FINANCE' },
+      { path: '/rh',          label: 'RH',          icon: Users,        requiredModule: 'HR' },
+      { path: '/formation',   label: 'Formation',   icon: GraduationCap, requiredModule: 'HR' },
+      { path: '/equipements', label: 'Équipements', icon: Hammer,       requiredModule: 'PRODUCTION' },
+      { path: '/projets',     label: 'Projets',     icon: Kanban,       requiredModule: 'PRODUCTION' },
     ],
   },
   {
     id: 'pilotage',
     label: 'Pilotage',
     items: [
-      { path: '/intelligence', label: 'Intelligence', icon: Brain,    roles: ADMIN_SUPERVISEUR },
-      { path: '/marketing',    label: 'Marketing',    icon: Megaphone, roles: ADMIN_SUPERVISEUR },
-      { path: '/iot',          label: 'IoT',          icon: Wifi,     roles: NO_TECHNICIEN },
-      { path: '/securite',     label: 'Sécurité',     icon: Shield,   roles: ADMIN_SUPERVISEUR },
+      { path: '/intelligence', label: 'Intelligence', icon: Brain,    requiredModule: 'REPORTS' },
+      { path: '/marketing',    label: 'Marketing',    icon: Megaphone, requiredModule: 'COMMERCIAL' },
+      { path: '/iot',          label: 'IoT',          icon: Wifi,     requiredModule: 'PRODUCTION' },
+      { path: '/securite',     label: 'Sécurité',     icon: Shield,   requiredModule: 'HR' },
     ],
   },
 ]
@@ -131,16 +130,17 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     })
   }
 
-  const currentRole = (appRole ?? 'technicien') as AppRole
+  const { hasPermission } = usePermissions()
 
-  // Inject admin item at bottom of Gestion group, then filter by role
+  // Inject admin item at bottom of Gestion group, then filter by real permission —
+  // ADMIN:CONFIGURE mirrors the immutable SUPER_ADMIN-only rule in rbacService.ts.
   const groups: NavGroup[] = NAV_GROUPS.map(g => {
-    const withAdmin = g.id === 'gestion' && appRole === 'admin'
-      ? { ...g, items: [...g.items, { path: '/admin', label: 'Administration', icon: Crown, roles: ['admin'] as AppRole[] }] }
+    const withAdmin = g.id === 'gestion' && hasPermission('ADMIN', 'CONFIGURE')
+      ? { ...g, items: [...g.items, { path: '/admin', label: 'Administration', icon: Crown, requiredModule: 'ADMIN' as const }] }
       : g
     return {
       ...withAdmin,
-      items: withAdmin.items.filter(item => !item.roles || item.roles.includes(currentRole)),
+      items: withAdmin.items.filter(item => !item.requiredModule || hasPermission(item.requiredModule, 'READ')),
     }
   }).filter(g => g.items.length > 0)
 

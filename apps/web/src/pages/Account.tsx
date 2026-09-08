@@ -8,9 +8,11 @@ import {
 import { Button } from '@forge/ui'
 import { useAuth } from '@/context/AuthContext'
 import { supabase } from '@/lib/supabase'
+import { apiClient } from '@/lib/api-client'
 import { toast } from 'sonner'
 import { useNavigate } from 'react-router-dom'
 import { useProfile } from '@/hooks/useProfile'
+import { usePermissions } from '@/hooks/useRbac'
 
 // ── Role config ───────────────────────────────────────────────────────────────
 
@@ -207,6 +209,103 @@ function TabProfil() {
 // TAB: SÉCURITÉ
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ── Téléphone + PIN — activation self-service ──────────────────────────────────
+// Le PIN EST le mot de passe défini ci-dessus (même compte, deux portes
+// d'entrée) — cette section ne fait que confirmer le numéro auprès de
+// Supabase Auth (nécessaire pour que signInWithPassword({ phone }) accepte
+// ce compte). Voir apps/api/src/services/phone-otp.service.ts.
+function PhoneOtpSection() {
+  const navigate = useNavigate()
+  const { data: profile, refetch } = useProfile()
+  const [phone, setPhone]     = useState('')
+  const [code, setCode]       = useState('')
+  const [step, setStep]       = useState<'idle' | 'sent'>('idle')
+  const [sending, setSending] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+
+  const alreadyConfirmed = Boolean(profile?.telephone)
+
+  const handleSend = async () => {
+    if (!phone.trim()) { toast.error('Saisissez un numéro de téléphone'); return }
+    setSending(true)
+    try {
+      const res = await apiClient.post<{ success: boolean; skipped: boolean }>('/api/profile/phone/request-otp', { phone: phone.trim() })
+      toast.success(res.skipped ? 'Code généré (SMS non configuré en dev)' : 'Code envoyé par SMS')
+      setStep('sent')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Erreur envoi du code')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const handleVerify = async () => {
+    if (code.length !== 6) { toast.error('Le code fait 6 chiffres'); return }
+    setVerifying(true)
+    try {
+      await apiClient.post('/api/profile/phone/verify-otp', { code })
+      toast.success('Téléphone confirmé — choisissez votre PIN de connexion')
+      setStep('idle')
+      setCode('')
+      void refetch()
+      // Le téléphone est confirmé côté Supabase Auth, mais aucun PIN n'existe
+      // encore (user_pins) — sans ce PIN, la connexion par téléphone à
+      // /login échouera avec NO_ACCOUNT. On enchaîne donc directement.
+      navigate('/set-pin')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Code invalide')
+    } finally {
+      setVerifying(false)
+    }
+  }
+
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-[#212121] mb-2">Téléphone + PIN</h3>
+      <p className="text-xs text-gray-400 mb-4">
+        Une fois votre numéro confirmé, vous pouvez vous connecter avec ce numéro et votre mot de passe (PIN) actuel, en plus de l'email.
+      </p>
+
+      {alreadyConfirmed && step === 'idle' ? (
+        <div className="flex items-center gap-2 px-3 py-2.5 bg-green-50 border border-green-100 rounded-lg text-sm text-green-700">
+          <CheckCircle className="h-4 w-4 shrink-0" />
+          Connexion par téléphone active — {profile!.telephone}
+        </div>
+      ) : step === 'idle' ? (
+        <div className="flex gap-2">
+          <input
+            type="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="+237 6XX XXX XXX"
+            className={inputCls}
+          />
+          <Button disabled={sending} onClick={handleSend} className="shrink-0">
+            {sending ? 'Envoi…' : 'Envoyer un code'}
+          </Button>
+        </div>
+      ) : (
+        <div className="flex gap-2">
+          <input
+            type="text"
+            inputMode="numeric"
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            placeholder="123456"
+            className={inputCls}
+          />
+          <Button disabled={verifying} onClick={handleVerify} className="shrink-0">
+            {verifying ? 'Vérification…' : 'Confirmer'}
+          </Button>
+          <button onClick={() => { setStep('idle'); setCode('') }} className="text-xs text-gray-400 hover:text-gray-600 shrink-0">
+            Annuler
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function TabSecurite() {
   const [currentPwd, setCurrentPwd] = useState('')
   const [newPwd,     setNewPwd]     = useState('')
@@ -277,6 +376,10 @@ function TabSecurite() {
         </div>
       </div>
 
+      <div className="border-t border-gray-100" />
+
+      <PhoneOtpSection />
+
       {/* Conseils */}
       <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-xs text-blue-700 space-y-1">
         <p className="font-semibold">Conseils pour un mot de passe fort</p>
@@ -310,6 +413,7 @@ const PERMS_LIST = [
 
 function TabPermissions() {
   const { role: appRole } = useAuth()
+  const { hasPermission } = usePermissions()
   const navigate = useNavigate()
   const roleConfig = ROLE_CONFIG[appRole ?? ''] ?? ROLE_CONFIG['apprenant']
 
@@ -347,7 +451,7 @@ function TabPermissions() {
         })}
       </div>
 
-      {appRole === 'admin' && (
+      {hasPermission('ADMIN', 'CONFIGURE') && (
         <div className="flex items-center justify-between gap-4 p-4 bg-[#FFEBEE] border border-[#FFCDD2] rounded-xl text-sm text-[#C62828]">
           <div>
             <p className="font-semibold">Accès administrateur complet</p>
@@ -503,6 +607,7 @@ const TABS: Array<{ key: TabKey; label: string; icon: React.ReactNode }> = [
 
 export default function Account() {
   const { user, role: appRole, signOut } = useAuth()
+  const { hasPermission } = usePermissions()
   const { data: profile } = useProfile()
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<TabKey>('profil')
@@ -607,7 +712,7 @@ export default function Account() {
             >
               <Shield className="h-3.5 w-3.5 text-gray-400" /> Sécurité & accès
             </button>
-            {appRole === 'admin' && (
+            {hasPermission('ADMIN', 'CONFIGURE') && (
               <button
                 onClick={() => navigate('/admin')}
                 className="w-full flex items-center gap-3 px-4 py-2.5 text-xs text-gray-500 hover:bg-gray-50 hover:text-[#C62828] transition-colors text-left"

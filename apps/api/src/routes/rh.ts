@@ -6,6 +6,7 @@ import { supabaseAdmin } from '@forge/db'
 
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
+import { requirePermission } from '../middleware/permission.middleware'
 import { generateAttestationPDF } from '../services/pdf.service'
 import {
   annulerEcrituresReference,
@@ -423,7 +424,7 @@ const recruterSchema = z.object({
 // EMPLOYÉS
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/rh/employes', async (c) => {
+router.get('/rh/employes', requirePermission('HR', 'READ'), async (c) => {
   const { statut, departement, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
@@ -440,7 +441,7 @@ router.get('/rh/employes', async (c) => {
   return c.json({ data, total: count ?? 0, page, per_page: perPage, total_pages: Math.ceil((count ?? 0) / perPage) })
 })
 
-router.get('/rh/employes/:id', async (c) => {
+router.get('/rh/employes/:id', requirePermission('HR', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data, error } = await db.from('employes').select('*').eq('id', id).single()
   if (error || !data) return c.json({ error: 'Employé introuvable', code: 'NOT_FOUND' }, 404)
@@ -479,7 +480,7 @@ router.delete('/rh/employes/:id', requireRole(['admin']), async (c) => {
 // PRÉSENCES
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/rh/presences', async (c) => {
+router.get('/rh/presences', requirePermission('HR', 'READ'), async (c) => {
   const { employe_id, date, statut } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '30'))
@@ -502,7 +503,7 @@ router.get('/rh/presences', async (c) => {
   })
 })
 
-router.post('/rh/presences', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', presenceSchema), async (c) => {
+router.post('/rh/presences', requirePermission('HR', 'CREATE'), zValidator('json', presenceSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -523,7 +524,7 @@ router.post('/rh/presences', requireRole(['admin', 'superviseur', 'operateur']),
   return c.json(data, 201)
 })
 
-router.put('/rh/presences/:id', requireRole(['admin', 'superviseur']), zValidator('json', presenceSchema.partial()), async (c) => {
+router.put('/rh/presences/:id', requirePermission('HR', 'UPDATE'), zValidator('json', presenceSchema.partial()), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
   const { data, error } = await db.from('presences').update(body).eq('id', id).select().single()
@@ -536,7 +537,7 @@ router.put('/rh/presences/:id', requireRole(['admin', 'superviseur']), zValidato
 // APPRENANTS
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/rh/apprenants', async (c) => {
+router.get('/rh/apprenants', requirePermission('HR', 'READ'), async (c) => {
   const { statut, specialite } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
@@ -552,7 +553,7 @@ router.get('/rh/apprenants', async (c) => {
   return c.json({ data, total: count ?? 0, page, per_page: perPage, total_pages: Math.ceil((count ?? 0) / perPage) })
 })
 
-router.post('/rh/apprenants', requireRole(['admin', 'superviseur']), zValidator('json', apprenantSchema), async (c) => {
+router.post('/rh/apprenants', requirePermission('HR', 'CREATE'), zValidator('json', apprenantSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
   const { data, error } = await db
@@ -563,7 +564,7 @@ router.post('/rh/apprenants', requireRole(['admin', 'superviseur']), zValidator(
   return c.json(data, 201)
 })
 
-router.post('/rh/apprenants/:id/progression', requireRole(['admin', 'superviseur']), zValidator('json', progressionSchema), async (c) => {
+router.post('/rh/apprenants/:id/progression', requirePermission('HR', 'UPDATE'), zValidator('json', progressionSchema), async (c) => {
   const { id }  = c.req.param()
   const user    = c.get('user')
   const body    = c.req.valid('json')
@@ -932,7 +933,7 @@ async function genererBulletinsMois(
 
 // ── GET /rh/paie?mois=YYYY-MM  — lecture des bulletins existants ───────────────
 
-router.get('/rh/avances-salaire', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rh/avances-salaire', requirePermission('HR', 'READ'), async (c) => {
   const { mois, employe_id, statut } = c.req.query()
 
   let q = db
@@ -1090,7 +1091,7 @@ router.patch('/rh/avances-salaire/:id/annuler', requireRole(['admin']), async (c
   return c.json(mapAvanceSalaireDb(data))
 })
 
-router.get('/rh/retenues-salaire', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rh/retenues-salaire', requirePermission('HR', 'READ'), async (c) => {
   const { mois, employe_id, statut } = c.req.query()
 
   let q = db
@@ -1255,7 +1256,7 @@ async function calculerPeriodePaie(mois: string, userId?: string) {
   }
 }
 
-router.get('/rh/cotisations-sociales', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rh/cotisations-sociales', requirePermission('HR', 'READ'), async (c) => {
   const mois = c.req.query('mois')
   if (!mois || !/^\d{4}-\d{2}$/.test(mois)) {
     return c.json({ error: 'Parametre mois requis (ex : 2024-05)', code: 'MISSING_MOIS' }, 400)
@@ -1321,7 +1322,7 @@ router.patch('/rh/cotisations-sociales/:id/statut', requireRole(['admin']), zVal
   return c.json(data)
 })
 
-router.get('/rh/paie-periodes', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rh/paie-periodes', requirePermission('HR', 'READ'), async (c) => {
   const mois = c.req.query('mois')
 
   let q = db.from('paie_periodes').select('*', { count: 'exact' })
@@ -1477,7 +1478,7 @@ router.post('/rh/paie/:mois/virer', requireRole(['admin']), zValidator('json', p
   return c.json(data)
 })
 
-router.get('/rh/paie/:mois/controle', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rh/paie/:mois/controle', requirePermission('HR', 'READ'), async (c) => {
   const { mois } = c.req.param()
   if (!/^\d{4}-\d{2}$/.test(mois)) {
     return c.json({ error: 'Format mois requis : YYYY-MM', code: 'INVALID_MOIS' }, 400)
@@ -1570,7 +1571,7 @@ router.get('/rh/paie/:mois/controle', requireRole(['admin', 'superviseur']), asy
   }
 })
 
-router.get('/rh/paie/:mois/export', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rh/paie/:mois/export', requirePermission('HR', 'EXPORT'), async (c) => {
   const { mois } = c.req.param()
   if (!/^\d{4}-\d{2}$/.test(mois)) {
     return c.json({ error: 'Format mois requis : YYYY-MM', code: 'INVALID_MOIS' }, 400)
@@ -1605,7 +1606,7 @@ router.get('/rh/paie/:mois/export', requireRole(['admin', 'superviseur']), async
   return c.text(`\uFEFF${csv}`)
 })
 
-router.get('/rh/paie', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rh/paie', requirePermission('HR', 'READ'), async (c) => {
   const mois = c.req.query('mois')
   if (!mois || !/^\d{4}-\d{2}$/.test(mois)) {
     return c.json({ error: 'Paramètre mois requis (ex : 2024-05)', code: 'MISSING_MOIS' }, 400)
@@ -1746,7 +1747,7 @@ router.patch('/rh/paie/:id/statut', requireRole(['admin']), zValidator('json', z
 // DOIT être défini AVANT /:annee/:mois pour éviter que Hono interprète
 // "pdf" comme le paramètre :mois et UUID comme :annee.
 
-router.get('/rh/paie/:id/pdf', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rh/paie/:id/pdf', requirePermission('HR', 'EXPORT'), async (c) => {
   const { id } = c.req.param()
 
   const { data, error } = await db
@@ -1799,7 +1800,7 @@ router.get('/rh/paie/:id/pdf', requireRole(['admin', 'superviseur']), async (c) 
 
 // ── GET /rh/paie/:annee/:mois  — rétrocompatibilité (génère si besoin) ─────────
 
-router.get('/rh/paie/:annee/:mois', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rh/paie/:annee/:mois', requirePermission('HR', 'READ'), async (c) => {
   const { annee, mois } = c.req.param()
   const genererPdf      = c.req.query('generer_pdf') === 'true'
   const recalculer      = c.req.query('recalculer') === 'true'
@@ -1842,7 +1843,7 @@ router.get('/rh/paie/:annee/:mois', requireRole(['admin', 'superviseur']), async
 // ══════════════════════════════════════════════════════════════════════════════
 
 // GET /rh/formation/sessions
-router.get('/rh/formation/sessions', async (c) => {
+router.get('/rh/formation/sessions', requirePermission('HR', 'READ'), async (c) => {
   const { statut, niveau } = c.req.query()
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1872,7 +1873,7 @@ router.get('/rh/formation/sessions', async (c) => {
 // POST /rh/formation/sessions
 router.post(
   '/rh/formation/sessions',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('HR', 'CREATE'),
   zValidator('json', formationSessionSchema),
   async (c) => {
     const user = c.get('user')
@@ -1888,7 +1889,7 @@ router.post(
 )
 
 // GET /rh/formation/sessions/:id  — détail + inscrits
-router.get('/rh/formation/sessions/:id', async (c) => {
+router.get('/rh/formation/sessions/:id', requirePermission('HR', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data, error } = await db
     .from('formation_sessions')
@@ -1902,7 +1903,7 @@ router.get('/rh/formation/sessions/:id', async (c) => {
 // PUT /rh/formation/sessions/:id
 router.put(
   '/rh/formation/sessions/:id',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('HR', 'UPDATE'),
   zValidator('json', formationSessionSchema.partial()),
   async (c) => {
     const { id } = c.req.param()
@@ -1933,7 +1934,7 @@ router.delete('/rh/formation/sessions/:id', requireRole(['admin']), async (c) =>
 
 router.post(
   '/rh/apprenants/:id/inscrire',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('HR', 'CREATE'),
   zValidator('json', inscriptionSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -1981,7 +1982,7 @@ router.post(
 // PUT /rh/formation/inscriptions/:id  — MAJ statut / nb_seances / évaluation
 router.put(
   '/rh/formation/inscriptions/:id',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('HR', 'UPDATE'),
   zValidator('json', inscriptionUpdateSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -2002,7 +2003,7 @@ router.put(
 // HISTORIQUE APPRENANT  (GET /rh/apprenants/:id/historique)
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/rh/apprenants/:id/historique', async (c) => {
+router.get('/rh/apprenants/:id/historique', requirePermission('HR', 'READ'), async (c) => {
   const { id } = c.req.param()
 
   const [{ data: appr }, { data: validations }, { data: inscriptions }] = await Promise.all([
@@ -2044,7 +2045,7 @@ const congeStatutSchema = z.object({
   commentaire_rh: z.string().optional(),
 })
 
-router.get('/rh/conges', async (c) => {
+router.get('/rh/conges', requirePermission('HR', 'READ'), async (c) => {
   const { employe_id, statut, mois } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '50'))
@@ -2068,13 +2069,13 @@ router.get('/rh/conges', async (c) => {
   return c.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage })
 })
 
-router.get('/rh/conges/soldes', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rh/conges/soldes', requirePermission('HR', 'READ'), async (c) => {
   const { data, error } = await db.from('v_solde_conges').select('*').order('employe_nom')
   if (error) return c.json({ error: error.message }, 500)
   return c.json({ data: data ?? [] })
 })
 
-router.post('/rh/conges', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', congeSchema), async (c) => {
+router.post('/rh/conges', requirePermission('HR', 'CREATE'), zValidator('json', congeSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -2091,7 +2092,7 @@ router.post('/rh/conges', requireRole(['admin', 'superviseur', 'operateur']), zV
   return c.json(data, 201)
 })
 
-router.patch('/rh/conges/:id/statut', requireRole(['admin', 'superviseur']), zValidator('json', congeStatutSchema), async (c) => {
+router.patch('/rh/conges/:id/statut', requirePermission('HR', 'VALIDATE'), zValidator('json', congeStatutSchema), async (c) => {
   const { id }  = c.req.param()
   const body    = c.req.valid('json')
   const user    = c.get('user')
@@ -2145,7 +2146,7 @@ router.delete('/rh/conges/:id', requireRole(['admin']), async (c) => {
 // RÉCAP PRÉSENCES PAR MOIS (RH02)
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/rh/presences/recap', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rh/presences/recap', requirePermission('HR', 'READ'), async (c) => {
   const { mois, employe_id } = c.req.query()
   if (!mois) return c.json({ error: 'Paramètre mois requis (YYYY-MM)', code: 'MISSING_MOIS' }, 400)
 
@@ -2202,7 +2203,7 @@ router.get('/rh/presences/recap', requireRole(['admin', 'superviseur']), async (
 // RAPPORT CNPS MENSUEL (RH01)
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/rh/cnps/rapport', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rh/cnps/rapport', requirePermission('HR', 'READ'), async (c) => {
   const mois = c.req.query('mois')
   if (!mois || !/^\d{4}-\d{2}$/.test(mois)) {
     return c.json({ error: 'Paramètre mois requis (YYYY-MM)', code: 'MISSING_MOIS' }, 400)
@@ -2255,7 +2256,7 @@ router.get('/rh/cnps/rapport', requireRole(['admin', 'superviseur']), async (c) 
 
 // ── Attestation de formation PDF (Gap 4 CDC MOD-05) ──────────────────────────
 
-router.get('/apprenants/:id/attestation', async (c) => {
+router.get('/apprenants/:id/attestation', requirePermission('HR', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data: apprenant } = await db
     .from('apprenants')

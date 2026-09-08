@@ -8,6 +8,7 @@ import { Button } from '@forge/ui'
 import {
   useAuditLogs,
   useAuditLogDetail,
+  RBAC_MODULES,
   type AuditLog,
   type AuditLogsFilter,
   type AuditActionType,
@@ -23,6 +24,7 @@ const ACTION_ICONS: Partial<Record<AuditActionType, React.ReactNode>> = {
   LOGOUT:         <LogOut className="w-4 h-4 text-gray-500" />,
   USER_CREATED:   <CheckCircle className="w-4 h-4 text-blue-500" />,
   USER_DEACTIVATED: <Shield className="w-4 h-4 text-orange-500" />,
+  USER_DELETED:   <AlertCircle className="w-4 h-4 text-red-500" />,
   PERMISSION_CHANGED: <Shield className="w-4 h-4 text-purple-500" />,
   SETTINGS_CHANGED:   <Shield className="w-4 h-4 text-yellow-500" />,
   DATA_EXPORT:    <Download className="w-4 h-4 text-indigo-500" />,
@@ -33,6 +35,7 @@ const ACTION_LABELS: Record<AuditActionType, string> = {
   USER_CREATED:       'Utilisateur créé',
   USER_UPDATED:       'Utilisateur modifié',
   USER_DEACTIVATED:   'Utilisateur désactivé',
+  USER_DELETED:       'Utilisateur supprimé',
   ROLE_CHANGED:       'Rôle changé',
   PERMISSION_CHANGED: 'Permission modifiée',
   SETTINGS_CHANGED:   'Paramètres modifiés',
@@ -45,10 +48,7 @@ const ACTION_LABELS: Record<AuditActionType, string> = {
   SESSION_EXPIRED:    'Session expirée',
 }
 
-const MODULES: RbacModule[] = [
-  'STOCK', 'COMMERCIAL', 'FINANCE', 'HR',
-  'PRODUCTION', 'LOGISTICS', 'ADMIN', 'REPORTS', 'RECEIVABLES',
-]
+const MODULES: RbacModule[] = [...RBAC_MODULES]
 
 // ── JsonDiff ──────────────────────────────────────────────────────────────────
 

@@ -6,6 +6,10 @@
  *  - fetch failed / network error                        : DNS ou socket
  *  - PostgreSQL code 08xxx                               : connexion PG perdue
  *  - Supabase "Failed to fetch"                          : cloud injoignable
+ *  - AbortError / this operation was aborted             : timeout fetchWithTimeout
+ *    (packages/db/src/supabase-client.ts) — supabase-js/postgrest-js stringifie
+ *    l'exception d'abort dans error.message via `${fetchError}`, ce qui donne
+ *    littéralement "AbortError: This operation was aborted".
  */
 
 // ── Détecteur ──────────────────────────────────────────────────────────────────
@@ -22,15 +26,18 @@ const OFFLINE_MSGS = [
   'getaddrinfo',
   'econnrefused',
   'enotfound',
+  'aborterror',
+  'operation was aborted',
 ]
 
 export function isNetworkError(err: unknown): boolean {
   if (!err) return false
 
   const e = err as {
-    code?: string
+    code?:    string
+    name?:    string
     message?: string
-    cause?: { code?: string; message?: string }
+    cause?:   { code?: string; message?: string }
   }
 
   // Code syscall direct
@@ -41,6 +48,9 @@ export function isNetworkError(err: unknown): boolean {
 
   // Cause wrappée (fetch → TypeError → cause)
   if (e.cause?.code && OFFLINE_CODES.has(e.cause.code)) return true
+
+  // AbortController.abort() — timeout fetchWithTimeout, pas une vraie erreur applicative
+  if (e.name === 'AbortError') return true
 
   // Message texte
   const msg = (e.message ?? '').toLowerCase()

@@ -4,11 +4,16 @@ import { motion } from 'framer-motion'
 import { useAuth } from '@/context/AuthContext'
 import { TafdilLogoHero } from '@/components/ui/Logo'
 
+type LoginMode = 'email' | 'phone'
+
 export default function Login() {
-  const { signIn } = useAuth()
+  const { signIn, signInWithPhonePin } = useAuth()
   const navigate = useNavigate()
+  const [mode, setMode] = useState<LoginMode>('email')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [phone, setPhone] = useState('')
+  const [pin, setPin] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -17,11 +22,13 @@ export default function Login() {
     setError(null)
     setLoading(true)
 
-    const { error } = await signIn(email.trim(), password)
+    const { error } = mode === 'email'
+      ? await signIn(email.trim(), password)
+      : await signInWithPhonePin(phone.trim(), pin)
 
     if (error) {
       console.error('[Login] Supabase error:', error)
-      setError('Email ou mot de passe incorrect')
+      setError(mode === 'email' ? 'Email ou mot de passe incorrect' : 'Numéro ou code PIN incorrect')
       setLoading(false)
     } else {
       navigate('/dashboard', { replace: true })
@@ -45,40 +52,105 @@ export default function Login() {
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold mb-1.5" style={{ color: 'rgba(255,255,255,0.6)' }}>
-              Email
-            </label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoComplete="email"
-              placeholder="vous@tafdil.cm"
-              className="w-full px-4 py-3 rounded-xl text-sm text-white placeholder-white/30
-                border border-white/10 bg-white/5 focus:outline-none focus:ring-2
-                focus:ring-[#C62828] focus:border-transparent transition-all"
-            />
-          </div>
+        {/* Bascule Email / Téléphone */}
+        <div className="flex mb-6 rounded-xl overflow-hidden border border-white/10">
+          {([
+            { key: 'email' as const, label: 'Email' },
+            { key: 'phone' as const, label: 'Téléphone' },
+          ]).map(({ key, label }) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => { setMode(key); setError(null) }}
+              className="flex-1 py-2.5 text-sm font-medium transition-colors"
+              style={mode === key
+                ? { backgroundColor: '#C62828', color: '#fff' }
+                : { backgroundColor: 'transparent', color: 'rgba(255,255,255,0.5)' }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
-          <div>
-            <label className="block text-xs font-semibold mb-1.5" style={{ color: 'rgba(255,255,255,0.6)' }}>
-              Mot de passe
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="current-password"
-              placeholder="••••••••"
-              className="w-full px-4 py-3 rounded-xl text-sm text-white placeholder-white/30
-                border border-white/10 bg-white/5 focus:outline-none focus:ring-2
-                focus:ring-[#C62828] focus:border-transparent transition-all"
-            />
-          </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {mode === 'email' ? (
+            <>
+              <div>
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: 'rgba(255,255,255,0.6)' }}>
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="email"
+                  placeholder="vous@tafdil.cm"
+                  className="w-full px-4 py-3 rounded-xl text-sm text-white placeholder-white/30
+                    border border-white/10 bg-white/5 focus:outline-none focus:ring-2
+                    focus:ring-[#C62828] focus:border-transparent transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: 'rgba(255,255,255,0.6)' }}>
+                  Mot de passe
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoComplete="current-password"
+                  placeholder="••••••••"
+                  className="w-full px-4 py-3 rounded-xl text-sm text-white placeholder-white/30
+                    border border-white/10 bg-white/5 focus:outline-none focus:ring-2
+                    focus:ring-[#C62828] focus:border-transparent transition-all"
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: 'rgba(255,255,255,0.6)' }}>
+                  Numéro de téléphone
+                </label>
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  required
+                  autoComplete="tel"
+                  placeholder="6XX XXX XXX"
+                  className="w-full px-4 py-3 rounded-xl text-sm text-white placeholder-white/30
+                    border border-white/10 bg-white/5 focus:outline-none focus:ring-2
+                    focus:ring-[#C62828] focus:border-transparent transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: 'rgba(255,255,255,0.6)' }}>
+                  Code PIN
+                </label>
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={4}
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  required
+                  autoComplete="current-password"
+                  placeholder="••••"
+                  className="w-full px-4 py-3 rounded-xl text-sm text-white placeholder-white/30
+                    border border-white/10 bg-white/5 focus:outline-none focus:ring-2
+                    focus:ring-[#C62828] focus:border-transparent transition-all"
+                />
+              </div>
+              <p className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                La connexion par téléphone doit d'abord être activée depuis votre profil (Mon compte → Téléphone + PIN).
+              </p>
+            </>
+          )}
 
           {error && (
             <motion.p

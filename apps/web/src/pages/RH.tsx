@@ -23,7 +23,7 @@ import type {
   Employe as EmployeApi, Presence as PresenceApi, BulletinPaie,
   Conge, SoldeConge, AvanceSalaire, RetenueSalaire,
 } from '@/hooks/useRH'
-import { useAuth } from '@/context/AuthContext'
+import { usePermissions } from '@/hooks/useRbac'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -426,8 +426,8 @@ function CongesTab({ employes }: { employes: EmployeApi[] }) {
   const [showForm, setShowForm]         = useState(false)
   const [showSoldes, setShowSoldes]     = useState(false)
   const [form, setForm]                 = useState<CongeForm>(DEFAULT_CONGE)
-  const { role } = useAuth()
-  const isAdmin = role === 'admin'
+  const { hasPermission } = usePermissions()
+  const isAdmin = hasPermission('HR', 'DELETE')
 
   const { data: congesData, isLoading } = useConges({ statut: filtreStatut || undefined })
   const { data: soldesData }            = useSoldesConges()

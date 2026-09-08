@@ -6,7 +6,7 @@ import { formatXAF } from '@/lib/utils'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '@/lib/api-client'
 import { toast } from 'sonner'
-import { useAuth } from '@/context/AuthContext'
+import { usePermissions } from '@/hooks/useRbac'
 
 type CategorieEquip =
   | 'machine_production' | 'outillage' | 'informatique' | 'logiciel'
@@ -271,8 +271,8 @@ function AssetIcon({ categorie }: { categorie: CategorieEquip }) {
 }
 
 export default function Equipements() {
-  const { role } = useAuth()
-  const canEdit = role === 'admin' || role === 'superviseur'
+  const { hasPermission } = usePermissions()
+  const canEdit = hasPermission('PRODUCTION', 'UPDATE')
 
   const [search, setSearch] = useState('')
   const [filtreStatut, setFiltreStatut] = useState('')

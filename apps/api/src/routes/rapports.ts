@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@forge/db'
 
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
+import { requirePermission } from '../middleware/permission.middleware'
 import { planComptable } from '../services/comptabilite.service'
 import type { HonoVariables } from '../types'
 
@@ -291,7 +292,7 @@ async function chargesAgregees(debut: string, fin: string) {
   }
 }
 
-router.get('/grand-livre', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/grand-livre', requirePermission('REPORTS', 'READ'), async (c) => {
   const { compte, debut, fin, exercice } = c.req.query()
 
   if (!compte) {
@@ -348,7 +349,7 @@ router.get('/grand-livre', requireRole(['admin', 'superviseur']), async (c) => {
   })
 })
 
-router.get('/grand-livre.xls', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/grand-livre.xls', requirePermission('REPORTS', 'EXPORT'), async (c) => {
   const { compte, debut, fin, exercice } = c.req.query()
   if (!compte) return c.json({ error: 'Parametre compte requis', code: 'MISSING_PARAM' }, 400)
 
@@ -404,7 +405,7 @@ router.get('/grand-livre.xls', requireRole(['admin', 'superviseur']), async (c) 
 // GET /api/rapports/balance?exercice=2026
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/balance', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/balance', requirePermission('REPORTS', 'READ'), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
   const { debut, fin } = exercicePlage(exercice)
 
@@ -541,7 +542,7 @@ router.get('/bilan', requireRole(['admin', 'superviseur']), async (c) => {
   }
 })
 
-router.get('/bilan.xls', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/bilan.xls', requirePermission('REPORTS', 'EXPORT'), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
   const { debut, fin } = exercicePlage(exercice)
 
@@ -617,7 +618,7 @@ router.get('/resultat', requireRole(['admin', 'superviseur']), async (c) => {
   }
 })
 
-router.get('/resultat.xls', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/resultat.xls', requirePermission('REPORTS', 'EXPORT'), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
   const { debut, fin } = exercicePlage(exercice)
 
@@ -648,7 +649,7 @@ router.get('/resultat.xls', requireRole(['admin', 'superviseur']), async (c) => 
   }
 })
 
-router.get('/synthese', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/synthese', requirePermission('REPORTS', 'READ'), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
   const { debut, fin } = exercicePlage(exercice)
 
@@ -701,7 +702,7 @@ router.get('/synthese', requireRole(['admin', 'superviseur']), async (c) => {
   }
 })
 
-router.get('/controles', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/controles', requirePermission('REPORTS', 'READ'), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
   const { debut, fin } = exercicePlage(exercice)
 
@@ -829,7 +830,7 @@ router.get('/controles', requireRole(['admin', 'superviseur']), async (c) => {
   }
 })
 
-router.get('/cloture', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/cloture', requirePermission('REPORTS', 'READ'), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
   const { debut, fin } = exercicePlage(exercice)
 
@@ -929,7 +930,7 @@ router.get('/cloture', requireRole(['admin', 'superviseur']), async (c) => {
   }
 })
 
-router.get('/dossier-cloture.xls', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/dossier-cloture.xls', requirePermission('REPORTS', 'EXPORT'), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
   const { debut, fin } = exercicePlage(exercice)
 
@@ -994,7 +995,7 @@ router.get('/dossier-cloture.xls', requireRole(['admin', 'superviseur']), async 
   }
 })
 
-router.get('/declarations/tva', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/declarations/tva', requirePermission('REPORTS', 'READ'), async (c) => {
   const mois = c.req.query('mois') ?? new Date().toISOString().slice(0, 7)
   const { debut, fin } = moisPlage(mois)
 
@@ -1065,7 +1066,7 @@ router.get('/declarations/tva', requireRole(['admin', 'superviseur']), async (c)
 // GET /api/rapports/plan-comptable?classe=4
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/plan-comptable', async (c) => {
+router.get('/plan-comptable', requirePermission('REPORTS', 'READ'), async (c) => {
   const classeParam = c.req.query('classe')
   type PlanEntry = { compte: string; libelle: string; classe: number }
   let comptes = planComptable as PlanEntry[]
@@ -1091,7 +1092,7 @@ router.get('/plan-comptable', async (c) => {
   })
 })
 
-router.get('/journaux-comptables', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/journaux-comptables', requirePermission('REPORTS', 'READ'), async (c) => {
   return c.json({
     data: [
       { code: 'VT', label: 'Journal des ventes', source: 'Factures', comptes_usuels: ['411', '701', '705', '706', '7098', '4431'] },
@@ -1111,7 +1112,7 @@ router.get('/journaux-comptables', requireRole(['admin', 'superviseur']), async 
 
 // ── Rapport remises accordées ──────────────────────────────────────────────────
 
-router.get('/remises', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/remises', requirePermission('REPORTS', 'READ'), async (c) => {
   const { date_debut, date_fin, client_id } = c.req.query()
 
   let devisQ = db

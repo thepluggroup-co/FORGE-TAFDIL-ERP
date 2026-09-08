@@ -1,8 +1,16 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
-import { dbGetClients, dbGetClient, dbCreateClient, dbUpdateClient } from '@/lib/db'
 import { apiClient } from '@/lib/api-client'
+
+function queryString(params?: Record<string, string | number | boolean | undefined>) {
+  const qs = new URLSearchParams()
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') qs.set(key, String(value))
+  })
+  const value = qs.toString()
+  return value ? `?${value}` : ''
+}
 
 export interface Client {
   id: string; nom: string; type: 'entreprise' | 'particulier' | 'institution'
@@ -22,7 +30,7 @@ interface ClientsResponse { data: Client[]; total: number }
 export function useClient(id: string) {
   return useQuery({
     queryKey:  ['clients', id],
-    queryFn:   () => dbGetClient(id) as Promise<Client>,
+    queryFn:   () => apiClient.get<Client>(`/api/clients/${id}`),
     staleTime: 60_000,
     enabled:   !!id,
   })
@@ -31,7 +39,9 @@ export function useClient(id: string) {
 export function useClients(params?: { search?: string; statut?: string; enabled?: boolean }) {
   return useQuery({
     queryKey:  ['clients', { search: params?.search, statut: params?.statut }],
-    queryFn:   () => dbGetClients(params) as Promise<ClientsResponse>,
+    queryFn:   () => apiClient.get<ClientsResponse>(
+      `/api/clients${queryString({ search: params?.search, statut: params?.statut })}`,
+    ),
     staleTime: 60_000,
     enabled:   params?.enabled !== false,
   })
@@ -62,13 +72,16 @@ export function useSearchClients(query: string, limit = 10) {
 export function useCreateClient() {
   const qc = useQueryClient()
   return useMutation({
+    // Champs optionnels omis (undefined) plutôt que null : le zod côté API
+    // (clientSchema, apps/api/src/routes/commerce.ts) utilise .optional(),
+    // pas .nullable() — un null explicite serait rejeté par la validation.
     mutationFn: (payload: CreateClientPayload) =>
-      dbCreateClient({
+      apiClient.post<Client>('/api/clients', {
         nom: payload.nom, type: payload.type,
-        telephone: payload.telephone ?? null, email: payload.email ?? null,
-        adresse: payload.adresse ?? null, ville: payload.ville ?? null,
+        telephone: payload.telephone || undefined, email: payload.email || undefined,
+        adresse: payload.adresse || undefined, ville: payload.ville || undefined,
         pays: payload.pays ?? 'Cameroun', statut: payload.statut ?? 'actif',
-        score_fiabilite: payload.score_fiabilite ?? 50, notes: payload.notes ?? null,
+        score_fiabilite: payload.score_fiabilite, notes: payload.notes || undefined,
       }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['clients'] }); toast.success('Client créé') },
     onError:   (err: Error) => toast.error(err.message),
@@ -79,7 +92,7 @@ export function useUpdateClientStatut() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ id, statut }: { id: string; statut: Client['statut'] }) =>
-      dbUpdateClient(id, { statut }),
+      apiClient.put<Client>(`/api/clients/${id}`, { statut }),
     onSuccess: (_data, variables) => {
       void qc.invalidateQueries({ queryKey: ['clients'] })
       const labels: Record<Client['statut'], string> = { actif: 'Actif', inactif: 'Inactif', bloque: 'Bloqué' }

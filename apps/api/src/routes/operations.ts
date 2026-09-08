@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
 
 const db = supabaseAdmin!
-import { requireRole } from '../middleware/rbac'
+import { requirePermission } from '../middleware/permission.middleware'
 import { notifyCommandeSms } from '../services/sms.service'
 import { enregistrerPaiementCommande, ensureFactureForCommande, getFactureActiveByCommande } from '../services/finance-core.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
@@ -215,19 +215,6 @@ const TRANSITIONS_PROJET: Record<string, string[]> = {
   annule:    [],
 }
 
-const TRANSITIONS_LIVRAISON: Record<string, string[]> = {
-  en_preparation: ['planifiee', 'annulee'],
-  planifiee:      ['en_transit', 'annulee'],
-  en_transit:     ['livree', 'annulee'],
-  livree:         [],
-  annulee:        [],
-  // compat anciennes données
-  confirmed:      ['pret', 'cancelled'],
-  pret:           ['delivered', 'cancelled'],
-  delivered:      [],
-  cancelled:      [],
-}
-
 // ══════════════════════════════════════════════════════════════════════════════
 // PRODUCTION — JOBS
 // ══════════════════════════════════════════════════════════════════════════════
@@ -276,7 +263,7 @@ function isSchemaCacheColumnError(error?: { message?: string; code?: string } | 
   return Boolean(error?.code === 'PGRST204' || error?.message?.includes('schema cache'))
 }
 
-router.get('/production/jobs', async (c) => {
+router.get('/production/jobs', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { statut, commande_id, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
@@ -304,7 +291,7 @@ router.get('/production/jobs', async (c) => {
   return c.json({ data: enriched, total: count ?? 0, page, per_page: perPage })
 })
 
-router.get('/production/jobs/:id', async (c) => {
+router.get('/production/jobs/:id', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data, error } = await db
     .from('jobs_production')
@@ -322,7 +309,7 @@ router.get('/production/jobs/:id', async (c) => {
   })
 })
 
-router.post('/production/jobs', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', jobSchema), async (c) => {
+router.post('/production/jobs', requirePermission('PRODUCTION', 'CREATE'), zValidator('json', jobSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
   const typeJob = body.type_job ?? (body.commande_id ? 'commande' : 'commande')
@@ -429,7 +416,7 @@ router.post('/production/jobs', requireRole(['admin', 'superviseur', 'operateur'
  */
 router.patch(
   '/production/jobs/:id/statut',
-  requireRole(['admin', 'superviseur', 'operateur']),
+  requirePermission('PRODUCTION', 'VALIDATE'),
   zValidator('json', jobStatutSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -604,7 +591,7 @@ router.patch(
  */
 router.patch(
   '/production/jobs/:id/avancement',
-  requireRole(['admin', 'superviseur', 'operateur']),
+  requirePermission('PRODUCTION', 'UPDATE'),
   zValidator('json', jobAvancementSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -704,7 +691,7 @@ router.patch(
 )
 
 // Historique de production enrichi d'une commande
-router.get('/production/historique/:commande_id', async (c) => {
+router.get('/production/historique/:commande_id', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { commande_id } = c.req.param()
 
   const { data, error } = await db
@@ -808,7 +795,7 @@ const tacheStatutSchema = z.object({
   statut: z.enum(['todo', 'en_cours', 'done', 'bloque']),
 })
 
-router.get('/projets', async (c) => {
+router.get('/projets', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { statut, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
@@ -833,7 +820,7 @@ router.get('/projets', async (c) => {
   return c.json({ data: enriched, total: count ?? 0, page, per_page: perPage })
 })
 
-router.get('/projets/:id', async (c) => {
+router.get('/projets/:id', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { id } = c.req.param()
 
   const { data, error } = await db
@@ -851,7 +838,7 @@ router.get('/projets/:id', async (c) => {
   })
 })
 
-router.post('/projets', requireRole(['admin', 'superviseur']), zValidator('json', projetSchema), async (c) => {
+router.post('/projets', requirePermission('PRODUCTION', 'CREATE'), zValidator('json', projetSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -893,7 +880,7 @@ router.post('/projets', requireRole(['admin', 'superviseur']), zValidator('json'
   return c.json(data, 201)
 })
 
-router.patch('/projets/:id/statut', requireRole(['admin', 'superviseur']), zValidator('json', projetStatutSchema), async (c) => {
+router.patch('/projets/:id/statut', requirePermission('PRODUCTION', 'VALIDATE'), zValidator('json', projetStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
@@ -929,7 +916,7 @@ router.patch('/projets/:id/statut', requireRole(['admin', 'superviseur']), zVali
 
 // ── Tâches de projet ──────────────────────────────────────────────────────────
 
-router.get('/projets/:id/taches', async (c) => {
+router.get('/projets/:id/taches', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { id } = c.req.param()
 
   // Trier par priorité : critique → haute → normale → basse
@@ -949,7 +936,7 @@ router.get('/projets/:id/taches', async (c) => {
   return c.json({ data: sorted, total: sorted.length })
 })
 
-router.post('/projets/:id/taches', requireRole(['admin', 'superviseur']), zValidator('json', tacheSchema), async (c) => {
+router.post('/projets/:id/taches', requirePermission('PRODUCTION', 'CREATE'), zValidator('json', tacheSchema), async (c) => {
   const { id }  = c.req.param()
   const body    = c.req.valid('json')
 
@@ -974,7 +961,7 @@ router.post('/projets/:id/taches', requireRole(['admin', 'superviseur']), zValid
   return c.json(data, 201)
 })
 
-router.patch('/projets/:projetId/taches/:tacheId/statut', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', tacheStatutSchema), async (c) => {
+router.patch('/projets/:projetId/taches/:tacheId/statut', requirePermission('PRODUCTION', 'VALIDATE'), zValidator('json', tacheStatutSchema), async (c) => {
   const { projetId, tacheId } = c.req.param()
   const body = c.req.valid('json')
 
@@ -1033,7 +1020,7 @@ const membreHeuresSchema = z.object({
   heures_reelles: z.number().min(0),
 })
 
-router.get('/projets/:id/membres', async (c) => {
+router.get('/projets/:id/membres', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { id } = c.req.param()
 
   const { data, error } = await db
@@ -1046,7 +1033,7 @@ router.get('/projets/:id/membres', async (c) => {
   return c.json({ data: data ?? [], total: (data ?? []).length })
 })
 
-router.post('/projets/:id/membres', requireRole(['admin', 'superviseur']), zValidator('json', membreSchema), async (c) => {
+router.post('/projets/:id/membres', requirePermission('PRODUCTION', 'CREATE'), zValidator('json', membreSchema), async (c) => {
   const { id }  = c.req.param()
   const user    = c.get('user')
   const body    = c.req.valid('json')
@@ -1090,7 +1077,7 @@ router.post('/projets/:id/membres', requireRole(['admin', 'superviseur']), zVali
   return c.json(data, 201)
 })
 
-router.delete('/projets/:id/membres/:employe_id', requireRole(['admin', 'superviseur']), async (c) => {
+router.delete('/projets/:id/membres/:employe_id', requirePermission('PRODUCTION', 'DELETE'), async (c) => {
   const { id, employe_id } = c.req.param()
 
   const { error } = await db
@@ -1103,7 +1090,7 @@ router.delete('/projets/:id/membres/:employe_id', requireRole(['admin', 'supervi
   return c.body(null, 204)
 })
 
-router.patch('/projets/:id/membres/:employe_id/heures', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', membreHeuresSchema), async (c) => {
+router.patch('/projets/:id/membres/:employe_id/heures', requirePermission('PRODUCTION', 'UPDATE'), zValidator('json', membreHeuresSchema), async (c) => {
   const { id, employe_id } = c.req.param()
   const body = c.req.valid('json')
 
@@ -1116,548 +1103,6 @@ router.patch('/projets/:id/membres/:employe_id/heures', requireRole(['admin', 's
 
   if (error) return c.json({ error: error.message }, 400)
   if (!data)  return c.json({ error: 'Membre introuvable', code: 'NOT_FOUND' }, 404)
-  return c.json(data)
-})
-
-// ══════════════════════════════════════════════════════════════════════════════
-// LOGISTIQUE — LIVRAISONS
-// ══════════════════════════════════════════════════════════════════════════════
-
-const livraisonSchema = z.object({
-  commande_id:             z.string().optional(),
-  client_id:               z.string().optional(),
-  client_nom:              z.string().min(1),
-  destination:             z.string().min(1),
-  transporteur:            z.string().optional(),
-  date_depart:             z.string().optional(),
-  date_livraison_prevue:   z.string().optional(),
-  notes:                   z.string().optional(),
-})
-
-const livraisonStatutSchema = z.object({
-  statut:                z.enum(['planifiee', 'en_transit', 'livree', 'annulee']),
-  date_livraison_reelle: z.string().optional(),
-  notes:                 z.string().optional(),
-  paiement_livraison:    z.object({
-    montant_xaf:    z.number().min(0),
-    methode:        z.enum(['mobile_money', 'especes']),
-    reference_ext:  z.string().optional(),
-  }).optional(),
-})
-
-async function verifierCommandeLivrable(commandeId: string) {
-  const [bonRes, bonLatestRes, facture] = await Promise.all([
-    db.from('bons_sortie')
-      .select('id, numero, statut, statut_preparation')
-      .eq('commande_id', commandeId)
-      .eq('statut', 'execute')
-      .limit(1)
-      .maybeSingle(),
-    db.from('bons_sortie')
-      .select('id, numero, statut, statut_preparation')
-      .eq('commande_id', commandeId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    getFactureActiveByCommande(commandeId),
-  ])
-
-  if (bonRes.error) throw new Error(bonRes.error.message)
-  if (bonLatestRes.error) throw new Error(bonLatestRes.error.message)
-  if (!bonRes.data) {
-    const bon = bonLatestRes.data as { id?: string; numero?: string; statut?: string; statut_preparation?: string | null } | null
-    return {
-      ok: false,
-      code: 'BON_SORTIE_NOT_EXECUTED',
-      error: 'Le bon de sortie doit etre execute avant la livraison.',
-      document_requis: {
-        type:    'bon_sortie',
-        label:   bon?.numero ? `Bon de sortie ${bon.numero}` : 'Bon de sortie',
-        etat:    bon?.statut ?? 'absent',
-        module:  'Stocks > Bons de sortie',
-        url:     '/stocks/bons-sortie',
-        action:  bon
-          ? 'Assigner un preparateur, marquer la preparation prete, puis executer le bon.'
-          : 'Creer ou synchroniser le bon de sortie de cette commande, puis l executer.',
-      },
-    }
-  }
-
-  const f = facture as {
-    id?: string
-    numero?: string
-    statut?: string
-    total_ttc_xaf?: number
-    montant_paye_xaf?: number
-  } | null
-
-  if (!f) {
-    return {
-      ok: false,
-      code: 'FACTURE_MISSING',
-      error: 'La facture doit etre generee par Finance avant la livraison.',
-      document_requis: {
-        type:   'facture',
-        label:  'Facture client',
-        etat:   'absente',
-        module: 'Finance > Factures',
-        url:    '/finance',
-        action: 'Generer la facture de la commande, puis la valider ou l envoyer.',
-      },
-    }
-  }
-
-  if (!['valide', 'envoye', 'paye'].includes(String(f.statut))) {
-    return {
-      ok: false,
-      code: 'FACTURE_NOT_READY',
-      error: `La facture ${f.numero ?? ''} doit etre validee/envoyee avant la livraison.`,
-      document_requis: {
-        type:   'facture',
-        label:  f.numero ? `Facture ${f.numero}` : 'Facture client',
-        etat:   f.statut ?? 'brouillon',
-        module: 'Finance > Factures',
-        url:    '/finance',
-        action: 'Valider ou envoyer cette facture avant de demarrer la livraison.',
-      },
-    }
-  }
-
-  const total = Number(f.total_ttc_xaf ?? 0)
-  const paye = Number(f.montant_paye_xaf ?? 0)
-  return {
-    ok: true,
-    facture: f,
-    document_requis: null,
-    solde_restant_xaf: Math.max(0, Math.round(total - paye)),
-  }
-}
-
-async function insertHistoriqueLivraison(params: {
-  livraisonId: string
-  ancienStatut?: string | null
-  nouveauStatut: string
-  commentaire?: string | null
-  userId?: string
-}) {
-  const { error } = await db.from('livraisons_historique').insert({
-    livraison_id:   params.livraisonId,
-    ancien_statut:  params.ancienStatut ?? null,
-    nouveau_statut: params.nouveauStatut,
-    commentaire:    params.commentaire ?? null,
-    changed_by:     params.userId ?? null,
-  })
-  if (error) console.error('[logistique] historique livraison:', error)
-}
-
-router.get('/logistique/livraisons', async (c) => {
-  const { statut, search } = c.req.query()
-  const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
-  const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
-  const from    = (page - 1) * perPage
-
-  let q = db.from('livraisons').select('*', { count: 'exact' })
-  if (statut) q = q.eq('statut', statut)
-  if (search) q = q.or(`client_nom.ilike.%${search}%,numero.ilike.%${search}%`)
-
-  const { data, count, error } = await q
-    .order('created_at', { ascending: false })
-    .range(from, from + perPage - 1)
-
-  if (error) return c.json({ error: error.message }, 500)
-
-  const livraisons = data ?? []
-  const livraisonIds = livraisons.map((livraison) => livraison.id).filter(Boolean)
-  const historiqueParLivraison = new Map<string, unknown[]>()
-
-  if (livraisonIds.length > 0) {
-    const { data: historique, error: historiqueError } = await db
-      .from('livraisons_historique')
-      .select('*')
-      .in('livraison_id', livraisonIds)
-      .order('changed_at', { ascending: false })
-
-    if (historiqueError) {
-      console.error('[logistique] lecture historique livraison:', historiqueError)
-    } else {
-      for (const entree of historique ?? []) {
-        const livraisonId = entree.livraison_id
-        if (!historiqueParLivraison.has(livraisonId)) historiqueParLivraison.set(livraisonId, [])
-        historiqueParLivraison.get(livraisonId)?.push(entree)
-      }
-    }
-  }
-
-  const enrichedData = []
-  for (const livraison of livraisons) {
-    let soldeRestant = 0
-    let factureStatut: string | null = null
-    let livrable = true
-    let blocageLivraisonCode: string | null = null
-    let blocageLivraisonMessage: string | null = null
-    let documentRequis: unknown = null
-    if (livraison.commande_id) {
-      const readiness = await verifierCommandeLivrable(livraison.commande_id).catch((e) => {
-        console.error('[logistique] verification livrable:', e)
-        return null
-      }) as {
-        ok?: boolean
-        code?: string
-        error?: string
-        facture?: { statut?: string; total_ttc_xaf?: number; montant_paye_xaf?: number } | null
-        solde_restant_xaf?: number
-        document_requis?: unknown
-      } | null
-      livrable = Boolean(readiness?.ok)
-      blocageLivraisonCode = readiness?.ok ? null : readiness?.code ?? 'VERIFICATION_LIVRAISON_FAILED'
-      blocageLivraisonMessage = readiness?.ok ? null : readiness?.error ?? 'Verification des documents de livraison impossible.'
-      documentRequis = readiness?.ok ? null : readiness?.document_requis ?? null
-      factureStatut = readiness?.facture?.statut ?? null
-      soldeRestant = Number(readiness?.solde_restant_xaf ?? 0)
-    }
-    enrichedData.push({
-      ...livraison,
-      livrable,
-      blocage_livraison_code: blocageLivraisonCode,
-      blocage_livraison_message: blocageLivraisonMessage,
-      document_requis: documentRequis,
-      facture_statut: factureStatut,
-      solde_restant_xaf: soldeRestant,
-      livraisons_historique: historiqueParLivraison.get(livraison.id) ?? [],
-    })
-  }
-
-  return c.json({ data: enrichedData, total: count ?? 0, page, per_page: perPage })
-})
-
-router.get('/logistique/livraisons/mes-livraisons', requireRole(['livreur']), async (c) => {
-  const user = c.get('user')
-  const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
-  const perPage = Math.min(50, parseInt(c.req.query('per_page') ?? '20'))
-  const from    = (page - 1) * perPage
-
-  const { data, count, error } = await db
-    .from('livraisons')
-    .select('*', { count: 'exact' })
-    .eq('livreur_id', user.id)
-    .not('statut', 'in', '("livree","annulee")')
-    .order('date_livraison_prevue', { ascending: true, nullsFirst: false })
-    .range(from, from + perPage - 1)
-
-  if (error) return c.json({ error: error.message }, 500)
-
-  return c.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage })
-})
-
-router.get('/logistique/commandes-pretes', async (c) => {
-  const { data: livraisonsActives } = await db
-    .from('livraisons')
-    .select('commande_id')
-    .in('statut', ['en_preparation', 'planifiee', 'en_transit', 'confirmed', 'pret'])
-    .not('commande_id', 'is', null)
-
-  const commandeIdsDejaPlanifiees = ((livraisonsActives ?? []) as { commande_id: string | null }[])
-    .map((l) => l.commande_id)
-    .filter(Boolean) as string[]
-
-  let q = db
-    .from('commandes')
-    .select('id, numero, client_id, client_nom, date_livraison_prevue, total_ttc_xaf, statut')
-    .eq('statut', 'pret')
-
-  if (commandeIdsDejaPlanifiees.length > 0) {
-    q = q.not('id', 'in', `(${commandeIdsDejaPlanifiees.join(',')})`)
-  }
-
-  const { data, error } = await q.order('date_livraison_prevue', { ascending: true, nullsFirst: false })
-  if (error) return c.json({ error: error.message }, 500)
-
-  const eligible = []
-  for (const commande of data ?? []) {
-    const check = await verifierCommandeLivrable(commande.id)
-    if (check.ok) eligible.push({
-      ...commande,
-      facture_statut: (check.facture as { statut?: string } | undefined)?.statut ?? null,
-      solde_restant_xaf: check.solde_restant_xaf ?? 0,
-    })
-  }
-
-  return c.json({ data: eligible, total: eligible.length })
-})
-
-/** Tableau de bord préparation — 4 colonnes */
-router.get('/logistique/preparation/resume', async (c) => {
-  const [
-    { count: aPreparerCount },
-    { count: enCoursCount },
-    { count: pretALivrerCount },
-    { count: planifieeCount },
-  ] = await Promise.all([
-    db.from('bons_sortie').select('*', { count: 'exact', head: true })
-      .eq('statut', 'valide').eq('statut_preparation', 'a_preparer'),
-    db.from('bons_sortie').select('*', { count: 'exact', head: true })
-      .eq('statut', 'valide').eq('statut_preparation', 'en_cours'),
-    db.from('livraisons').select('*', { count: 'exact', head: true })
-      .eq('statut', 'en_preparation'),
-    db.from('livraisons').select('*', { count: 'exact', head: true })
-      .eq('statut', 'planifiee'),
-  ])
-
-  return c.json({
-    a_preparer:    aPreparerCount  ?? 0,
-    en_cours:      enCoursCount    ?? 0,
-    pret_a_livrer: pretALivrerCount ?? 0,
-    planifiee:     planifieeCount  ?? 0,
-  })
-})
-
-router.post('/logistique/livraisons', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', livraisonSchema), async (c) => {
-  const user = c.get('user')
-  const body = c.req.valid('json')
-
-  // Si commande_id fourni, copier les données client automatiquement
-  let client_nom = body.client_nom
-  let client_id  = body.client_id
-  if (body.commande_id) {
-    const { data: commande } = await db
-      .from('commandes')
-      .select('client_id, client_nom, statut, numero, date_livraison_prevue')
-      .eq('id', body.commande_id)
-      .single()
-    if (!commande) return c.json({ error: 'Commande introuvable', code: 'COMMANDE_NOT_FOUND' }, 404)
-
-    const cmd = commande as { client_id: string | null; client_nom: string; statut: string; numero: string; date_livraison_prevue: string | null }
-    if (cmd.statut !== 'pret') {
-      return c.json({
-        error: `La commande ${cmd.numero} n'est pas prête à livrer`,
-        code: 'COMMANDE_NOT_READY',
-      }, 422)
-    }
-
-    const readiness = await verifierCommandeLivrable(body.commande_id)
-    if (!readiness.ok) {
-      return c.json({
-        error: readiness.error,
-        code:  readiness.code,
-      }, 422)
-    }
-
-    const { count: activeLivraisons } = await db
-      .from('livraisons')
-      .select('*', { count: 'exact', head: true })
-      .eq('commande_id', body.commande_id)
-      .in('statut', ['en_preparation', 'planifiee', 'en_transit', 'confirmed', 'pret'])
-
-    if ((activeLivraisons ?? 0) > 0) {
-      return c.json({
-        error: `Une livraison active existe déjà pour la commande ${cmd.numero}`,
-        code: 'LIVRAISON_ALREADY_EXISTS',
-      }, 422)
-    }
-
-    client_id  = client_id  ?? cmd.client_id ?? undefined
-    client_nom = client_nom ?? cmd.client_nom
-
-    if (!body.date_livraison_prevue && cmd.date_livraison_prevue) {
-      body.date_livraison_prevue = cmd.date_livraison_prevue
-    }
-  }
-
-  // Si client_id fourni mais pas de nom, le récupérer
-  if (client_id && !client_nom) {
-    const { data: client } = await db.from('clients').select('nom').eq('id', client_id).single()
-    client_nom = (client as { nom: string } | null)?.nom ?? client_nom
-  }
-
-  const { count } = await db.from('livraisons').select('*', { count: 'exact', head: true })
-  const year      = new Date().getFullYear()
-  const numero    = `LIV-${year}-${String((count ?? 0) + 1).padStart(3, '0')}`
-
-  const { data, error } = await db
-    .from('livraisons')
-    .insert({
-      ...body,
-      numero,
-      statut: 'planifiee',
-      client_id: client_id ?? null,
-      client_nom,
-      created_by: user.id,
-      sync_status: 'synced',
-    })
-    .select().single()
-
-  if (error) return c.json({ error: error.message, code: error.code }, 400)
-  await insertHistoriqueLivraison({
-    livraisonId: (data as { id: string }).id,
-    ancienStatut: null,
-    nouveauStatut: 'planifiee',
-    commentaire: body.commande_id ? 'Livraison planifiée depuis une commande prête' : 'Livraison planifiée',
-    userId: user.id,
-  })
-  await notifyWorkflow({
-    event:   'logistique.livraison_planifiee',
-    module:  'logistique',
-    severite:'info',
-    titre:   'Livraison planifiee',
-    message: body.commande_id
-      ? `Livraison ${numero} planifiee pour la commande liee.`
-      : `Livraison ${numero} planifiee.`,
-    ref:     numero,
-    url:     '/logistique',
-    data:    { livraison_id: (data as { id: string }).id, commande_id: body.commande_id ?? null },
-  })
-  return c.json(data, 201)
-})
-
-router.patch('/logistique/livraisons/:id/statut', requireRole(['admin', 'superviseur', 'operateur', 'livreur']), zValidator('json', livraisonStatutSchema), async (c) => {
-  const { id } = c.req.param()
-  const body   = c.req.valid('json')
-  const user   = c.get('user')
-
-  const { data: existing } = await db
-    .from('livraisons')
-    .select('statut, commande_id')
-    .eq('id', id)
-    .single()
-
-  if (!existing) return c.json({ error: 'Livraison introuvable', code: 'NOT_FOUND' }, 404)
-
-  const ex      = existing as { statut: string; commande_id: string | null }
-  const allowed = TRANSITIONS_LIVRAISON[ex.statut] ?? []
-
-  if (!allowed.includes(body.statut)) {
-    return c.json({
-      error: `Transition "${ex.statut}" -> "${body.statut}" non autorisee`,
-      code:  'INVALID_TRANSITION',
-      transitions_autorisees: allowed,
-    }, 422)
-  }
-
-  if (ex.commande_id && ['en_transit', 'livree'].includes(body.statut)) {
-    const readiness = await verifierCommandeLivrable(ex.commande_id)
-    if (!readiness.ok) {
-      return c.json({
-        error: readiness.error,
-        code:  readiness.code,
-      }, 422)
-    }
-
-    if (body.statut === 'livree') {
-      const solde = Number(readiness.solde_restant_xaf ?? 0)
-      const montantLivreur = Number(body.paiement_livraison?.montant_xaf ?? 0)
-      if (solde > 0 && !body.paiement_livraison) {
-        return c.json({
-          error: `Paiement livraison requis : solde restant ${Math.round(solde).toLocaleString('fr-CM')} XAF`,
-          code:  'DELIVERY_PAYMENT_REQUIRED',
-          solde_restant_xaf: Math.round(solde),
-        }, 422)
-      }
-      if (solde > 0 && Math.abs(montantLivreur - solde) > 1) {
-        return c.json({
-          error: `Montant encaisse incorrect. Solde attendu : ${Math.round(solde).toLocaleString('fr-CM')} XAF`,
-          code:  'INVALID_DELIVERY_PAYMENT_AMOUNT',
-          solde_restant_xaf: Math.round(solde),
-        }, 422)
-      }
-      if (body.paiement_livraison && body.paiement_livraison.montant_xaf > 0) {
-        await enregistrerPaiementCommande({
-          commandeId:              ex.commande_id,
-          montantXaf:              body.paiement_livraison.montant_xaf,
-          methode:                 body.paiement_livraison.methode,
-          referenceExt:            body.paiement_livraison.reference_ext ?? null,
-          datePaiement:            body.date_livraison_reelle ?? new Date().toISOString().slice(0, 10),
-          notes:                   `Paiement encaisse a la livraison ${id}`,
-          userId:                  user.id,
-          ensureFacture:           true,
-          factureStatutSiCreation: 'envoye',
-        })
-      }
-    }
-  }
-
-  const updates: Record<string, unknown> = {
-    statut:     body.statut,
-    updated_at: new Date().toISOString(),
-  }
-  if (body.notes) updates.notes = body.notes
-
-  if (body.statut === 'livree') {
-    updates.date_livraison_reelle = body.date_livraison_reelle ?? new Date().toISOString().slice(0, 10)
-  }
-
-  const { data, error } = await db
-    .from('livraisons').update(updates).eq('id', id).select().single()
-
-  if (error) return c.json({ error: error.message }, 400)
-  if (!data)  return c.json({ error: 'Livraison introuvable', code: 'NOT_FOUND' }, 404)
-
-  await insertHistoriqueLivraison({
-    livraisonId: id,
-    ancienStatut: ex.statut,
-    nouveauStatut: body.statut,
-    commentaire: body.notes ?? null,
-    userId: user.id,
-  })
-
-  if (body.statut === 'en_transit' && ex.commande_id) {
-    await db.from('commandes_shop')
-      .update({ statut_commande: 'expediee', updated_at: new Date().toISOString() })
-      .eq('erp_commande_id', ex.commande_id)
-    await notifyWorkflow({
-      event:   'logistique.livraison_en_transit',
-      module:  'logistique',
-      severite:'info',
-      titre:   'Livraison en transit',
-      message: 'Le livreur a demarre la livraison.',
-      ref:     id,
-      url:     '/logistique',
-      data:    { livraison_id: id, commande_id: ex.commande_id },
-    })
-  }
-
-  if (body.statut === 'livree' && ex.commande_id) {
-    const { data: commande } = await db
-      .from('commandes').select('statut').eq('id', ex.commande_id).single()
-    if (commande && (commande as { statut: string }).statut === 'pret') {
-      await db.from('commandes')
-        .update({ statut: 'delivered', updated_at: new Date().toISOString() })
-        .eq('id', ex.commande_id)
-      await db.from('historique_commandes').insert({
-        commande_id:    ex.commande_id,
-        ancien_statut:  'pret',
-        nouveau_statut: 'delivered',
-        commentaire:    `[Auto] Livraison ${id} confirmee`,
-        changed_by:     user.id,
-      })
-      await notifyCommandeEvent(ex.commande_id, 'commande_livree')
-    }
-
-    await db.from('commandes_shop')
-      .update({
-        statut_commande:  'livree',
-        statut_paiement:  'paye',
-        updated_at:       new Date().toISOString(),
-      })
-      .eq('erp_commande_id', ex.commande_id)
-
-    await notifyWorkflow({
-      event:   'logistique.livraison_terminee',
-      module:  'logistique',
-      severite:'success',
-      titre:   'Livraison terminee',
-      message: body.paiement_livraison && body.paiement_livraison.montant_xaf > 0
-        ? `Livraison confirmee avec encaissement de ${Math.round(body.paiement_livraison.montant_xaf).toLocaleString('fr-CM')} XAF.`
-        : 'Livraison confirmee.',
-      ref:     id,
-      url:     '/logistique',
-      data:    {
-        livraison_id: id,
-        commande_id: ex.commande_id,
-        paiement_livraison: body.paiement_livraison ?? null,
-      },
-    })
-  }
-
   return c.json(data)
 })
 
@@ -1686,7 +1131,7 @@ const campagneProduitSchema = z.object({
   priorite:        z.number().int().min(0).default(0),
 })
 
-router.get('/marketing/campagnes', async (c) => {
+router.get('/marketing/campagnes', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { statut, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
@@ -1704,7 +1149,7 @@ router.get('/marketing/campagnes', async (c) => {
   return c.json({ data, total: count ?? 0, page, per_page: perPage })
 })
 
-router.post('/marketing/campagnes', requireRole(['admin', 'superviseur']), zValidator('json', campagneSchema), async (c) => {
+router.post('/marketing/campagnes', requirePermission('COMMERCIAL', 'CREATE'), zValidator('json', campagneSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
   const { data, error } = await db
@@ -1715,7 +1160,7 @@ router.post('/marketing/campagnes', requireRole(['admin', 'superviseur']), zVali
   return c.json(data, 201)
 })
 
-router.patch('/marketing/campagnes/:id/statut', requireRole(['admin', 'superviseur']), zValidator('json', campagneStatutSchema), async (c) => {
+router.patch('/marketing/campagnes/:id/statut', requirePermission('COMMERCIAL', 'VALIDATE'), zValidator('json', campagneStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
   const { data, error } = await db
@@ -1727,7 +1172,7 @@ router.patch('/marketing/campagnes/:id/statut', requireRole(['admin', 'supervise
   return c.json(data)
 })
 
-router.get('/marketing/campagnes/:id/produits', async (c) => {
+router.get('/marketing/campagnes/:id/produits', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data, error } = await db
     .from('campagnes_produits')
@@ -1750,7 +1195,7 @@ router.get('/marketing/campagnes/:id/produits', async (c) => {
   return c.json({ data: data ?? [], total: data?.length ?? 0 })
 })
 
-router.post('/marketing/campagnes/:id/produits', requireRole(['admin', 'superviseur']), zValidator('json', campagneProduitSchema), async (c) => {
+router.post('/marketing/campagnes/:id/produits', requirePermission('COMMERCIAL', 'CREATE'), zValidator('json', campagneProduitSchema), async (c) => {
   const { id } = c.req.param()
   const body = c.req.valid('json')
 
@@ -1780,7 +1225,7 @@ router.post('/marketing/campagnes/:id/produits', requireRole(['admin', 'supervis
   return c.json(data, 201)
 })
 
-router.delete('/marketing/campagnes/:campagneId/produits/:productId', requireRole(['admin', 'superviseur']), async (c) => {
+router.delete('/marketing/campagnes/:campagneId/produits/:productId', requirePermission('COMMERCIAL', 'DELETE'), async (c) => {
   const { campagneId, productId } = c.req.param()
   const { error } = await db
     .from('campagnes_produits')
@@ -1817,7 +1262,7 @@ const incidentStatutSchema = z.object({
   actions_correctives:  z.string().optional(),
 })
 
-router.get('/securite/incidents', async (c) => {
+router.get('/securite/incidents', requirePermission('HR', 'READ'), async (c) => {
   const { statut, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
@@ -1835,7 +1280,7 @@ router.get('/securite/incidents', async (c) => {
   return c.json({ data, total: count ?? 0, page, per_page: perPage })
 })
 
-router.post('/securite/incidents', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', incidentSchema), async (c) => {
+router.post('/securite/incidents', requirePermission('HR', 'CREATE'), zValidator('json', incidentSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
   const { data, error } = await db
@@ -1846,7 +1291,7 @@ router.post('/securite/incidents', requireRole(['admin', 'superviseur', 'operate
   return c.json(data, 201)
 })
 
-router.patch('/securite/incidents/:id/statut', requireRole(['admin', 'superviseur']), zValidator('json', incidentStatutSchema), async (c) => {
+router.patch('/securite/incidents/:id/statut', requirePermission('HR', 'VALIDATE'), zValidator('json', incidentStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
@@ -1894,14 +1339,14 @@ const epiSchema = z.object({
   notes:                z.string().optional(),
 })
 
-router.get('/securite/epi', async (c) => {
+router.get('/securite/epi', requirePermission('HR', 'READ'), async (c) => {
   const { data, error } = await db
     .from('epi_items').select('*').order('designation')
   if (error) return c.json({ error: error.message }, 500)
   return c.json({ data: data ?? [], total: (data ?? []).length })
 })
 
-router.post('/securite/epi', requireRole(['admin', 'superviseur']), zValidator('json', epiSchema), async (c) => {
+router.post('/securite/epi', requirePermission('HR', 'CREATE'), zValidator('json', epiSchema), async (c) => {
   const body = c.req.valid('json')
 
   if (body.conformes > body.total) {
@@ -1916,7 +1361,7 @@ router.post('/securite/epi', requireRole(['admin', 'superviseur']), zValidator('
   return c.json(data, 201)
 })
 
-router.put('/securite/epi/:id', requireRole(['admin', 'superviseur']), zValidator('json', epiSchema.partial()), async (c) => {
+router.put('/securite/epi/:id', requirePermission('HR', 'UPDATE'), zValidator('json', epiSchema.partial()), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
@@ -1965,7 +1410,7 @@ const ressourceSchema = z.object({
   notes:             z.string().optional(),
 })
 
-router.get('/projets/:id/ressources', async (c) => {
+router.get('/projets/:id/ressources', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { id } = c.req.param()
   const type   = c.req.query('type')
 
@@ -1991,7 +1436,7 @@ router.get('/projets/:id/ressources', async (c) => {
   return c.json({ data: ressources, total: ressources.length, total_cout_xaf: Math.round(totalCout) })
 })
 
-router.post('/projets/:id/ressources', requireRole(['admin', 'superviseur']), zValidator('json', ressourceSchema), async (c) => {
+router.post('/projets/:id/ressources', requirePermission('PRODUCTION', 'CREATE'), zValidator('json', ressourceSchema), async (c) => {
   const { id }  = c.req.param()
   const user    = c.get('user')
   const body    = c.req.valid('json')
@@ -2069,7 +1514,7 @@ router.post('/projets/:id/ressources', requireRole(['admin', 'superviseur']), zV
   return c.json(data, 201)
 })
 
-router.patch('/projets/:id/ressources/:rid/statut', requireRole(['admin', 'superviseur', 'operateur']), async (c) => {
+router.patch('/projets/:id/ressources/:rid/statut', requirePermission('PRODUCTION', 'VALIDATE'), async (c) => {
   const { id, rid } = c.req.param()
   const body = await c.req.json<{ statut: string; notes?: string }>()
 
@@ -2109,7 +1554,7 @@ router.patch('/projets/:id/ressources/:rid/statut', requireRole(['admin', 'super
   return c.json(data)
 })
 
-router.delete('/projets/:id/ressources/:rid', requireRole(['admin', 'superviseur']), async (c) => {
+router.delete('/projets/:id/ressources/:rid', requirePermission('PRODUCTION', 'DELETE'), async (c) => {
   const { id, rid } = c.req.param()
   const { error } = await db
     .from('projets_ressources')

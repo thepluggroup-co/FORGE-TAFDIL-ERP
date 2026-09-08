@@ -15,6 +15,16 @@ if (!supabaseUrl || !supabaseAnonKey) {
   )
 }
 
+// Sans délai plafonné, une résolution DNS/réseau instable (vécu en pratique :
+// certains appels Supabase prennent 30 à 90+ secondes avant même d'échouer)
+// bloque l'écran (recherche produit/client, etc.) bien plus longtemps qu'une
+// vraie coupure ne le justifierait. Fail-fast à 10s plutôt qu'illimité.
+const fetchWithTimeout: typeof fetch = (input, init) => {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 10_000)
+  return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer))
+}
+
 export const supabase = createClient(
   supabaseUrl     ?? 'https://placeholder.supabase.co',
   supabaseAnonKey ?? 'placeholder-anon-key',
@@ -22,6 +32,9 @@ export const supabase = createClient(
     auth: {
       persistSession:  true,
       autoRefreshToken: true,
+    },
+    global: {
+      fetch: fetchWithTimeout,
     },
   },
 )

@@ -368,3 +368,119 @@ export async function fetchBonLivraison(livraisonId: string): Promise<BonLivrais
     return null
   }
 }
+
+// ── Caisse (PROMPT 6 — en ligne uniquement) ─────────────────────────────────
+// Mêmes endpoints que apps/web/src/hooks/useCaisse.ts / apps/api/src/routes/caisse.ts.
+
+export type ModePaiementCaisse = 'espece' | 'orange_money' | 'mtn_momo' | 'credit' | 'carte'
+
+export interface CaisseSession {
+  id: string
+  caissier_id: string
+  date_ouverture: string
+  date_fermeture: string | null
+  fond_ouverture_xaf: number
+  fond_fermeture_xaf: number | null
+  total_especes_xaf: number
+  total_om_xaf: number
+  total_momo_xaf: number
+  total_credit_xaf: number
+  ecart_xaf: number | null
+  statut: 'ouverte' | 'fermee'
+}
+
+export interface LigneTicketPayload {
+  produit_id?: string
+  designation: string
+  unite: string
+  quantite: number
+  prix_unitaire_xaf: number
+}
+
+export interface PaiementTicketPayload {
+  mode: ModePaiementCaisse
+  montant_xaf: number
+  montant_recu_xaf?: number
+  reference?: string
+}
+
+export interface TicketVente {
+  id: string
+  op_id: string
+  numero_facture: string | null
+  numero_local: string | null
+  session_id: string
+  client_id: string | null
+  client_nom: string | null
+  total_ht_xaf: number
+  tva_xaf: number
+  total_ttc_xaf: number
+  remise_xaf: number
+  statut: string
+  oversell: boolean
+  lignes: Array<LigneTicketPayload & { total_ligne_xaf: number }>
+  paiements: Array<PaiementTicketPayload & { rendu_xaf: number | null }>
+  idempotent?: boolean
+}
+
+export interface RapportZ {
+  session: CaisseSession
+  tickets_count: number
+  total_ttc_xaf: number
+  par_mode: Record<string, number>
+  ventes_oversell: number
+  ecart_xaf?: number
+  montant_theorique_xaf?: number
+}
+
+export interface CreerTicketPayload {
+  op_id: string
+  numero_local?: string
+  session_id: string
+  client_id?: string
+  client_nom?: string
+  remise_xaf?: number
+  lignes: LigneTicketPayload[]
+  paiements: PaiementTicketPayload[]
+}
+
+export async function fetchSessionCourante(): Promise<CaisseSession | null> {
+  return apiFetch<CaisseSession | null>('/api/caisse/sessions/courante')
+}
+
+export async function openCaisseSession(fond_ouverture_xaf: number): Promise<CaisseSession> {
+  return apiFetch<CaisseSession>('/api/caisse/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ fond_ouverture_xaf }),
+  })
+}
+
+export async function closeCaisseSession(sessionId: string, fond_fermeture_xaf: number): Promise<RapportZ> {
+  return apiFetch<RapportZ>(`/api/caisse/sessions/${sessionId}/close`, {
+    method: 'PATCH',
+    body: JSON.stringify({ fond_fermeture_xaf }),
+  })
+}
+
+export async function fetchRapportZ(sessionId: string): Promise<RapportZ> {
+  return apiFetch<RapportZ>(`/api/caisse/sessions/${sessionId}/rapport-z`)
+}
+
+export async function createTicket(payload: CreerTicketPayload): Promise<TicketVente> {
+  return apiFetch<TicketVente>('/api/caisse/tickets', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export interface MobileClient {
+  id: string
+  nom: string
+  telephone: string | null
+}
+
+export async function searchClients(query: string): Promise<MobileClient[]> {
+  if (query.trim().length < 2) return []
+  const res = await apiFetch<{ data: MobileClient[] }>(`/api/clients/recherche?q=${encodeURIComponent(query)}&limit=10`)
+  return res.data ?? []
+}

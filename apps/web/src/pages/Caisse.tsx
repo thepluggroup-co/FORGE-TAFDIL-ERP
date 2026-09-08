@@ -4,7 +4,7 @@ import { Plus, Minus, Trash2, Star, Search, Printer, Lock, X, MessageCircle, His
 import { PageHeader, Button, Modal } from '@forge/ui'
 import { formatXAF, formatDateTime } from '@/lib/utils'
 import { toast } from 'sonner'
-import { useAuth } from '@/context/AuthContext'
+import { usePermissions } from '@/hooks/useRbac'
 import { useStocks } from '@/hooks/useStocks'
 import { useSearchClients, type Client } from '@/hooks/useClients'
 import {
@@ -305,7 +305,9 @@ function VenteScreen({ sessionId, isResponsable }: { sessionId: string; isRespon
     localStorage.setItem(FAVORIS_KEY, JSON.stringify(favoris))
   }, [favoris])
 
-  const { data: stocksData, isLoading: stocksLoading } = useStocks({ search: debouncedSearch, categorie })
+  // limit: 40 — écran de vente comptoir, pas un catalogue à parcourir en entier ;
+  // évite de retransférer + re-render des centaines de lignes à chaque frappe.
+  const { data: stocksData, isLoading: stocksLoading } = useStocks({ search: debouncedSearch, categorie, limit: 40 })
   const { data: clientsData } = useSearchClients(clientQuery)
   const creerTicket = useCreerTicket()
   const fermerSession = useFermerSession()
@@ -794,6 +796,46 @@ function FermetureModal({
   )
 }
 
+// ── Badge de connexion (PROMPT 5) — EN LIGNE / HORS-LIGNE / SYNCHRO ─────────────
+// window.forge.sync.onUpdate n'existe qu'en Electron (desktop). En navigateur
+// pur, ce badge ne s'affiche pas — les écritures passent toujours par l'API.
+
+type SyncBadgeStatus = 'idle' | 'syncing' | 'offline' | 'error'
+
+const SYNC_BADGE_STYLE: Record<SyncBadgeStatus, { label: string; className: string }> = {
+  idle:    { label: 'En ligne',  className: 'text-green-700 bg-green-50 border-green-200' },
+  syncing: { label: 'Synchro…',  className: 'text-blue-700 bg-blue-50 border-blue-200' },
+  offline: { label: 'Hors-ligne', className: 'text-amber-700 bg-amber-50 border-amber-200' },
+  error:   { label: 'Erreur synchro', className: 'text-red-700 bg-red-50 border-red-200' },
+}
+
+function SyncStatusBadge() {
+  const [status, setStatus] = useState<SyncBadgeStatus | null>(null)
+
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sync = (window as any).forge?.sync as {
+      status:   () => Promise<{ status: SyncBadgeStatus }>
+      onUpdate: (cb: (status: string) => void) => () => void
+    } | undefined
+    if (!sync) return
+
+    sync.status().then((s) => setStatus(s.status)).catch(() => {})
+    const unsubscribe = sync.onUpdate((s) => setStatus(s as SyncBadgeStatus))
+    return unsubscribe
+  }, [])
+
+  if (!status) return null // navigateur pur — pas de window.forge.sync
+
+  const { label, className } = SYNC_BADGE_STYLE[status] ?? SYNC_BADGE_STYLE.idle
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${className}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${status === 'syncing' ? 'animate-pulse' : ''}`} style={{ backgroundColor: 'currentColor' }} />
+      {label}
+    </span>
+  )
+}
+
 // ── Détail d'un ticket depuis l'historique — voir / imprimer / renvoyer ────────
 
 function TicketDetailModal({ ticketId, onClose }: { ticketId: string | null; onClose: () => void }) {
@@ -935,8 +977,8 @@ function HistoriqueScreen() {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function Caisse() {
-  const { role } = useAuth()
-  const isResponsable = role === 'admin' || role === 'superviseur'
+  const { hasPermission } = usePermissions()
+  const isResponsable = hasPermission('CAISSE', 'UPDATE')
   const { data: session, isLoading } = useSessionCourante()
   const [tab, setTab] = useState<'vente' | 'historique'>('vente')
 
@@ -954,7 +996,8 @@ export default function Caisse() {
         breadcrumbs={[{ label: 'FORGE', href: '/' }, { label: 'Caisse' }]}
       />
 
-      <div className="flex border-b border-gray-200">
+      <div className="flex items-center border-b border-gray-200">
+        <div className="flex flex-1">
         {([
           { key: 'vente' as const, label: 'Vente', icon: null },
           { key: 'historique' as const, label: 'Historique', icon: <History className="h-3.5 w-3.5" /> },
@@ -972,6 +1015,8 @@ export default function Caisse() {
             {icon}{label}
           </button>
         ))}
+        </div>
+        <SyncStatusBadge />
       </div>
 
       {tab === 'historique' ? (

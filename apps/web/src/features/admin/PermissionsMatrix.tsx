@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Lock, Save, AlertTriangle, X } from 'lucide-react'
+import { Lock, Save, AlertTriangle, X, CheckSquare, Square } from 'lucide-react'
 import { Button } from '@forge/ui'
 import {
   useRolePermissions,
   useSaveRolePermissions,
+  RBAC_MODULES, RBAC_ACTIONS, RBAC_MODULE_LABELS, RBAC_ACTION_LABELS,
   type RbacModule,
   type RbacAction,
   type RbacRoleName,
@@ -12,36 +13,10 @@ import {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const MODULES: RbacModule[] = [
-  'STOCK', 'COMMERCIAL', 'FINANCE', 'HR',
-  'PRODUCTION', 'LOGISTICS', 'ADMIN', 'REPORTS', 'RECEIVABLES',
-]
-
-const ACTIONS: RbacAction[] = [
-  'READ', 'CREATE', 'UPDATE', 'DELETE', 'VALIDATE', 'CONFIGURE', 'EXPORT',
-]
-
-const MODULE_LABELS: Record<RbacModule, string> = {
-  STOCK:       'Stock',
-  COMMERCIAL:  'Commercial',
-  FINANCE:     'Finance',
-  HR:          'RH',
-  PRODUCTION:  'Production',
-  LOGISTICS:   'Logistique',
-  ADMIN:       'Admin',
-  REPORTS:     'Rapports',
-  RECEIVABLES: 'Créances',
-}
-
-const ACTION_LABELS: Record<RbacAction, string> = {
-  READ:      'Lire',
-  CREATE:    'Créer',
-  UPDATE:    'Modifier',
-  DELETE:    'Supprimer',
-  VALIDATE:  'Valider',
-  CONFIGURE: 'Configurer',
-  EXPORT:    'Exporter',
-}
+const MODULES: RbacModule[] = [...RBAC_MODULES]
+const ACTIONS: RbacAction[] = [...RBAC_ACTIONS]
+const MODULE_LABELS = RBAC_MODULE_LABELS
+const ACTION_LABELS = RBAC_ACTION_LABELS
 
 // Règles immutables côté UI
 const IMMUTABLE_PAIRS = new Set([
@@ -103,13 +78,16 @@ export function PermissionsMatrix({ rbacName, label, onClose }: PermissionsMatri
     setGranted(new Set(initialGranted))
   }, [initialGranted])
 
+  // Une cellule verrouillée (règle système, ou SUPER_ADMIN + ADMIN:CONFIGURE)
+  // garde toujours sa valeur actuelle — ni le toggle individuel ni "tout
+  // cocher/décocher" ne doivent jamais y toucher.
+  const isLocked = useCallback((key: string) =>
+    IMMUTABLE_PAIRS.has(key) || (rbacName === 'SUPER_ADMIN' && key === 'ADMIN:CONFIGURE'),
+  [rbacName])
+
   const togglePermission = useCallback((module: RbacModule, action: RbacAction) => {
     const key = `${module}:${action}`
-
-    // Immutable permissions cannot be toggled
-    if (IMMUTABLE_PAIRS.has(key)) return
-    // SUPER_ADMIN cannot lose ADMIN:CONFIGURE
-    if (rbacName === 'SUPER_ADMIN' && key === 'ADMIN:CONFIGURE') return
+    if (isLocked(key)) return
 
     setGranted(prev => {
       const next = new Set(prev)
@@ -117,7 +95,24 @@ export function PermissionsMatrix({ rbacName, label, onClose }: PermissionsMatri
       else next.add(key)
       return next
     })
-  }, [rbacName])
+  }, [isLocked])
+
+  const setAll = useCallback((value: boolean) => {
+    setGranted(prev => {
+      const next = new Set<string>()
+      for (const module of MODULES) {
+        for (const action of ACTIONS) {
+          const key = `${module}:${action}`
+          if (isLocked(key)) {
+            if (prev.has(key)) next.add(key)   // préserve l'état verrouillé actuel
+          } else if (value) {
+            next.add(key)
+          }
+        }
+      }
+      return next
+    })
+  }, [isLocked])
 
   const hasChanges = useMemo(() => {
     for (const key of granted) if (!initialGranted.has(key)) return true
@@ -151,6 +146,14 @@ export function PermissionsMatrix({ rbacName, label, onClose }: PermissionsMatri
           <p className="text-sm text-gray-500">Rôle : <span className="font-medium">{label}</span></p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" className="gap-1.5" onClick={() => setAll(true)}>
+            <CheckSquare className="w-3.5 h-3.5" />
+            Tout cocher
+          </Button>
+          <Button variant="secondary" size="sm" className="gap-1.5" onClick={() => setAll(false)}>
+            <Square className="w-3.5 h-3.5" />
+            Tout décocher
+          </Button>
           {hasChanges && (
             <Button onClick={() => setShowConfirm(true)} disabled={saving} className="gap-2">
               <Save className="w-4 h-4" />
@@ -185,17 +188,16 @@ export function PermissionsMatrix({ rbacName, label, onClose }: PermissionsMatri
                   {MODULE_LABELS[module]}
                 </td>
                 {ACTIONS.map(action => {
-                  const key         = `${module}:${action}`
-                  const isGranted   = granted.has(key)
-                  const isImmutable = IMMUTABLE_PAIRS.has(key)
-                  const isSuperLock = rbacName === 'SUPER_ADMIN' && key === 'ADMIN:CONFIGURE'
+                  const key       = `${module}:${action}`
+                  const isGranted = granted.has(key)
+                  const locked    = isLocked(key)
 
                   return (
                     <td key={action} className="px-3 py-3 text-center">
                       <div
                         className="relative inline-flex items-center justify-center"
                         title={
-                          isImmutable || isSuperLock
+                          locked
                             ? 'Permission système — non modifiable'
                             : `${MODULE_LABELS[module]}:${ACTION_LABELS[action]}`
                         }
@@ -203,15 +205,15 @@ export function PermissionsMatrix({ rbacName, label, onClose }: PermissionsMatri
                         <input
                           type="checkbox"
                           checked={isGranted}
-                          disabled={isImmutable || isSuperLock}
+                          disabled={locked}
                           onChange={() => togglePermission(module, action)}
                           className={`w-4 h-4 rounded border-gray-300 transition-all ${
-                            isImmutable || isSuperLock
+                            locked
                               ? 'opacity-40 cursor-not-allowed accent-gray-400'
                               : 'cursor-pointer accent-blue-600'
                           }`}
                         />
-                        {(isImmutable || isSuperLock) && (
+                        {locked && (
                           <Lock className="absolute -top-1 -right-1 w-2.5 h-2.5 text-gray-400" />
                         )}
                       </div>

@@ -1,9 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import {
-  dbGetProduits, dbGetAlertesProduits, dbCreateProduit, dbMouvementStock,
-} from '@/lib/db'
 import { apiClient } from '@/lib/api-client'
+
+function queryString(params?: Record<string, string | number | boolean | undefined>) {
+  const qs = new URLSearchParams()
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') qs.set(key, String(value))
+  })
+  const value = qs.toString()
+  return value ? `?${value}` : ''
+}
 
 export interface StockProduit {
   id: string; ref: string; designation: string; categorie: string; unite: string
@@ -20,10 +26,10 @@ export interface CreateProduitPayload {
 
 interface StocksResponse { data: StockProduit[]; total: number }
 
-export function useStocks(params?: { search?: string; categorie?: string; statut?: string }) {
+export function useStocks(params?: { search?: string; categorie?: string; statut?: string; limit?: number }) {
   return useQuery({
     queryKey:  ['stocks', params],
-    queryFn:   () => dbGetProduits(params) as Promise<StocksResponse>,
+    queryFn:   () => apiClient.get<StocksResponse>(`/api/stocks${queryString(params)}`),
     staleTime: 30_000,
   })
 }
@@ -31,7 +37,7 @@ export function useStocks(params?: { search?: string; categorie?: string; statut
 export function useStockAlertes() {
   return useQuery({
     queryKey:  ['stocks', 'alertes'],
-    queryFn:   () => dbGetAlertesProduits() as Promise<{ data: StockProduit[] }>,
+    queryFn:   () => apiClient.get<{ data: StockProduit[] }>('/api/stocks/alertes'),
     staleTime: 60_000,
   })
 }
@@ -39,7 +45,7 @@ export function useStockAlertes() {
 export function useCreateProduit() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (payload: CreateProduitPayload) => dbCreateProduit(payload),
+    mutationFn: (payload: CreateProduitPayload) => apiClient.post<StockProduit>('/api/stocks', payload),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['stocks'] }); toast.success('Produit créé') },
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -88,7 +94,9 @@ export function useMouvement() {
     mutationFn: ({ produitId, payload }: {
       produitId: string
       payload: { type: 'entree' | 'sortie' | 'ajustement'; quantite: number; motif?: string; reference?: string }
-    }) => dbMouvementStock(produitId, payload.type, payload.quantite, payload.motif),
+    }) => apiClient.post<{ mouvement: MouvementStock; produit: StockProduit }>(
+      `/api/stocks/${produitId}/mouvement`, payload,
+    ),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['stocks'] }); toast.success('Mouvement enregistré') },
     onError:   (err: Error) => toast.error(err.message),
   })

@@ -15,6 +15,7 @@ import { aiRouter } from './routes/ai'
 import { rapportsRouter } from './routes/rapports'
 import { shopRouter, shopErpRouter } from './routes/shop'
 import { paiementsRouter } from './routes/paiements'
+import { authPhonePinRouter } from './routes/auth-phone-pin'
 import { caisseRouter } from './routes/caisse'
 import { operationsRouter } from './routes/operations'
 import { adminRouter } from './routes/admin'
@@ -29,6 +30,7 @@ import { checkOverdueInstallments } from './services/creditService'
 import { checkOverdueCaisseCredits } from './services/caisse-credit.service'
 import { sendUpcomingReminders } from './services/notificationService'
 import { HTTPException } from 'hono/http-exception'
+import { isNetworkError } from './services/offline-fallback'
 
 const app = new Hono<{ Variables: HonoVariables }>()
 
@@ -69,6 +71,7 @@ app.use('*', rateLimitMiddleware)
 
 app.route('/', publicCommandesRouter)
 app.route('/', publicDevisRouter)
+app.route('/api/auth', authPhonePinRouter)
 app.route('/api/shop',      shopRouter)
 app.route('/api/paiements', paiementsRouter)
 
@@ -141,6 +144,18 @@ app.onError((err, c) => {
   const e = err as Error & { code?: string; httpStatus?: number }
   if (e.httpStatus && e.httpStatus >= 400 && e.httpStatus < 500) {
     return c.json({ error: e.message, code: e.code ?? 'CLIENT_ERROR' }, e.httpStatus as 400)
+  }
+
+  // Timeout/coupure réseau vers Supabase (cf. fetchWithTimeout dans
+  // packages/db/src/supabase-client.ts) — pas un bug applicatif, ne pas
+  // afficher "Erreur serveur interne" + un message technique du genre
+  // "AbortError: This operation was aborted" à un caissier qui n'y peut rien.
+  if (isNetworkError(err)) {
+    console.warn(`[error] ${c.req.method} ${c.req.url} — Supabase injoignable (timeout/réseau)`, err)
+    return c.json(
+      { error: 'Service indisponible — connexion au serveur instable, réessayez', code: 'UPSTREAM_UNAVAILABLE' },
+      503,
+    )
   }
 
   console.error(`[error] ${c.req.method} ${c.req.url}`, err)

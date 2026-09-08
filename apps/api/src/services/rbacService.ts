@@ -246,6 +246,43 @@ export async function checkPermission(
   return { allowed, roleName: entry.roleName }
 }
 
+// ── getMyPermissions — résolution complète pour l'endpoint self-service ──────
+// Utilisé par GET /api/profile/permissions pour piloter la visibilité UI
+// (sidebar, garde de route) depuis les VRAIES permissions plutôt qu'un rôle
+// legacy statique — cf. bug caissier/Caisse : la sidebar filtrait sur un
+// tableau de rôles figé qui avait divergé du système RBAC réellement
+// consulté côté serveur pour ce module.
+
+export interface MyPermissions {
+  legacyRole:   string | null
+  rbacRoleName: string | null
+  permissions:  Array<{ module: RbacModule; action: RbacAction }>
+}
+
+export async function getMyPermissions(userId: string, legacyRole?: string): Promise<MyPermissions> {
+  let entry = getCached(userId)
+  if (!entry) {
+    entry = await loadPermissionsFromDb(userId, legacyRole)
+  }
+
+  if (!entry) {
+    return { legacyRole: legacyRole ?? null, rbacRoleName: null, permissions: [] }
+  }
+
+  const permissions = [...entry.perms]
+    // Réapplique les IMMUTABLE_RULES de type DENY par-dessus les grants DB —
+    // même logique que checkPermission, pour qu'un module:action refusé en
+    // pratique (ex: CAISSIER + STOCK:UPDATE) ne remonte jamais comme "visible"
+    // ici alors qu'il serait rejeté par la moindre vraie requête.
+    .filter((key) => checkImmutableRules(entry!.roleName, ...(key.split(':') as [RbacModule, RbacAction])).decision !== 'DENY')
+    .map((key) => {
+      const [module, action] = key.split(':') as [RbacModule, RbacAction]
+      return { module, action }
+    })
+
+  return { legacyRole: legacyRole ?? null, rbacRoleName: entry.roleName, permissions }
+}
+
 // ── writeAuditLog (async fire-and-forget) ────────────────────────────────────
 
 export function writeAuditLog(input: WriteAuditInput): void {

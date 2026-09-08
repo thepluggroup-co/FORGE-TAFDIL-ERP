@@ -3,9 +3,9 @@ import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { setApiToken } from '../lib/api'
 
-export type MobileRole = 'admin' | 'superviseur' | 'operateur' | 'apprenant' | 'livreur'
+export type MobileRole = 'admin' | 'superviseur' | 'operateur' | 'apprenant' | 'livreur' | 'caissier'
 
-const VALID_ROLES: MobileRole[] = ['admin', 'superviseur', 'operateur', 'apprenant', 'livreur']
+const VALID_ROLES: MobileRole[] = ['admin', 'superviseur', 'operateur', 'apprenant', 'livreur', 'caissier']
 
 const LEGACY_ROLE_MAP: Record<string, MobileRole> = {
   directeur: 'admin',

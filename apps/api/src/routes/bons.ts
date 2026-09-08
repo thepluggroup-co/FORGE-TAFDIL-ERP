@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
 
 const db = supabaseAdmin!
-import { requireRole } from '../middleware/rbac'
+import { requirePermission } from '../middleware/permission.middleware'
 import { localCreateBon, localValiderBon, getBonsSortieLocal } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
 import {
@@ -175,7 +175,7 @@ async function resolveCommandeIdForBon(bon: {
 }
 
 /** Liste des bons avec filtres */
-router.get('/', async (c) => {
+router.get('/', requirePermission('STOCK', 'READ'), async (c) => {
   const { statut, technicien, search } = c.req.query()
   const statutPreparation = c.req.query('statut_preparation')
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
@@ -209,8 +209,32 @@ router.get('/', async (c) => {
     return c.json({ error: error.message }, 500)
   }
 
+  // Enrichissement preparateur — même logique que l'ancien dbGetBons côté web
+  // (apps/web/src/lib/db.ts), déplacée ici lors du rebranchement web→API pour
+  // fermer le contournement RBAC des appels Supabase directs depuis le navigateur.
+  const rows = (data ?? []) as Array<Record<string, unknown>>
+  const preparateurIds = [...new Set(
+    rows.map((row) => row.preparateur_id).filter(Boolean) as string[],
+  )]
+  const preparateurs = new Map<string, Record<string, unknown>>()
+  if (preparateurIds.length > 0) {
+    const { data: employes, error: employesError } = await db
+      .from('employes')
+      .select('id, nom, poste, departement, telephone, statut')
+      .in('id', preparateurIds)
+    if (employesError) {
+      console.warn('[bons] GET / enrichissement preparateur échoué (non bloquant):', employesError.message)
+    } else {
+      for (const employe of employes ?? []) preparateurs.set(employe.id as string, employe as Record<string, unknown>)
+    }
+  }
+
   return c.json({
-    data,
+    data: rows.map((row) => ({
+      ...row,
+      lignes: row.lignes ?? row.bons_sortie_lignes ?? [],
+      preparateur: row.preparateur_id ? preparateurs.get(row.preparateur_id as string) ?? null : null,
+    })),
     total: count ?? 0,
     page,
     per_page: perPage,
@@ -221,7 +245,7 @@ router.get('/', async (c) => {
 /** Créer un bon de sortie — avec fallback SQLite offline */
 router.post(
   '/',
-  requireRole(['admin', 'superviseur', 'operateur']),
+  requirePermission('STOCK', 'CREATE'),
   zValidator('json', createBonSchema),
   async (c) => {
     const user = c.get('user')
@@ -305,7 +329,7 @@ router.post(
 )
 
 /** Détail bon + lignes + historique statuts */
-router.get('/:id{[0-9a-f-]{36}}', async (c) => {
+router.get('/:id{[0-9a-f-]{36}}', requirePermission('STOCK', 'READ'), async (c) => {
   const { id } = c.req.param()
 
   const { data, error } = await db
@@ -328,7 +352,7 @@ router.get('/:id{[0-9a-f-]{36}}', async (c) => {
 })
 
 /** Vérification préalable des stocks avant exécution d'un bon */
-router.get('/:id{[0-9a-f-]{36}}/verifier-stock', async (c) => {
+router.get('/:id{[0-9a-f-]{36}}/verifier-stock', requirePermission('STOCK', 'READ'), async (c) => {
   const { id } = c.req.param()
 
   const { data: bon, error } = await db
@@ -378,10 +402,53 @@ router.get('/:id{[0-9a-f-]{36}}/verifier-stock', async (c) => {
   return c.json({ bon_statut: b.statut, lignes, toutSuffisant })
 })
 
+/**
+ * Renseigner nature_transaction / imputation_payeur sur un bon qui en est
+ * dépourvu (bons créés avant que ces champs soient obligatoires). Appelé par
+ * l'écran de validation juste avant PUT /:id/valider quand ces champs
+ * manquent — /:id/valider lui-même les exige déjà en base (MISSING_NATURE_PAYEUR)
+ * et ne les accepte pas en override.
+ */
+router.patch(
+  '/:id/nature-payeur',
+  requirePermission('STOCK', 'UPDATE'),
+  zValidator('json', z.object({
+    nature_transaction: z.enum(['comptant', 'credit', 'deduction_acompte']).optional(),
+    imputation_payeur:  z.enum(['entreprise_tafdil', 'atelier', 'administration']).optional(),
+  })),
+  async (c) => {
+    const { id } = c.req.param()
+    const body   = c.req.valid('json')
+
+    if (!body.nature_transaction && !body.imputation_payeur) {
+      return c.json({ error: 'Aucune valeur à mettre à jour', code: 'NO_UPDATE' }, 400)
+    }
+
+    const { data: existing } = await db.from('bons_sortie').select('statut').eq('id', id).single()
+    if (!existing) return c.json({ error: 'Bon introuvable', code: 'NOT_FOUND' }, 404)
+
+    const ex = existing as { statut: string }
+    if (!['en_attente', 'soumis'].includes(ex.statut)) {
+      return c.json({ error: `Impossible de modifier un bon en statut "${ex.statut}"`, code: 'INVALID_STATE' }, 422)
+    }
+
+    const { data, error } = await db.from('bons_sortie')
+      .update({
+        ...(body.nature_transaction ? { nature_transaction: body.nature_transaction } : {}),
+        ...(body.imputation_payeur  ? { imputation_payeur:  body.imputation_payeur }  : {}),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id).select().single()
+
+    if (error) return c.json({ error: error.message }, 400)
+    return c.json(data)
+  },
+)
+
 /** Valider ou refuser un bon (secrétaire / directeur) — avec fallback SQLite offline */
 router.put(
   '/:id/valider',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('STOCK', 'VALIDATE'),
   zValidator('json', validerBonSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -538,7 +605,7 @@ async function ensureLivraisonEnPreparation(commandeId: string, userId?: string)
 /** Assigner un préparateur à un bon validé */
 router.patch(
   '/:id/preparateur',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('STOCK', 'UPDATE'),
   zValidator('json', z.object({ preparateur_id: z.string().uuid() })),
   async (c) => {
     const { id } = c.req.param()
@@ -600,7 +667,7 @@ router.patch(
 /** Marquer un bon comme prêt (préparateur ou superviseur) */
 router.patch(
   '/:id/preparation',
-  requireRole(['admin', 'superviseur', 'operateur']),
+  requirePermission('STOCK', 'UPDATE'),
   zValidator('json', z.object({ statut: z.enum(['pret']) })),
   async (c) => {
     const { id } = c.req.param()
@@ -704,7 +771,7 @@ router.patch(
 /** Exécuter un bon (magasin) — transaction atomique ALL-or-NOTHING */
 router.put(
   '/:id/executer',
-  requireRole(['admin', 'superviseur', 'operateur']),
+  requirePermission('STOCK', 'VALIDATE'),
   zValidator('json', executerBonSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -920,7 +987,7 @@ async function hydrateBonAppro(id: string) {
 }
 
 /** Nombre de bons d'appro en brouillon — pour badge UI */
-router.get('/appro/count', async (c) => {
+router.get('/appro/count', requirePermission('STOCK', 'READ'), async (c) => {
   const { count, error } = await db
     .from('bons_approvisionnement')
     .select('*', { count: 'exact', head: true })
@@ -930,7 +997,7 @@ router.get('/appro/count', async (c) => {
 })
 
 /** Liste paginée des bons d'approvisionnement */
-router.get('/appro', requireRole(['admin', 'superviseur', 'operateur']), async (c) => {
+router.get('/appro', requirePermission('STOCK', 'READ'), async (c) => {
   const { statut, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
@@ -982,7 +1049,7 @@ router.get('/appro', requireRole(['admin', 'superviseur', 'operateur']), async (
 /** Créer un bon d'approvisionnement manuel (depuis la page Stocks) */
 router.post(
   '/appro',
-  requireRole(['admin', 'superviseur', 'operateur']),
+  requirePermission('STOCK', 'CREATE'),
   zValidator('json', creerApproManuelSchema),
   async (c) => {
     const user = c.get('user')
@@ -1075,7 +1142,7 @@ router.post(
 /** Modifier les infos preparatoires d'un bon d'approvisionnement */
 router.patch(
   '/appro/:id',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('STOCK', 'UPDATE'),
   zValidator('json', updateApproDetailsSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -1130,7 +1197,7 @@ router.patch(
 /** Receptionner un bon d'approvisionnement et incrementer le stock */
 router.post(
   '/appro/:id/reception',
-  requireRole(['admin', 'superviseur', 'operateur']),
+  requirePermission('STOCK', 'VALIDATE'),
   zValidator('json', receptionApproSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -1273,7 +1340,7 @@ router.post(
 /** Changer le statut d'un bon d'approvisionnement */
 router.patch(
   '/appro/:id/statut',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('STOCK', 'VALIDATE'),
   zValidator('json', statutApproSchema),
   async (c) => {
     const { id }     = c.req.param()

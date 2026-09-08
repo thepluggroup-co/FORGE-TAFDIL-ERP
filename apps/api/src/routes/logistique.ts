@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
-import { requireRole } from '../middleware/rbac'
+import { requirePermission } from '../middleware/permission.middleware'
 import { checkPermission, writeAuditLog } from '../services/rbacService'
 import { enregistrerPaiementCommande, ensureFactureForCommande, getFactureActiveByCommande } from '../services/finance-core.service'
 import { resolveBonSortieLivrableForCommande, synchroniserCommandesWorkflow } from '../services/commande-workflow.service'
@@ -199,7 +199,7 @@ export const logistiqueRouter = new Hono<{ Variables: HonoVariables }>()
 
 logistiqueRouter.get(
   '/preparation/resume',
-  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  requirePermission('LOGISTICS', 'READ'),
   async (c) => {
     const [aPreparer, enCours, pret, planifiee] = await Promise.all([
       db.from('bons_sortie').select('*', { count: 'exact', head: true }).eq('statut_preparation', 'a_preparer'),
@@ -221,7 +221,7 @@ logistiqueRouter.get(
 
 logistiqueRouter.get(
   '/livraisons/mes-livraisons',
-  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  requirePermission('LOGISTICS', 'READ'),
   async (c) => {
     const user    = c.get('user')
     const page    = Math.max(1, parseInt(c.req.query('page')     ?? '1'))
@@ -255,7 +255,7 @@ logistiqueRouter.get(
 
 logistiqueRouter.get(
   '/livraisons',
-  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  requirePermission('LOGISTICS', 'READ'),
   zValidator('query', livraisonsQuerySchema),
   async (c) => {
     const { statut, transporteur, client_id, date_debut, date_fin, page, per_page } = c.req.valid('query')
@@ -430,7 +430,7 @@ logistiqueRouter.get(
 
 logistiqueRouter.get(
   '/commandes-pretes',
-  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  requirePermission('LOGISTICS', 'READ'),
   async (c) => {
     const { data: livraisonsActives } = await db
       .from('livraisons')
@@ -477,7 +477,7 @@ logistiqueRouter.get(
 
 logistiqueRouter.post(
   '/synchroniser-livraisons',
-  requireRole(['admin', 'superviseur', 'operateur']),
+  requirePermission('LOGISTICS', 'CREATE'),
   async (c) => {
     const user = c.get('user')
     const result = await synchroniserCommandesWorkflow({
@@ -493,7 +493,7 @@ logistiqueRouter.post(
 
 logistiqueRouter.get(
   '/livraisons/:id',
-  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  requirePermission('LOGISTICS', 'READ'),
   async (c) => {
     const { id } = c.req.param()
 
@@ -527,7 +527,7 @@ logistiqueRouter.get(
 
 logistiqueRouter.post(
   '/livraisons',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('LOGISTICS', 'CREATE'),
   zValidator('json', createLivraisonSchema),
   async (c) => {
     const user = c.get('user')
@@ -597,7 +597,7 @@ logistiqueRouter.post(
 
 logistiqueRouter.patch(
   '/livraisons/:id/statut',
-  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  requirePermission('LOGISTICS', 'VALIDATE'),
   zValidator('json', patchStatutSchema),
   async (c) => {
     const user = c.get('user')
@@ -819,7 +819,7 @@ logistiqueRouter.patch(
 
 logistiqueRouter.patch(
   '/livraisons/:id/assigner',
-  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  requirePermission('LOGISTICS', 'UPDATE'),
   zValidator('json', assignerSchema),
   async (c) => {
     const user = c.get('user')
@@ -901,7 +901,7 @@ logistiqueRouter.patch(
 
 logistiqueRouter.post(
   '/livraisons/:id/signature',
-  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  requirePermission('LOGISTICS', 'VALIDATE'),
   zValidator('json', signatureSchema),
   async (c) => {
     const user  = c.get('user')
@@ -969,7 +969,7 @@ logistiqueRouter.post(
 
 logistiqueRouter.get(
   '/livraisons/:id/bl.pdf',
-  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  requirePermission('LOGISTICS', 'EXPORT'),
   async (c) => {
     const user  = c.get('user')
     const { id } = c.req.param()
@@ -1008,7 +1008,7 @@ logistiqueRouter.get(
 
 logistiqueRouter.get(
   '/livraisons/:id/bl',
-  requireRole(['admin', 'superviseur', 'operateur', 'livreur']),
+  requirePermission('LOGISTICS', 'READ'),
   async (c) => {
     const user  = c.get('user')
     const { id } = c.req.param()

@@ -5,19 +5,23 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient } from '@/lib/api-client'
 import { toast } from 'sonner'
+import {
+  RBAC_MODULES, RBAC_ACTIONS, RBAC_ROLE_NAMES,
+  RBAC_MODULE_LABELS, RBAC_ACTION_LABELS, RBAC_ROLE_LABELS,
+} from '@/lib/rbac-constants'
+
+// ── Constantes RBAC — source unique pour tout le web, cf. lib/rbac-constants.ts ─
+
+export {
+  RBAC_MODULES, RBAC_ACTIONS, RBAC_ROLE_NAMES,
+  RBAC_MODULE_LABELS, RBAC_ACTION_LABELS, RBAC_ROLE_LABELS,
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type RbacRoleName =
-  | 'SUPER_ADMIN' | 'MANAGER' | 'COMMERCIAL'
-  | 'CAISSIER' | 'MAGASINIER' | 'FORMATEUR' | 'READONLY'
-
-export type RbacModule =
-  | 'STOCK' | 'COMMERCIAL' | 'FINANCE' | 'HR'
-  | 'PRODUCTION' | 'LOGISTICS' | 'ADMIN' | 'REPORTS' | 'RECEIVABLES'
-
-export type RbacAction =
-  | 'READ' | 'CREATE' | 'UPDATE' | 'DELETE' | 'VALIDATE' | 'CONFIGURE' | 'EXPORT'
+export type RbacRoleName = typeof RBAC_ROLE_NAMES[number]
+export type RbacModule   = typeof RBAC_MODULES[number]
+export type RbacAction   = typeof RBAC_ACTIONS[number]
 
 export type AuditActionType =
   | 'ACCESS_DENIED' | 'USER_CREATED' | 'USER_UPDATED' | 'USER_DEACTIVATED' | 'USER_DELETED'
@@ -100,6 +104,49 @@ interface PaginatedResult<T> {
   page:       number
   perPage:    number
   totalPages: number
+}
+
+// ── usePermissions — self-service, n'importe quel rôle authentifié ───────────
+// Pilote la visibilité UI (sidebar, gardes de route) depuis les VRAIES
+// permissions RBAC de l'utilisateur courant, au lieu d'un tableau de rôles
+// legacy statique — cf. bug caissier/Caisse où la sidebar avait divergé du
+// système RBAC réellement consulté côté serveur pour ce module.
+
+export interface MyPermissions {
+  legacyRole:   string | null
+  rbacRoleName: RbacRoleName | null
+  permissions:  Array<{ module: RbacModule; action: RbacAction }>
+}
+
+export function usePermissions() {
+  const [data, setData]       = useState<MyPermissions | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState<string | null>(null)
+
+  const fetch = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await apiClient.get<{ data: MyPermissions }>('/api/profile/permissions')
+      setData(res.data)
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur chargement permissions')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void fetch() }, [fetch])
+
+  // Faux tant que non chargé — ne jamais laisser une UI privilégiée s'afficher
+  // brièvement avant que les vraies permissions soient connues.
+  const hasPermission = useCallback(
+    (module: RbacModule, action: RbacAction = 'READ') =>
+      !loading && (data?.permissions.some(p => p.module === module && p.action === action) ?? false),
+    [data, loading],
+  )
+
+  return { data, loading, error, refetch: fetch, hasPermission }
 }
 
 // ── useRbacRoles ──────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import { supabaseAdmin } from '@forge/db'
 
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
+import { requirePermission } from '../middleware/permission.middleware'
 import { generateFacturePDF, generateRecuPDF, uploadPDF } from '../services/pdf.service'
 import {
   genererEcritureVente,
@@ -485,7 +486,7 @@ function calculerTvaDeductibleCharges(charges: Awaited<ReturnType<typeof getChar
 // FACTURES
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/finance/dashboard', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/finance/dashboard', requirePermission('FINANCE', 'READ'), async (c) => {
   const [facturesRes, creditsRes, ecrituresRes] = await Promise.all([
     db.from('factures').select('id,numero,client_id,client_nom,statut,total_ttc_xaf,montant_paye_xaf,date_emission,date_echeance,created_at').neq('statut', 'annule'),
     db.from('credits').select('id,statut,solde_restant_xaf').neq('statut', 'rembourse'),
@@ -581,7 +582,7 @@ router.get('/finance/dashboard', requireRole(['admin', 'superviseur']), async (c
   })
 })
 
-router.get('/finance/indicateurs', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/finance/indicateurs', requirePermission('FINANCE', 'READ'), async (c) => {
   const { from, to } = defaultDateRange(c)
   try {
     const factures = await getFacturesPeriode(from, to)
@@ -591,7 +592,7 @@ router.get('/finance/indicateurs', requireRole(['admin', 'superviseur']), async 
   }
 })
 
-router.get('/declarations-fiscales', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/declarations-fiscales', requirePermission('FINANCE', 'READ'), async (c) => {
   const { type, statut } = c.req.query()
   let q = db.from('declarations_fiscales').select('*', { count: 'exact' })
   if (type) q = q.eq('type', type)
@@ -674,7 +675,7 @@ router.patch('/declarations-fiscales/:id/statut', requireRole(['admin']), zValid
   return c.json(data)
 })
 
-router.get('/finance/exports/indicateurs.xls', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/finance/exports/indicateurs.xls', requirePermission('FINANCE', 'EXPORT'), async (c) => {
   const { from, to } = defaultDateRange(c)
   try {
     const factures = await getFacturesPeriode(from, to)
@@ -718,7 +719,7 @@ router.get('/finance/exports/indicateurs.xls', requireRole(['admin', 'superviseu
   }
 })
 
-router.get('/finance/exports/tva.xls', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/finance/exports/tva.xls', requirePermission('FINANCE', 'EXPORT'), async (c) => {
   const periode = c.req.query('periode') ?? new Date().toISOString().slice(0, 7)
   const { start, end } = periodeRange(periode)
   try {
@@ -776,7 +777,7 @@ router.get('/finance/exports/tva.xls', requireRole(['admin', 'superviseur']), as
   }
 })
 
-router.get('/factures', async (c) => {
+router.get('/factures', requirePermission('FINANCE', 'READ'), async (c) => {
   const { statut, client_id, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(500, parseInt(c.req.query('per_page') ?? '20'))
@@ -910,7 +911,7 @@ router.post('/factures', requireRole(['admin']), zValidator('json', factureSchem
   return c.json(result, 201)
 })
 
-router.post('/factures/synchroniser-commandes', requireRole(['admin', 'superviseur']), async (c) => {
+router.post('/factures/synchroniser-commandes', requirePermission('FINANCE', 'CREATE'), async (c) => {
   const user = c.get('user')
   const result = await synchroniserCommandesWorkflow({
     cible:  'factures',
@@ -1042,7 +1043,7 @@ router.post('/factures/regulariser-livraison', requireRole(['admin']), async (c)
   })
 })
 
-router.get('/factures/:id', async (c) => {
+router.get('/factures/:id', requirePermission('FINANCE', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data, error } = await db.from('factures').select('*, factures_lignes(*)').eq('id', id).single()
   if (error || !data) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
@@ -1052,7 +1053,7 @@ router.get('/factures/:id', async (c) => {
   return c.json(enrichirFacture({ ...data, pdf_url }))
 })
 
-router.get('/factures/:id/pdf', async (c) => {
+router.get('/factures/:id/pdf', requirePermission('FINANCE', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data: facture, error } = await db
     .from('factures').select('*, factures_lignes(*)').eq('id', id).single()
@@ -1303,7 +1304,7 @@ const versementSchema = z.object({
   note:           z.string().optional(),
 })
 
-router.get('/factures/:id/versements', async (c) => {
+router.get('/factures/:id/versements', requirePermission('FINANCE', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data, error } = await db
     .from('versements_factures')
@@ -1436,7 +1437,7 @@ router.post('/factures/:id/whatsapp', requireRole(['admin']), zValidator('json',
   }
 })
 
-router.get('/finance/exports/charges.xls', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/finance/exports/charges.xls', requirePermission('FINANCE', 'EXPORT'), async (c) => {
   const { from, to } = defaultDateRange(c)
   try {
     const [charges, sorties] = await Promise.all([
@@ -1520,7 +1521,7 @@ router.get('/finance/exports/charges.xls', requireRole(['admin', 'superviseur'])
 // CRÉDITS
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.post('/factures/:id/relance', requireRole(['admin', 'superviseur']), zValidator('json', relanceFactureSchema), async (c) => {
+router.post('/factures/:id/relance', requirePermission('FINANCE', 'UPDATE'), zValidator('json', relanceFactureSchema), async (c) => {
   const { id } = c.req.param()
   const user = c.get('user')
   const body = c.req.valid('json')
@@ -1577,7 +1578,7 @@ router.post('/factures/:id/relance', requireRole(['admin', 'superviseur']), zVal
 })
 
 // Charges entreprise et sorties d'argent
-router.get('/charges', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/charges', requirePermission('FINANCE', 'READ'), async (c) => {
   const { statut, categorie, fournisseur, from, to, justificatif } = c.req.query()
   const page = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(200, parseInt(c.req.query('per_page') ?? '100'))
@@ -1606,7 +1607,7 @@ router.get('/charges', requireRole(['admin', 'superviseur']), async (c) => {
   })
 })
 
-router.post('/charges', requireRole(['admin', 'superviseur']), zValidator('json', chargeSchema), async (c) => {
+router.post('/charges', requirePermission('FINANCE', 'CREATE'), zValidator('json', chargeSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
   const compte = validerCompteCharge(body.compte_charge)
@@ -1642,7 +1643,7 @@ router.post('/charges', requireRole(['admin', 'superviseur']), zValidator('json'
   return c.json(data, 201)
 })
 
-router.get('/charges/dashboard', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/charges/dashboard', requirePermission('FINANCE', 'READ'), async (c) => {
   const { from, to } = defaultDateRange(c)
 
   const [chargesRes, sortiesRes] = await Promise.all([
@@ -1745,7 +1746,7 @@ router.get('/charges/dashboard', requireRole(['admin', 'superviseur']), async (c
   })
 })
 
-router.get('/charges/:id', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/charges/:id', requirePermission('FINANCE', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data, error } = await db
     .from('charges')
@@ -1760,7 +1761,7 @@ router.get('/charges/:id', requireRole(['admin', 'superviseur']), async (c) => {
   })
 })
 
-router.put('/charges/:id', requireRole(['admin', 'superviseur']), zValidator('json', chargeUpdateSchema), async (c) => {
+router.put('/charges/:id', requirePermission('FINANCE', 'UPDATE'), zValidator('json', chargeUpdateSchema), async (c) => {
   const { id } = c.req.param()
   const body = c.req.valid('json')
 
@@ -1793,7 +1794,7 @@ router.put('/charges/:id', requireRole(['admin', 'superviseur']), zValidator('js
   return c.json(data)
 })
 
-router.patch('/charges/:id/statut', requireRole(['admin', 'superviseur']), zValidator('json', z.object({
+router.patch('/charges/:id/statut', requirePermission('FINANCE', 'VALIDATE'), zValidator('json', z.object({
   statut: z.enum(['a_valider', 'validee', 'annulee']),
   notes: z.string().optional(),
 })), async (c) => {
@@ -1846,7 +1847,7 @@ router.patch('/charges/:id/statut', requireRole(['admin', 'superviseur']), zVali
   return c.json(data)
 })
 
-router.get('/sorties-tresorerie', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/sorties-tresorerie', requirePermission('FINANCE', 'READ'), async (c) => {
   const { charge_id, mode_paiement, statut, justificatif, from, to } = c.req.query()
   const page = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(200, parseInt(c.req.query('per_page') ?? '100'))
@@ -1865,7 +1866,7 @@ router.get('/sorties-tresorerie', requireRole(['admin', 'superviseur']), async (
   return c.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage, total_pages: Math.ceil((count ?? 0) / perPage) })
 })
 
-router.post('/sorties-tresorerie', requireRole(['admin', 'superviseur']), zValidator('json', sortieTresorerieSchema), async (c) => {
+router.post('/sorties-tresorerie', requirePermission('FINANCE', 'CREATE'), zValidator('json', sortieTresorerieSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
   const attendu = compteTresorerieAttendu(body.mode_paiement)
@@ -1900,7 +1901,7 @@ router.post('/sorties-tresorerie', requireRole(['admin', 'superviseur']), zValid
   return c.json(data, 201)
 })
 
-router.put('/sorties-tresorerie/:id', requireRole(['admin', 'superviseur']), zValidator('json', sortieUpdateSchema), async (c) => {
+router.put('/sorties-tresorerie/:id', requirePermission('FINANCE', 'UPDATE'), zValidator('json', sortieUpdateSchema), async (c) => {
   const { id } = c.req.param()
   const body = c.req.valid('json')
   const { data: existing, error: existingError } = await db.from('sorties_tresorerie').select('statut, charge_id').eq('id', id).single()
@@ -1922,7 +1923,7 @@ router.put('/sorties-tresorerie/:id', requireRole(['admin', 'superviseur']), zVa
   return c.json(data)
 })
 
-router.patch('/sorties-tresorerie/:id/annuler', requireRole(['admin', 'superviseur']), async (c) => {
+router.patch('/sorties-tresorerie/:id/annuler', requirePermission('FINANCE', 'VALIDATE'), async (c) => {
   const { id } = c.req.param()
   const user = c.get('user')
   const { data: existing, error: existingError } = await db.from('sorties_tresorerie').select('charge_id, numero, statut').eq('id', id).single()
@@ -1979,31 +1980,31 @@ async function uploadJustificatif(c: FinanceContext, parent: { chargeId?: string
   return c.json({ ...data, url }, 201)
 }
 
-router.get('/charges/:id/justificatifs', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/charges/:id/justificatifs', requirePermission('FINANCE', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data, error } = await db.from('charges_justificatifs').select('*').eq('charge_id', id).order('created_at', { ascending: false })
   if (error) return c.json({ error: error.message }, 500)
   return c.json({ data: (data ?? []).map((doc) => ({ ...doc, url: db.storage.from('charges-justificatifs').getPublicUrl((doc as { storage_path: string }).storage_path).data.publicUrl })) })
 })
 
-router.post('/charges/:id/justificatifs', requireRole(['admin', 'superviseur']), async (c) => {
+router.post('/charges/:id/justificatifs', requirePermission('FINANCE', 'CREATE'), async (c) => {
   const { id } = c.req.param()
   return uploadJustificatif(c, { chargeId: id })
 })
 
-router.get('/sorties-tresorerie/:id/justificatifs', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/sorties-tresorerie/:id/justificatifs', requirePermission('FINANCE', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data, error } = await db.from('charges_justificatifs').select('*').eq('sortie_id', id).order('created_at', { ascending: false })
   if (error) return c.json({ error: error.message }, 500)
   return c.json({ data: (data ?? []).map((doc) => ({ ...doc, url: db.storage.from('charges-justificatifs').getPublicUrl((doc as { storage_path: string }).storage_path).data.publicUrl })) })
 })
 
-router.post('/sorties-tresorerie/:id/justificatifs', requireRole(['admin', 'superviseur']), async (c) => {
+router.post('/sorties-tresorerie/:id/justificatifs', requirePermission('FINANCE', 'CREATE'), async (c) => {
   const { id } = c.req.param()
   return uploadJustificatif(c, { sortieId: id })
 })
 
-router.get('/credits/alertes', async (c) => {
+router.get('/credits/alertes', requirePermission('FINANCE', 'READ'), async (c) => {
   // Auto-échoir les crédits dépassés avant de renvoyer les alertes
   await autoEchoirCredits()
 
@@ -2031,7 +2032,7 @@ router.get('/credits/alertes', async (c) => {
   })
 })
 
-router.get('/credits', async (c) => {
+router.get('/credits', requirePermission('FINANCE', 'READ'), async (c) => {
   // Auto-échoir en arrière-plan avant de lire
   autoEchoirCredits().catch(e => console.error('[finance] autoEchoirCredits:', e))
   if (!creditsBackfillStarted) {
@@ -2115,7 +2116,7 @@ router.post('/credits', requireRole(['admin']), zValidator('json', creditSchema)
   return c.json(result, 201)
 })
 
-router.get('/credits/:id', async (c) => {
+router.get('/credits/:id', requirePermission('FINANCE', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data, error } = await db.from('credits').select('*, remboursements_credit(*)').eq('id', id).single()
   if (error || !data) return c.json({ error: 'Crédit introuvable', code: 'NOT_FOUND' }, 404)
@@ -2258,7 +2259,7 @@ router.post('/credits/:id/rembourser', requireRole(['admin']), zValidator('json'
 
 // ── Reçu PDF après remboursement (Gap 3 CDC MOD-04) ──────────────────────────
 
-router.get('/credits/:id/recu', async (c) => {
+router.get('/credits/:id/recu', requirePermission('FINANCE', 'READ'), async (c) => {
   const { id } = c.req.param()
   const rembId  = c.req.query('remboursement_id')
 
@@ -2301,7 +2302,7 @@ router.get('/credits/:id/recu', async (c) => {
 
 // ── Lien de relance WhatsApp wa.me (Gap 2 CDC MOD-04) ────────────────────────
 
-router.get('/credits/:id/relance-url', async (c) => {
+router.get('/credits/:id/relance-url', requirePermission('FINANCE', 'READ'), async (c) => {
   const { id } = c.req.param()
 
   const { data: credit } = await db
@@ -2334,7 +2335,7 @@ router.get('/credits/:id/relance-url', async (c) => {
 
 // ── Upload / liste documents justificatifs d'un crédit (Gap 5 CDC MOD-04) ────
 
-router.get('/credits/:id/documents', async (c) => {
+router.get('/credits/:id/documents', requirePermission('FINANCE', 'READ'), async (c) => {
   const { id } = c.req.param()
   const { data: docs, error } = await db
     .from('credit_documents')
@@ -2394,7 +2395,7 @@ router.post('/credits/:id/documents', requireRole(['admin']), async (c) => {
 // ÉCRITURES SYSCOHADA (saisie manuelle)
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/ecritures', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/ecritures', requirePermission('FINANCE', 'READ'), async (c) => {
   const { compte, mois, facture_id, commande_id } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(200, parseInt(c.req.query('per_page') ?? '100'))
@@ -2520,7 +2521,7 @@ router.post('/ecritures/journal', requireRole(['admin']), zValidator('json', jou
   }, 201)
 })
 
-router.get('/rapports/bilan', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rapports/bilan', requirePermission('REPORTS', 'READ'), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
 
   const { data: ecritures, error } = await db
@@ -2562,7 +2563,7 @@ router.get('/rapports/bilan', requireRole(['admin', 'superviseur']), async (c) =
   })
 })
 
-router.get('/rapports/resultat', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/rapports/resultat', requirePermission('REPORTS', 'READ'), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
 
   const { data: ecritures, error } = await db
@@ -2610,7 +2611,13 @@ router.get('/rapports/resultat', requireRole(['admin', 'superviseur']), async (c
 
 // ── Dashboard KPIs ────────────────────────────────────────────────────────────
 
-router.get('/rapports/dashboard', requireRole(['admin', 'superviseur', 'operateur', 'technicien']), async (c) => {
+// Réécrit pour appeler fn_dashboard_kpis (packages/db migrations 20260606/
+// 20260607/20260818_fn_dashboard_kpis_caisse.sql) au lieu de 8 requêtes en
+// parallèle — même RPC que le web appelait directement côté client avant le
+// rebranchement vers l'API (apps/web/src/lib/db.ts:dbGetDashboardKpis),
+// donc même gain de perf conservé, plus les champs caisse que l'ancienne
+// version de cet endpoint n'avait jamais eus.
+router.get('/rapports/dashboard', requirePermission('REPORTS', 'READ'), async (c) => {
   const maintenant = new Date()
 
   const debut6Mois = new Date(maintenant)
@@ -2618,57 +2625,40 @@ router.get('/rapports/dashboard', requireRole(['admin', 'superviseur', 'operateu
   debut6Mois.setDate(1)
   const debut6MoisStr = debut6Mois.toISOString().slice(0, 10)
 
-  const [
-    commandesMoisRes,
-    commandesActifRes,
-    alertesStockRes,
-    apprenantsRes,
-    bonsRes,
-    creditsRes,
-    recentCommandesRes,
-    recentMouvementsRes,
-  ] = await Promise.all([
-    db.from('commandes')
-      .select('total_ttc_xaf, date_commande')
-      .gte('date_commande', debut6MoisStr)
-      .neq('statut', 'cancelled'),
-    db.from('commandes')
-      .select('id', { count: 'exact', head: true })
-      .in('statut', ['confirmed', 'in_production', 'pret']),
-    db.from('produits')
-      .select('id', { count: 'exact', head: true })
-      .in('statut', ['alerte', 'critique', 'rupture']),
-    db.from('apprenants')
-      .select('id', { count: 'exact', head: true })
-      .eq('statut', 'actif'),
-    db.from('bons_sortie')
-      .select('id', { count: 'exact', head: true })
-      .eq('statut', 'soumis'),
-    db.from('credits')
-      .select('id', { count: 'exact', head: true })
-      .eq('statut', 'echu'),
-    db.from('commandes')
-      .select('id, numero, client_nom, total_ttc_xaf, statut, date_commande')
-      .order('created_at', { ascending: false })
-      .limit(5),
-    db.from('mouvements_stock')
-      .select('id, type, quantite, created_at, produits(designation, unite)')
-      .order('created_at', { ascending: false })
-      .limit(5),
-  ])
+  const { data: raw, error } = await (db as never as {
+    rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { message: string } | null }>
+  }).rpc('fn_dashboard_kpis', { debut_6mois: debut6MoisStr })
+
+  if (error) return c.json({ error: error.message }, 500)
+
+  // raw peut être null si la RPC répond sans erreur mais sans ligne (ex: mocks
+  // de test qui résolvent { data: null, error: null } par défaut) — sans ce
+  // garde, `d.ca_data` plus bas lève TypeError avant même d'atteindre les
+  // `?? []` déjà en place pour chaque champ individuel.
+  const d = (raw ?? {}) as {
+    commandes_actives?: number
+    stocks_en_alerte?:  number
+    apprenants_actifs?: number
+    bons_en_attente?:   number
+    credits_echus?:     number
+    caisse_ventes_jour_count?: number
+    caisse_ventes_jour_xaf?:   number
+    recent_commandes?:  Array<{ id: string; numero: string; client_nom: string; total_ttc_xaf: number; statut: string; date_commande: string }>
+    ca_data?:           Array<{ total_ttc_xaf: number; date_commande: string }>
+    recent_mouvements?: Array<{ id: string; type: string; quantite: number; created_at: string; produits: { designation: string; unite: string } | null }>
+  }
 
   const MOIS_FR = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jui', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
   const caParMois = new Map<string, { label: string; ca: number }>()
 
   for (let i = 5; i >= 0; i--) {
-    const d = new Date(maintenant)
-    d.setMonth(d.getMonth() - i)
-    const cle = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    caParMois.set(cle, { label: MOIS_FR[d.getMonth()], ca: 0 })
+    const dt = new Date(maintenant)
+    dt.setMonth(dt.getMonth() - i)
+    const cle = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`
+    caParMois.set(cle, { label: MOIS_FR[dt.getMonth()], ca: 0 })
   }
 
-  type CmdRow = { total_ttc_xaf: number; date_commande: string }
-  for (const cmd of (commandesMoisRes.data ?? []) as CmdRow[]) {
+  for (const cmd of d.ca_data ?? []) {
     const cle = cmd.date_commande.slice(0, 7)
     const existing = caParMois.get(cle)
     if (existing) existing.ca += cmd.total_ttc_xaf
@@ -2682,14 +2672,16 @@ router.get('/rapports/dashboard', requireRole(['admin', 'superviseur', 'operateu
   return c.json({
     ca_mensuel,
     kpis: {
-      commandes_actives: commandesActifRes.count ?? 0,
-      stocks_en_alerte:  alertesStockRes.count   ?? 0,
-      apprenants_actifs: apprenantsRes.count      ?? 0,
-      bons_en_attente:   bonsRes.count            ?? 0,
-      credits_echus:     creditsRes.count         ?? 0,
+      commandes_actives: d.commandes_actives ?? 0,
+      stocks_en_alerte:  d.stocks_en_alerte  ?? 0,
+      apprenants_actifs: d.apprenants_actifs ?? 0,
+      bons_en_attente:   d.bons_en_attente   ?? 0,
+      credits_echus:     d.credits_echus     ?? 0,
+      caisse_ventes_jour_count: d.caisse_ventes_jour_count ?? 0,
+      caisse_ventes_jour_xaf:   d.caisse_ventes_jour_xaf   ?? 0,
     },
-    recent_commandes:  recentCommandesRes.data  ?? [],
-    recent_mouvements: recentMouvementsRes.data ?? [],
+    recent_commandes:  d.recent_commandes  ?? [],
+    recent_mouvements: d.recent_mouvements ?? [],
   })
 })
 

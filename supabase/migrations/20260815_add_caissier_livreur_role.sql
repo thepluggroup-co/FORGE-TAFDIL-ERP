@@ -18,24 +18,24 @@
 --      déjà. Le livreur mobile tourne donc aujourd'hui sans aucune
 --      permission RBAC réelle en base.
 --
--- NOTE : il n'existe PAS de mécanisme "technicien" pour les rôles côté
--- Postgres — 'technicien' n'apparaît dans les migrations que comme nom de
--- colonne (jobs_production.technicien_id/technicien_nom), sans rapport
--- avec la contrainte de rôle. Cette migration reproduit donc le mécanisme
--- réellement utilisé pour caissier (déjà partiellement en place) et pour
--- livreur (à créer entièrement), pas un mécanisme inventé pour technicien.
--- ═══════════════════════════════════════════════════════════════════════════
-
--- ── 1. profiles.role — élargir la CHECK constraint ──────────────────────────
--- On ajoute uniquement 'caissier' et 'livreur' ; on ne touche pas aux autres
--- rôles legacy déjà utilisés par le code (superviseur, technicien, apprenant)
--- mais absents de cette contrainte — hors périmètre de ce chantier.
+-- CORRECTIF (tentative d'exécution du 2026-09-02) : la première version de
+-- cette migration listait ('admin','directeur','operateur','viewer','caissier',
+-- 'livreur') — copié du commentaire de 20260524_core_tables_complete.sql sans
+-- vérifier les valeurs RÉELLEMENT en base. Or la contrainte live avait déjà
+-- été élargie ailleurs (hors migration trackée) pour accepter 'superviseur' —
+-- au moins une ligne profiles.role='superviseur' existe déjà en prod. La
+-- première tentative a donc échoué : "check constraint ... is violated by
+-- some row". Liste corrigée ci-dessous = union de tout ce qui est légitime :
+-- valeurs déjà vues en base (admin, superviseur, operateur) + valeurs legacy
+-- gérées en entrée par apps/web/src/context/AuthContext.tsx::LEGACY_ROLE_MAP
+-- (directeur, viewer) + valeurs applicatives modernes pas encore utilisées
+-- mais valides (technicien, caissier) + le nouveau rôle livreur.
 
 ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_role_check;
 
 ALTER TABLE public.profiles
   ADD CONSTRAINT profiles_role_check
-  CHECK (role IN ('admin', 'directeur', 'operateur', 'viewer', 'caissier', 'livreur'));
+  CHECK (role IN ('admin', 'directeur', 'operateur', 'viewer', 'superviseur', 'technicien', 'caissier', 'livreur'));
 
 -- ── 2. rbac_role_name — ajouter LIVREUR (CAISSIER existe déjà) ──────────────
 

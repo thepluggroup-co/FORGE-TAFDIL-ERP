@@ -1,7 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { supabase } from '@/lib/supabase'
-import { dbGetCredits, dbGetDashboardKpis } from '@/lib/db'
 import { apiClient } from '@/lib/api-client'
 
 export interface FactureLigne {
@@ -494,7 +492,7 @@ export function useRegulariserLivraisonFactures() {
 export function useCredits(params?: { statut?: string }) {
   return useQuery({
     queryKey: ['credits', params],
-    queryFn: () => dbGetCredits(params) as Promise<CreditsResponse>,
+    queryFn: () => apiClient.get<CreditsResponse>(`/api/credits${queryString(params)}`),
     staleTime: 30_000,
   })
 }
@@ -550,7 +548,7 @@ export interface DashboardKpis {
 export function useDashboardKpis() {
   return useQuery({
     queryKey: ['dashboard', 'kpis'],
-    queryFn: () => dbGetDashboardKpis() as Promise<DashboardKpis>,
+    queryFn: () => apiClient.get<DashboardKpis>('/api/rapports/dashboard'),
     staleTime: 30_000,
     refetchInterval: 60_000,
   })

@@ -29,6 +29,7 @@ export function BottomNav() {
   const { user } = useAuth()
   const isLivreur  = user?.role === 'livreur'
   const canApprove = user?.role === 'admin' || user?.role === 'superviseur'
+  const canCaisse  = user?.role === 'caissier' || user?.role === 'admin' || user?.role === 'superviseur'
   const pendingCount = usePendingBons(canApprove)
 
   const tabs = [
@@ -51,21 +52,21 @@ export function BottomNav() {
         </svg>
       ),
     }] : []),
-    ...(!isLivreur ? [{
-      to: '/boutique',
-      label: 'Boutique',
-      icon: (active: boolean) => (
-        <svg viewBox="0 0 24 24" fill={active ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={active ? 0 : 1.8} className="w-6 h-6">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h18v4H3V3zm2 7v11h14V10H5zM8 14h8v2H8v-2z" />
-        </svg>
-      ),
-    }] : []),
     ...(isLivreur ? [{
       to: '/livraisons',
       label: 'Livraisons',
       icon: (active: boolean) => (
         <svg viewBox="0 0 24 24" fill={active ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={active ? 0 : 1.8} className="w-6 h-6">
           <path strokeLinecap="round" strokeLinejoin="round" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0" />
+        </svg>
+      ),
+    }] : []),
+    ...(canCaisse ? [{
+      to: '/caisse',
+      label: 'Caisse',
+      icon: (active: boolean) => (
+        <svg viewBox="0 0 24 24" fill={active ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={active ? 0 : 1.8} className="w-6 h-6">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M5 6h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2zM8 14h.01M12 14h4" />
         </svg>
       ),
     }] : []),

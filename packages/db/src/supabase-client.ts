@@ -19,6 +19,22 @@ if (!SUPABASE_URL) {
   console.warn('[FORGE/db] SUPABASE_URL manquant — client Supabase non initialisé.')
 }
 
+// ── fetch avec délai plafonné ──────────────────────────────────────────────────
+// Sans ceci, une résolution DNS qui traîne (réseau instable — vécu en pratique :
+// des appels Supabase individuels qui prennent 30 à 90+ secondes avant même
+// d'échouer) bloque la requête entière bien au-delà du timeout CÔTÉ CLIENT,
+// qui voit alors un "Délai dépassé" sans queue ni pied — alors que le serveur
+// tourne, juste coincé sur cet appel sortant. Fail-fast à 10s : nettement plus
+// long qu'un aller-retour Supabase normal (dizaines à centaines de ms), mais
+// borné plutôt qu'illimité.
+const SUPABASE_FETCH_TIMEOUT_MS = 10_000
+
+const fetchWithTimeout: typeof fetch = (input, init) => {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), SUPABASE_FETCH_TIMEOUT_MS)
+  return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer))
+}
+
 // ── Client public (anon) ──────────────────────────────────────────────────────
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -32,6 +48,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   },
   global: {
     headers: { 'x-app-name': 'FORGE-ERP' },
+    fetch:   fetchWithTimeout,
   },
 })
 
@@ -45,6 +62,9 @@ export const supabaseAdmin = SUPABASE_SERVICE_KEY
       },
       realtime: {
         transport: realtimeTransport,
+      },
+      global: {
+        fetch: fetchWithTimeout,
       },
     })
   : null

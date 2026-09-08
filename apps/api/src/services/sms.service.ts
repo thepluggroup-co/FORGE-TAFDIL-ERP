@@ -71,6 +71,12 @@ export async function sendSms(to: string, message: string): Promise<SmsResult> {
   })
   if (senderId) body.set('from', senderId)
 
+  // Sans timeout, un provider lent/injoignable bloque toute la requête
+  // POST /tickets/:id/envoyer jusqu'au timeout CLIENT (15s, apiClient) — le
+  // caissier voit "Délai dépassé (serveur API non disponible ?)" alors que le
+  // serveur tourne très bien, juste bloqué sur cet appel sortant.
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 8_000)
   try {
     const res = await fetch(smsEndpoint(), {
       method:  'POST',
@@ -80,6 +86,7 @@ export async function sendSms(to: string, message: string): Promise<SmsResult> {
         apiKey,
       },
       body,
+      signal: controller.signal,
     })
 
     const text = await res.text()
@@ -93,9 +100,12 @@ export async function sendSms(to: string, message: string): Promise<SmsResult> {
 
     return { ok: true, provider: 'africastalking', response: payload }
   } catch (err) {
-    const messageError = err instanceof Error ? err.message : String(err)
+    const isTimeout = err instanceof Error && err.name === 'AbortError'
+    const messageError = isTimeout ? 'Délai dépassé (Africa\'s Talking injoignable)' : err instanceof Error ? err.message : String(err)
     console.error('[sms:africastalking] send error:', messageError)
     return { ok: false, provider: 'africastalking', error: messageError }
+  } finally {
+    clearTimeout(timer)
   }
 }
 

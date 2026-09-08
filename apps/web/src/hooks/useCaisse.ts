@@ -1,6 +1,32 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { apiClient } from '@/lib/api-client'
+import { useAuth } from '@/context/AuthContext'
+
+// ── Détection Electron (PROMPT 5) ────────────────────────────────────────────
+// Quand window.forge existe, les écritures Caisse (ouverture/fermeture de
+// session, création de ticket) passent par les handlers IPC dédiés
+// (apps/desktop/src/main/ipc/db-handler.ts, calqués sur credit:recordPaymentOffline) :
+// écriture SQLite locale + sync_queue, offline-capable. Le SyncManager pousse
+// ensuite la sync_queue vers POST /api/caisse/tickets à la reconnexion
+// (apps/desktop/src/main/ipc/sync-handler.ts::pushTicketViaApi), pas un
+// upsert brut — l'idempotence op_id s'applique aussi bien en ligne qu'après
+// une synchro tardive. En navigateur pur (pas de window.forge), tout passe
+// par apiClient comme avant. L'UI (Caisse.tsx) ne change pas.
+const isElectron = typeof window !== 'undefined' && 'forge' in window
+
+interface ForgeCaisseBridge {
+  openSessionOffline:        (payload: { caissierId: string; fondOuvertureXaf: number }) => Promise<CaisseSession & { offline?: boolean }>
+  getSessionCouranteOffline: (caissierId: string) => Promise<CaisseSession | null>
+  closeSessionOffline:       (payload: { sessionId: string; fondFermetureXaf: number }) => Promise<RapportZ & { offline?: boolean }>
+  createTicketOffline:       (payload: Record<string, unknown>) => Promise<TicketVente & { offline?: boolean }>
+  getHistoriqueOffline:      (opts?: { caissierId?: string }) => Promise<HistoriqueResponse>
+}
+
+function ipcCaisse(): ForgeCaisseBridge {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (window as any).forge.caisse as ForgeCaisseBridge
+}
 
 // ── Types (alignés sur apps/api/src/routes/caisse.ts) ─────────────────────────
 
@@ -19,6 +45,7 @@ export interface CaisseSession {
   total_credit_xaf:    number
   ecart_xaf:           number | null
   statut:              'ouverte' | 'fermee'
+  offline?:            boolean
 }
 
 export interface LigneTicketPayload {
@@ -53,6 +80,7 @@ export interface TicketVente {
   lignes:          Array<LigneTicketPayload & { total_ligne_xaf: number }>
   paiements:       Array<PaiementTicketPayload & { rendu_xaf: number | null }>
   idempotent?:     boolean
+  offline?:        boolean
 }
 
 export interface RapportZTicket {
@@ -74,27 +102,65 @@ export interface RapportZ {
   tickets:                 RapportZTicket[]
   ecart_xaf?:              number
   montant_theorique_xaf?:  number
+  offline?:                boolean
 }
 
 // ── Session ─────────────────────────────────────────────────────────────────
 
+// Un fetch() qui ne peut pas joindre le serveur lève un TypeError natif
+// (ex: "Failed to fetch") — toute AUTRE erreur d'apiClient (401/403/409/500…)
+// est une VRAIE réponse serveur qu'il ne faut jamais masquer en tombant sur le
+// cache local (ça créerait un doublon silencieux, ou cacherait une 409
+// SESSION_ALREADY_OPEN légitime — "un caissier ne peut avoir qu'une session
+// ouverte à la fois", justement pour éviter deux postes sur la même caisse).
+function isBrowserNetworkError(err: unknown): boolean {
+  return err instanceof TypeError
+}
+
 /** Session ouverte de l'utilisateur courant, ou null. Source de vérité au chargement. */
 export function useSessionCourante() {
+  const { user } = useAuth()
   return useQuery({
     queryKey: ['caisse', 'session-courante'],
-    queryFn:  () => apiClient.get<CaisseSession | null>('/api/caisse/sessions/courante'),
+    queryFn:  async () => {
+      // Toujours interroger le serveur en premier, MÊME en Electron : c'est le
+      // seul moyen de voir qu'une session est déjà ouverte sur UN AUTRE poste
+      // avec le même compte — le cache SQLite local n'est mis à jour que par le
+      // cycle de pull (jusqu'à 5 minutes de retard), ce qui donnait l'impression
+      // à tort qu'aucune session n'était ouverte ailleurs.
+      try {
+        return await apiClient.get<CaisseSession | null>('/api/caisse/sessions/courante')
+      } catch (err) {
+        if (isElectron && user?.id && isBrowserNetworkError(err)) {
+          return ipcCaisse().getSessionCouranteOffline(user.id)
+        }
+        throw err
+      }
+    },
+    // En Electron, il faut connaître l'utilisateur avant le fallback SQLite ; en
+    // navigateur, l'API infère l'utilisateur depuis le JWT, pas de blocage.
+    enabled:   isElectron ? Boolean(user?.id) : true,
     staleTime: 10_000,
   })
 }
 
 export function useOuvrirSession() {
   const qc = useQueryClient()
+  const { user } = useAuth()
   return useMutation({
-    mutationFn: (fond_ouverture_xaf: number) =>
-      apiClient.post<CaisseSession>('/api/caisse/sessions', { fond_ouverture_xaf }),
-    onSuccess: () => {
+    mutationFn: async (fond_ouverture_xaf: number) => {
+      try {
+        return await apiClient.post<CaisseSession>('/api/caisse/sessions', { fond_ouverture_xaf })
+      } catch (err) {
+        if (isElectron && user?.id && isBrowserNetworkError(err)) {
+          return ipcCaisse().openSessionOffline({ caissierId: user.id, fondOuvertureXaf: fond_ouverture_xaf })
+        }
+        throw err   // ex: 409 SESSION_ALREADY_OPEN — ne jamais créer de doublon local
+      }
+    },
+    onSuccess: (session) => {
       void qc.invalidateQueries({ queryKey: ['caisse', 'session-courante'] })
-      toast.success('Session de caisse ouverte')
+      toast.success(session.offline ? 'Session de caisse ouverte (hors-ligne)' : 'Session de caisse ouverte')
     },
     onError: (err: Error) => toast.error(err.message),
   })
@@ -104,10 +170,12 @@ export function useFermerSession() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ sessionId, fond_fermeture_xaf }: { sessionId: string; fond_fermeture_xaf: number }) =>
-      apiClient.patch<RapportZ>(`/api/caisse/sessions/${sessionId}/close`, { fond_fermeture_xaf }),
-    onSuccess: () => {
+      isElectron
+        ? ipcCaisse().closeSessionOffline({ sessionId, fondFermetureXaf: fond_fermeture_xaf })
+        : apiClient.patch<RapportZ>(`/api/caisse/sessions/${sessionId}/close`, { fond_fermeture_xaf }),
+    onSuccess: (rapport) => {
       void qc.invalidateQueries({ queryKey: ['caisse', 'session-courante'] })
-      toast.success('Session fermée')
+      toast.success(rapport.offline ? 'Session fermée (hors-ligne — synchro à la reconnexion)' : 'Session fermée')
     },
     onError: (err: Error) => toast.error(err.message),
   })
@@ -137,17 +205,47 @@ export interface CreerTicketPayload {
 
 export function useCreerTicket() {
   const qc = useQueryClient()
+  const { user } = useAuth()
   return useMutation({
-    // Timeout élargi (défaut 15s) : création de ticket = plusieurs écritures
-    // DB (ticket + lignes + paiements + décrément stock par ligne) — plus
-    // lourd qu'un GET classique, surtout sur connexion Supabase à froid.
-    mutationFn: (payload: CreerTicketPayload) =>
-      apiClient.post<TicketVente>('/api/caisse/tickets', payload, 30_000),
+    mutationFn: (payload: CreerTicketPayload) => {
+      if (isElectron && user?.id) {
+        // Écriture locale (ticket + lignes + paiements + décrément stock +
+        // mouvement_stock) + sync_queue — jamais bloqué par le réseau.
+        return ipcCaisse().createTicketOffline({
+          opId:        payload.op_id,
+          numeroLocal: payload.numero_local,
+          sessionId:   payload.session_id,
+          caissierId:  user.id,
+          clientId:    payload.client_id,
+          clientNom:   payload.client_nom,
+          remiseXaf:   payload.remise_xaf,
+          lignes: payload.lignes.map((l) => ({
+            produitId:       l.produit_id,
+            designation:     l.designation,
+            unite:           l.unite,
+            quantite:        l.quantite,
+            prixUnitaireXaf: l.prix_unitaire_xaf,
+          })),
+          paiements: payload.paiements.map((p) => ({
+            mode:            p.mode,
+            montantXaf:      p.montant_xaf,
+            montantRecuXaf:  p.montant_recu_xaf,
+            reference:       p.reference,
+          })),
+        })
+      }
+      // Timeout élargi (défaut 15s) : création de ticket = plusieurs écritures
+      // DB (ticket + lignes + paiements + décrément stock par ligne) — plus
+      // lourd qu'un GET classique, surtout sur connexion Supabase à froid.
+      return apiClient.post<TicketVente>('/api/caisse/tickets', payload, 30_000)
+    },
     onSuccess: (ticket) => {
       void qc.invalidateQueries({ queryKey: ['caisse', 'session-courante'] })
       void qc.invalidateQueries({ queryKey: ['caisse', 'historique'] })
       void qc.invalidateQueries({ queryKey: ['stocks'] })
-      if (ticket.oversell) {
+      if (ticket.offline) {
+        toast.success(`Ticket ${ticket.numero_local ?? ''} enregistré hors-ligne — synchro à la reconnexion`)
+      } else if (ticket.oversell) {
         toast.warning(`Ticket ${ticket.numero_facture} enregistré — stock insuffisant sur au moins un article, réappro alerté`)
       } else {
         toast.success(`Ticket ${ticket.numero_facture ?? ''} encaissé`)
@@ -194,6 +292,12 @@ export function useHistoriqueTickets(params?: {
   return useQuery({
     queryKey: ['caisse', 'historique', params],
     queryFn:  () => {
+      // Lecture locale en Electron — pas de filtre date/statut/pagination
+      // côté SQLite (200 derniers tickets seulement) : suffisant pour
+      // consulter les ventes du jour hors-ligne, pas un remplacement complet
+      // de l'historique serveur filtré (utilisé dès que le réseau revient).
+      if (isElectron) return ipcCaisse().getHistoriqueOffline({ caissierId: params?.caissier_id })
+
       const qs = new URLSearchParams()
       if (params?.page)        qs.set('page', String(params.page))
       if (params?.per_page)    qs.set('per_page', String(params.per_page))

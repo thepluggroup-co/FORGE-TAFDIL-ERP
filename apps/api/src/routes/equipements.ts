@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
-import { requireRole } from '../middleware/rbac'
+import { requirePermission } from '../middleware/permission.middleware'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 import type { HonoVariables } from '../types'
 
@@ -87,7 +87,7 @@ function statutApresMaintenance(type: string, statut: string) {
  * GET /api/equipements/alertes-revision
  * Équipements dont la révision est due dans les 30 prochains jours.
  */
-router.get('/equipements/alertes-revision', async (c) => {
+router.get('/equipements/alertes-revision', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const dans30j = new Date()
   dans30j.setDate(dans30j.getDate() + 30)
   const limitDate = dans30j.toISOString().slice(0, 10)
@@ -113,7 +113,7 @@ router.get('/equipements/alertes-revision', async (c) => {
   return c.json({ data: enriched, total: enriched.length })
 })
 
-router.get('/equipements/dashboard', async (c) => {
+router.get('/equipements/dashboard', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const today = new Date().toISOString().slice(0, 10)
   const dans30j = new Date()
   dans30j.setDate(dans30j.getDate() + 30)
@@ -156,7 +156,7 @@ router.get('/equipements/dashboard', async (c) => {
   })
 })
 
-router.get('/equipements', async (c) => {
+router.get('/equipements', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { categorie, statut, search } = c.req.query()
   const page    = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
@@ -184,7 +184,7 @@ router.get('/equipements', async (c) => {
   return c.json({ data: enriched, total: count ?? 0, page, per_page: perPage })
 })
 
-router.get('/equipements/:id', async (c) => {
+router.get('/equipements/:id', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { id } = c.req.param()
 
   const [equipRes, maintRes, chargesRes] = await Promise.all([
@@ -222,7 +222,7 @@ router.get('/equipements/:id', async (c) => {
   })
 })
 
-router.post('/equipements', requireRole(['admin', 'superviseur']), zValidator('json', equipementSchema), async (c) => {
+router.post('/equipements', requirePermission('PRODUCTION', 'CREATE'), zValidator('json', equipementSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -254,7 +254,7 @@ router.post('/equipements', requireRole(['admin', 'superviseur']), zValidator('j
   return c.json(data, 201)
 })
 
-router.put('/equipements/:id', requireRole(['admin', 'superviseur']), zValidator('json', equipementSchema.partial()), async (c) => {
+router.put('/equipements/:id', requirePermission('PRODUCTION', 'UPDATE'), zValidator('json', equipementSchema.partial()), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
@@ -279,7 +279,7 @@ router.put('/equipements/:id', requireRole(['admin', 'superviseur']), zValidator
   return c.json(data)
 })
 
-router.patch('/equipements/:id/statut', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', equipementStatutSchema), async (c) => {
+router.patch('/equipements/:id/statut', requirePermission('PRODUCTION', 'VALIDATE'), zValidator('json', equipementStatutSchema), async (c) => {
   const { id } = c.req.param()
   const body   = c.req.valid('json')
   const user   = c.get('user')
@@ -302,7 +302,7 @@ router.patch('/equipements/:id/statut', requireRole(['admin', 'superviseur', 'op
   if (error) return c.json({ error: error.message }, 400)
   if (!data)  return c.json({ error: 'Équipement introuvable', code: 'NOT_FOUND' }, 404)
 
-  await db.from('maintenances_equipement').insert({
+  const { error: historiqueError } = await db.from('maintenances_equipement').insert({
     equipement_id:     id,
     type:              body.statut === 'en_panne' ? 'panne' : body.statut === 'maintenance' ? 'preventive' : 'audit',
     date_maintenance:  new Date().toISOString().slice(0, 10),
@@ -310,7 +310,8 @@ router.patch('/equipements/:id/statut', requireRole(['admin', 'superviseur', 'op
     cout_xaf:          0,
     description:       body.notes ?? `Changement statut ${(existing as { statut: string }).statut} -> ${body.statut}`,
     created_by:        user.id,
-  }).catch((e) => console.error('[equipements] historique statut:', e))
+  })
+  if (historiqueError) console.error('[equipements] historique statut:', historiqueError)
 
   await notifyWorkflow({
     event:   body.statut === 'en_panne' ? 'equipements.panne_signalee' : 'equipements.statut_modifie',
@@ -329,7 +330,7 @@ router.patch('/equipements/:id/statut', requireRole(['admin', 'superviseur', 'op
 // MAINTENANCES
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/equipements/:id/maintenances', async (c) => {
+router.get('/equipements/:id/maintenances', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { id } = c.req.param()
 
   const { data, error } = await db
@@ -342,7 +343,7 @@ router.get('/equipements/:id/maintenances', async (c) => {
   return c.json({ data: data ?? [], total: (data ?? []).length })
 })
 
-router.post('/equipements/:id/maintenances', requireRole(['admin', 'superviseur']), zValidator('json', maintenanceSchema), async (c) => {
+router.post('/equipements/:id/maintenances', requirePermission('PRODUCTION', 'CREATE'), zValidator('json', maintenanceSchema), async (c) => {
   const { id } = c.req.param()
   const user   = c.get('user')
   const body   = c.req.valid('json')
@@ -422,7 +423,7 @@ router.post('/equipements/:id/maintenances', requireRole(['admin', 'superviseur'
   return c.json(data, 201)
 })
 
-router.patch('/equipements/:equipId/maintenances/:maintId/statut', requireRole(['admin', 'superviseur', 'operateur']), async (c) => {
+router.patch('/equipements/:equipId/maintenances/:maintId/statut', requirePermission('PRODUCTION', 'VALIDATE'), async (c) => {
   const { equipId, maintId } = c.req.param()
   const body = await c.req.json<{ statut: string; prochaine_date?: string }>()
 

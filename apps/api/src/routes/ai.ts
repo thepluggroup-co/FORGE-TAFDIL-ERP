@@ -7,6 +7,7 @@ import { supabaseAdmin } from '@forge/db'
 const db = supabaseAdmin!
 import { anthropic, FORGE_MODEL } from '@forge/ai'
 import { requireRole } from '../middleware/rbac'
+import { requirePermission } from '../middleware/permission.middleware'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
@@ -219,7 +220,7 @@ router.post('/ai/chat', zValidator('json', chatSchema), async (c) => {
 // GET /ai/recommandations/stock
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/ai/recommandations/stock', requireRole(['admin', 'superviseur']), async (c) => { // superviseur : voir rapports IA
+router.get('/ai/recommandations/stock', requirePermission('REPORTS', 'READ'), async (c) => { // superviseur : voir rapports IA
   const since90j = new Date(Date.now() - 90 * 86400000).toISOString()
 
   const [produitsRes, mouvRes] = await Promise.all([

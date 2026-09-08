@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
-import { requireRole } from '../middleware/rbac'
+import { requirePermission } from '../middleware/permission.middleware'
 import { getProduitsLocal, localMouvement } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
 import type { HonoVariables } from '../types'
@@ -56,7 +56,7 @@ const mouvementSchema = z.object({
 // ══════════════════════════════════════════════════════════════════════════════
 
 /** Produits sous seuil critique — triés du plus urgent au moins urgent */
-router.get('/alertes', async (c) => {
+router.get('/alertes', requirePermission('STOCK', 'READ'), async (c) => {
   const { data, error } = await db
     .from('produits')
     .select('*')
@@ -80,7 +80,7 @@ router.get('/alertes', async (c) => {
 })
 
 /** Rapport d'inventaire journalier complet */
-router.get('/inventaire/journalier', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/inventaire/journalier', requirePermission('STOCK', 'READ'), async (c) => {
   const today = new Date().toISOString().slice(0, 10)
   const startOfDay = `${today}T00:00:00.000Z`
 
@@ -134,7 +134,7 @@ router.get('/inventaire/journalier', requireRole(['admin', 'superviseur']), asyn
 // ══════════════════════════════════════════════════════════════════════════════
 
 /** Liste paginée avec filtres */
-router.get('/', async (c) => {
+router.get('/', requirePermission('STOCK', 'READ'), async (c) => {
   const { categorie, statut, search } = c.req.query()
   const page = Math.max(1, parseInt(c.req.query('page') ?? '1'))
   const perPage = Math.min(100, Math.max(1, parseInt(c.req.query('per_page') ?? '20')))
@@ -172,7 +172,7 @@ router.get('/', async (c) => {
 /** Créer un produit */
 router.post(
   '/',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('STOCK', 'CREATE'),
   zValidator('json', createProduitSchema),
   async (c) => {
     const user = c.get('user')
@@ -201,7 +201,7 @@ router.post(
 )
 
 /** Liste globale paginée des mouvements de stock */
-router.get('/mouvements', async (c) => {
+router.get('/mouvements', requirePermission('STOCK', 'READ'), async (c) => {
   const q = c.req.query()
   const page    = Math.max(1, parseInt(q.page    ?? '1'))
   const perPage = Math.min(100, Math.max(1, parseInt(q.per_page ?? '20')))
@@ -262,7 +262,7 @@ router.get('/mouvements', async (c) => {
 })
 
 /** Détail produit + historique 30 jours */
-router.get('/:id', async (c) => {
+router.get('/:id', requirePermission('STOCK', 'READ'), async (c) => {
   const { id } = c.req.param()
   const since30j = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
 
@@ -298,7 +298,7 @@ router.get('/:id', async (c) => {
 /** Modifier un produit */
 router.put(
   '/:id',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('STOCK', 'UPDATE'),
   zValidator('json', updateProduitSchema),
   async (c) => {
     const { id } = c.req.param()
@@ -336,7 +336,7 @@ router.put(
 /** Mouvement de stock — appelle fn_mouvement_stock (atomique PostgreSQL) avec fallback SQLite */
 router.post(
   '/:id/mouvement',
-  requireRole(['admin', 'superviseur', 'operateur']),
+  requirePermission('STOCK', 'CREATE'),
   zValidator('json', mouvementSchema),
   async (c) => {
     const { id } = c.req.param()

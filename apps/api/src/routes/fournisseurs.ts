@@ -4,6 +4,7 @@ import { z } from 'zod'
 import PDFDocument from 'pdfkit'
 import { supabaseAdmin } from '@forge/db'
 import { requireRole } from '../middleware/rbac'
+import { requirePermission } from '../middleware/permission.middleware'
 import { sendEmailDirect } from '../services/email-queue.service'
 import type { HonoVariables } from '../types'
 
@@ -183,7 +184,7 @@ async function generateBonApproPdf(bon: BonAppro, fournisseurNom: string): Promi
 // ══════════════════════════════════════════════════════════════════════════════
 
 // GET /fournisseurs — liste des fournisseurs actifs
-router.get('/', async (c) => {
+router.get('/', requirePermission('STOCK', 'READ'), async (c) => {
   const search = c.req.query('search') ?? ''
   const actif  = c.req.query('actif') !== 'false' // par défaut actifs seulement
 
@@ -206,7 +207,7 @@ router.get('/', async (c) => {
 // POST /fournisseurs — créer un fournisseur
 router.post(
   '/',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('STOCK', 'CREATE'),
   zValidator('json', fournisseurSchema),
   async (c) => {
     const body = c.req.valid('json')
@@ -238,7 +239,7 @@ router.post(
 // PATCH /fournisseurs/:id — modifier un fournisseur
 router.patch(
   '/:id',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('STOCK', 'UPDATE'),
   zValidator('json', fournisseurSchema.partial()),
   async (c) => {
     const { id } = c.req.param()
@@ -289,7 +290,7 @@ router.delete(
 // POST /fournisseurs/:id/envoyer-bon — envoyer bon d'appro par email ou WhatsApp
 router.post(
   '/:id/envoyer-bon',
-  requireRole(['admin', 'superviseur']),
+  requirePermission('STOCK', 'UPDATE'),
   zValidator('json', envoyerBonSchema),
   async (c) => {
     const { id }  = c.req.param()

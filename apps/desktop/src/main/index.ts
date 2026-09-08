@@ -1,8 +1,10 @@
 import { app, BrowserWindow, Menu, shell, Notification, ipcMain, session } from 'electron'
 import { join } from 'path'
+import { existsSync } from 'fs'
 import { fork } from 'child_process'
 import type { ChildProcess } from 'child_process'
 import log from 'electron-log'
+import { config as loadDotenv } from 'dotenv'
 import { registerDbHandlers, getDb } from './ipc/db-handler'
 import { SyncManager } from './ipc/sync-handler'
 import { registerSessionHandlers } from '../auth/session'
@@ -46,15 +48,32 @@ function resolveApiEntry(): string {
  * Le processus enfant n'a pas accès aux APIs Electron — c'est un Node.js pur.
  *
  * Les variables Supabase sont baked dans le bundle par electron-vite (define)
- * et transmises à l'enfant via env.
+ * et transmises à l'enfant via env. Mais TOUTE AUTRE variable de apps/api/.env
+ * (WhatsApp, SMS Africa's Talking, Upstash…) n'est ni baked ni transmise —
+ * apps/api en mode "dev classique" les charge via `tsx watch --env-file=.env`,
+ * mécanisme absent ici puisqu'on exécute le bundle standalone directement.
+ * Résultat sans le fallback ci-dessous : ces intégrations tournent TOUJOURS en
+ * mode dry-run dans l'app desktop, même correctement configurées dans .env.
  */
 function startApiServer(): Promise<void> {
   return new Promise((resolve) => {
     const apiEntry = resolveApiEntry()
     log.info('[api] démarrage depuis', apiEntry)
 
+    // Dev uniquement — en prod apps/api/.env n'est pas embarqué (pas dans
+    // extraResources) ; les secrets de prod devront être fournis autrement
+    // (ex: baked au build comme les variables Supabase ci-dessous).
+    let dotenvVars: Record<string, string> = {}
+    if (isDev) {
+      const apiEnvPath = join(__dirname, '../../../../apps/api/.env')
+      if (existsSync(apiEnvPath)) {
+        dotenvVars = loadDotenv({ path: apiEnvPath, processEnv: {} }).parsed ?? {}
+      }
+    }
+
     const apiEnv: NodeJS.ProcessEnv = {
       ...process.env,
+      ...dotenvVars,
       PORT:                      '3001',
       NODE_ENV:                  isDev ? 'development' : 'production',
       SUPABASE_URL:              process.env.SUPABASE_URL              ?? '',

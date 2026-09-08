@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { supabaseAdmin } from '@forge/db'
+import { supabaseAdmin, RBAC_ROLE_NAMES, RBAC_MODULES, RBAC_ACTIONS } from '@forge/db'
 import type { HonoVariables } from '../types'
 import { requireRole } from '../middleware/rbac'
 import {
@@ -10,12 +10,12 @@ import {
   invalidatePermissionCache,
 } from '../services/rbacService'
 import { resolveInviteRedirectUrl } from '../utils/inviteRedirect'
+import { generateAndSendPin } from '../services/phone-pin.service'
 
 // ── Schémas Zod ───────────────────────────────────────────────────────────────
-
-const RBAC_ROLE_NAMES = ['SUPER_ADMIN','MANAGER','COMMERCIAL','CAISSIER','MAGASINIER','FORMATEUR','READONLY','LIVREUR'] as const
-const RBAC_MODULES    = ['STOCK','COMMERCIAL','FINANCE','HR','PRODUCTION','LOGISTICS','ADMIN','REPORTS','RECEIVABLES'] as const
-const RBAC_ACTIONS    = ['READ','CREATE','UPDATE','DELETE','VALIDATE','CONFIGURE','EXPORT'] as const
+// RBAC_ROLE_NAMES/RBAC_MODULES/RBAC_ACTIONS viennent de packages/db/src/schema-rbac.ts
+// (source unique) — ne plus redéclarer une copie locale ici : c'est cette dérive
+// qui a fait manquer le module CAISSE pendant un temps.
 
 const patchRbacUserSchema = z.object({
   rbacRoleName: z.enum(RBAC_ROLE_NAMES).optional(),
@@ -60,7 +60,12 @@ export const adminRouter = new Hono<{ Variables: HonoVariables }>()
 // ── Gestion utilisateurs réservée au Patron (admin) ──────────────────────────
 adminRouter.use('*', requireRole(['admin']))
 
-const VALID_ROLES = ['admin', 'superviseur', 'operateur', 'technicien'] as const
+// 'caissier' doit rester dans cette liste — apps/web/src/context/AuthContext.tsx
+// et apps/web/src/components/layout/Sidebar.tsx (CAISSIER_RESPONSABLE) le
+// traitent comme un rôle legacy à part entière, distinct de 'operateur'.
+// Sans lui, un compte RBAC CAISSIER créé via RBAC_TO_LEGACY reçoit le rôle
+// legacy 'operateur' et le module Caisse reste invisible dans la sidebar.
+const VALID_ROLES = ['admin', 'superviseur', 'operateur', 'technicien', 'caissier'] as const
 type ForgeRole = typeof VALID_ROLES[number]
 
 // ── GET /api/admin/users ──────────────────────────────────────────────────────
@@ -136,7 +141,7 @@ const RBAC_TO_LEGACY: Record<string, ForgeRole> = {
   SUPER_ADMIN: 'admin',
   MANAGER:     'superviseur',
   COMMERCIAL:  'operateur',
-  CAISSIER:    'operateur',
+  CAISSIER:    'caissier',
   MAGASINIER:  'operateur',
   FORMATEUR:   'technicien',
   READONLY:    'technicien',
@@ -148,8 +153,8 @@ adminRouter.post('/users/invite', async (c) => {
     return c.json({ error: 'Service role key manquant côté serveur' }, 503)
   }
 
-  const { email, nom = '', rbacRoleName } =
-    await c.req.json<{ email: string; nom?: string; rbacRoleName?: string }>()
+  const { email, nom = '', rbacRoleName, password, phone } =
+    await c.req.json<{ email: string; nom?: string; rbacRoleName?: string; password?: string; phone?: string }>()
 
   if (!email) return c.json({ error: 'Email requis' }, 400)
 
@@ -158,28 +163,49 @@ adminRouter.post('/users/invite', async (c) => {
     ? RBAC_TO_LEGACY[rbacRoleName]!
     : 'operateur'
 
-  const redirectTo = resolveInviteRedirectUrl()
-
-  // Invite user (sends magic-link email)
-  const { data, error } = await supabaseAdmin.auth.admin.inviteUserByEmail(email, {
-    data: { role: legacyRole, nom },
-    redirectTo,
-  })
+  // ── Deux chemins de création ──────────────────────────────────────────────
+  // 1. Invitation classique : envoie un email via le service Supabase par
+  //    défaut, dont le quota est très bas (quelques envois/heure) — souvent
+  //    épuisé en dev/tests ("email rate limit exceeded"), et nécessite une
+  //    vraie boîte mail + un SMTP custom configuré en prod pour scaler.
+  // 2. `password` fourni : crée le compte directement avec ce mot de passe,
+  //    déjà confirmé (email_confirm: true) — AUCUN email envoyé, donc aucun
+  //    quota concerné. Utilisable immédiatement pour se connecter. Pensé pour
+  //    créer des comptes de test/démo sans dépendre de l'envoi d'email.
+  const { data, error } = password
+    ? await supabaseAdmin.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: { role: legacyRole, nom },
+        app_metadata:  { role: legacyRole },
+      })
+    : await supabaseAdmin.auth.admin.inviteUserByEmail(email, {
+        data: { role: legacyRole, nom },
+        redirectTo: resolveInviteRedirectUrl(),
+      })
 
   if (error) return c.json({ error: error.message }, 400)
 
   if (data.user) {
     await supabaseAdmin.from('profiles').upsert({
-      id:    data.user.id,
+      id:        data.user.id,
       email,
       nom,
-      role:  legacyRole,
-      actif: true,
+      role:      legacyRole,
+      actif:     true,
+      ...(phone ? { telephone: phone } : {}),
     })
 
-    await supabaseAdmin.auth.admin.updateUserById(data.user.id, {
-      app_metadata: { role: legacyRole },
-    }).catch((e) => console.error('[admin] app_metadata update on invite failed:', e))
+    // createUser positionne déjà app_metadata.role ci-dessus — cet appel ne
+    // sert que pour le chemin invite (inviteUserByEmail ne le fait pas).
+    if (!password) {
+      // auth.admin.updateUserById renvoie une vraie Promise (appel fetch direct) —
+      // .catch() y est valide.
+      await supabaseAdmin.auth.admin.updateUserById(data.user.id, {
+        app_metadata: { role: legacyRole },
+      }).catch((e) => console.error('[admin] app_metadata update on invite failed:', e))
+    }
 
     // Créer le profil RBAC avec le rôle sélectionné
     if (rbacRoleName) {
@@ -190,14 +216,32 @@ adminRouter.post('/users/invite', async (c) => {
         .single()
 
       if (roleRow) {
-        await supabaseAdmin
+        // Le query builder Supabase (from().upsert()) n'est "thenable" qu'après
+        // await — pas une vraie Promise, donc pas de .catch() dessus (c'était le
+        // bug : "supabaseAdmin.from(...).upsert(...).catch is not a function",
+        // qui faisait échouer TOUTE la création d'utilisateur avant même de
+        // renvoyer la réponse). On l'attend et on vérifie `error` normalement.
+        // password_must_change=false quand un admin fixe lui-même le mot de
+        // passe (chemin createUser) — le forcer à changer un mot de passe
+        // qu'on vient de lui donner n'a pas de sens ; seul le chemin invite
+        // (l'utilisateur choisit son propre mot de passe au premier login)
+        // doit le forcer.
+        const { error: rbacUpsertErr } = await supabaseAdmin
           .from('rbac_user_profiles')
           .upsert(
-            { profile_id: data.user.id, role_id: roleRow.id, is_active: true, password_must_change: true },
+            { profile_id: data.user.id, role_id: roleRow.id, is_active: true, password_must_change: !password },
             { onConflict: 'profile_id' },
           )
-          .catch((e) => console.error('[admin] rbac_user_profiles upsert failed:', e))
+        if (rbacUpsertErr) console.error('[admin] rbac_user_profiles upsert failed:', rbacUpsertErr.message)
       }
+    }
+
+    // Téléphone fourni → PIN aléatoire à 4 chiffres généré et envoyé par SMS
+    // (+ WhatsApp best-effort). Non bloquant : un échec d'envoi ne doit pas
+    // faire échouer la création du compte, qui reste utilisable par email.
+    if (phone) {
+      const pinResult = await generateAndSendPin(data.user.id, phone)
+      if (!pinResult.ok) console.error('[admin] génération/envoi PIN échoué:', pinResult.error)
     }
   }
 
@@ -407,10 +451,15 @@ adminRouter.patch('/rbac/users/:id/reset-password', async (c) => {
     .update({ password_must_change: true })
     .eq('profile_id', targetId)
 
-  await supabaseAdmin!.auth.admin.generateLink({
-    type: 'recovery',
-    email: profile.email,
+  // admin.generateLink() NE PAS confondre avec resetPasswordForEmail : le
+  // premier construit juste un lien (pour un envoi d'email fait par vos soins),
+  // il n'envoie RIEN — c'était le bug ici, l'admin cliquait "reset" et
+  // l'utilisateur ne recevait jamais rien. resetPasswordForEmail déclenche le
+  // vrai email Supabase, avec le même redirectTo corrigé que l'invitation.
+  const { error: resetErr } = await supabaseAdmin!.auth.resetPasswordForEmail(profile.email, {
+    redirectTo: resolveInviteRedirectUrl(),
   })
+  if (resetErr) return c.json({ error: resetErr.message }, 400)
 
   writeAuditLog({
     userId: caller.id, actionType: 'PASSWORD_RESET',
@@ -425,7 +474,14 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 async function resolveRoleId(idOrName: string): Promise<string | null> {
   if (UUID_RE.test(idOrName)) return idOrName
-  const { data } = await db.from('rbac_roles').select('id').eq('name', idOrName).single()
+  // error non vérifié auparavant : un timeout/coupure réseau vers Supabase
+  // (cf. fetchWithTimeout, packages/db/src/supabase-client.ts) faisait échouer
+  // cette requête silencieusement — data restait undefined et le rôle
+  // ressortait comme "introuvable" alors qu'il existe bel et bien, masquant
+  // un problème réseau derrière un faux 404 métier. On relance maintenant
+  // l'erreur pour que app.onError la classe correctement (503 réseau vs 404).
+  const { data, error } = await db.from('rbac_roles').select('id').eq('name', idOrName).single()
+  if (error && error.code !== 'PGRST116') throw error   // PGRST116 = "no rows" (vraiment introuvable)
   return data?.id ?? null
 }
 
@@ -471,13 +527,19 @@ adminRouter.patch(
   '/rbac/roles/:id/permissions',
   zValidator('json', permissionsSchema),
   async (c) => {
-    const roleId = await resolveRoleId(c.req.param('id'))
-    if (!roleId) return c.json({ error: 'Rôle introuvable' }, 404)
-
     const caller = c.get('user')
     const { permissions } = c.req.valid('json')
 
-    const permCheck = await checkPermission(caller.id, 'ADMIN', 'CONFIGURE', caller.role)
+    // ── Requêtes indépendantes lancées en parallèle — même raisonnement que
+    // POST /api/caisse/tickets : chaque aller-retour Supabase s'additionnait
+    // plutôt que de se chevaucher, ce qui faisait dépasser le timeout client
+    // (15s) sur connexion lente/à froid, avant même d'atteindre les requêtes
+    // de grant/revoke plus bas.
+    const [roleId, permCheck] = await Promise.all([
+      resolveRoleId(c.req.param('id')),
+      checkPermission(caller.id, 'ADMIN', 'CONFIGURE', caller.role),
+    ])
+    if (!roleId) return c.json({ error: 'Rôle introuvable' }, 404)
     if (!permCheck.allowed) return c.json({ error: 'Accès refusé', code: 'FORBIDDEN' }, 403)
 
     // Garde-rail : SUPER_ADMIN ne peut pas perdre ADMIN:CONFIGURE
@@ -503,12 +565,17 @@ adminRouter.patch(
     const toGrant   = permissions.filter(p => p.granted)
     const toRevoke  = permissions.filter(p => !p.granted)
 
-    if (toRevoke.length > 0) {
-      const { data: revokePerms } = await db
-        .from('rbac_permissions')
-        .select('id, module, action')
+    // Un seul fetch de rbac_permissions réutilisé pour grant ET revoke — la
+    // matrice envoie systématiquement les 70 combinaisons module×action à
+    // chaque sauvegarde (remplacement complet, pas un diff), donc les deux
+    // branches étaient quasi toujours empruntées et interrogeaient deux fois
+    // la même table pour rien.
+    const allPerms = (toGrant.length > 0 || toRevoke.length > 0)
+      ? (await db.from('rbac_permissions').select('id, module, action')).data ?? []
+      : []
 
-      const revokeIds = (revokePerms ?? [])
+    if (toRevoke.length > 0) {
+      const revokeIds = allPerms
         .filter(p => toRevoke.some(r => r.module === p.module && r.action === p.action))
         .map(p => p.id)
 
@@ -522,11 +589,7 @@ adminRouter.patch(
     }
 
     if (toGrant.length > 0) {
-      const { data: grantPerms } = await db
-        .from('rbac_permissions')
-        .select('id, module, action')
-
-      const grantRows = (grantPerms ?? [])
+      const grantRows = allPerms
         .filter(p => toGrant.some(g => g.module === p.module && g.action === p.action))
         .map(p => ({ role_id: roleId, permission_id: p.id, granted_by: caller.id }))
 

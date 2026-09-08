@@ -1,8 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { dbGetCommandes, dbCreateCommande, dbUpdateStatutCommande } from '@/lib/db'
-import { useAuth } from '@/context/AuthContext'
 import { apiClient } from '@/lib/api-client'
+
+function queryString(params?: Record<string, string | number | boolean | undefined>) {
+  const qs = new URLSearchParams()
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') qs.set(key, String(value))
+  })
+  const value = qs.toString()
+  return value ? `?${value}` : ''
+}
 
 export interface ConditionPaiement {
   id: string; code: string; libelle: string
@@ -47,18 +54,20 @@ interface CommandesResponse { data: Commande[]; total: number }
 export function useCommandes(params?: { statut?: string; search?: string; client_id?: string; enabled?: boolean }) {
   return useQuery({
     queryKey:  ['commandes', { statut: params?.statut, search: params?.search, client_id: params?.client_id }],
-    queryFn:   () => dbGetCommandes(params) as Promise<CommandesResponse>,
+    queryFn:   () => apiClient.get<CommandesResponse>(
+      `/api/commandes${queryString({ statut: params?.statut, search: params?.search, client_id: params?.client_id })}`,
+    ),
     staleTime: 20_000,
     enabled:   params?.enabled !== false,
   })
 }
 
 export function useCreateCommande() {
-  const qc   = useQueryClient()
-  const auth = useAuth()
+  const qc = useQueryClient()
   return useMutation({
+    // userId n'est plus passé côté client : l'API le tire du JWT (c.get('user')).
     mutationFn: (payload: CreateCommandePayload) =>
-      dbCreateCommande(payload, auth.user?.id),
+      apiClient.post<Commande>('/api/commandes', payload),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['commandes'] }); toast.success('Commande créée') },
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -92,11 +101,10 @@ export function useConditionsPaiementEligibles(
 }
 
 export function useStatutCommande() {
-  const qc   = useQueryClient()
-  const auth = useAuth()
+  const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ id, statut, commentaire }: { id: string; statut: string; commentaire?: string }) =>
-      dbUpdateStatutCommande(id, statut, commentaire, auth.user?.id),
+      apiClient.patch(`/api/commandes/${id}/statut`, { statut, commentaire }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['commandes'] })
       void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })

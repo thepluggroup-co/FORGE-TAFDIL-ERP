@@ -2,14 +2,13 @@ import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   Users, UserPlus, Shield, CheckCircle, XCircle,
-  Mail, Crown, ChevronDown, Loader2, Search,
+  Mail, Crown, ChevronDown, Loader2, Search, Phone,
 } from 'lucide-react'
 import { PageHeader, Button, SlideOver } from '@forge/ui'
 import { useAuth } from '@/context/AuthContext'
 import { useAdminUsers, useUpdateUser, useInviteUser } from '@/hooks/useAdmin'
 import type { ForgeRole, UserProfile } from '@/hooks/useAdmin'
 import { toast } from 'sonner'
-import { Navigate } from 'react-router-dom'
 import { UserManagement, PermissionsMatrix, AuditLogViewer, SecuritySettings } from '@/features/admin'
 import type { RbacRoleName } from '@/hooks/useRbac'
 
@@ -184,18 +183,26 @@ function UserRow({ user, isSelf }: { user: UserProfile; isSelf: boolean }) {
 // ── Rôles RBAC pour le formulaire d'invitation ────────────────────────────────
 
 // Rôles basés sur la configuration originale de FORGE
+// Les 8 rôles RBAC (packages/db/src/schema-rbac.ts) doivent tous apparaître ici —
+// avant ce correctif, CAISSIER/MAGASINIER/FORMATEUR/LIVREUR étaient absents du
+// formulaire d'invitation ET de l'onglet "Permissions", donc impossibles à
+// inviter ou à configurer depuis l'UI.
 const FORGE_ROLES: Array<{
   name: RbacRoleName; label: string; desc: string; color: string; bg: string; icon?: string
 }> = [
   { name: 'SUPER_ADMIN', label: 'Admin (Patron)',  desc: 'Accès complet + gestion utilisateurs',       color: '#C62828', bg: '#FFEBEE', icon: '👑' },
   { name: 'MANAGER',     label: 'Superviseur',     desc: 'Validation, stocks, rapports, formation',    color: '#1d4ed8', bg: '#dbeafe' },
   { name: 'COMMERCIAL',  label: 'Opérateur',       desc: 'Stocks, commandes, bons, production',        color: '#15803d', bg: '#dcfce7' },
+  { name: 'CAISSIER',    label: 'Caissier',        desc: 'Vente comptoir, encaissement, sessions caisse', color: '#0891b2', bg: '#cffafe' },
+  { name: 'MAGASINIER',  label: 'Magasinier',      desc: 'Stocks, approvisionnement, logistique',      color: '#d97706', bg: '#fef3c7' },
+  { name: 'FORMATEUR',   label: 'Formateur',       desc: 'RH, formation, apprenants',                  color: '#4f46e5', bg: '#e0e7ff' },
+  { name: 'LIVREUR',     label: 'Livreur',         desc: 'Livraisons, bons de sortie assignés',        color: '#ea580c', bg: '#ffedd5' },
   { name: 'READONLY',    label: 'Apprenant',       desc: 'Lecture tâches, stock et formation',         color: '#6b7280', bg: '#f3f4f6' },
 ]
 
 // ── Invite slide-over ──────────────────────────────────────────────────────────
 
-const DEFAULT_INVITE = { email: '', rbacRoleName: 'COMMERCIAL' as RbacRoleName, nom: '' }
+const DEFAULT_INVITE = { email: '', rbacRoleName: 'COMMERCIAL' as RbacRoleName, nom: '', phone: '' }
 
 function InviteSlideOver({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [form, setForm] = useState(DEFAULT_INVITE)
@@ -208,7 +215,7 @@ function InviteSlideOver({ open, onClose }: { open: boolean; onClose: () => void
     setErr(null)
 
     inviteUser.mutate(
-      { email: form.email, nom: form.nom, rbacRoleName: form.rbacRoleName },
+      { email: form.email, nom: form.nom, rbacRoleName: form.rbacRoleName, phone: form.phone.trim() || undefined },
       {
         onSuccess: () => {
           toast.success(`Invitation envoyée à ${form.email}`)
@@ -257,6 +264,27 @@ function InviteSlideOver({ open, onClose }: { open: boolean; onClose: () => void
             className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg
               focus:outline-none focus:ring-2 focus:ring-[#C62828]"
           />
+        </div>
+
+        {/* Téléphone — optionnel, active la connexion par PIN */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">
+            Téléphone <span className="normal-case font-normal text-gray-400">(optionnel)</span>
+          </label>
+          <div className="relative">
+            <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <input
+              type="tel"
+              value={form.phone}
+              onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+              placeholder="+237 6XX XXX XXX"
+              className="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-200 rounded-lg
+                focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+            />
+          </div>
+          <p className="text-[11px] text-gray-400 mt-1.5">
+            Si renseigné, un code PIN à 4 chiffres est généré et envoyé par SMS — utile pour le personnel sans accès facile à l'email (comptoir, livraison).
+          </p>
         </div>
 
         {/* Rôle RBAC */}
@@ -318,17 +346,12 @@ function InviteSlideOver({ open, onClose }: { open: boolean; onClose: () => void
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function AdminSettings() {
-  const { user, role: appRole } = useAuth()
+  const { user }                 = useAuth()
   const { data, isLoading }     = useAdminUsers()
   const [search, setSearch]     = useState('')
   const [inviteOpen, setInvite] = useState(false)
   const [adminTab, setAdminTab]       = useState<AdminTab>('Utilisateurs')
   const [permRoleIdx, setPermRoleIdx] = useState(0)
-
-  // Guard — non-admins get redirected
-  if (appRole !== null && appRole !== 'admin') {
-    return <Navigate to="/dashboard" replace />
-  }
 
   const users: UserProfile[] = data?.data ?? []
 
@@ -470,63 +493,18 @@ export default function AdminSettings() {
         )}
       </div>
 
-      {/* ── Permission matrix ── */}
+      {/* ── Permission matrix — renvoi vers l'onglet "Permissions" (matrice réelle,
+          branchée sur rbac_role_permissions) plutôt qu'un tableau statique
+          déconnecté de toute donnée réelle. ── */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-        <div className="flex items-center gap-2 px-5 py-4 border-b border-gray-100">
-          <Shield className="h-4 w-4 text-[#C62828]" />
-          <h2 className="font-semibold text-sm text-[#212121]">Matrice des permissions</h2>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-gray-100 bg-gray-50/50">
-                <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Module</th>
-                {ROLES.map((r) => (
-                  <th
-                    key={r.value}
-                    className="px-4 py-2.5 text-xs font-semibold uppercase text-center"
-                    style={{ color: r.color }}
-                  >
-                    {r.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                { module: 'Dashboard',           admin: true,  superviseur: true,  operateur: true,  technicien: true  },
-                { module: 'Boutique',             admin: true,  superviseur: true,  operateur: true,  technicien: true  },
-                { module: 'Production',           admin: true,  superviseur: true,  operateur: true,  technicien: true  },
-                { module: 'Commandes',            admin: true,  superviseur: true,  operateur: true,  technicien: true  },
-                { module: 'Stocks',               admin: true,  superviseur: true,  operateur: true,  technicien: true  },
-                { module: 'Fournisseurs',         admin: true,  superviseur: true,  operateur: true,  technicien: true  },
-                { module: 'Devis',                admin: true,  superviseur: true,  operateur: true,  technicien: true  },
-                { module: 'Clients',              admin: true,  superviseur: true,  operateur: true,  technicien: true  },
-                { module: 'Logistique',           admin: true,  superviseur: true,  operateur: true,  technicien: true  },
-                { module: 'Finance',              admin: true,  superviseur: true,  operateur: false, technicien: false },
-                { module: 'RH',                   admin: true,  superviseur: true,  operateur: false, technicien: false },
-                { module: 'Formation',            admin: true,  superviseur: true,  operateur: true,  technicien: false },
-                { module: 'Équipements',          admin: true,  superviseur: true,  operateur: true,  technicien: false },
-                { module: 'Projets',              admin: true,  superviseur: true,  operateur: false, technicien: false },
-                { module: 'Intelligence',         admin: true,  superviseur: true,  operateur: false, technicien: false },
-                { module: 'Marketing',            admin: true,  superviseur: true,  operateur: false, technicien: false },
-                { module: 'IoT',                  admin: true,  superviseur: true,  operateur: true,  technicien: false },
-                { module: 'Sécurité',             admin: true,  superviseur: true,  operateur: false, technicien: false },
-                { module: 'Administration',       admin: true,  superviseur: false, operateur: false, technicien: false },
-              ].map((row) => (
-                <tr key={row.module} className="border-b border-gray-50 hover:bg-gray-50/50">
-                  <td className="px-4 py-2.5 text-sm text-[#212121] font-medium">{row.module}</td>
-                  {(['admin', 'superviseur', 'operateur', 'technicien'] as const).map((role) => (
-                    <td key={role} className="px-4 py-2.5 text-center">
-                      {row[role]
-                        ? <CheckCircle className="h-4 w-4 text-green-500 mx-auto" />
-                        : <XCircle    className="h-4 w-4 text-gray-200 mx-auto"  />}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="flex items-center justify-between gap-2 px-5 py-4">
+          <div className="flex items-center gap-2">
+            <Shield className="h-4 w-4 text-[#C62828]" />
+            <h2 className="font-semibold text-sm text-[#212121]">Matrice des permissions</h2>
+          </div>
+          <Button variant="secondary" onClick={() => setAdminTab('Permissions')}>
+            Ouvrir la matrice des permissions →
+          </Button>
         </div>
       </div>
 

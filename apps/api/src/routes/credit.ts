@@ -9,6 +9,7 @@ import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
 import { requireRole } from '../middleware/rbac'
+import { requirePermission } from '../middleware/permission.middleware'
 import type { HonoVariables } from '../types'
 import {
   checkEligibility,
@@ -60,7 +61,7 @@ const eligibilityRuleSchema = z.object({
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /credit/limits — list all limits with client info
-router.get('/limits', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/limits', requirePermission('RECEIVABLES', 'READ'), async (c) => {
   const { data, error } = await db
     .from('customer_credit_limits')
     .select('*, clients(id, nom, telephone, type)')
@@ -75,7 +76,7 @@ router.get('/limits', requireRole(['admin', 'superviseur']), async (c) => {
 })
 
 // GET /credit/limits/:customerId
-router.get('/limits/:customerId', async (c) => {
+router.get('/limits/:customerId', requirePermission('RECEIVABLES', 'READ'), async (c) => {
   const { customerId } = c.req.param()
 
   const { data, error } = await db
@@ -128,7 +129,7 @@ router.post('/limits', requireRole(['admin']), zValidator('json', creditLimitSch
 })
 
 // GET /credit/limits/:customerId/check
-router.get('/limits/:customerId/check', async (c) => {
+router.get('/limits/:customerId/check', requirePermission('RECEIVABLES', 'READ'), async (c) => {
   const { customerId } = c.req.param()
 
   try {
@@ -145,7 +146,7 @@ router.get('/limits/:customerId/check', async (c) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // POST /credit/plans
-router.post('/plans', requireRole(['admin', 'superviseur', 'operateur']), zValidator('json', createPlanSchema), async (c) => {
+router.post('/plans', requirePermission('RECEIVABLES', 'CREATE'), zValidator('json', createPlanSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
 
@@ -167,7 +168,7 @@ router.post('/plans', requireRole(['admin', 'superviseur', 'operateur']), zValid
 })
 
 // GET /credit/plans/:planId
-router.get('/plans/:planId', async (c) => {
+router.get('/plans/:planId', requirePermission('RECEIVABLES', 'READ'), async (c) => {
   const { planId } = c.req.param()
 
   const { data, error } = await db
@@ -181,7 +182,7 @@ router.get('/plans/:planId', async (c) => {
 })
 
 // GET /credit/plans?customerId=&status=
-router.get('/plans', async (c) => {
+router.get('/plans', requirePermission('RECEIVABLES', 'READ'), async (c) => {
   const customerId = c.req.query('customerId')
   const status     = c.req.query('status')
   const page       = Math.max(1, parseInt(c.req.query('page') ?? '1'))
@@ -209,7 +210,7 @@ router.get('/plans', async (c) => {
 })
 
 // PATCH /credit/plans/:planId/cancel — admin only
-router.patch('/plans/:planId/cancel', requireRole(['admin', 'superviseur']), async (c) => {
+router.patch('/plans/:planId/cancel', requirePermission('RECEIVABLES', 'VALIDATE'), async (c) => {
   const { planId } = c.req.param()
   const user       = c.get('user')
 
@@ -242,7 +243,7 @@ router.patch('/plans/:planId/cancel', requireRole(['admin', 'superviseur']), asy
 // POST /credit/plans/:planId/installments/:installmentId/pay
 router.post(
   '/plans/:planId/installments/:installmentId/pay',
-  requireRole(['admin', 'superviseur', 'operateur']),
+  requirePermission('RECEIVABLES', 'CREATE'),
   zValidator('json', recordPaymentSchema),
   async (c) => {
     const { installmentId } = c.req.param()
@@ -265,7 +266,7 @@ router.post(
 )
 
 // GET /credit/plans/:planId/installments
-router.get('/plans/:planId/installments', async (c) => {
+router.get('/plans/:planId/installments', requirePermission('RECEIVABLES', 'READ'), async (c) => {
   const { planId } = c.req.param()
 
   const { data, error } = await db
@@ -283,7 +284,7 @@ router.get('/plans/:planId/installments', async (c) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /credit/dashboard
-router.get('/dashboard', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/dashboard', requirePermission('RECEIVABLES', 'READ'), async (c) => {
   const [plansRes, overdueRes, totalRes] = await Promise.all([
     // Plans actifs
     db.from('payment_plans').select('customer_id, outstanding_balance', { count: 'exact' }).eq('status', 'ACTIVE'),
@@ -332,7 +333,7 @@ router.get('/dashboard', requireRole(['admin', 'superviseur']), async (c) => {
 })
 
 // GET /credit/overdue
-router.get('/overdue', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/overdue', requirePermission('RECEIVABLES', 'READ'), async (c) => {
   const today = new Date().toISOString().slice(0, 10)
 
   // Requêtes séparées pour éviter les joins PostgREST (cache FK non garanti)
@@ -384,7 +385,7 @@ router.get('/overdue', requireRole(['admin', 'superviseur']), async (c) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /credit/rules
-router.get('/rules', async (c) => {
+router.get('/rules', requirePermission('RECEIVABLES', 'READ'), async (c) => {
   const { data, error } = await db
     .from('credit_eligibility_rules')
     .select('*')

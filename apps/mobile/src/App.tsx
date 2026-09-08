@@ -7,10 +7,10 @@ import { DashboardPage } from './pages/DashboardPage'
 import { OrdersPage } from './pages/OrdersPage'
 import { StocksPage } from './pages/StocksPage'
 import { StockDetailPage } from './pages/StockDetailPage'
-import { BoutiquePage } from './pages/BoutiquePage'
 import { ProfilePage } from './pages/ProfilePage'
 import { ApprobationPage } from './pages/ApprobationPage'
 import { LivreurPage } from './pages/LivreurPage'
+import { CaissePage } from './pages/CaissePage'
 
 function AuthenticatedApp() {
   const { user } = useAuth()
@@ -22,13 +22,15 @@ function AuthenticatedApp() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/orders" element={<OrdersPage />} />
-          <Route path="/boutique" element={<BoutiquePage />} />
           <Route path="/approbation" element={<ApprobationPage />} />
           <Route path="/stocks" element={<StocksPage />} />
           <Route path="/stocks/:id" element={<StockDetailPage />} />
           <Route path="/profile" element={<ProfilePage />} />
           {user?.role === 'livreur' && (
             <Route path="/livraisons" element={<LivreurPage />} />
+          )}
+          {(user?.role === 'caissier' || user?.role === 'admin' || user?.role === 'superviseur') && (
+            <Route path="/caisse" element={<CaissePage />} />
           )}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>

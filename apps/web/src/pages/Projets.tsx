@@ -18,6 +18,7 @@ import type { Projet, ProjetMembre, ProjetRessource, AddRessourcePayload } from 
 import { useClients } from '@/hooks/useClients'
 import { useEmployes } from '@/hooks/useRH'
 import { useAuth } from '@/context/AuthContext'
+import { usePermissions } from '@/hooks/useRbac'
 import { ClientCombobox } from '@/components/shared/ClientCombobox'
 import type { Client } from '@/hooks/useClients'
 
@@ -590,7 +591,8 @@ function ProjetDetailPanel({
 }) {
   const [activeTab, setActiveTab] = useState<'infos' | 'equipe' | 'ressources' | 'taches'>('infos')
   const updateStatut = useUpdateProjetStatut()
-  const canEdit = role === 'admin' || role === 'superviseur'
+  const { hasPermission } = usePermissions()
+  const canEdit = hasPermission('PRODUCTION', 'UPDATE')
   const sc = STATUT_MAP[projet.statut as string] ?? STATUT_MAP.planifie
 
   // Charger le détail du projet (avec tâches à jour)
@@ -818,7 +820,8 @@ function NouveauProjetForm({ onClose }: { onClose: () => void }) {
 
 export default function Projets() {
   const { role } = useAuth()
-  const canAdmin = role === 'admin' || role === 'superviseur'
+  const { hasPermission } = usePermissions()
+  const canAdmin = hasPermission('PRODUCTION', 'UPDATE')
 
   const [formOpen,      setFormOpen]      = useState(false)
   const [selectedProjet,setSelectedProjet]= useState<ProjetRecord | null>(null)

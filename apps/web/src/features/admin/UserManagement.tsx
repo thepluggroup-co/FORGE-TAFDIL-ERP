@@ -4,25 +4,30 @@ import {
   Users, Shield, ShieldOff, KeyRound, Trash2,
   Plus, Search, ChevronDown, X, Check,
 } from 'lucide-react'
-import { Button, Badge } from '@forge/ui'
+import { Button } from '@forge/ui'
 import {
   useRbacUsers,
   useUpdateRbacUser,
+  RBAC_ROLE_NAMES, RBAC_ROLE_LABELS,
   type RbacUserRow,
   type RbacRoleName,
 } from '@/hooks/useRbac'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const RBAC_ROLES: { name: RbacRoleName; label: string; color: string }[] = [
-  { name: 'SUPER_ADMIN', label: 'Super Admin',    color: 'bg-red-100 text-red-700' },
-  { name: 'MANAGER',     label: 'Manager',         color: 'bg-purple-100 text-purple-700' },
-  { name: 'COMMERCIAL',  label: 'Commercial',      color: 'bg-blue-100 text-blue-700' },
-  { name: 'CAISSIER',    label: 'Caissier',        color: 'bg-green-100 text-green-700' },
-  { name: 'MAGASINIER',  label: 'Magasinier',      color: 'bg-yellow-100 text-yellow-700' },
-  { name: 'FORMATEUR',   label: 'Formateur',       color: 'bg-indigo-100 text-indigo-700' },
-  { name: 'READONLY',    label: 'Lecture seule',   color: 'bg-gray-100 text-gray-600' },
-]
+const ROLE_COLORS: Record<RbacRoleName, string> = {
+  SUPER_ADMIN: 'bg-red-100 text-red-700',
+  MANAGER:     'bg-purple-100 text-purple-700',
+  COMMERCIAL:  'bg-blue-100 text-blue-700',
+  CAISSIER:    'bg-green-100 text-green-700',
+  MAGASINIER:  'bg-yellow-100 text-yellow-700',
+  FORMATEUR:   'bg-indigo-100 text-indigo-700',
+  READONLY:    'bg-gray-100 text-gray-600',
+  LIVREUR:     'bg-orange-100 text-orange-700',
+}
+
+const RBAC_ROLES: { name: RbacRoleName; label: string; color: string }[] =
+  RBAC_ROLE_NAMES.map((name) => ({ name, label: RBAC_ROLE_LABELS[name], color: ROLE_COLORS[name] }))
 
 function getRoleStyle(name: RbacRoleName | undefined) {
   return RBAC_ROLES.find(r => r.name === name)?.color ?? 'bg-gray-100 text-gray-500'

@@ -1,12 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { supabase } from '@/lib/supabase'
 import { apiClient } from '@/lib/api-client'
-import {
-  dbGetApprenants, dbCreateApprenant,
-  dbGetFormationSessions,
-} from '@/lib/db'
-import { useAuth } from '@/context/AuthContext'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -213,25 +207,14 @@ export function usePresences(params?: { date?: string; employe_id?: string }) {
 }
 
 export function useCreatePresence() {
-  const qc   = useQueryClient()
-  const auth = useAuth()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (payload: {
+    // heures est recalculé côté API depuis arrivee/depart (apps/api/src/routes/rh.ts) —
+    // même formule, plus besoin de la dupliquer ici.
+    mutationFn: (payload: {
       employe_id: string; date: string; arrivee?: string; depart?: string
       statut: Presence['statut']; notes?: string
-    }) => {
-      let heures = 0
-      if (payload.arrivee && payload.depart) {
-        const [ah, am] = payload.arrivee.split(':').map(Number)
-        const [dh, dm] = payload.depart.split(':').map(Number)
-        heures = Math.max(0, (dh * 60 + dm - ah * 60 - am) / 60)
-      }
-      const { data, error } = await supabase.from('presences')
-        .insert({ ...payload, heures: Math.round(heures * 100) / 100, created_by: auth.user?.id })
-        .select().single()
-      if (error) throw new Error(error.message)
-      return data!
-    },
+    }) => apiClient.post<Presence>('/api/rh/presences', payload),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['presences'] }); toast.success('Présence enregistrée') },
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -486,7 +469,10 @@ export function useExportPaie() {
 export function useApprenants(params?: { statut?: string }) {
   return useQuery({
     queryKey:  ['apprenants', params],
-    queryFn:   () => dbGetApprenants(params) as Promise<ApprenantsResponse>,
+    queryFn:   () => {
+      const qs = params?.statut ? `?statut=${encodeURIComponent(params.statut)}` : ''
+      return apiClient.get<ApprenantsResponse>(`/api/rh/apprenants${qs}`)
+    },
     staleTime: 60_000,
   })
 }
@@ -494,58 +480,29 @@ export function useApprenants(params?: { statut?: string }) {
 export function useCreateApprenant() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (payload: CreateApprenantPayload) => dbCreateApprenant(payload as unknown as Record<string, unknown>),
+    mutationFn: (payload: CreateApprenantPayload) => apiClient.post<Apprenant>('/api/rh/apprenants', payload),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['apprenants'] }); toast.success('Apprenant ajouté') },
     onError:   (err: Error) => toast.error(err.message),
   })
 }
 
 export function useProgressionApprenant() {
-  const qc   = useQueryClient()
-  const auth = useAuth()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, commentaire }: { id: string; observations?: string; commentaire?: string }) => {
-      const { data: a } = await supabase.from('apprenants').select('niveau,statut').eq('id', id).single()
-      if (!a) throw new Error('Apprenant introuvable')
-      const ap = a as { niveau: number; statut: string }
-      if (ap.statut !== 'actif') throw new Error('Apprenant inactif')
-      if (ap.niveau >= 5) throw new Error('Niveau maximum atteint (5/5)')
-      const nouveauNiveau = ap.niveau + 1
-      await supabase.from('validations_niveau').insert({
-        apprenant_id: id, niveau: nouveauNiveau,
-        valide_by: auth.user?.id, date_validation: new Date().toISOString().slice(0, 10),
-        commentaire: commentaire ?? null,
-      })
-      const { data, error } = await supabase.from('apprenants')
-        .update({ niveau: nouveauNiveau, updated_at: new Date().toISOString() }).eq('id', id).select().single()
-      if (error) throw new Error(error.message)
-      return data!
-    },
+    // Règles (niveau actif, max 5/5) revalidées côté API — apps/api/src/routes/rh.ts.
+    mutationFn: ({ id, commentaire }: { id: string; observations?: string; commentaire?: string }) =>
+      apiClient.post<Apprenant>(`/api/rh/apprenants/${id}/progression`, { commentaire }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['apprenants'] }); toast.success('Niveau validé') },
     onError:   (err: Error) => toast.error(err.message),
   })
 }
 
 export function useRecruterApprenant() {
-  const qc   = useQueryClient()
-  const auth = useAuth()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, ...body }: RecruterPayload) => {
-      const { data: a } = await supabase.from('apprenants').select('*').eq('id', id).single()
-      if (!a) throw new Error('Apprenant introuvable')
-      const ap = a as { nom: string; niveau: number; duree_mois: number; statut: string }
-      if (ap.statut === 'recrute') throw new Error('Déjà recruté')
-      if (ap.niveau < 5) throw new Error(`Niveau insuffisant : ${ap.niveau}/5`)
-      if (ap.duree_mois < 6) throw new Error(`Durée insuffisante : ${ap.duree_mois} mois`)
-      const { data: emp, error: empErr } = await supabase.from('employes')
-        .insert({ nom: ap.nom, ...body, statut: 'actif', created_by: auth.user?.id, sync_status: 'synced' })
-        .select().single()
-      if (empErr || !emp) throw new Error(empErr?.message ?? 'Erreur création employé')
-      await supabase.from('apprenants')
-        .update({ statut: 'recrute', employe_id: (emp as { id: string }).id, updated_at: new Date().toISOString() })
-        .eq('id', id)
-      return emp
-    },
+    // Règles (niveau 5/5, 6 mois min, création employé + statut='recrute')
+    // revalidées et exécutées côté API.
+    mutationFn: ({ id, ...body }: RecruterPayload) => apiClient.post<Employe>(`/api/rh/apprenants/${id}/recruter`, body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['apprenants'] })
       void qc.invalidateQueries({ queryKey: ['employes'] })
@@ -558,14 +515,7 @@ export function useRecruterApprenant() {
 export function useApprenantHistorique(id: string | null) {
   return useQuery({
     queryKey: ['apprenant-historique', id],
-    queryFn: async () => {
-      const [{ data: a }, { data: v }, { data: i }] = await Promise.all([
-        supabase.from('apprenants').select('*').eq('id', id!).single(),
-        supabase.from('validations_niveau').select('*').eq('apprenant_id', id!).order('date_validation'),
-        supabase.from('formation_inscriptions').select('*, formation_sessions(module,niveau,date_debut,date_fin,formateur,lieu)').eq('apprenant_id', id!),
-      ])
-      return { apprenant: a, validations: v ?? [], inscriptions: i ?? [] } as ApprenantHistorique
-    },
+    queryFn:  () => apiClient.get<ApprenantHistorique>(`/api/rh/apprenants/${id}/historique`),
     enabled: !!id, staleTime: 30_000,
   })
 }
@@ -575,21 +525,22 @@ export function useApprenantHistorique(id: string | null) {
 export function useFormationSessions(params?: { statut?: string; niveau?: number }) {
   return useQuery({
     queryKey:  ['formation-sessions', params],
-    queryFn:   () => dbGetFormationSessions(params) as unknown as Promise<SessionsResponse>,
+    queryFn:   () => {
+      const qs = new URLSearchParams()
+      if (params?.statut)  qs.set('statut', params.statut)
+      if (params?.niveau)  qs.set('niveau', String(params.niveau))
+      const q = qs.toString()
+      return apiClient.get<SessionsResponse>(`/api/rh/formation/sessions${q ? `?${q}` : ''}`)
+    },
     staleTime: 60_000,
   })
 }
 
 export function useCreateFormationSession() {
-  const qc   = useQueryClient()
-  const auth = useAuth()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (payload: CreateFormationSessionPayload) => {
-      const { data, error } = await supabase.from('formation_sessions')
-        .insert({ ...payload, created_by: auth.user?.id }).select().single()
-      if (error) throw new Error(error.message)
-      return { ...data, nb_inscrits: 0 }
-    },
+    mutationFn: (payload: CreateFormationSessionPayload) =>
+      apiClient.post<FormationSession>('/api/rh/formation/sessions', payload),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['formation-sessions'] }); toast.success('Session créée') },
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -598,12 +549,8 @@ export function useCreateFormationSession() {
 export function useUpdateFormationSession() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, ...body }: Partial<CreateFormationSessionPayload> & { id: string }) => {
-      const { data, error } = await supabase.from('formation_sessions')
-        .update({ ...body, updated_at: new Date().toISOString() }).eq('id', id).select().single()
-      if (error) throw new Error(error.message)
-      return data!
-    },
+    mutationFn: ({ id, ...body }: Partial<CreateFormationSessionPayload> & { id: string }) =>
+      apiClient.put<FormationSession>(`/api/rh/formation/sessions/${id}`, body),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['formation-sessions'] }); toast.success('Session mise à jour') },
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -612,10 +559,7 @@ export function useUpdateFormationSession() {
 export function useDeleteFormationSession() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from('formation_sessions').delete().eq('id', id)
-      if (error) throw new Error(error.message)
-    },
+    mutationFn: (id: string) => apiClient.delete(`/api/rh/formation/sessions/${id}`),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['formation-sessions'] }); toast.success('Session supprimée') },
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -624,21 +568,9 @@ export function useDeleteFormationSession() {
 export function useInscrireApprenant() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, session_id, disponibilites, notes }: InscrirePayload) => {
-      const { data: sess } = await supabase.from('formation_sessions')
-        .select('statut,capacite_max').eq('id', session_id).single()
-      if (!sess) throw new Error('Session introuvable')
-      const s = sess as { statut: string; capacite_max: number }
-      if (['terminee','annulee'].includes(s.statut)) throw new Error('Session terminée ou annulée')
-      const { count } = await supabase.from('formation_inscriptions')
-        .select('*', { count: 'exact', head: true }).eq('session_id', session_id)
-      if ((count ?? 0) >= s.capacite_max) throw new Error('Session complète')
-      const { data, error } = await supabase.from('formation_inscriptions')
-        .insert({ apprenant_id: id, session_id, disponibilites: disponibilites ?? [], notes: notes ?? null })
-        .select().single()
-      if (error) throw new Error(error.message)
-      return data!
-    },
+    // Capacité/statut de session revalidés côté API (apps/api/src/routes/rh.ts).
+    mutationFn: ({ id, session_id, disponibilites, notes }: InscrirePayload) =>
+      apiClient.post<FormationInscription>(`/api/rh/apprenants/${id}/inscrire`, { session_id, disponibilites, notes }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['formation-sessions'] })
       void qc.invalidateQueries({ queryKey: ['apprenants'] })
@@ -656,12 +588,8 @@ export interface UpdateInscriptionPayload {
 export function useUpdateInscription() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, ...body }: UpdateInscriptionPayload) => {
-      const { data, error } = await supabase.from('formation_inscriptions')
-        .update({ ...body, updated_at: new Date().toISOString() }).eq('id', id).select().single()
-      if (error) throw new Error(error.message)
-      return data!
-    },
+    mutationFn: ({ id, ...body }: UpdateInscriptionPayload) =>
+      apiClient.put<FormationInscription>(`/api/rh/formation/inscriptions/${id}`, body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['formation-sessions'] })
       void qc.invalidateQueries({ queryKey: ['apprenant-historique'] })
@@ -725,70 +653,33 @@ export function useApprouverConge() {
 // ── Pointage batch ────────────────────────────────────────────────────────────
 
 export function usePresenceBatch() {
-  const qc   = useQueryClient()
-  const auth = useAuth()
+  const qc = useQueryClient()
   return useMutation({
+    // Pas d'endpoint batch dédié côté API : on réutilise GET /rh/presences
+    // (lookup des lignes déjà enregistrées ce jour-là) puis un POST ou PUT
+    // unitaire par employé, en parallèle. heures est recalculé côté API.
     mutationFn: async (lignes: Array<{
       employe_id: string; date: string; arrivee?: string; depart?: string
       statut: Presence['statut']; notes?: string; heures?: number
     }>) => {
       if (lignes.length === 0) return 0
-
       const date = lignes[0].date
 
-      // Calculer les heures pour chaque ligne
-      const rows = lignes.map(l => {
-        let heures = l.heures ?? 0
-        if (l.arrivee && l.depart) {
-          const [ah, am] = l.arrivee.split(':').map(Number)
-          const [dh, dm] = l.depart.split(':').map(Number)
-          heures = Math.max(0, (dh * 60 + dm - ah * 60 - am) / 60)
+      const existing = await apiClient.get<PresencesResponse>(`/api/rh/presences?date=${date}`)
+      const existingMap = new Map(existing.data.map((p) => [p.employe_id, p.id]))
+
+      await Promise.all(lignes.map((l) => {
+        const body = {
+          employe_id: l.employe_id, date: l.date,
+          arrivee: l.arrivee, depart: l.depart, statut: l.statut, notes: l.notes,
         }
-        return { ...l, heures: Math.round(heures * 100) / 100, created_by: auth.user?.id }
-      })
+        const id = existingMap.get(l.employe_id)
+        return id
+          ? apiClient.put(`/api/rh/presences/${id}`, body)
+          : apiClient.post('/api/rh/presences', body)
+      }))
 
-      // 1. Lire les présences déjà enregistrées pour cette date
-      const employeIds = rows.map(r => r.employe_id)
-      const { data: existing, error: readErr } = await supabase
-        .from('presences')
-        .select('id, employe_id')
-        .in('employe_id', employeIds)
-        .eq('date', date)
-
-      if (readErr) throw new Error(readErr.message)
-
-      const existingMap = new Map(
-        (existing ?? []).map(e => [e.employe_id as string, e.id as string]),
-      )
-
-      // 2. Séparer en "à mettre à jour" et "à insérer"
-      const toUpdate = rows.filter(r => existingMap.has(r.employe_id))
-      const toInsert = rows.filter(r => !existingMap.has(r.employe_id))
-
-      // 3. Mettre à jour les enregistrements existants
-      if (toUpdate.length > 0) {
-        await Promise.all(
-          toUpdate.map(r =>
-            supabase.from('presences')
-              .update({
-                arrivee:  r.arrivee,
-                depart:   r.depart,
-                heures:   r.heures,
-                statut:   r.statut,
-                notes:    r.notes,
-              })
-              .eq('id', existingMap.get(r.employe_id)!),
-          ),
-        )
-      }
-
-      // 4. Insérer les nouvelles lignes
-      if (toInsert.length > 0) {
-        const { error: insertErr } = await supabase.from('presences').insert(toInsert)
-        if (insertErr) throw new Error(insertErr.message)
-      }
-
-      return rows.length
+      return lignes.length
     },
     onSuccess: (count) => {
       void qc.invalidateQueries({ queryKey: ['presences'] })

@@ -123,7 +123,11 @@ async function request<T>(
     if (res.status === 403) {
       const data = await res.json().catch(() => ({})) as { details?: string; error?: string }
       const detail = data.details ?? data.error ?? 'Droits insuffisants'
-      toast.error(`Accès refusé — ${detail}`)
+      // toast.warning (ambre) plutôt que toast.error (rouge) — un refus de
+      // permission est une règle métier normale, pas un bug. Le rouge doit
+      // rester réservé aux vraies pannes (5xx, réseau) pour que l'utilisateur
+      // puisse distinguer "je n'ai pas le droit" de "quelque chose est cassé".
+      toast.warning(`Accès refusé — ${detail}`)
       throw new Error(detail)
     }
 

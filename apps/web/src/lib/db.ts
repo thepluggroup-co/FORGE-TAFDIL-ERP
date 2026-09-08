@@ -83,15 +83,25 @@ export function normalizeScoreFiabilite(value: unknown): ScoreFiabilite {
 // ══════════════════════════════════════════════════════════════════════════════
 
 export async function dbGetProduits(params?: {
-  search?: string; categorie?: string; statut?: string
+  search?: string; categorie?: string; statut?: string; limit?: number
 }) {
-  let q = supabase.from('produits').select('*', { count: 'exact' })
+  // count:'exact' force Postgres à compter TOUTES les lignes correspondantes en
+  // plus de les renvoyer — utile pour le KPI "Total produits" de Stocks.tsx,
+  // mais pur gaspillage pour une recherche ponctuelle (Caisse.tsx n'affiche
+  // jamais ce total). Avec `limit` fourni, on saute le count et on plafonne le
+  // nombre de lignes transférées : c'était la requête sans borne (+ count exact)
+  // sur chaque frappe qui rendait la recherche produit lente.
+  let q = params?.limit
+    ? supabase.from('produits').select('*')
+    : supabase.from('produits').select('*', { count: 'exact' })
   if (params?.categorie) q = q.eq('categorie', params.categorie)
   if (params?.statut)    q = q.eq('statut', params.statut)
   if (params?.search)    q = q.or(`designation.ilike.%${params.search}%,ref.ilike.%${params.search}%`)
-  const { data, count, error } = await q.order('designation')
+  let ordered = q.order('designation')
+  if (params?.limit) ordered = ordered.limit(params.limit)
+  const { data, count, error } = await ordered
   if (error) raise(error, 'produits')
-  return { data: data ?? [], total: count ?? 0 }
+  return { data: data ?? [], total: count ?? data?.length ?? 0 }
 }
 
 export async function dbGetAlertesProduits() {

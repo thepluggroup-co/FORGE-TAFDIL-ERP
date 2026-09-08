@@ -5,6 +5,8 @@ import { AnimatePresence } from 'framer-motion'
 import { Toaster } from 'sonner'
 import { AuthProvider, useAuth } from '@/context/AuthContext'
 import { AppShell } from '@/components/layout/AppShell'
+import { usePermissions } from '@/hooks/useRbac'
+import type { RbacModule } from '@/hooks/useRbac'
 
 // ── Error Boundary global ──────────────────────────────────────────────────────
 // Attrape les erreurs non gérées dans l'arbre React et affiche un message
@@ -56,6 +58,8 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, EBState> {
 
 // Pages
 const Login        = lazy(() => import('@/pages/Login'))
+const SetPassword  = lazy(() => import('@/pages/SetPassword'))
+const SetPin       = lazy(() => import('@/pages/SetPin'))
 const Dashboard    = lazy(() => import('@/pages/Dashboard'))
 const Stocks       = lazy(() => import('@/pages/Stocks'))
 const Caisse       = lazy(() => import('@/pages/Caisse'))
@@ -127,8 +131,20 @@ function OfflineBanner() {
 }
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth()
+  const { user, passwordMustChange, pinMustChange } = useAuth()
+  const location = useLocation()
   if (!user) return <Navigate to="/login" replace />
+  // Invitation/reset non finalisés : bloque tout le reste de l'app tant que
+  // le mot de passe n'a pas été choisi — sans ça un utilisateur peut fermer
+  // l'onglet de l'email et naviguer avec une session "à moitié" configurée.
+  if (passwordMustChange && location.pathname !== '/set-password') {
+    return <Navigate to="/set-password" replace />
+  }
+  // Même logique pour le PIN téléphone temporaire (généré par un admin ou par
+  // l'activation self-service) — cf. apps/web/src/pages/SetPin.tsx.
+  if (pinMustChange && location.pathname !== '/set-pin') {
+    return <Navigate to="/set-pin" replace />
+  }
   return <>{children}</>
 }
 
@@ -138,10 +154,25 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+// Garde de route par permission RBAC — jusqu'ici SEULE la sidebar cachait les
+// liens vers les modules sans permission ; rien n'empêchait une navigation
+// directe par URL (ex: caissier tapant /finance dans la barre d'adresse).
+// N'affiche rien tant que les permissions ne sont pas chargées (jamais de
+// flash de contenu privilégié), redirige vers /dashboard une fois résolu si
+// la permission manque — même mapping module que Sidebar.tsx.
+function RequirePermission({ module, children }: { module: RbacModule; children: React.ReactNode }) {
+  const { hasPermission, loading } = usePermissions()
+  if (loading) return <PageLoader />
+  if (!hasPermission(module, 'READ')) return <Navigate to="/dashboard" replace />
+  return <>{children}</>
+}
+
+function Shell({ children, requiredModule }: { children: React.ReactNode; requiredModule?: RbacModule }) {
   return (
     <ProtectedRoute>
-      <AppShell>{children}</AppShell>
+      {requiredModule
+        ? <RequirePermission module={requiredModule}><AppShell>{children}</AppShell></RequirePermission>
+        : <AppShell>{children}</AppShell>}
     </ProtectedRoute>
   )
 }
@@ -160,6 +191,16 @@ function AppRoutes() {
           {/* Public */}
           <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
 
+          {/* Première connexion (invitation) / reset mot de passe — gère elle-même
+              le cas "pas de session" (lien expiré/déjà utilisé), donc ni Public
+              ni Protected : ProtectedRoute y redirige explicitement plus haut. */}
+          <Route path="/set-password" element={<SetPassword />} />
+
+          {/* Choix du PIN téléphone (4 chiffres) — nécessite une session déjà
+              établie (email, ou PIN temporaire déjà échangé), donc Protected
+              contrairement à /set-password. */}
+          <Route path="/set-pin" element={<ProtectedRoute><SetPin /></ProtectedRoute>} />
+
           {/* Redirect racine */}
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
@@ -167,41 +208,41 @@ function AppRoutes() {
           <Route path="/dashboard" element={<Shell><Dashboard /></Shell>} />
 
           {/* Caisse — vente au comptoir */}
-          <Route path="/caisse" element={<Shell><Caisse /></Shell>} />
+          <Route path="/caisse" element={<Shell requiredModule="CAISSE"><Caisse /></Shell>} />
 
           {/* Stocks + sous-routes */}
-          <Route path="/stocks" element={<Shell><Stocks /></Shell>} />
-          <Route path="/stocks/bons-sortie"        element={<Shell><BonsSortie /></Shell>} />
-          <Route path="/stocks/approvisionnement" element={<Shell><BonsAppro /></Shell>} />
+          <Route path="/stocks" element={<Shell requiredModule="STOCK"><Stocks /></Shell>} />
+          <Route path="/stocks/bons-sortie"        element={<Shell requiredModule="STOCK"><BonsSortie /></Shell>} />
+          <Route path="/stocks/approvisionnement" element={<Shell requiredModule="STOCK"><BonsAppro /></Shell>} />
 
           {/* Module commercial */}
-          <Route path="/commandes" element={<Shell><Commandes /></Shell>} />
-          <Route path="/devis" element={<Shell><Devis /></Shell>} />
-          <Route path="/clients" element={<Shell><Clients /></Shell>} />
-          <Route path="/clients/:id" element={<Shell><ClientDetail /></Shell>} />
+          <Route path="/commandes" element={<Shell requiredModule="COMMERCIAL"><Commandes /></Shell>} />
+          <Route path="/devis" element={<Shell requiredModule="COMMERCIAL"><Devis /></Shell>} />
+          <Route path="/clients" element={<Shell requiredModule="COMMERCIAL"><Clients /></Shell>} />
+          <Route path="/clients/:id" element={<Shell requiredModule="COMMERCIAL"><ClientDetail /></Shell>} />
 
           {/* Modules réels */}
-          <Route path="/finance" element={<Shell><Finance /></Shell>} />
-          <Route path="/rh" element={<Shell><RH /></Shell>} />
-          <Route path="/intelligence" element={<Shell><Intelligence /></Shell>} />
-          <Route path="/production" element={<Shell><Production /></Shell>} />
-          <Route path="/projets" element={<Shell><Projets /></Shell>} />
-          <Route path="/logistique" element={<Shell><Logistique /></Shell>} />
-          <Route path="/marketing" element={<Shell><Marketing /></Shell>} />
-          <Route path="/securite" element={<Shell><Securite /></Shell>} />
-          <Route path="/iot" element={<Shell><IoT /></Shell>} />
-          <Route path="/formation" element={<Shell><Formation /></Shell>} />
-          <Route path="/boutique" element={<Shell><Boutique /></Shell>} />
+          <Route path="/finance" element={<Shell requiredModule="FINANCE"><Finance /></Shell>} />
+          <Route path="/rh" element={<Shell requiredModule="HR"><RH /></Shell>} />
+          <Route path="/intelligence" element={<Shell requiredModule="REPORTS"><Intelligence /></Shell>} />
+          <Route path="/production" element={<Shell requiredModule="PRODUCTION"><Production /></Shell>} />
+          <Route path="/projets" element={<Shell requiredModule="PRODUCTION"><Projets /></Shell>} />
+          <Route path="/logistique" element={<Shell requiredModule="LOGISTICS"><Logistique /></Shell>} />
+          <Route path="/marketing" element={<Shell requiredModule="COMMERCIAL"><Marketing /></Shell>} />
+          <Route path="/securite" element={<Shell requiredModule="HR"><Securite /></Shell>} />
+          <Route path="/iot" element={<Shell requiredModule="PRODUCTION"><IoT /></Shell>} />
+          <Route path="/formation" element={<Shell requiredModule="HR"><Formation /></Shell>} />
+          <Route path="/boutique" element={<Shell requiredModule="COMMERCIAL"><Boutique /></Shell>} />
 
           {/* Équipements */}
-          <Route path="/equipements" element={<Shell><Equipements /></Shell>} />
+          <Route path="/equipements" element={<Shell requiredModule="PRODUCTION"><Equipements /></Shell>} />
 
           {/* Fournisseurs */}
-          <Route path="/fournisseurs" element={<Shell><Fournisseurs /></Shell>} />
+          <Route path="/fournisseurs" element={<Shell requiredModule="STOCK"><Fournisseurs /></Shell>} />
 
-          {/* Account / settings */}
+          {/* Account / settings — accessible à tout utilisateur authentifié */}
           <Route path="/account" element={<Shell><Account /></Shell>} />
-          <Route path="/admin"   element={<Shell><AdminSettings /></Shell>} />
+          <Route path="/admin"   element={<Shell requiredModule="ADMIN"><AdminSettings /></Shell>} />
 
           {/* Route publique — approbation devis (hors Shell/auth) */}
           <Route path="/devis/approuver/:token" element={<Suspense fallback={<PageLoader />}><ApprouverDevis /></Suspense>} />

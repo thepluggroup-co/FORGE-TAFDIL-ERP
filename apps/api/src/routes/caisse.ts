@@ -31,6 +31,12 @@ async function sendWhatsApp(to: string, message: string) {
     console.info('[whatsapp:dry-run]', to, message.slice(0, 80))
     return { ok: true, skipped: true }
   }
+  // Sans timeout, un Graph API lent/injoignable bloque toute la requête
+  // POST /tickets/:id/envoyer jusqu'au timeout CLIENT (15s, apiClient) — le
+  // caissier voit "Délai dépassé (serveur API non disponible ?)" alors que le
+  // serveur tourne très bien, juste bloqué sur cet appel sortant.
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 8_000)
   try {
     const res = await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
       method: 'POST',
@@ -41,12 +47,15 @@ async function sendWhatsApp(to: string, message: string) {
         type: 'text',
         text: { body: message },
       }),
+      signal: controller.signal,
     })
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}` }
     return { ok: true }
   } catch (e) {
     console.error('[whatsapp] send error:', e)
-    return { ok: false, error: String(e) }
+    return { ok: false, error: e instanceof Error && e.name === 'AbortError' ? 'Délai dépassé (WhatsApp injoignable)' : String(e) }
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -363,6 +372,15 @@ router.post(
     }
 
     // ── Session ──────────────────────────────────────────────────────────────
+    // PGRST116 = "no rows" (le .single() de Supabase renvoie ce code quand la
+    // session n'existe vraiment pas). Toute AUTRE erreur (ex: TypeError: fetch
+    // failed — Supabase injoignable) était auparavant écrasée par le même
+    // message "introuvable", masquant un vrai problème réseau/config derrière
+    // un 404 trompeur. On distingue maintenant les deux.
+    if (sessErr && sessErr.code !== 'PGRST116') {
+      console.error('[caisse] erreur lecture session (pas "introuvable") :', sessErr)
+      return c.json({ error: `Erreur base de données lors de la lecture de la session : ${sessErr.message}`, code: sessErr.code ?? 'DB_ERROR' }, 500)
+    }
     if (sessErr || !session) return c.json({ error: 'Session de caisse introuvable', code: 'NOT_FOUND' }, 404)
     const s = session as { id: string; caissier_id: string; statut: string }
     if (s.statut !== 'ouverte') return c.json({ error: 'Session de caisse fermée', code: 'SESSION_CLOSED' }, 409)

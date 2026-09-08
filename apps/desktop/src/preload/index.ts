@@ -76,4 +76,13 @@ contextBridge.exposeInMainWorld('forge', {
       return () => ipcRenderer.removeListener('auth:lock', handler)
     },
   },
+
+  // ── Caisse offline (PROMPT 5) ────────────────────────────────────────────
+  caisse: {
+    openSessionOffline:        (payload: unknown) => ipcRenderer.invoke('caisse:openSessionOffline', payload),
+    getSessionCouranteOffline: (caissierId: string) => ipcRenderer.invoke('caisse:getSessionCouranteOffline', caissierId),
+    closeSessionOffline:       (payload: unknown) => ipcRenderer.invoke('caisse:closeSessionOffline', payload),
+    createTicketOffline:       (payload: unknown) => ipcRenderer.invoke('caisse:createTicketOffline', payload),
+    getHistoriqueOffline:      (opts?: { caissierId?: string }) => ipcRenderer.invoke('caisse:getHistoriqueOffline', opts ?? {}),
+  },
 })

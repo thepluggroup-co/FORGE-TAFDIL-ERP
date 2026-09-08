@@ -8,7 +8,7 @@ import { useClient, useUpdateClientStatut } from '@/hooks/useClients'
 import type { Client } from '@/hooks/useClients'
 import { useCommandes } from '@/hooks/useCommandes'
 import type { Commande } from '@/hooks/useCommandes'
-import { useAuth } from '@/context/AuthContext'
+import { usePermissions } from '@/hooks/useRbac'
 import { ScoreFiabilite } from '../Clients'
 import type { ClientType } from '../Clients'
 
@@ -47,7 +47,7 @@ const STATUT_OPTIONS: { value: Client['statut']; label: string; color: string; b
 export default function ClientDetail() {
   const { id }   = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { role } = useAuth()
+  const { hasPermission } = usePermissions()
 
   const [activeTab, setActiveTab]           = useState<Tab>('Infos')
   const [showBlockConfirm, setShowBlockConfirm] = useState(false)
@@ -56,7 +56,7 @@ export default function ClientDetail() {
   const { data: commandesData, isLoading: commandesLoading } = useCommandes({ client_id: id, enabled: !!id })
   const updateStatut = useUpdateClientStatut()
 
-  const canChangeStatut = role === 'admin' || role === 'superviseur'
+  const canChangeStatut = hasPermission('COMMERCIAL', 'UPDATE')
 
   const handleStatutChange = (newStatut: Client['statut']) => {
     if (!client || client.statut === newStatut) return

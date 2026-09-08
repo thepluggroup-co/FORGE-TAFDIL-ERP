@@ -1,13 +1,6 @@
 ﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { supabase } from '@/lib/supabase'
-import {
-  dbUpdateStatut,
-  dbGetProjets, dbGetLivraisons, dbGetCampagnes,
-  genererNumero,
-} from '@/lib/db'
 import { apiClient } from '@/lib/api-client'
-import { useAuth } from '@/context/AuthContext'
 
 // ══════════════════════════════════════════════════════════════════════════════
 // PRODUCTION — JOBS
@@ -152,44 +145,18 @@ interface ProjetsResponse { data: Projet[]; total: number }
 export function useProjets(params?: { statut?: string; search?: string }) {
   return useQuery({
     queryKey:  ['projets', params],
-    queryFn:   () => dbGetProjets(params) as Promise<ProjetsResponse>,
+    queryFn:   () => apiClient.get<ProjetsResponse>(`/api/projets${queryString(params)}`),
     staleTime: 30_000,
   })
 }
 
 export function useCreateProjet() {
-  const qc   = useQueryClient()
-  const auth = useAuth()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (payload: CreateProjetPayload) => {
-      let client_nom = payload.client_nom
-      if (payload.client_id && !client_nom) {
-        const { data: c } = await supabase.from('clients').select('nom').eq('id', payload.client_id).single()
-        client_nom = (c as { nom?: string } | null)?.nom
-      }
-
-      // Colonnes garanties présentes dans le schéma Supabase actuel.
-      // chef_projet_id / assistant_id sont dans une migration séparée non encore appliquée —
-      // on ne les passe pas pour éviter "column not found" tant que la migration n'est pas jouée.
-      const insertRow: Record<string, unknown> = {
-        nom:             payload.nom,
-        description:     payload.description     ?? null,
-        client_id:       payload.client_id       ?? null,
-        client_nom:      client_nom              ?? null,
-        chef_projet_nom: payload.chef_projet_nom ?? null,
-        budget_xaf:      payload.budget_xaf      ?? 0,
-        date_debut:      payload.date_debut      ?? null,
-        deadline:        payload.deadline        ?? null,
-        created_by:      auth.user?.id,
-        sync_status:     'synced',
-      }
-
-      const { data, error } = await supabase.from('projets')
-        .insert(insertRow)
-        .select().single()
-      if (error) throw new Error(error.message)
-      return data!
-    },
+    // client_nom/chef_projet_nom sont résolus côté API depuis client_id/
+    // chef_projet_id (apps/api/src/routes/operations.ts) — plus besoin de
+    // lookup client-side.
+    mutationFn: (payload: CreateProjetPayload) => apiClient.post<Projet>('/api/projets', payload),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['projets'] }); toast.success('Projet créé') },
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -200,7 +167,7 @@ export function useUpdateProjetStatut() {
   return useMutation({
     mutationFn: ({ id, statut, avancement_pct, depense_xaf }: {
       id: string; statut: Projet['statut']; avancement_pct?: number; depense_xaf?: number
-    }) => dbUpdateStatut('projets', id, statut, { avancement_pct, depense_xaf }),
+    }) => apiClient.patch<Projet>(`/api/projets/${id}/statut`, { statut, avancement_pct, depense_xaf }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['projets'] }),
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -578,21 +545,15 @@ interface CampagnesResponse { data: Campagne[]; total: number }
 export function useCampagnes(params?: { statut?: string; search?: string }) {
   return useQuery({
     queryKey:  ['campagnes', params],
-    queryFn:   () => dbGetCampagnes(params) as Promise<CampagnesResponse>,
+    queryFn:   () => apiClient.get<CampagnesResponse>(`/api/marketing/campagnes${queryString(params)}`),
     staleTime: 30_000,
   })
 }
 
 export function useCreateCampagne() {
-  const qc   = useQueryClient()
-  const auth = useAuth()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (payload: CreateCampagnePayload) => {
-      const { data, error } = await supabase.from('campagnes_marketing')
-        .insert({ ...payload, created_by: auth.user?.id, sync_status: 'synced' }).select().single()
-      if (error) throw new Error(error.message)
-      return data!
-    },
+    mutationFn: (payload: CreateCampagnePayload) => apiClient.post<Campagne>('/api/marketing/campagnes', payload),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['campagnes'] }); toast.success('Campagne créée') },
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -603,7 +564,7 @@ export function useUpdateCampagneStatut() {
   return useMutation({
     mutationFn: ({ id, statut, reach, leads_count, conversions_count }: {
       id: string; statut: Campagne['statut']; reach?: number; leads_count?: number; conversions_count?: number
-    }) => dbUpdateStatut('campagnes_marketing', id, statut, { reach, leads_count, conversions_count }),
+    }) => apiClient.patch<Campagne>(`/api/marketing/campagnes/${id}/statut`, { statut, reach, leads_count, conversions_count }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['campagnes'] }),
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -673,29 +634,15 @@ interface IncidentsResponse { data: Incident[]; total: number }
 export function useIncidents(params?: { statut?: string; search?: string }) {
   return useQuery({
     queryKey: ['incidents', params],
-    queryFn: async () => {
-      let q = supabase.from('incidents_securite').select('*', { count: 'exact' })
-      if (params?.statut) q = q.eq('statut', params.statut)
-      if (params?.search) q = q.ilike('description', `%${params.search}%`)
-      const { data, count, error } = await q.order('created_at', { ascending: false })
-      if (error) throw new Error(error.message)
-      return { data: data ?? [], total: count ?? 0 } as IncidentsResponse
-    },
+    queryFn:  () => apiClient.get<IncidentsResponse>(`/api/securite/incidents${queryString(params)}`),
     staleTime: 30_000,
   })
 }
 
 export function useCreateIncident() {
-  const qc   = useQueryClient()
-  const auth = useAuth()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (payload: CreateIncidentPayload) => {
-      const { data, error } = await supabase.from('incidents_securite')
-        .insert({ ...payload, statut: 'ouvert', created_by: auth.user?.id, sync_status: 'synced' })
-        .select().single()
-      if (error) throw new Error(error.message)
-      return data!
-    },
+    mutationFn: (payload: CreateIncidentPayload) => apiClient.post<Incident>('/api/securite/incidents', payload),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['incidents'] }); toast.success('Incident signalé') },
     onError:   (err: Error) => toast.error(err.message),
   })
@@ -704,11 +651,14 @@ export function useCreateIncident() {
 export function useUpdateIncidentStatut() {
   const qc = useQueryClient()
   return useMutation({
+    // Le paramètre public reste `actions_correctrices` (aucun appelant à
+    // toucher) ; l'API attend `actions_correctives` (incidentStatutSchema).
     mutationFn: ({ id, statut, date_resolution, actions_correctrices }: {
       id: string; statut: Incident['statut']; date_resolution?: string; actions_correctrices?: string
-    }) => dbUpdateStatut('incidents_securite', id, statut, {
+    }) => apiClient.patch<Incident>(`/api/securite/incidents/${id}/statut`, {
+      statut,
       date_resolution: date_resolution ?? (statut === 'resolu' ? new Date().toISOString().slice(0, 10) : undefined),
-      actions_correctrices,
+      actions_correctives: actions_correctrices,
     }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['incidents'] }),
     onError:   (err: Error) => toast.error(err.message),

@@ -1,5 +1,6 @@
 import { ipcMain, app } from 'electron'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 import log from 'electron-log'
 import type Database from 'better-sqlite3'
 
@@ -656,6 +657,18 @@ function runMigrations(database: InstanceType<typeof Database>) {
       safeAddColumn(db, 'clients', 'credit_caisse_bloque_jusqu_au', 'TEXT')
       log.info('[db] migration 008 : score_fiabilite_caisse + credit_caisse_bloque_jusqu_au sur clients')
     },
+
+    // ── 009: colonne sync_status manquante sur lignes_ticket ──────────────────
+    // Absente depuis la migration 007 (oubliée, contrairement à caisse_sessions/
+    // tickets_vente/paiements_ticket) — le pull SyncManager.pullFromSupabase
+    // référence sync_status pour TOUTE table synchronisée (ON CONFLICT ... SET
+    // sync_status='synced'), donc le pull de lignes_ticket échouait à chaque
+    // cycle avec "no such column: sync_status", empêchant les lignes d'autres
+    // postes/caissiers de jamais apparaître dans l'historique local.
+    '009_lignes_ticket_sync_status': (db) => {
+      safeAddColumn(db, 'lignes_ticket', 'sync_status', "TEXT DEFAULT 'synced'")
+      log.info('[db] migration 009 : sync_status sur lignes_ticket')
+    },
   }
 
   const alreadyRan = new Set(
@@ -795,6 +808,283 @@ export async function registerDbHandlers() {
       .prepare('SELECT * FROM payment_installments WHERE payment_plan_id = ? ORDER BY installment_number ASC')
       .all(planId)
     return insts
+  })
+
+  // ── IPC Caisse offline (PROMPT 5) ─────────────────────────────────────────
+  // Calqués EXACTEMENT sur credit:recordPaymentOffline : écriture locale
+  // synchrone (better-sqlite3), puis une entrée sync_queue par opération.
+  // Pour tickets_vente spécifiquement, le payload de sync_queue est imbriqué
+  // (ticket + lignes[] + paiements[]) — c'est sync-handler.ts::pushPending()
+  // qui route ce table_name particulier vers POST /api/caisse/tickets (pas un
+  // upsert Supabase brut), pour que le décrément de stock serveur (RPC
+  // fn_mouvement_stock_vente) et la compta s'exécutent aussi à la synchro.
+
+  // Ouvrir une session de caisse hors-ligne
+  ipcMain.handle('caisse:openSessionOffline', (_e, payload: {
+    caissierId:       string
+    fondOuvertureXaf: number
+  }) => {
+    try {
+      const now = new Date().toISOString()
+      const id  = randomUUID()
+
+      database.prepare(`
+        INSERT INTO caisse_sessions (
+          id, caissier_id, date_ouverture, fond_ouverture_xaf,
+          total_especes_xaf, total_om_xaf, total_momo_xaf, total_credit_xaf,
+          statut, updated_at, sync_status
+        ) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 'ouverte', ?, 'pending')
+      `).run(id, payload.caissierId, now, payload.fondOuvertureXaf, now)
+
+      const session = database.prepare('SELECT * FROM caisse_sessions WHERE id = ?').get(id)
+
+      database.prepare(`
+        INSERT INTO sync_queue (table_name, operation, record_id, payload)
+        VALUES ('caisse_sessions', 'INSERT', ?, ?)
+      `).run(id, JSON.stringify(session))
+
+      log.info('[caisse:offline] session ouverte localement', id)
+      return { ...(session as object), offline: true }
+    } catch (err) {
+      log.error('[caisse:offline] erreur ouverture session', err)
+      throw err
+    }
+  })
+
+  // Session ouverte du caissier courant (offline) — équivalent local de
+  // GET /api/caisse/sessions/courante, pour que l'écran sache s'il doit
+  // afficher l'ouverture de session ou l'écran de vente quand hors-ligne.
+  ipcMain.handle('caisse:getSessionCouranteOffline', (_e, caissierId: string) => {
+    const session = database
+      .prepare(`SELECT * FROM caisse_sessions WHERE caissier_id = ? AND statut = 'ouverte' ORDER BY date_ouverture DESC LIMIT 1`)
+      .get(caissierId)
+    return session ?? null
+  })
+
+  // Fermer une session hors-ligne — recalcule les totaux depuis les tickets
+  // et paiements déjà en local (même logique que buildRapportZ côté API).
+  ipcMain.handle('caisse:closeSessionOffline', (_e, payload: {
+    sessionId:        string
+    fondFermetureXaf: number
+  }) => {
+    try {
+      const now = new Date().toISOString()
+
+      const session = database.prepare('SELECT * FROM caisse_sessions WHERE id = ?').get(payload.sessionId) as
+        Record<string, unknown> | undefined
+      if (!session) throw new Error('Session introuvable en local')
+      if (session.statut === 'fermee') throw new Error('Session déjà fermée')
+
+      const tickets = database
+        .prepare(`SELECT id, total_ttc_xaf, statut, oversell FROM tickets_vente WHERE session_id = ?`)
+        .all(payload.sessionId) as Array<{ id: string; total_ttc_xaf: number; statut: string; oversell: number }>
+
+      const ticketsValides = tickets.filter((t) => t.statut !== 'annule')
+      const ticketIds = ticketsValides.map((t) => t.id)
+
+      const parMode: Record<string, number> = { espece: 0, orange_money: 0, mtn_momo: 0, credit: 0, carte: 0 }
+      if (ticketIds.length > 0) {
+        const placeholders = ticketIds.map(() => '?').join(',')
+        const paiements = database
+          .prepare(`SELECT mode, montant_xaf FROM paiements_ticket WHERE ticket_id IN (${placeholders})`)
+          .all(...ticketIds) as Array<{ mode: string; montant_xaf: number }>
+        for (const p of paiements) parMode[p.mode] = (parMode[p.mode] ?? 0) + p.montant_xaf
+      }
+
+      const totalEspeces     = parMode.espece ?? 0
+      const montantTheorique = (session.fond_ouverture_xaf as number) + totalEspeces
+      const ecart             = payload.fondFermetureXaf - montantTheorique
+
+      database.prepare(`
+        UPDATE caisse_sessions
+        SET statut = 'fermee', date_fermeture = ?, fond_fermeture_xaf = ?,
+            total_especes_xaf = ?, total_om_xaf = ?, total_momo_xaf = ?, total_credit_xaf = ?,
+            ecart_xaf = ?, updated_at = ?, sync_status = 'pending'
+        WHERE id = ?
+      `).run(now, payload.fondFermetureXaf, totalEspeces, parMode.orange_money ?? 0,
+             parMode.mtn_momo ?? 0, parMode.credit ?? 0, ecart, now, payload.sessionId)
+
+      const updated = database.prepare('SELECT * FROM caisse_sessions WHERE id = ?').get(payload.sessionId)
+
+      database.prepare(`
+        INSERT INTO sync_queue (table_name, operation, record_id, payload)
+        VALUES ('caisse_sessions', 'UPDATE', ?, ?)
+      `).run(payload.sessionId, JSON.stringify(updated))
+
+      log.info('[caisse:offline] session fermée localement', payload.sessionId)
+      return {
+        session:                updated,
+        tickets_count:          ticketsValides.length,
+        total_ttc_xaf:          ticketsValides.reduce((s, t) => s + t.total_ttc_xaf, 0),
+        par_mode:               parMode,
+        ventes_oversell:        ticketsValides.filter((t) => t.oversell).length,
+        ecart_xaf:              ecart,
+        montant_theorique_xaf:  montantTheorique,
+        offline:                true,
+      }
+    } catch (err) {
+      log.error('[caisse:offline] erreur fermeture session', err)
+      throw err
+    }
+  })
+
+  // Historique offline — lecture simple pour l'onglet Historique hors-ligne.
+  ipcMain.handle('caisse:getHistoriqueOffline', (_e, opts: { caissierId?: string } = {}) => {
+    const rows = opts.caissierId
+      ? database.prepare('SELECT * FROM tickets_vente WHERE caissier_id = ? ORDER BY created_at DESC LIMIT 200').all(opts.caissierId)
+      : database.prepare('SELECT * FROM tickets_vente ORDER BY created_at DESC LIMIT 200').all()
+    return { data: rows, total: (rows as unknown[]).length, page: 1, per_page: 200, total_pages: 1, offline: true }
+  })
+
+  // Créer un ticket de vente hors-ligne — transaction locale complète :
+  // ticket + lignes + paiements + décrément stock local + mouvement_stock,
+  // puis UNE entrée sync_queue portant le payload imbriqué complet (record_id
+  // = op_id, pour que l'idempotence serveur s'applique aussi après la synchro).
+  ipcMain.handle('caisse:createTicketOffline', (_e, payload: {
+    opId:         string
+    numeroLocal?: string
+    sessionId:    string
+    caissierId:   string
+    clientId?:    string
+    clientNom?:   string
+    remiseXaf?:   number
+    lignes: Array<{ produitId?: string; designation: string; unite: string; quantite: number; prixUnitaireXaf: number }>
+    paiements: Array<{ mode: string; montantXaf: number; montantRecuXaf?: number; reference?: string }>
+  }) => {
+    try {
+      // Idempotence locale : si ce op_id existe déjà (retry après crash UI),
+      // renvoyer le ticket existant sans rejouer le décrément de stock.
+      const existing = database.prepare('SELECT * FROM tickets_vente WHERE op_id = ?').get(payload.opId) as
+        Record<string, unknown> | undefined
+      if (existing) {
+        const lignes    = database.prepare('SELECT * FROM lignes_ticket WHERE ticket_id = ? ORDER BY ordre').all(existing.id as string)
+        const paiements = database.prepare('SELECT * FROM paiements_ticket WHERE ticket_id = ?').all(existing.id as string)
+        return { ...existing, lignes, paiements, idempotent: true, offline: true }
+      }
+
+      const now         = new Date().toISOString()
+      const ticketId     = randomUUID()
+      const numeroLocal  = payload.numeroLocal ?? `OFF-${Date.now()}`
+
+      const brutHt   = payload.lignes.reduce((s, l) => s + l.quantite * l.prixUnitaireXaf, 0)
+      const totalHt  = Math.max(0, Math.round(brutHt) - (payload.remiseXaf ?? 0))
+      // TVA désactivée pour le moment — aligné sur apps/api/src/routes/caisse.ts (TVA_RATE = 0)
+      const tva      = 0
+      const totalTtc = totalHt + tva
+
+      const lignesRows = payload.lignes.map((l) => ({
+        id:                randomUUID(),
+        produit_id:        l.produitId ?? null,
+        designation:       l.designation,
+        unite:             l.unite,
+        quantite:          l.quantite,
+        prix_unitaire_xaf: l.prixUnitaireXaf,
+        total_ligne_xaf:   Math.round(l.quantite * l.prixUnitaireXaf),
+      }))
+
+      const paiementsRows = payload.paiements.map((p) => ({
+        id:                randomUUID(),
+        mode:              p.mode,
+        montant_xaf:       p.montantXaf,
+        montant_recu_xaf:  p.montantRecuXaf ?? null,
+        rendu_xaf:         p.mode === 'espece' && p.montantRecuXaf != null
+          ? Math.max(0, p.montantRecuXaf - p.montantXaf)
+          : null,
+        reference:         p.reference ?? null,
+      }))
+
+      // Payload imbriqué envoyé tel quel à POST /api/caisse/tickets à la
+      // synchro — mêmes clés que createTicketSchema (apps/api/src/routes/caisse.ts).
+      const syncPayload = {
+        op_id:         payload.opId,
+        numero_local:  numeroLocal,
+        session_id:    payload.sessionId,
+        client_id:     payload.clientId,
+        client_nom:    payload.clientNom,
+        remise_xaf:    payload.remiseXaf ?? 0,
+        lignes: payload.lignes.map((l) => ({
+          produit_id:         l.produitId,
+          designation:        l.designation,
+          unite:              l.unite,
+          quantite:           l.quantite,
+          prix_unitaire_xaf:  l.prixUnitaireXaf,
+        })),
+        paiements: payload.paiements.map((p) => ({
+          mode:              p.mode,
+          montant_xaf:       p.montantXaf,
+          montant_recu_xaf:  p.montantRecuXaf,
+          reference:         p.reference,
+        })),
+      }
+
+      const tx = database.transaction(() => {
+        database.prepare(`
+          INSERT INTO tickets_vente (
+            id, op_id, numero_local, numero_facture, session_id, caissier_id,
+            client_id, client_nom, total_ht_xaf, tva_xaf, total_ttc_xaf, remise_xaf,
+            statut, oversell, created_at, updated_at, sync_status
+          ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'paye', 0, ?, ?, 'pending')
+        `).run(
+          ticketId, payload.opId, numeroLocal, payload.sessionId, payload.caissierId,
+          payload.clientId ?? null, payload.clientNom ?? null,
+          totalHt, tva, totalTtc, payload.remiseXaf ?? 0, now, now,
+        )
+
+        const insertLigne = database.prepare(`
+          INSERT INTO lignes_ticket (id, ticket_id, produit_id, designation, unite, quantite, prix_unitaire_xaf, total_ligne_xaf, ordre)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        lignesRows.forEach((l, i) => {
+          insertLigne.run(l.id, ticketId, l.produit_id, l.designation, l.unite, l.quantite, l.prix_unitaire_xaf, l.total_ligne_xaf, i)
+        })
+
+        const insertPaiement = database.prepare(`
+          INSERT INTO paiements_ticket (
+            id, ticket_id, mode, montant_xaf, montant_recu_xaf, rendu_xaf, reference,
+            date_echeance, statut_remboursement, date_remboursement, created_at, sync_status
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 'pending')
+        `)
+        for (const p of paiementsRows) {
+          insertPaiement.run(p.id, ticketId, p.mode, p.montant_xaf, p.montant_recu_xaf, p.rendu_xaf, p.reference, now)
+        }
+
+        // Décrément stock local — provisoire : la valeur qui fera foi est
+        // celle recalculée côté serveur par fn_mouvement_stock_vente à la
+        // synchro (écrasée au prochain pull). Sert seulement à ce que l'écran
+        // hors-ligne affiche un stock plausible entre-temps.
+        const insertMouvement = database.prepare(`
+          INSERT INTO mouvements_stock (id, produit_id, type, quantite, reference, notes, created_by, created_at, sync_status)
+          VALUES (?, ?, 'sortie_vente', ?, ?, ?, ?, ?, 'pending')
+        `)
+        const updateStock = database.prepare(`UPDATE produits SET stock_actuel = ?, updated_at = ?, sync_status = 'pending' WHERE id = ?`)
+
+        for (const l of payload.lignes) {
+          if (!l.produitId) continue
+          const produit = database.prepare('SELECT stock_actuel FROM produits WHERE id = ?').get(l.produitId) as
+            { stock_actuel: number } | undefined
+          const nouvelleQte = (produit?.stock_actuel ?? 0) - l.quantite
+          insertMouvement.run(
+            randomUUID(), l.produitId, l.quantite, numeroLocal,
+            `Vente comptoir hors-ligne — ticket ${numeroLocal}`, payload.caissierId, now,
+          )
+          updateStock.run(nouvelleQte, now, l.produitId)
+        }
+
+        database.prepare(`
+          INSERT INTO sync_queue (table_name, operation, record_id, payload)
+          VALUES ('tickets_vente', 'INSERT', ?, ?)
+        `).run(payload.opId, JSON.stringify(syncPayload))
+      })
+
+      tx()
+
+      const ticket = database.prepare('SELECT * FROM tickets_vente WHERE id = ?').get(ticketId)
+      log.info('[caisse:offline] ticket créé localement', ticketId, 'op_id:', payload.opId)
+      return { ...(ticket as object), lignes: lignesRows, paiements: paiementsRows, offline: true }
+    } catch (err) {
+      log.error('[caisse:offline] erreur création ticket', err)
+      throw err
+    }
   })
 
   ipcMain.handle('app:version', () => app.getVersion())
