@@ -4,7 +4,7 @@ import { genererEcritureEncaissement, genererEcritureVente } from './comptabilit
 const db = supabaseAdmin!
 
 type FactureStatut = 'brouillon' | 'valide' | 'envoye' | 'paye' | 'annule'
-type PaiementMethode = 'mobile_money' | 'virement' | 'especes' | 'cheque' | 'notchpay'
+type PaiementMethode = 'mobile_money' | 'virement' | 'especes' | 'cheque' | 'NOKASH'
 
 interface FactureCreditRow {
   id?: string | null

@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS paiements_commande (
   client_id      UUID    REFERENCES clients(id),
   montant_xaf    REAL    NOT NULL CHECK (montant_xaf > 0),
   methode        TEXT    NOT NULL DEFAULT 'mobile_money',
-                 -- mobile_money | virement | especes | cheque | notchpay
+                 -- mobile_money | virement | especes | cheque | NOKASH
   reference_ext  TEXT,
   statut         TEXT    NOT NULL DEFAULT 'confirme',
                  -- confirme | rejete | rembourse

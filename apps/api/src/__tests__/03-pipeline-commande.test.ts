@@ -1,7 +1,7 @@
 /**
- * TEST-03 : Pipeline commande web avec paiement Notchpay
+ * TEST-03 : Pipeline commande web avec paiement NOKASH
  *
- * 1. POST /api/paiements/initier → appel Notchpay (mocké fetch)
+ * 1. POST /api/paiements/initier → appel NOKASH (mocké fetch)
  * 2. POST /api/paiements/webhook  → paiement.complete
  * 3. Assert : commande statut → 'confirmee' en < 3 s
  * 4. Assert : stock déduit
@@ -79,7 +79,7 @@ describe('TEST-03 : Pipeline commande web avec paiement', () => {
     globalThis.fetch = originalFetch
   })
 
-  it('initie un paiement Notchpay pour une commande web existante', async () => {
+  it('initie un paiement NOKASH pour une commande web existante', async () => {
     const mockFrom = vi.mocked(supabase.from)
 
     // Commande existe, pas encore payée
@@ -89,13 +89,13 @@ describe('TEST-03 : Pipeline commande web avec paiement', () => {
     // update payment_reference
     mockFrom.mockReturnValue(mkChain({ data: null, error: null }) as never)
 
-    // Mock fetch → Notchpay API
+    // Mock fetch → NOKASH API
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok:   true,
       json: () => Promise.resolve({
         transaction: {
           reference:    PAYMENT_REF,
-          checkout_url: 'https://pay.notchpay.co/xxx',
+          checkout_url: 'https://pay.NOKASH.co/xxx',
           status:       'pending',
           expires_at:   '2026-05-18T14:00:00Z',
         },
@@ -117,7 +117,7 @@ describe('TEST-03 : Pipeline commande web avec paiement', () => {
     expect(res.status).toBe(201)
     const body = await res.json() as Record<string, unknown>
     expect(body.payment_reference).toBe(PAYMENT_REF)
-    expect(body.checkout_url).toMatch(/notchpay/)
+    expect(body.checkout_url).toMatch(/NOKASH/)
     expect(body.status).toBe('pending')
   })
 
@@ -146,7 +146,7 @@ describe('TEST-03 : Pipeline commande web avec paiement', () => {
       method:  'POST',
       headers: new Headers({
         'Content-Type':       'application/json',
-        // NOTCHPAY_SECRET_KEY est vide en test → signature bypass
+        // NOKASH_SECRET_KEY est vide en test → signature bypass
         'x-notch-signature':  '',
       }),
       body: payload,
@@ -210,8 +210,8 @@ describe('TEST-03 : Pipeline commande web avec paiement', () => {
 
   it('webhook avec signature invalide → 401', async () => {
     // Activer la vérification de signature pour ce test uniquement
-    const oldKey = process.env.NOTCHPAY_SECRET_KEY
-    process.env.NOTCHPAY_SECRET_KEY = 'real-secret-key'
+    const oldKey = process.env.NOKASH_SECRET_KEY
+    process.env.NOKASH_SECRET_KEY = 'real-secret-key'
 
     const payload   = JSON.stringify({ event: 'payment.complete', data: {} })
     const badSig    = 'invalid-signature-xxxx'
@@ -225,7 +225,7 @@ describe('TEST-03 : Pipeline commande web avec paiement', () => {
       body: payload,
     })
 
-    process.env.NOTCHPAY_SECRET_KEY = oldKey
+    process.env.NOKASH_SECRET_KEY = oldKey
 
     expect(res.status).toBe(401)
     const body = await res.json() as { error: string }

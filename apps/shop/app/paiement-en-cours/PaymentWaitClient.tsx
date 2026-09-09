@@ -91,7 +91,7 @@ export function PaymentWaitClient() {
     return () => clearInterval(id)
   }, [state])
 
-  // Polling statut Notchpay (toutes les 3s)
+  // Polling statut NOKASH (toutes les 3s)
   const poll = useCallback(async () => {
     if (!paymentRef || stateRef.current !== 'waiting') return
     try {

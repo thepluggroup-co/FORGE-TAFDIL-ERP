@@ -73,8 +73,8 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ''
           # Clé Anthropic factice — remplacée par mock vi dans les tests
           ANTHROPIC_API_KEY: sk-ant-ci-test-forge-2026
-          NOTCHPAY_SECRET_KEY: ''
-          NOTCHPAY_PUBLIC_KEY: pk_test.ci-forge
+          NOKASH_SECRET_KEY: ''
+          NOKASH_PUBLIC_KEY: pk_test.ci-forge
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
@@ -150,8 +150,8 @@ jobs:
           NEXT_PUBLIC_SITE_URL: https://shop.tafdil.cm
           NEXT_PUBLIC_WHATSAPP_NUMBER: '+237 95884528'
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          NOTCHPAY_PUBLIC_KEY: ${{ secrets.NOTCHPAY_PUBLIC_KEY }}
-          NOTCHPAY_SECRET_KEY: ${{ secrets.NOTCHPAY_SECRET_KEY }}
+          NOKASH_PUBLIC_KEY: ${{ secrets.NOKASH_PUBLIC_KEY }}
+          NOKASH_SECRET_KEY: ${{ secrets.NOKASH_SECRET_KEY }}
           AT_API_KEY: ${{ secrets.AT_API_KEY }}
           AT_USERNAME: ${{ secrets.AT_USERNAME }}
           AT_SENDER_ID: AFRICASTALKING

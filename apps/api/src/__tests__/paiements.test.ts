@@ -2,7 +2,7 @@
  * paiements.test.ts — Couverture de apps/api/src/routes/paiements.ts
  *
  * Le routeur paiements est monté SANS authMiddleware (endpoints publics :
- * checkout shop + webhook NotchPay). Les tests couvrent donc la validation
+ * checkout shop + webhook NOKASH). Les tests couvrent donc la validation
  * de payload, la logique anti-fraude du webhook, et le polling de statut.
  *
  * Endpoints couverts :
@@ -148,15 +148,15 @@ describe('GET /api/paiements/:reference/statut', () => {
     expect(body.statut).toBe('failed')
   })
 
-  it('retourne pending si NotchPay non configuré et statut local non final', async () => {
-    // setup.ts définit NOTCHPAY_SECRET_KEY='' mais NOTCHPAY_PUBLIC_KEY est défini.
-    // On force le statut local non final → notchpayConfigured() true ⇒ tente fetch.
+  it('retourne pending si NOKASH non configuré et statut local non final', async () => {
+    // setup.ts définit NOKASH_SECRET_KEY='' mais NOKASH_PUBLIC_KEY est défini.
+    // On force le statut local non final → NOKASHConfigured() true ⇒ tente fetch.
     // Pour rester déterministe on couvre seulement le chemin local non-payé.
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: { statut_paiement: 'en_attente', updated_at: null }, error: null }) as never,
     )
     const res = await app.request('/api/paiements/REF-PENDING/statut')
-    // Soit pending (non configuré) soit 503 (fetch NotchPay échoue) — pas de crash
+    // Soit pending (non configuré) soit 503 (fetch NOKASH échoue) — pas de crash
     expect([200, 404, 503]).toContain(res.status)
   })
 })

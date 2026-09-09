@@ -354,7 +354,7 @@ export function SuiviClient({ commandeRef, initialCommande }: {
                               <p>Mode : <span className="font-semibold text-forge-dark">{MODE_LABEL[commande.mode_paiement] ?? commande.mode_paiement}</span></p>
                             )}
                             {commande.payment_reference && (
-                              <p className="font-mono text-[10px] text-gray-400">Réf. Notchpay : {commande.payment_reference}</p>
+                              <p className="font-mono text-[10px] text-gray-400">Réf. NOKASH : {commande.payment_reference}</p>
                             )}
                           </div>
                         )}

@@ -2144,7 +2144,7 @@ router.delete('/commandes/:id', requireRole(['admin']), async (c) => {
 
 const paiementCommandeSchema = z.object({
   montant_xaf:   z.number().positive(),
-  methode:       z.enum(['mobile_money', 'virement', 'especes', 'cheque', 'notchpay']).default('mobile_money'),
+  methode:       z.enum(['mobile_money', 'virement', 'especes', 'cheque', 'NOKASH']).default('mobile_money'),
   reference_ext: z.string().optional(),
   date_paiement: z.string(),
   notes:         z.string().optional(),

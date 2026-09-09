@@ -1242,7 +1242,7 @@ export function CheckoutClient() {
         return
       }
 
-      // ── 2b. Mobile Money → initier le paiement NotchPay ─────────────────────
+      // ── 2b. Mobile Money → initier le paiement NOKASH ─────────────────────
       const montantPaiement = modePaiement === 'livraison' && avanceLivraisonPct
         ? Math.round(total * avanceLivraisonPct / 100)
         : total

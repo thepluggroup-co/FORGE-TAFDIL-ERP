@@ -8,8 +8,17 @@ import { notifyWorkflow } from '../services/workflow-notifications.service'
 const db = supabaseAdmin!
 
 // ── Constants ──────────────────────────────────────────────────────────────────
+// Référence : NOKASH API_PAYIN Documentation, NOKASH GLOBAL, juin 2025 (v407).
 
-const NOTCHPAY_API = 'https://api.notchpay.co'
+const NOKASH_API = 'https://api.nokash.app'
+const NOKASH_INIT_PATH   = '/lapas-on-trans/trans/api-payin-request/407'
+const NOKASH_STATUS_PATH = '/lapas-on-trans/trans/310/status-request'
+
+type NokashApiResponse = {
+  status:  string
+  message: string
+  data:    Record<string, unknown> | null
+}
 
 // ── In-memory status cache (3s TTL) ───────────────────────────────────────────
 
@@ -23,7 +32,6 @@ function getCached(ref: string) {
 
 function setCache(ref: string, data: unknown) {
   statusCache.set(ref, { data, expires: Date.now() + 3_000 })
-  // Nettoyage si cache trop grand
   if (statusCache.size > 500) {
     const now = Date.now()
     for (const [k, v] of statusCache.entries()) {
@@ -32,35 +40,47 @@ function setCache(ref: string, data: unknown) {
   }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Helpers NOKASH ─────────────────────────────────────────────────────────────
 
-function notchpayApiKey() {
-  return process.env.NOTCHPAY_PUBLIC_KEY ?? process.env.NOTCHPAY_API_KEY ?? process.env.NOTCHPAY_SECRET_KEY ?? ''
+function nokashAppKey() {
+  return process.env.NOKASH_APPLICATION_KEY ?? ''
 }
 
-function notchpayConfigured() {
-  return Boolean(notchpayApiKey())
+function nokashIntegrationKey() {
+  return process.env.NOKASH_INTEGRATION_KEY ?? ''
 }
 
-function notchpayHeader() {
-  return {
-    Authorization: notchpayApiKey(),
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
-  }
+function nokashConfigured() {
+  return Boolean(nokashAppKey() && nokashIntegrationKey())
 }
 
-function normalizeStatus(status: unknown) {
-  const value = String(status ?? 'pending').toLowerCase()
-  if (value === 'paid') return 'complete'
-  return value
+// Signature exigée par NOKASH sur l'initiation : hmac-sha256(i_space_key, "orderId:amount:user_phone:app_space_key")
+function nokashSignature(orderId: string, amount: number, userPhone: string): string {
+  const payload = `${orderId}:${amount}:${userPhone}:${nokashAppKey()}`
+  return createHmac('sha256', nokashIntegrationKey()).update(payload).digest('hex')
 }
 
-function verifySignature(rawBody: string, header: string): boolean {
-  const secret = process.env.NOTCHPAY_SECRET_KEY ?? ''
-  if (!secret) return true // pas de clé configurée = skip en dev
-  const expected = createHmac('sha256', secret).update(rawBody).digest('hex')
-  return expected === header
+function nokashPaymentMethod(canal: string): 'MTN_MOMO' | 'ORANGE_MONEY' | null {
+  if (canal === 'cm.mtn')    return 'MTN_MOMO'
+  if (canal === 'cm.orange') return 'ORANGE_MONEY'
+  return null
+}
+
+// Statuts NOKASH : PENDING, FAILED, CANCELED, TIMEOUT, SUCCESS
+function normalizeStatus(status: unknown): 'complete' | 'failed' | 'pending' {
+  const value = String(status ?? 'PENDING').toUpperCase()
+  if (value === 'SUCCESS') return 'complete'
+  if (value === 'FAILED' || value === 'CANCELED' || value === 'CANCELLED' || value === 'TIMEOUT') return 'failed'
+  return 'pending'
+}
+
+async function nokashStatusRequest(transactionId: string): Promise<NokashApiResponse> {
+  const res = await fetch(`${NOKASH_API}${NOKASH_STATUS_PATH}`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ transaction_id: transactionId }),
+  })
+  return await res.json() as NokashApiResponse
 }
 
 async function sendWhatsApp(to: string, message: string) {
@@ -92,7 +112,7 @@ export const paiementsRouter = new Hono()
 
 // ══════════════════════════════════════════════════════════════════════════════
 // POST /api/paiements/initier
-// Initialise un paiement Notchpay pour une commande web existante
+// Initialise un paiement NOKASH (Mobile Money CM) pour une commande web existante
 // ══════════════════════════════════════════════════════════════════════════════
 
 paiementsRouter.post('/initier', async (c) => {
@@ -107,10 +127,11 @@ paiementsRouter.post('/initier', async (c) => {
   if (!commande_ref) {
     return c.json({ error: 'commande_ref est requis' }, 400)
   }
-  if (!notchpayConfigured()) {
-    return c.json({ error: 'Notchpay non configure', code: 'PAYMENT_NOT_CONFIGURED' }, 503)
+  if (!nokashConfigured()) {
+    return c.json({ error: 'NOKASH non configuré', code: 'PAYMENT_NOT_CONFIGURED' }, 503)
   }
-  if (canal !== 'cm.mtn' && canal !== 'cm.orange') {
+  const paymentMethod = nokashPaymentMethod(canal ?? '')
+  if (!paymentMethod) {
     return c.json({ error: 'Canal Mobile Money invalide' }, 400)
   }
 
@@ -147,86 +168,46 @@ paiementsRouter.post('/initier', async (c) => {
     }, 422)
   }
 
-  // Appel Notchpay
-  const siteUrl = process.env.SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? 'https://shop.tafdil.cm'
-  const payload: Record<string, unknown> = {
-    amount:      montantPaiement,
-    currency:    'XAF',
-    email:       email ?? commande.client_email ?? 'client@forge.cm',
-    reference:   commande_ref,
-    description: commande.mode_paiement === 'livraison'
-      ? `Avance commande FORGE Shop ${commande_ref}`
-      : `Commande FORGE Shop ${commande_ref}`,
-    callback:    `${siteUrl}/paiement-en-cours?commande_ref=${commande_ref}`,
-    channel:     canal,
-    channels:    [canal],
-    locked_currency: 'XAF',
-    locked_country:  'CM',
-    locked_channel:  canal,
-    phone,
-    country:     'CM',
-    customer: {
-      name:  commande.client_nom ?? 'Client FORGE',
-      email: email ?? commande.client_email ?? 'client@forge.cm',
-      phone,
-    },
-    customer_meta: {
-      commande_id:  commande.id,
-      commande_ref: commande.ref,
-    },
-  }
+  // callback_url : optionnel côté NOKASH (clés production uniquement). Si absent,
+  // on reste sur le polling client (/statut) qui fonctionne dans tous les cas.
+  const callbackUrl = process.env.NOKASH_CALLBACK_URL || undefined
 
-  let notchJson: Record<string, unknown>
+  const body: Record<string, unknown> = {
+    i_space_key:    nokashIntegrationKey(),
+    app_space_key:  nokashAppKey(),
+    payment_type:   'CM_MOBILEMONEY',
+    country:        'CM',
+    payment_method: paymentMethod,
+    order_id:       commande_ref,
+    amount:         montantPaiement,
+    user_data:      { user_phone: phone },
+  }
+  if (callbackUrl) body.callback_url = callbackUrl
+
+  let nokashJson: NokashApiResponse
   try {
-    const notchRes = await fetch(`${NOTCHPAY_API}/payments`, {
+    const res = await fetch(`${NOKASH_API}${NOKASH_INIT_PATH}`, {
       method:  'POST',
-      headers: notchpayHeader(),
-      body:    JSON.stringify(payload),
+      headers: {
+        'Content-Type':   'application/json',
+        'hmac-signature': nokashSignature(commande_ref, montantPaiement, phone),
+      },
+      body: JSON.stringify(body),
     })
-
-    notchJson = await notchRes.json() as Record<string, unknown>
-
-    if (!notchRes.ok) {
-      console.error('[notchpay] init error:', notchJson)
-      return c.json({ error: 'Erreur Notchpay', details: notchJson }, 502)
-    }
+    nokashJson = await res.json() as NokashApiResponse
   } catch (e) {
-    console.error('[notchpay] network error:', e)
-    return c.json({ error: 'Notchpay injoignable' }, 503)
+    console.error('[nokash] network error:', e)
+    return c.json({ error: 'NOKASH injoignable' }, 503)
   }
 
-  const transaction = notchJson.transaction as Record<string, unknown> | undefined
-  const paymentRef  = (transaction?.reference ?? notchJson.reference ?? commande_ref) as string | undefined
+  if (nokashJson.status !== 'REQUEST_OK' || !nokashJson.data) {
+    console.error('[nokash] init error:', nokashJson)
+    return c.json({ error: nokashJson.message || 'Erreur NOKASH', code: nokashJson.status }, 502)
+  }
 
+  const paymentRef = String(nokashJson.data.id ?? '')
   if (!paymentRef) {
-    return c.json({ error: 'Référence paiement absente dans la réponse Notchpay' }, 502)
-  }
-
-  // Declencher le prompt Mobile Money sur le telephone du client
-  let promptJson: Record<string, unknown> = {}
-  try {
-    const promptRes = await fetch(`${NOTCHPAY_API}/payments/${encodeURIComponent(paymentRef)}`, {
-      method:  'POST',
-      headers: notchpayHeader(),
-      body:    JSON.stringify({
-        channel: canal,
-        data: {
-          phone,
-          account_number: phone,
-          country: 'CM',
-        },
-      }),
-    })
-
-    promptJson = await promptRes.json().catch(() => ({})) as Record<string, unknown>
-
-    if (!promptRes.ok) {
-      console.error('[notchpay] prompt error:', promptJson)
-      return c.json({ error: 'Prompt Mobile Money non initie', details: promptJson }, 502)
-    }
-  } catch (e) {
-    console.error('[notchpay] prompt network error:', e)
-    return c.json({ error: 'Prompt Mobile Money injoignable' }, 503)
+    return c.json({ error: 'Référence paiement absente dans la réponse NOKASH' }, 502)
   }
 
   await db
@@ -236,13 +217,9 @@ paiementsRouter.post('/initier', async (c) => {
 
   return c.json({
     payment_reference: paymentRef,
-    checkout_url:      transaction?.checkout_url ?? null,
-    expires_at:        transaction?.expires_at   ?? null,
-    status:            normalizeStatus(
-      ((promptJson.transaction as Record<string, unknown> | undefined)?.status) ??
-      transaction?.status ??
-      'pending'
-    ),
+    checkout_url:      null,
+    expires_at:        null,
+    status:             normalizeStatus(nokashJson.data.status),
   }, 201)
 })
 
@@ -255,7 +232,6 @@ paiementsRouter.get('/:reference/statut', async (c) => {
   const reference = c.req.param('reference')
   c.header('Cache-Control', 'no-store')
 
-  // Cache local 3s
   const cached = getCached(reference)
   if (cached) return c.json(cached)
 
@@ -287,7 +263,7 @@ paiementsRouter.get('/:reference/statut', async (c) => {
     return c.json(result)
   }
 
-  if (!notchpayConfigured()) {
+  if (!nokashConfigured()) {
     return c.json({
       statut:     'pending',
       montant:    null,
@@ -296,25 +272,23 @@ paiementsRouter.get('/:reference/statut', async (c) => {
     })
   }
 
-  let notchJson: Record<string, unknown>
+  let nokashJson: NokashApiResponse
   try {
-    const notchRes = await fetch(`${NOTCHPAY_API}/payments/${reference}`, {
-      headers: notchpayHeader(),
-    })
-    if (notchRes.status === 404) {
-      return c.json({ error: 'Paiement introuvable' }, 404)
-    }
-    notchJson = await notchRes.json() as Record<string, unknown>
+    nokashJson = await nokashStatusRequest(reference)
   } catch {
-    return c.json({ error: 'Notchpay injoignable' }, 503)
+    return c.json({ error: 'NOKASH injoignable' }, 503)
   }
 
-  const t = (notchJson.transaction ?? notchJson) as Record<string, unknown>
+  if (nokashJson.status !== 'REQUEST_OK' || !nokashJson.data) {
+    return c.json({ error: 'Paiement introuvable' }, 404)
+  }
+
+  const t = nokashJson.data
   const result = {
     statut:     normalizeStatus(t.status),
-    montant:    t.amount     ?? null,
-    devise:     t.currency   ?? 'XAF',
-    updated_at: t.updated_at ?? t.created_at ?? new Date().toISOString(),
+    montant:    t.amount ?? null,
+    devise:     'XAF',
+    updated_at: new Date().toISOString(),
   }
 
   setCache(reference, result)
@@ -323,37 +297,47 @@ paiementsRouter.get('/:reference/statut', async (c) => {
 
 // ══════════════════════════════════════════════════════════════════════════════
 // POST /api/paiements/webhook
-// Reçoit les événements Notchpay (appelé directement par Notchpay, sans CORS)
+// Reçoit callback_url NOKASH : { id, status, amount, phone, orderId }
+// NOKASH ne documente aucune signature sur ce callback — on ne fait donc jamais
+// confiance au corps reçu : on revérifie systématiquement le statut réel auprès
+// de NOKASH (status-request) avant de marquer quoi que ce soit comme payé.
 // ══════════════════════════════════════════════════════════════════════════════
 
 paiementsRouter.post('/webhook', async (c) => {
-  const rawBody  = await c.req.text()
-  const sigHeader = c.req.header('x-notch-signature') ?? c.req.header('notch-signature') ?? ''
+  const payload = await c.req.json<{
+    id?:      string
+    status?:  string
+    amount?:  number
+    phone?:   string
+    orderId?: string
+  }>().catch(() => null)
 
-  // Vérification de signature
-  if (!verifySignature(rawBody, sigHeader)) {
-    console.warn('[security] Webhook Notchpay — signature invalide')
-    return c.json({ error: 'Signature invalide' }, 401)
-  }
-
-  let payload: { event: string; data: Record<string, unknown> }
-  try {
-    payload = JSON.parse(rawBody)
-  } catch {
+  if (!payload?.id) {
     return c.json({ error: 'Payload invalide' }, 400)
   }
 
-  const { event } = payload
-  const data = (payload.data?.transaction ?? payload.data ?? {}) as Record<string, unknown>
-  console.info(`[notchpay-webhook] ${event}`, data?.reference)
+  let verified: NokashApiResponse
+  try {
+    verified = await nokashStatusRequest(payload.id)
+  } catch (e) {
+    console.error('[nokash-webhook] revérification impossible:', e)
+    return c.json({ received: true }) // 200 — la revérification se refera au prochain poll client
+  }
 
-  // ── payment.complete ────────────────────────────────────────────────────────
+  if (verified.status !== 'REQUEST_OK' || !verified.data) {
+    console.error('[nokash-webhook] revérification échouée pour', payload.id, verified)
+    return c.json({ received: true })
+  }
 
-  if (['payment.complete', 'payment.completed', 'payment.success', 'payment.paid'].includes(event)) {
-    const reference = data.reference as string
-    const amount    = Number(data.amount ?? 0)
+  const reference = payload.id
+  const status    = normalizeStatus(verified.data.status)
+  const amount    = Number(verified.data.amount ?? payload.amount ?? 0)
 
-    // Récupérer la commande
+  console.info(`[nokash-webhook] ${reference} → ${status}`)
+
+  // ── Paiement confirmé ────────────────────────────────────────────────────────
+
+  if (status === 'complete') {
     const { data: commande, error: errFetch } = await db
       .from('commandes_shop')
       .select('id, ref, montant_ttc, mode_paiement, client_nom, client_telephone, client_adresse, lignes, erp_commande_id')
@@ -362,7 +346,7 @@ paiementsRouter.post('/webhook', async (c) => {
 
     if (errFetch || !commande) {
       console.error('[webhook] commande introuvable pour payment_reference:', reference)
-      return c.json({ received: true }) // 200 pour éviter les retries Notchpay
+      return c.json({ received: true }) // 200 pour éviter les retries NOKASH
     }
 
     const totalCommande = Number(commande.montant_ttc)
@@ -377,7 +361,6 @@ paiementsRouter.post('/webhook', async (c) => {
       return c.json({ received: true })
     }
 
-    // Mise à jour statut paiement + commande
     const { error: errUpdate } = await db
       .from('commandes_shop')
       .update({
@@ -392,7 +375,6 @@ paiementsRouter.post('/webhook', async (c) => {
       return c.json({ error: 'Erreur interne' }, 500)
     }
 
-    // Synchronisation finance de la commande ERP liée
     const context = await resolveCommandeContext({
       erp_commande_id: (commande as { erp_commande_id?: string | null }).erp_commande_id ?? null,
       ref:             (commande as { ref?: string | null }).ref ?? null,
@@ -407,12 +389,12 @@ paiementsRouter.post('/webhook', async (c) => {
         await enregistrerPaiementCommande({
           commandeId:               context.commandeId,
           montantXaf:               amount,
-          methode:                  'notchpay',
+          methode:                  'NOKASH',
           referenceExt:             reference,
           datePaiement:             new Date().toISOString().slice(0, 10),
           notes:                    isPaiementTotal
-            ? `Paiement NotchPay commande web ${commande.ref}`
-            : `Avance NotchPay commande web ${commande.ref}`,
+            ? `Paiement NOKASH commande web ${commande.ref}`
+            : `Avance NOKASH commande web ${commande.ref}`,
           ensureFacture:            true,
           factureStatutSiCreation:  isPaiementTotal ? 'paye' : 'envoye',
         })
@@ -424,7 +406,6 @@ paiementsRouter.post('/webhook', async (c) => {
     // Le paiement ne sort pas le stock. La sortie physique est faite uniquement
     // par l'execution du bon de sortie par le magasinier.
 
-    // Notifier l'ERP via Supabase Realtime
     await db.channel('erp-notifications').send({
       type:    'broadcast',
       event:   'commande_web_payee',
@@ -441,7 +422,7 @@ paiementsRouter.post('/webhook', async (c) => {
       severite:'success',
       titre:   isPaiementTotal ? 'Paiement shop recu' : 'Avance livraison recue',
       message: isPaiementTotal
-        ? `Commande ${commande.ref} payee via NotchPay.`
+        ? `Commande ${commande.ref} payee via NOKASH.`
         : `Commande ${commande.ref} : avance recue, solde a encaisser a la livraison.`,
       ref:     commande.ref,
       url:     '/finance',
@@ -453,7 +434,6 @@ paiementsRouter.post('/webhook', async (c) => {
       },
     })
 
-    // WhatsApp — client
     const siteUrl = process.env.SITE_URL ?? 'https://shop.tafdil.cm'
     if (commande.client_telephone) {
       await sendWhatsApp(
@@ -465,7 +445,6 @@ paiementsRouter.post('/webhook', async (c) => {
       )
     }
 
-    // WhatsApp — secrétaire TAFDIL
     const tafdilTel = process.env.WHATSAPP_TAFDIL_NUMBER ?? ''
     if (tafdilTel) {
       await sendWhatsApp(
@@ -478,17 +457,13 @@ paiementsRouter.post('/webhook', async (c) => {
       )
     }
 
-    // Invalidation cache statut
     statusCache.delete(reference)
-
     return c.json({ received: true })
   }
 
-  // ── payment.failed / payment.cancelled ─────────────────────────────────────
+  // ── Paiement échoué / annulé / expiré ───────────────────────────────────────
 
-  if (['payment.failed', 'payment.cancelled', 'payment.canceled', 'payment.expired'].includes(event)) {
-    const reference = data.reference as string
-
+  if (status === 'failed') {
     const { data: commande } = await db
       .from('commandes_shop')
       .select('ref, client_nom, client_telephone')
