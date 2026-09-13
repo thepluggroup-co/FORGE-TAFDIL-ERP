@@ -818,16 +818,19 @@ export async function synchroniserCommandesWorkflow(options: {
           detail.message = `Commande ${detail.reference} ignoree pour livraison : statut ERP ${context.commande.statut ?? 'inconnu'} non pret.`
           console.log(`[workflow-sync] ${detail.message}`)
         } else {
-          const livraison = await ensureLivraisonEnPreparationForCommande(context.commandeId, options.userId)
-          const livraisonRow = livraison.livraison as { numero?: string | null; statut?: string | null } | null
-          if (livraison.created) {
+          const livraisonResult = await ensureLivraisonEnPreparationForCommande(context.commandeId, options.userId)
+          const livraisonRow = livraisonResult?.livraison as { numero?: string | null; statut?: string | null } | null
+          if (livraisonResult?.created) {
             result.livraisons_creees += 1
             detail.livraison = { action: 'creee', numero: livraisonRow?.numero ?? null, statut: livraisonRow?.statut ?? null }
             console.log(`[workflow-sync] Livraison ${livraisonRow?.numero ?? '(sans numero)'} creee pour ${detail.reference}.`)
-          } else if (livraison.livraison) {
+          } else if (livraisonRow) {
             result.livraisons_existantes += 1
             detail.livraison = { action: 'existante', numero: livraisonRow?.numero ?? null, statut: livraisonRow?.statut ?? null }
             console.log(`[workflow-sync] Livraison ${livraisonRow?.numero ?? '(sans numero)'} deja existante pour ${detail.reference}.`)
+          } else {
+            detail.livraison = { action: 'ignoree', statut: null }
+            detail.message = `Commande ${detail.reference} : livraison non creee car la commande est introuvable.`
           }
         }
       }
@@ -915,9 +918,9 @@ export async function synchroniserBonsExecutesWorkflowLegacy(options: {
       }
 
       if (cible === 'livraisons' || cible === 'tout') {
-        const livraison = await ensureLivraisonEnPreparationForCommande(context.commandeId, options.userId)
-        if (livraison.created) result.livraisons_creees += 1
-        else if (livraison.livraison) result.livraisons_existantes += 1
+        const livraisonResult = await ensureLivraisonEnPreparationForCommande(context.commandeId, options.userId)
+        if (livraisonResult?.created) result.livraisons_creees += 1
+        else if (livraisonResult?.livraison) result.livraisons_existantes += 1
       }
     } catch (e) {
       result.erreurs.push({

@@ -444,16 +444,16 @@ interface SynchronisationWorkflowResult {
 }
 
 function messageSynchronisationLivraisons(res: SynchronisationWorkflowResult) {
-  const creee = res.details.find((d) => d.livraison?.action === 'creee' && d.livraison.numero)
-  const existante = res.details.find((d) => d.livraison?.action === 'existante' && d.livraison.numero)
+  const creee = res.details.find((d) => d.livraison?.action === 'creee' && d.livraison?.numero)
+  const existante = res.details.find((d) => d.livraison?.action === 'existante' && d.livraison?.numero)
   const ignoree = res.details.find((d) => d.livraison?.action === 'ignoree')
   const erreur = res.erreurs[0]
 
   if (creee?.livraison) {
-    return `Livraison ${creee.livraison.numero} creee pour ${creee.reference}. ${res.erreurs.length} erreur(s).`
+    return `Livraison ${creee.livraison?.numero ?? '(sans numero)'} creee pour ${creee.reference}. ${res.erreurs.length} erreur(s).`
   }
   if (existante?.livraison) {
-    return `Livraison ${existante.livraison.numero} deja existante pour ${existante.reference}. ${res.erreurs.length} erreur(s).`
+    return `Livraison ${existante.livraison?.numero ?? '(sans numero)'} deja existante pour ${existante.reference}. ${res.erreurs.length} erreur(s).`
   }
   if (erreur) {
     return `Aucune livraison creee. ${erreur.numero ?? 'Commande'} : ${erreur.message}`
@@ -664,4 +664,3 @@ export function useUpdateIncidentStatut() {
     onError:   (err: Error) => toast.error(err.message),
   })
 }
-
