@@ -2,7 +2,9 @@ import { toast } from 'sonner'
 import { supabase } from './supabase'
 
 const _raw = import.meta.env.VITE_API_URL as string | undefined
-export const API_BASE = _raw?.startsWith('http') ? _raw : 'http://localhost:3001'
+export const API_BASE = _raw?.startsWith('http')
+  ? _raw.replace(/\/$/, '')
+  : 'https://forge-tafdil-erp-tafdil.up.railway.app'
 
 const REQUEST_TIMEOUT_MS = 15_000
 

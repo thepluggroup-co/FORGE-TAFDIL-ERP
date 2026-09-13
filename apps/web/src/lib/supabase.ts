@@ -26,7 +26,7 @@ const fetchWithTimeout: typeof fetch = (input, init) => {
 }
 
 export const supabase = createClient(
-  supabaseUrl     ?? 'https://placeholder.supabase.co',
+  supabaseUrl     ?? 'https://lcfuuwwsfqdhphhsbkky.supabase.co',
   supabaseAnonKey ?? 'placeholder-anon-key',
   {
     auth: {
