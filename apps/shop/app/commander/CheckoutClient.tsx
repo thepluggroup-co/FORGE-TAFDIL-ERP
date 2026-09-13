@@ -1203,7 +1203,8 @@ export function CheckoutClient() {
           const details = errJson.details as { designation?: string } | undefined
           toast.error(`Stock insuffisant : ${details?.designation ?? 'un article'}`)
         } else {
-          toast.error('Erreur lors de la commande. Réessayez.')
+          const message = typeof errJson.error === 'string' ? errJson.error : 'Erreur lors de la commande. Réessayez.'
+          toast.error(message)
         }
         return
       }
