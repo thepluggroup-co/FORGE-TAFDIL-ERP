@@ -1,4 +1,4 @@
-const PRODUCTION_API_URL = 'https://shimmering-balance-forge-tafdil.up.railway.app'
+const PRODUCTION_API_URL = 'https://forge-tafdil-erp-tafdil.up.railway.app'
 
 export function forgeApiBaseUrl(): string {
   const configured = process.env.FORGE_API_URL

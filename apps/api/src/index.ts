@@ -11,7 +11,7 @@ const port = Number(process.env.PORT ?? 3001)
 // Startup diagnostics
 console.log('[boot] SUPABASE_URL        :', process.env.SUPABASE_URL ? 'SET' : 'MISSING')
 console.log('[boot] SUPABASE_ANON_KEY   :', process.env.SUPABASE_ANON_KEY ? 'SET' : 'MISSING')
-console.log('[boot] SERVICE_ROLE_KEY    :', process.env.SUPABASE_SERVICE_ROLE_KEY ? 'SET' : 'MISSING')
+console.log('[boot] SERVICE_ROLE_KEY    :', (process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_KEY) ? 'SET' : 'MISSING')
 console.log('[boot] supabaseAdmin       :', supabaseAdmin ? 'INITIALIZED' : 'NULL — routes will all 500')
 
 // ── Cron 1 : Traitement batch emails (toutes les 4h) ────────────────────────
