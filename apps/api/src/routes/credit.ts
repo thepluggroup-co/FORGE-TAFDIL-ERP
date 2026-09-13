@@ -289,15 +289,21 @@ router.get('/dashboard', requirePermission('RECEIVABLES', 'READ'), async (c) => 
     // Plans actifs
     db.from('payment_plans').select('customer_id, outstanding_balance', { count: 'exact' }).eq('status', 'ACTIVE'),
     // Clients en retard
-    db.from('payment_plans').select('customer_id', { count: 'exact' }).eq('status', 'OVERDUE'),
+    db.from('payment_installments').select('id', { count: 'exact', head: true }).in('status', ['OVERDUE']),
     // Total décaissé (montant original de tous les plans créés)
     db.from('payment_plans').select('total_amount, outstanding_balance').neq('status', 'CANCELLED'),
   ])
 
+  if (plansRes.error || overdueRes.error || totalRes.error) {
+    const error = plansRes.error ?? overdueRes.error ?? totalRes.error
+    console.error('[credit:dashboard]', { error: error.message })
+    return c.json({ error: 'Erreur lecture tableau de bord crédit', code: 'DB_ERROR' }, 500)
+  }
+
   const activePlans   = (plansRes.data ?? []) as Array<{ outstanding_balance: number; customer_id: string }>
   const totalEncours  = activePlans.reduce((s, p) => s + p.outstanding_balance, 0)
   const activeClients = new Set(activePlans.map(p => p.customer_id)).size
-  const overdueCount  = plansRes.error ? 0 : (overdueRes.count ?? 0)
+  const overdueCount  = overdueRes.count ?? 0
 
   const allPlans   = (totalRes.data ?? []) as Array<{ total_amount: number; outstanding_balance: number }>
   const totalIssued = allPlans.reduce((s, p) => s + p.total_amount, 0)

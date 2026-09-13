@@ -29,10 +29,10 @@ import { useCommandes } from '@/hooks/useCommandes'
 import { API_BASE, apiClient } from '@/lib/api-client'
 import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
-import { CreditDashboard, CreditLimitForm, PaymentPlanWizard } from '@/features/credit'
+import { CreditDashboard, CreditLimitForm, PaymentPlanDetail, PaymentPlanWizard } from '@/features/credit'
 import type { Commande } from '@/hooks/useCommandes'
-import { useAllCreditLimits } from '@/hooks/useCredit'
-import type { CreditLimitWithClient } from '@/hooks/useCredit'
+import { useAllCreditLimits, usePaymentPlans } from '@/hooks/useCredit'
+import type { CreditLimitWithClient, PaymentPlan } from '@/hooks/useCredit'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1104,6 +1104,62 @@ function PlafondsList({ onEdit, onNew }: { onEdit: (clientId: string) => void; o
         keyField="id"
         loading={loading}
         emptyMessage="Aucun plafond configuré — cliquez sur « Nouveau plafond » pour en créer un"
+      />
+    </div>
+  )
+}
+
+function PaymentPlansPanel({ onNew }: { onNew: () => void }) {
+  const { data, total, loading, refetch } = usePaymentPlans()
+  const [status, setStatus] = useState('')
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null)
+
+  const visiblePlans = status ? data.filter((plan) => plan.status === status) : data
+  const statusLabel: Record<string, string> = {
+    ACTIVE: 'Actif', COMPLETED: 'Terminé', OVERDUE: 'En retard', CANCELLED: 'Annulé',
+  }
+
+  if (selectedPlanId) {
+    return (
+      <div className="p-5">
+        <button onClick={() => setSelectedPlanId(null)} className="mb-4 text-sm font-medium text-blue-600 hover:underline">
+          ← Retour aux plans ({total})
+        </button>
+        <PaymentPlanDetail planId={selectedPlanId} onBack={() => setSelectedPlanId(null)} />
+      </div>
+    )
+  }
+
+  return (
+    <div className="border-t border-gray-100">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3">
+        <div>
+          <p className="text-sm font-semibold text-gray-800">Plans de paiement</p>
+          <p className="text-xs text-gray-500">{total} plan{total !== 1 ? 's' : ''} enregistré{total !== 1 ? 's' : ''}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <select value={status} onChange={(e) => setStatus(e.target.value)} className="rounded-lg border border-gray-200 px-2.5 py-2 text-xs">
+            <option value="">Tous les statuts</option>
+            {Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <button onClick={refetch} className="text-xs text-gray-500 hover:text-gray-800">Actualiser</button>
+          <Button size="sm" onClick={onNew}><Plus className="h-3.5 w-3.5" /> Nouveau plan</Button>
+        </div>
+      </div>
+      <DataTable
+        columns={[
+          { id: 'client', header: 'Client', accessor: 'id', render: (_: unknown, row: PaymentPlan) => (
+            <div><p className="text-sm font-semibold">{row.clients?.nom ?? '—'}</p><p className="text-xs text-gray-400">{row.commandes?.numero ?? 'Commande —'}</p></div>
+          ) },
+          { id: 'total', header: 'Montant', accessor: 'total_amount', render: (v: unknown) => <span className="text-sm font-semibold">{formatXAF(Number(v ?? 0))}</span> },
+          { id: 'reste', header: 'Reste', accessor: 'outstanding_balance', render: (v: unknown) => <span className="text-sm font-semibold text-amber-700">{formatXAF(Number(v ?? 0))}</span> },
+          { id: 'statut', header: 'Statut', accessor: 'status', render: (v: unknown) => <Badge statut={String(v)} map={Object.fromEntries(Object.entries(statusLabel).map(([key, label]) => [key, { label, color: '#475569', bg: '#f1f5f9' }]))} /> },
+          { id: 'actions', header: '', accessor: 'id', csvSkip: true, render: (_: unknown, row: PaymentPlan) => <button onClick={() => setSelectedPlanId(row.id)} className="text-xs font-semibold text-[#C62828] hover:underline">Voir et suivre</button> },
+        ]}
+        data={visiblePlans as PaymentPlan[]}
+        keyField="id"
+        loading={loading}
+        emptyMessage="Aucun plan de paiement pour ce filtre"
       />
     </div>
   )
@@ -2441,10 +2497,13 @@ export default function Finance() {
 
                 {/* Plafonds crédit */}
                 {creditSubTab === 'plafonds' && (
-                  <PlafondsList
-                    onEdit={(clientId) => setEditLimitClientId(clientId)}
-                    onNew={() => setShowCreditLimitForm(true)}
-                  />
+                  <div>
+                    <PlafondsList
+                      onEdit={(clientId) => setEditLimitClientId(clientId)}
+                      onNew={() => setShowCreditLimitForm(true)}
+                    />
+                    <PaymentPlansPanel onNew={() => setShowOrderSelector(true)} />
+                  </div>
                 )}
 
                 {/* Modal limite de crédit — nouveau ou édition */}
@@ -3176,5 +3235,3 @@ export default function Finance() {
     </motion.div>
   )
 }
-
-

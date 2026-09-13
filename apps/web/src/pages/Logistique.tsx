@@ -574,14 +574,14 @@ export default function Logistique() {
             )}
           </div>
 
-          {Number(actionLivraison.livraison.solde_restant_xaf ?? 0) > 0 && (
+          {Number(selectedCommande?.solde_restant_xaf ?? 0) > 0 && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
               <div className="flex items-start gap-3">
                 <CreditCard className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-bold text-amber-900">Paiement du solde requis avant livraison</p>
                   <p className="mt-1 text-sm text-amber-800">
-                    Solde restant à encaisser : <strong>{formatXAF(Number(actionLivraison.livraison.solde_restant_xaf))}</strong>
+                    Solde restant à encaisser : <strong>{formatXAF(Number(selectedCommande?.solde_restant_xaf ?? 0))}</strong>
                   </p>
                 </div>
               </div>
