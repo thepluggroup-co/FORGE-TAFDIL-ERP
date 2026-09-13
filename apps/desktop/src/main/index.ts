@@ -179,13 +179,13 @@ function buildMenu(window: BrowserWindow) {
               type: 'info',
               title: 'FORGE by TAFDIL',
               message: `FORGE ERP v${APP_V}`,
-              detail: 'Microusine Métallurgique & BTP\nTAFDIL SARL — Douala, Cameroun\ninfo@tafdil.cm',
+              detail: 'Microusine Métallurgique & BTP\nTAFDIL SARL — Douala, Cameroun\ntafdilsarl@gmail.com',
               buttons: ['OK'],
             })
           },
         },
         { type: 'separator' },
-        { label: 'Rapport de bugs', click: () => shell.openExternal('mailto:info@tafdil.cm?subject=Bug+FORGE') },
+        { label: 'Rapport de bugs', click: () => shell.openExternal('mailto:tafdilsarl@gmail.com?subject=Bug+FORGE') },
       ],
     },
   ]

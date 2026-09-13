@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS public.clients (
   id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   nom                 TEXT        NOT NULL,
   type                TEXT        NOT NULL DEFAULT 'entreprise'
-                        CHECK (type IN ('particulier','entreprise','administration')),
+                                              CHECK (type IN ('particulier','entreprise','institution')),
   telephone           TEXT,
   email               TEXT,
   adresse             TEXT,

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { AlertTriangle, CheckCircle, Clock, Package, Plus, RefreshCw, Truck, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle, Clock, CreditCard, Package, Plus, RefreshCw, Truck, XCircle } from 'lucide-react'
 import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column, StatusMap } from '@forge/ui'
 import { formatDate, formatXAF } from '@/lib/utils'
@@ -27,6 +27,8 @@ type LivraisonActionForm = {
   destination: string
   transporteur: string
   notes: string
+  paiementMethode: 'mobile_money' | 'especes'
+  paiementReference: string
 }
 
 const TRANSPORTEURS = ['TRANSIT CM', 'CAMTRANS', 'PORT EXPRESS', 'Auto-livraison', 'ELITE TRANSPORT']
@@ -112,6 +114,8 @@ const DEFAULT_FORM: LivraisonForm = {
   dateDepart: new Date().toISOString().split('T')[0],
   dateLivraison: '',
   notes: '',
+  paiementMethode: 'mobile_money',
+  paiementReference: '',
 }
 
 const DEFAULT_ACTION_FORM: LivraisonActionForm = {
@@ -269,6 +273,8 @@ export default function Logistique() {
       destination:          String(livraison.destination ?? ''),
       transporteur:         String(livraison.transporteur ?? ''),
       notes:                '',
+      paiementMethode:      'mobile_money',
+      paiementReference:    '',
     })
   }
 
@@ -296,19 +302,10 @@ export default function Logistique() {
     if (statut === 'livree') {
       const solde = Number(livraison.solde_restant_xaf ?? 0)
       if (solde > 0) {
-        const methodeInput = window.prompt(
-          `Solde à encaisser : ${formatXAF(solde)}\nMode de paiement : tapez "mobile_money" ou "especes"`,
-          'mobile_money',
-        )
-        if (!methodeInput) return
-        const methode = methodeInput === 'especes' ? 'especes' : 'mobile_money'
-        const ref = methode === 'mobile_money'
-          ? window.prompt('Référence Mobile Money ou numéro de transaction', '')
-          : ''
         paiement_livraison = {
-          montant_xaf:   solde,
-          methode,
-          reference_ext: ref || undefined,
+          montant_xaf: solde,
+          methode: actionForm.paiementMethode,
+          reference_ext: actionForm.paiementReference.trim() || undefined,
         }
       }
     }
@@ -354,6 +351,8 @@ export default function Logistique() {
     }
     if (actionLivraison.statut === 'livree') {
       if (!actionForm.dateLivraisonReelle) return
+      const solde = Number(actionLivraison.livraison.solde_restant_xaf ?? 0)
+      if (solde > 0 && actionForm.paiementMethode === 'mobile_money' && !actionForm.paiementReference.trim()) return
       handleStatut(actionLivraison.livraison, 'livree', {
         date_livraison_reelle: actionForm.dateLivraisonReelle,
         notes:                actionForm.notes.trim() || `Livraison validée le ${actionForm.dateLivraisonReelle}`,
@@ -575,6 +574,44 @@ export default function Logistique() {
             )}
           </div>
 
+          {Number(actionLivraison.livraison.solde_restant_xaf ?? 0) > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <div className="flex items-start gap-3">
+                <CreditCard className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-amber-900">Paiement du solde requis avant livraison</p>
+                  <p className="mt-1 text-sm text-amber-800">
+                    Solde restant à encaisser : <strong>{formatXAF(Number(actionLivraison.livraison.solde_restant_xaf))}</strong>
+                  </p>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold uppercase text-amber-900">Mode de paiement *</label>
+                  <select
+                    value={actionForm.paiementMethode}
+                    onChange={(e) => setActionForm((f) => ({ ...f, paiementMethode: e.target.value as PaiementLivraison['methode'] }))}
+                    className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#C62828]"
+                  >
+                    <option value="mobile_money">Mobile Money</option>
+                    <option value="especes">Espèces</option>
+                  </select>
+                </div>
+                {actionForm.paiementMethode === 'mobile_money' && (
+                  <div>
+                    <label className="mb-1.5 block text-xs font-semibold uppercase text-amber-900">Référence transaction *</label>
+                    <input
+                      value={actionForm.paiementReference}
+                      onChange={(e) => setActionForm((f) => ({ ...f, paiementReference: e.target.value }))}
+                      placeholder="Ex. TXN-123456"
+                      className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-[#C62828]"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Destination *</label>
             <input value={form.destination} onChange={(e) => setForm((f) => ({ ...f, destination: e.target.value }))}
@@ -737,7 +774,13 @@ export default function Logistique() {
                 Annuler
               </Button>
               <Button
-                disabled={!actionForm.dateLivraisonReelle || updateStatut.isPending}
+                disabled={
+                  !actionForm.dateLivraisonReelle ||
+                  updateStatut.isPending ||
+                  (Number(actionLivraison.livraison.solde_restant_xaf ?? 0) > 0 &&
+                    actionForm.paiementMethode === 'mobile_money' &&
+                    !actionForm.paiementReference.trim())
+                }
                 onClick={submitActionForm}
               >
                 Valider livraison

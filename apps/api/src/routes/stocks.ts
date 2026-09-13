@@ -25,6 +25,10 @@ function calcStatut(
   return 'normal'
 }
 
+function normalizeReference(value: string): string {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
+}
+
 // ── Schémas Zod ────────────────────────────────────────────────────────────────
 
 const createProduitSchema = z.object({
@@ -178,6 +182,27 @@ router.post(
     const user = c.get('user')
     const body = c.req.valid('json')
     const statut = calcStatut(body.stock_actuel, body.stock_min, body.stock_critique)
+
+    const { data: existingProducts, error: lookupError } = await db
+      .from('produits')
+      .select('ref')
+
+    if (lookupError) {
+      console.error('[stocks] POST / reference lookup error:', lookupError.message)
+      return c.json({ error: 'Impossible de vérifier la référence du produit.' }, 500)
+    }
+
+    const normalizedReference = normalizeReference(body.ref)
+    const existingProduct = existingProducts?.find(
+      (product: { ref: string }) => normalizeReference(product.ref) === normalizedReference,
+    )
+
+    if (existingProduct) {
+      return c.json({
+        error: `Cette référence existe déjà : ${existingProduct.ref}. Veuillez en choisir une autre.`,
+        code: 'DUPLICATE_REFERENCE',
+      }, 409)
+    }
 
     const { data, error } = await db
       .from('produits')

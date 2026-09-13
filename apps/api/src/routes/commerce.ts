@@ -90,6 +90,12 @@ const clientSchema = z.object({
   statut:           z.enum(['actif', 'inactif', 'bloque']).default('actif'),
   score_fiabilite:  scoreFiabiliteSchema,
   notes:            z.string().optional(),
+  niu:              z.string().max(100).optional(),
+  rccm:             z.string().max(100).optional(),
+  numero_cni:       z.string().max(100).optional(),
+  profession:       z.string().max(150).optional(),
+  identifiant_administratif: z.string().max(150).optional(),
+  service:          z.string().max(150).optional(),
 })
 
 const devisLigneSchema = z.object({
@@ -212,7 +218,7 @@ async function checkExpireDevis(devisId: string, dateValidite: string, statut: s
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapDevis(row: any) {
-  const cli   = row.clients as { id?: string; nom?: string; telephone?: string; email?: string } | null
+  const cli   = row.clients as { id?: string; nom?: string; telephone?: string; email?: string; adresse?: string } | null
   const today = new Date().toISOString().slice(0, 10)
   const jours_restants = row.date_validite
     ? Math.round((new Date(row.date_validite).getTime() - Date.now()) / 86400000)
@@ -244,6 +250,7 @@ function mapDevis(row: any) {
       nom:       cli?.nom ?? row.client_nom ?? '',
       telephone: cli?.telephone ?? null,
       email:     cli?.email ?? null,
+      adresse:   cli?.adresse ?? null,
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     lignes: (row.devis_lignes ?? []).map((l: any) => ({
@@ -327,11 +334,20 @@ async function creerBonSortieCommande(
 ): Promise<boolean> {
   const { data: existing } = await db
     .from('bons_sortie')
-    .select('id')
-    .eq('commande_id', commandeId)
+    .select('id, commande_id')
+    .or(`commande_id.eq.${commandeId},demandeur.eq.${commandeNumero}`)
+    .order('created_at', { ascending: true })
+    .limit(1)
     .maybeSingle()
 
-  if (existing) return true
+  if (existing) {
+    if (!(existing as { commande_id?: string | null }).commande_id) {
+      await db.from('bons_sortie')
+        .update({ commande_id: commandeId, updated_at: new Date().toISOString() })
+        .eq('id', (existing as { id: string }).id)
+    }
+    return true
+  }
 
   // 1. Récupérer les lignes de la commande
   const { data: lignes, error: lignesErr } = await db
@@ -706,8 +722,48 @@ router.get('/clients', requirePermission('COMMERCIAL', 'READ'), async (c) => {
     return c.json({ error: error.message }, 500)
   }
 
+  const clientRows = data ?? []
+  const clientIds = clientRows.map((client) => client.id)
+  const [commandesResult, creditsResult] = await Promise.all([
+    clientIds.length
+      ? db.from('commandes').select('client_id, total_ttc_xaf').in('client_id', clientIds)
+      : Promise.resolve({ data: [], error: null }),
+    clientIds.length
+      ? db.from('credits').select('client_id, solde_restant_xaf').in('client_id', clientIds).neq('statut', 'solde')
+      : Promise.resolve({ data: [], error: null }),
+  ])
+
+  if (commandesResult.error || creditsResult.error) {
+    const aggregateError = commandesResult.error?.message ?? creditsResult.error?.message
+    console.error('[commerce] GET /clients metrics error:', aggregateError)
+    return c.json({ error: 'Impossible de calculer les indicateurs clients.' }, 500)
+  }
+
+  const commandesByClient = new Map<string, { count: number; total: number }>()
+  for (const commande of commandesResult.data ?? []) {
+    const current = commandesByClient.get(commande.client_id) ?? { count: 0, total: 0 }
+    current.count += 1
+    current.total += Number(commande.total_ttc_xaf) || 0
+    commandesByClient.set(commande.client_id, current)
+  }
+
+  const encoursByClient = new Map<string, number>()
+  for (const credit of creditsResult.data ?? []) {
+    encoursByClient.set(
+      credit.client_id,
+      (encoursByClient.get(credit.client_id) ?? 0) + (Number(credit.solde_restant_xaf) || 0),
+    )
+  }
+
+  const clientsWithMetrics = clientRows.map((client) => ({
+    ...client,
+    commandes_count: commandesByClient.get(client.id)?.count ?? 0,
+    total_ca_xaf: commandesByClient.get(client.id)?.total ?? 0,
+    encours_credit_xaf: encoursByClient.get(client.id) ?? 0,
+  }))
+
   return c.json({
-    data,
+    data: clientsWithMetrics,
     total: count ?? 0,
     page,
     per_page: perPage,
@@ -801,7 +857,7 @@ router.get('/devis', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const from    = (page - 1) * perPage
   const to      = from + perPage - 1
 
-  let query = db.from('devis').select('*, devis_lignes(*), clients(id, nom, telephone, email), cp:conditions_paiement!condition_paiement_id(code, libelle, acompte_pct, delai_solde_jours)', { count: 'exact' })
+  let query = db.from('devis').select('*, devis_lignes(*), clients(id, nom, telephone, email, adresse), cp:conditions_paiement!condition_paiement_id(code, libelle, acompte_pct, delai_solde_jours)', { count: 'exact' })
 
   if (statut)    query = query.eq('statut', statut)
   if (client_id) query = query.eq('client_id', client_id)
@@ -950,7 +1006,12 @@ router.post('/devis', requirePermission('COMMERCIAL', 'CREATE'), zValidator('jso
           { numero, date_emission: body.date_emission, date_validite: body.date_validite,
             validite_jours: body.validite_jours, total_ht_xaf: dv.total_ht_xaf,
             tva_xaf: dv.tva_xaf, total_ttc_xaf: dv.total_ttc_xaf },
-          { nom: body.client_nom },
+          {
+            nom: body.client_nom,
+            adresse: body.client_adresse ?? null,
+            telephone: body.client_telephone ?? null,
+            email: body.client_email ?? null,
+          },
           (lignesData ?? []) as { designation: string; unite: string; quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number }[],
         )
         pdf_url = await uploadPDF(pdfBuf, 'devis', `${numero}.pdf`)
@@ -1320,7 +1381,7 @@ router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'U
   <table width="100%" cellpadding="0" cellspacing="0"><tr>
     <td valign="middle">
       <p style="margin:0;color:#ffffff;font-size:22px;font-weight:bold;letter-spacing:.4px;">TAFDIL SARL</p>
-      <p style="margin:5px 0 0;color:rgba(255,255,255,.82);font-size:12px;">Microusine Métallurgique &amp; BTP — Kotto Mairyvanas, Douala</p>
+      <p style="margin:5px 0 0;color:rgba(255,255,255,.82);font-size:12px;">Microusine Métallurgique &amp; BTP — Kotto Mauryvanas, Douala</p>
       <p style="margin:3px 0 0;color:rgba(255,255,255,.65);font-size:11px;">NIU&nbsp;: M052116085624A &nbsp;|&nbsp; RCCM&nbsp;: RC/DLA/2021/B/2624</p>
     </td>
     <td align="right" valign="middle" style="padding-left:20px;">
@@ -1402,12 +1463,12 @@ router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'U
     </p>
   </div>
   <p style="margin:0 0 4px;color:#374151;font-size:13px;font-weight:600;">Une question ?</p>
-  <p style="margin:0;color:#6B7280;font-size:13px;line-height:1.7;">Contactez-nous au <strong>+237 695 884 528</strong> ou à <strong>info@tafdil.cm</strong>.<br>
+  <p style="margin:0;color:#6B7280;font-size:13px;line-height:1.7;">Contactez-nous au <strong>+237 695 884 528</strong> ou à <strong>tafdilsarl@gmail.com</strong>.<br>
   Disponible du lundi au vendredi, 8h–17h.</p>
 </td></tr>
 <tr><td style="background:#F9FAFB;border-top:1px solid #E5E7EB;padding:18px 36px;text-align:center;">
   <p style="margin:0 0 3px;color:#6B7280;font-size:11px;font-weight:600;">TAFDIL SARL — Microusine Métallurgique &amp; BTP</p>
-  <p style="margin:0;color:#9CA3AF;font-size:10px;">NIU : M052116085624A &nbsp;|&nbsp; RCCM : RC/DLA/2021/B/2624 &nbsp;|&nbsp; Kotto Mairyvanas, Douala &nbsp;|&nbsp; +237 695 884 528</p>
+  <p style="margin:0;color:#9CA3AF;font-size:10px;">NIU : M052116085624A &nbsp;|&nbsp; RCCM : RC/DLA/2021/B/2624 &nbsp;|&nbsp; Kotto Mauryvanas, Douala &nbsp;|&nbsp; +237 695 884 528</p>
 </td></tr>
 </table>
 </td></tr>
@@ -2472,8 +2533,10 @@ if (erpStatut) {
       const numeroBon = `WEB-${cmd.ref}`
       const { data: bonExist } = await db
         .from('bons_sortie')
-        .select('id')
-        .eq('demandeur', cmd.ref)
+        .select('id, commande_id')
+        .or(`demandeur.eq.${cmd.ref},numero.eq.WEB-${cmd.ref}`)
+        .order('created_at', { ascending: true })
+        .limit(1)
         .maybeSingle()
 
       if (!bonExist) {
@@ -2508,6 +2571,10 @@ if (erpStatut) {
             await db.from('bons_sortie_lignes').insert(lignesJson)
           }
         } 
+      } else if (!(bonExist as { commande_id?: string | null }).commande_id && cmd.erp_commande_id) {
+        await db.from('bons_sortie')
+          .update({ commande_id: cmd.erp_commande_id, updated_at: new Date().toISOString() })
+          .eq('id', (bonExist as { id: string }).id)
       }
     }
 

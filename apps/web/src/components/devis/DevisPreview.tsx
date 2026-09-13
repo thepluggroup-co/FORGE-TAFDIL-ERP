@@ -14,6 +14,9 @@ export interface DevisPreviewLine {
 export interface DevisPreviewData {
   numero: string
   client_nom: string
+  client_email?: string | null
+  client_telephone?: string | null
+  client_adresse?: string | null
   date_emission?: string | null
   date_validite?: string | null
   validite_jours?: number | null
@@ -44,14 +47,14 @@ export function DevisPreview({ devis, compact = false }: DevisPreviewProps) {
       <div className="bg-[#C62828] px-5 py-4 text-white">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex gap-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-white text-sm font-black text-[#C62828]">
-              T
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white">
+              <img src="/tafdil-logo.jpeg" alt="Logo TAFDIL" className="h-full w-full object-contain" />
             </div>
             <div>
               <p className="text-lg font-black leading-tight">TAFDIL SARL</p>
               <p className="mt-1 text-xs text-white/80">Microusine Metallurgique et BTP - Douala, Cameroun</p>
               <p className="mt-1 text-[11px] text-white/70">NIU : M052116085624A | RCCM : RC/DLA/2021/B/2624</p>
-              <p className="mt-1 text-[11px] text-white/70">+237 695 884 528 | info@tafdil.cm</p>
+              <p className="mt-1 text-[11px] text-white/70">+237 695 884 528 | tafdilsarl@gmail.com</p>
             </div>
           </div>
           <div className="text-left sm:text-right">
@@ -70,6 +73,9 @@ export function DevisPreview({ devis, compact = false }: DevisPreviewProps) {
           <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
             <p className="text-[11px] font-bold uppercase text-gray-400">Client</p>
             <p className="mt-1 text-sm font-bold text-[#212121]">{devis.client_nom}</p>
+            {devis.client_adresse && <p className="mt-1 text-xs text-gray-500">{devis.client_adresse}</p>}
+            {devis.client_telephone && <p className="text-xs text-gray-500">{devis.client_telephone}</p>}
+            {devis.client_email && <p className="truncate text-xs text-gray-500">{devis.client_email}</p>}
           </div>
           <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
             <p className="text-[11px] font-bold uppercase text-gray-400">Validite</p>
@@ -138,7 +144,7 @@ export function DevisPreview({ devis, compact = false }: DevisPreviewProps) {
         </div>
 
         <p className="border-t border-gray-100 pt-3 text-center text-[11px] text-gray-400">
-          TAFDIL SARL - Kotto Mairyvanas, Douala - Devis valable selon les conditions indiquees.
+          TAFDIL SARL - Kotto Mauryvanas, Douala - Devis valable selon les conditions indiquees.
         </p>
       </div>
     </div>

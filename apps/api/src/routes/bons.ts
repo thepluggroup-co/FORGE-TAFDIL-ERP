@@ -258,6 +258,21 @@ router.post(
       async () => {
         await checkNatureCompatibilite(body.nature_transaction, body.commande_id ?? null)
 
+        if (body.commande_id) {
+          const { data: existingBon, error: existingBonError } = await db
+            .from('bons_sortie')
+            .select('id, numero, statut, commande_id')
+            .eq('commande_id', body.commande_id)
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle()
+
+          if (existingBonError) throw new Error(existingBonError.message)
+          if (existingBon) {
+            return { ...existingBon, duplicate: true }
+          }
+        }
+
         const numero = await genererNumeroBon()
 
         const { data: bon, error: bonErr } = await db

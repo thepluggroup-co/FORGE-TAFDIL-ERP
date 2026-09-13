@@ -186,6 +186,9 @@ function DevisDetailPanel({
           devis={{
             numero:             devis.reference as string,
             client_nom:         client.nom,
+            client_email:       client.email,
+            client_telephone:   client.telephone,
+            client_adresse:     (client as { adresse?: string | null }).adresse,
             date_emission:      devis.date_creation as string | null,
             date_validite:      devis.date_validite as string | null,
             validite_jours:     devis.validite_jours as number,

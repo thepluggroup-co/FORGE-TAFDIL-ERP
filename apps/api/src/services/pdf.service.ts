@@ -8,17 +8,17 @@ const db = supabaseAdmin!
 const CO = {
   nom:       'TAFDIL SARL',
   activite:  'Microusine Métallurgique & BTP',
-  adresse:   'Kotto Mairyvanas, Douala, Cameroun',
+  adresse:   'Kotto Mauryvanas, Douala, Cameroun',
   tel:       '+237 695 884 528',
-  email:     'info@tafdil.cm',
+  email:     'tafdilsarl@gmail.com',
   niu:       'M052116085624A',
   rccm:      'RC/DLA/2021/B/2624',
   capital:   '10 000 000 XAF',
   directeur: 'M. CARMEL TANEKEU',
 } as const
 
-// Logo TAFDIL — placer le fichier dans apps/api/src/assets/logo-tafdil.png
-const LOGO_PATH = join(process.cwd(), 'src', 'assets', 'logo-tafdil.png')
+// Logo TAFDIL — placer le fichier dans apps/api/src/assets/logo-tafdil.jpeg
+const LOGO_PATH = join(process.cwd(), 'src', 'assets', 'logo-tafdil.jpeg')
 
 // ── Design tokens ──────────────────────────────────────────────────────────────
 const C = {

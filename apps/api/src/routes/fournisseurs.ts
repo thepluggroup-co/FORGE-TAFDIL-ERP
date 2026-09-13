@@ -36,9 +36,9 @@ const envoyerBonSchema = z.object({
 const CO = {
   nom:      'TAFDIL SARL',
   activite: 'Microusine Métallurgique & BTP',
-  adresse:  'Kotto Mairyvanas, Douala, Cameroun',
+  adresse:  'Kotto Mauryvanas, Douala, Cameroun',
   tel:      '+237 695 884 528',
-  email:    'info@tafdil.cm',
+  email:    'tafdilsarl@gmail.com',
 } as const
 
 const C = {

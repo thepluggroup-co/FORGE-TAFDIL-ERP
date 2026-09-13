@@ -20,13 +20,17 @@ type Product = StockProduit & Record<string, unknown>
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MOTIFS = ['Achat fournisseur', 'Retour chantier', 'Correction inventaire', 'Don / perte', 'Autre']
-const UNITES = ['pièce', 'kg', 'm', 'm²', 'm³', 'litre', 'barre', 'rouleau', 'unité']
+const UNITES = ['pièce', 'kg', 'm', 'mm', 'm²', 'm³', 'litre', 'barre', 'rouleau', 'unité']
 const CATEGORIES_DEFAULT = ['Acier', 'Aluminium', 'Inox', 'Consommable soudure', 'EPI', 'Outillage', 'Autre']
 
 const DEFAULT_PRODUIT: CreateProduitPayload = {
   ref: '', designation: '', categorie: '', unite: 'pièce',
   stock_actuel: 0, stock_min: 5, stock_critique: 2, prix_unitaire_xaf: 0,
   emplacement: '', fournisseur: '',
+}
+
+function normalizeReference(value: string): string {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
 }
 
 // ── Columns ────────────────────────────────────────────────────────────────────
@@ -193,6 +197,11 @@ export default function Stocks() {
   const { data, isLoading, isError } = useStocks({ search: debouncedSearch, categorie, statut: statusFilter })
   const mouvement = useMouvement()
   const createProduit = useCreateProduit()
+  const existingReference = useMemo(() => {
+    const normalizedReference = normalizeReference(newProduit.ref)
+    if (!normalizedReference) return null
+    return data?.data.find((product) => normalizeReference(product.ref) === normalizedReference) ?? null
+  }, [data?.data, newProduit.ref])
   const [approOpen, setApproOpen]   = useState(false)
   const [approForm, setApproForm]   = useState<ApproForm>(DEFAULT_APPRO)
 
@@ -585,6 +594,11 @@ export default function Stocks() {
                 <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Référence *</label>
                 <input value={newProduit.ref} onChange={(e) => setNewProduit((p) => ({ ...p, ref: e.target.value }))}
                   placeholder="ex. AC-001" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+                {existingReference && (
+                  <p className="mt-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+                    Cette référence existe déjà pour « {existingReference.designation} ». Veuillez en choisir une autre.
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Unité</label>
@@ -679,7 +693,7 @@ export default function Stocks() {
               </Button>
               <Button
                 className="flex-1"
-                disabled={!newProduit.ref || !newProduit.designation || !newProduit.categorie || createProduit.isPending}
+                disabled={!newProduit.ref || !newProduit.designation || !newProduit.categorie || !!existingReference || createProduit.isPending}
                 onClick={() => {
                   if (!newProduit.ref || !newProduit.designation || !newProduit.categorie) return
                   setCreateError(null)

@@ -107,7 +107,7 @@ function buildBlEmailHtml({
 
               <p style="margin:0;font-size:12px;line-height:1.6;color:#9CA3AF;">
                 TAFDIL SARL — Micro-usine métallurgique & BTP<br/>
-                Kotto Mairyvanas, Douala, Cameroun<br/>
+                Kotto Mauryvanas, Douala, Cameroun<br/>
                 Tél : +237 695 884 528 — ${PUBLIC_URL}
               </p>
             </td>

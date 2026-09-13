@@ -15,6 +15,8 @@ function queryString(params?: Record<string, string | number | boolean | undefin
 export interface Client {
   id: string; nom: string; type: 'entreprise' | 'particulier' | 'institution'
   telephone: string; email: string; adresse: string; ville?: string; pays?: string; notes?: string
+  niu?: string; rccm?: string; numero_cni?: string; profession?: string
+  identifiant_administratif?: string; service?: string
   commandes_count: number; encours_credit_xaf: number; total_ca_xaf: number
   score_fiabilite: number; statut: 'actif' | 'inactif' | 'bloque'
 }
@@ -22,6 +24,8 @@ export interface Client {
 export interface CreateClientPayload {
   nom: string; type: 'entreprise' | 'particulier' | 'institution'
   telephone?: string; email?: string; adresse?: string; ville?: string; pays?: string; notes?: string
+  niu?: string; rccm?: string; numero_cni?: string; profession?: string
+  identifiant_administratif?: string; service?: string
   statut?: 'actif' | 'inactif' | 'bloque'; score_fiabilite?: number
 }
 
@@ -82,6 +86,10 @@ export function useCreateClient() {
         adresse: payload.adresse || undefined, ville: payload.ville || undefined,
         pays: payload.pays ?? 'Cameroun', statut: payload.statut ?? 'actif',
         score_fiabilite: payload.score_fiabilite, notes: payload.notes || undefined,
+        niu: payload.niu || undefined, rccm: payload.rccm || undefined,
+        numero_cni: payload.numero_cni || undefined, profession: payload.profession || undefined,
+        identifiant_administratif: payload.identifiant_administratif || undefined,
+        service: payload.service || undefined,
       }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['clients'] }); toast.success('Client créé') },
     onError:   (err: Error) => toast.error(err.message),

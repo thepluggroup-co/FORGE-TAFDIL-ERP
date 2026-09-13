@@ -51,12 +51,19 @@ interface NouveauClientForm {
   adresse: string
   ville: string
   notes: string
+  niu: string
+  rccm: string
+  numero_cni: string
+  profession: string
+  identifiant_administratif: string
+  service: string
   statut: 'actif' | 'inactif' | 'bloque'
 }
 
 const DEFAULT_FORM: NouveauClientForm = {
   nom: '', type: 'entreprise', telephone: '', email: '',
   adresse: '', ville: 'Douala', notes: '', statut: 'actif',
+  niu: '', rccm: '', numero_cni: '', profession: '', identifiant_administratif: '', service: '',
 }
 
 // ── Table columns ─────────────────────────────────────────────────────────────
@@ -158,6 +165,12 @@ export default function Clients() {
       ville:     form.ville     || undefined,
       statut:    form.statut,
       notes:     form.notes     || undefined,
+      niu:       form.niu       || undefined,
+      rccm:      form.rccm      || undefined,
+      numero_cni: form.numero_cni || undefined,
+      profession: form.profession || undefined,
+      identifiant_administratif: form.identifiant_administratif || undefined,
+      service:    form.service    || undefined,
     }
     createClient.mutate(
       payload,
@@ -262,6 +275,31 @@ export default function Clients() {
                 className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
               />
             </div>
+          </div>
+
+          {/* Informations propres au type de client */}
+          <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-3 space-y-3">
+            <p className="text-xs font-semibold text-blue-800">
+              Informations {form.type === 'entreprise' ? 'de l’entreprise' : form.type === 'particulier' ? 'du particulier' : 'de l’institution'}
+            </p>
+            {form.type === 'entreprise' && (
+              <div className="grid grid-cols-2 gap-3">
+                <input value={form.niu} onChange={(e) => setForm((f) => ({ ...f, niu: e.target.value }))} placeholder="NIU" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+                <input value={form.rccm} onChange={(e) => setForm((f) => ({ ...f, rccm: e.target.value }))} placeholder="RCCM" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+              </div>
+            )}
+            {form.type === 'particulier' && (
+              <div className="grid grid-cols-2 gap-3">
+                <input value={form.numero_cni} onChange={(e) => setForm((f) => ({ ...f, numero_cni: e.target.value }))} placeholder="Numéro de CNI" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+                <input value={form.profession} onChange={(e) => setForm((f) => ({ ...f, profession: e.target.value }))} placeholder="Profession" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+              </div>
+            )}
+            {form.type === 'institution' && (
+              <div className="grid grid-cols-2 gap-3">
+                <input value={form.identifiant_administratif} onChange={(e) => setForm((f) => ({ ...f, identifiant_administratif: e.target.value }))} placeholder="NIU / identifiant" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+                <input value={form.service} onChange={(e) => setForm((f) => ({ ...f, service: e.target.value }))} placeholder="Service / direction" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+              </div>
+            )}
           </div>
 
           {/* Adresse */}
