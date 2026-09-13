@@ -156,7 +156,10 @@ export function BoutiquePage() {
 
     return () => {
       active = false
-      codeReader.reset()
+      const stream = videoRef.current?.srcObject
+      if (stream instanceof MediaStream) {
+        stream.getTracks().forEach((track) => track.stop())
+      }
     }
   }, [scannerActive])
 
@@ -251,7 +254,7 @@ export function BoutiquePage() {
         prix_unitaire: line.prix_unitaire,
       }))
 
-      const body = {
+      const body: Parameters<typeof createShopCommande>[0] = {
         client_nom: clientName || 'Client Boutique',
         client_telephone: clientPhone || null,
         client_email: null,
@@ -365,7 +368,7 @@ export function BoutiquePage() {
   }, [])
 
   const latestSales = useMemo(() => {
-    return [...salesHistory].sort((a, b) => new Date(b.date_commande).getTime() - new Date(a.date_commande).getTime())
+    return [...salesHistory].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
   }, [salesHistory])
 
   return (
