@@ -1215,11 +1215,27 @@ router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'U
       .select('email, adresse, telephone, niu, type')
       .eq('id', d.client_id).single()
     const cliRow = cli as { email?: string | null; adresse?: string | null; telephone?: string | null; niu?: string | null; type?: string | null } | null
-    clientEmail    = cliRow?.email    ?? null
+    clientEmail    = cliRow?.email?.trim().toLowerCase() || null
     clientAdresse  = cliRow?.adresse  ?? null
     clientTelephone = cliRow?.telephone ?? null
     clientNiu      = cliRow?.niu      ?? null
     clientType     = cliRow?.type     ?? null
+  }
+
+  // Older shop-created quotes may have a missing/stale client_id while the
+  // matching client record (and its email) still exists.
+  if (!clientEmail) {
+    const { data: cli } = await db.from('clients')
+      .select('email, adresse, telephone, niu, type')
+      .ilike('nom', d.client_nom.trim())
+      .limit(1)
+      .maybeSingle()
+    const cliRow = cli as { email?: string | null; adresse?: string | null; telephone?: string | null; niu?: string | null; type?: string | null } | null
+    clientEmail     = cliRow?.email?.trim().toLowerCase() || null
+    clientAdresse   = clientAdresse ?? cliRow?.adresse ?? null
+    clientTelephone = clientTelephone ?? cliRow?.telephone ?? null
+    clientNiu       = clientNiu ?? cliRow?.niu ?? null
+    clientType      = clientType ?? cliRow?.type ?? null
   }
 
   if (!clientEmail) {
@@ -1255,6 +1271,15 @@ router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'U
       error: 'Impossible d envoyer le devis : le PDF du devis n a pas pu etre genere.',
       code:  'PDF_GENERATION_FAILED',
     }, 500)
+  }
+
+  // Persist the PDF as well as attaching it to the email. This repairs older
+  // shop-created quotes that were saved without a pdf_url.
+  try {
+    const pdfUrl = await uploadPDF(pdfBuffer, 'devis', `${d.numero}.pdf`)
+    await db.from('devis').update({ pdf_url: pdfUrl }).eq('id', id)
+  } catch (e) {
+    console.error('[commerce] Erreur stockage PDF pour email:', e)
   }
 
   const token     = randomUUID()

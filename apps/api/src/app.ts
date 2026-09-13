@@ -34,14 +34,23 @@ import { isNetworkError } from './services/offline-fallback'
 
 const app = new Hono<{ Variables: HonoVariables }>()
 
-const ALLOWED_ORIGINS = [
+const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:4173',
   'http://localhost:3000',
   'http://localhost:3002',
+  'https://forge-tafdil.vercel.app',
+  'https://forge-tafdil-erp-web.vercel.app',
+]
+
+const EXTRA_ALLOWED_ORIGINS = [
   ...(process.env.FRONTEND_URL?.split(',').map((u) => u.trim()) ?? []),
   process.env.TAURI_URL,
-].filter(Boolean) as string[]
+  process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined,
+  process.env.VERCEL_BRANCH_URL ? `https://${process.env.VERCEL_BRANCH_URL}` : undefined,
+].filter((value): value is string => Boolean(value?.trim()))
+
+const ALLOWED_ORIGINS = [...new Set([...DEFAULT_ALLOWED_ORIGINS, ...EXTRA_ALLOWED_ORIGINS].map((value) => value.trim().replace(/\/+$/, '').toLowerCase()))]
 
 app.use('*', logger())
 
@@ -55,9 +64,16 @@ app.use('*', async (c, next) => {
 app.use('*', cors({
   origin: (origin) => {
     if (!origin) return origin
-    if (ALLOWED_ORIGINS.includes(origin)) return origin
+
+    const normalizedOrigin = origin.trim().replace(/\/+$/, '').toLowerCase()
+    if (ALLOWED_ORIGINS.includes(normalizedOrigin)) return origin
+
     // Dev: allow any localhost port (Vite may shift to 5174, 5175, etc.)
     if (process.env.NODE_ENV !== 'production' && /^https?:\/\/localhost(:\d+)?$/.test(origin)) return origin
+
+    // Production preview / branch deploys on Vercel use per-deploy hostnames.
+    if (/^https:\/\/(?:forge-tafdil(?:-[a-z0-9-]+)?|forge-tafdil-erp-web)\.vercel\.app$/i.test(origin)) return origin
+
     return null
   },
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

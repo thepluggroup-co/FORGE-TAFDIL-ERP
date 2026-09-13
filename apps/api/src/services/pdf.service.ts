@@ -844,17 +844,27 @@ export async function uploadPDF(
   bucket:   string,
   filename: string,
 ): Promise<string> {
-  // supabaseAdmin has storage.createSignedUrl privileges; fall back to anon client
   const client = db
-
-  const { error: upErr } = await client.storage
+  const upload = () => client.storage
     .from(bucket)
     .upload(filename, buffer, { contentType: 'application/pdf', upsert: true })
 
+  let { error: upErr } = await upload()
+
+  // Some environments were deployed without the storage bucket migration.
+  // Create the private bucket once, then retry the upload instead of returning
+  // a URL that points to a non-existent bucket.
+  if (upErr?.message.toLowerCase().includes('bucket not found')) {
+    const { error: bucketErr } = await client.storage.createBucket(bucket, { public: false })
+    if (bucketErr && !bucketErr.message.toLowerCase().includes('already exists')) {
+      throw new Error(`Storage bucket creation failed (${bucket}): ${bucketErr.message}`)
+    }
+    ;({ error: upErr } = await upload())
+  }
+
   if (upErr) {
     console.error(`[pdf] storage upload error (${bucket}/${filename}):`, upErr.message)
-    // Return public URL as fallback (works if bucket is public)
-    return db.storage.from(bucket).getPublicUrl(filename).data.publicUrl
+    throw new Error(`Storage PDF upload failed (${bucket}/${filename}): ${upErr.message}`)
   }
 
   const { data } = await client.storage
