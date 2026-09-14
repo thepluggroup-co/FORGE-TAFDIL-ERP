@@ -718,6 +718,7 @@ function RemboursementModal({ isOpen, onClose, credit }: { isOpen: boolean; onCl
   const [montant, setMontant] = useState('')
   const [date, setDate]     = useState(new Date().toISOString().split('T')[0])
   const rembourser = useRemboursement()
+  const [success, setSuccess] = useState(false)
 
   useEffect(() => {
     if (isOpen) {
@@ -727,11 +728,9 @@ function RemboursementModal({ isOpen, onClose, credit }: { isOpen: boolean; onCl
     }
   }, [isOpen, credit?.id])
 
-  if (!credit) return null
-
-  const [success, setSuccess] = useState(false)
-
   useEffect(() => { if (isOpen) setSuccess(false) }, [isOpen])
+
+  if (!credit) return null
 
   const handleSubmit = () => {
     const montantFinal = type === 'total' ? (credit.solde_restant_xaf as number) : Number(montant)

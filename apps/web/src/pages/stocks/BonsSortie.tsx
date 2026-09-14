@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { Plus, Check, ChevronRight, RefreshCw, AlertTriangle, CheckCircle2, Minus } from 'lucide-react'
+import { Plus, Check, RefreshCw, AlertTriangle, CheckCircle2, Minus } from 'lucide-react'
 import { toast } from 'sonner'
 import { PageHeader, DataTable, StatusBadge, SlideOver, Modal, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
@@ -25,11 +25,8 @@ import { supabase } from '@/lib/supabase'
 
 type BonRecord = BonApi & Record<string, unknown>
 
-type BonStatus = 'soumis' | 'valide' | 'execute'
 type PreparationStatus = 'a_preparer' | 'en_cours' | 'pret'
 
-const STEP_LABELS: Record<BonStatus, string> = { soumis: 'En attente', valide: 'Validé', execute: 'Exécuté' }
-const STEPS: BonStatus[] = ['soumis', 'valide', 'execute']
 const PREPARATION_LABELS: Record<PreparationStatus, string> = {
   a_preparer: 'A preparer',
   en_cours:   'En cours',
@@ -69,35 +66,6 @@ function preparationStatus(bon: BonRecord): PreparationStatus | null {
 
 function peutExecuterBon(bon: BonRecord) {
   return Boolean(bon.preparateur_id) && preparationStatus(bon) === 'pret'
-}
-
-// ── Stepper ────────────────────────────────────────────────────────────────────
-
-function WorkflowStepper({ status }: { status: string }) {
-  const normalized = (status === 'en_attente' ? 'soumis' : status) as BonStatus
-  const currentIdx = STEPS.indexOf(normalized)
-  return (
-    <div className="flex items-center gap-1">
-      {STEPS.map((step, i) => (
-        <React.Fragment key={step}>
-          <div className="flex items-center gap-1">
-            <div
-              className="flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold shrink-0"
-              style={{ backgroundColor: i <= currentIdx ? '#C62828' : '#e5e7eb', color: i <= currentIdx ? '#fff' : '#9ca3af' }}
-            >
-              {i < currentIdx ? <Check className="h-3 w-3" /> : i + 1}
-            </div>
-            <span className="text-xs font-medium hidden sm:inline" style={{ color: i <= currentIdx ? '#C62828' : '#9ca3af' }}>
-              {STEP_LABELS[step]}
-            </span>
-          </div>
-          {i < STEPS.length - 1 && (
-            <ChevronRight className="h-3 w-3 mx-0.5 shrink-0" style={{ color: i < currentIdx ? '#C62828' : '#d1d5db' }} />
-          )}
-        </React.Fragment>
-      ))}
-    </div>
-  )
 }
 
 // ── Page ───────────────────────────────────────────────────────────────────────
@@ -199,12 +167,6 @@ export default function BonsSortie() {
           </div>
         )
       },
-    },
-    {
-      id: 'statut_workflow',
-      header: 'Workflow',
-      accessor: 'statut',
-      render: (v) => <WorkflowStepper status={v as string} />,
     },
     {
       id: 'preparateur',

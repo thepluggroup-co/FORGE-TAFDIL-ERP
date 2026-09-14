@@ -229,6 +229,18 @@ async function creerBonSortieShop(args: {
     .single()
 
   if (bonErr || !bon) {
+    if (bonErr?.code === '23505') {
+      const { data: concurrentBon } = await db
+        .from('bons_sortie')
+        .select('id, commande_id')
+        .or(args.commandeId
+          ? `commande_id.eq.${args.commandeId},demandeur.eq.${args.ref}`
+          : `demandeur.eq.${args.ref}`)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle()
+      if (concurrentBon) return concurrentBon
+    }
     throw new Error(bonErr?.message ?? 'Erreur création bon de sortie shop')
   }
 

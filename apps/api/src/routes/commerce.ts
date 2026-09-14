@@ -408,6 +408,16 @@ async function creerBonSortieCommande(
     .single()
 
   if (bonErr || !bon) {
+    if (bonErr?.code === '23505') {
+      const { data: concurrentBon } = await db
+        .from('bons_sortie')
+        .select('id, commande_id')
+        .or(`commande_id.eq.${commandeId},demandeur.eq.${commandeNumero}`)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle()
+      if (concurrentBon) return true
+    }
     console.error('[commerce] creerBonSortieCommande — insert bon:', bonErr?.message)
     return false
   }
@@ -2670,6 +2680,18 @@ async function creerBonDepuisLignesJsonb(params: {
   const { commandeErpId, ref, clientNom, clientTel, lignes, userId, montantTotalXaf } = params
 
   if (lignes.length === 0) return { ok: false, error: 'lignes JSONB vides' }
+
+  const { data: existing } = await db
+    .from('bons_sortie')
+    .select('id')
+    .or(commandeErpId
+      ? `commande_id.eq.${commandeErpId},demandeur.eq.${ref}`
+      : `demandeur.eq.${ref}`)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (existing) return { ok: true }
 
   const today    = new Date()
   const yyyymmdd = today.toISOString().slice(0, 10).replace(/-/g, '')

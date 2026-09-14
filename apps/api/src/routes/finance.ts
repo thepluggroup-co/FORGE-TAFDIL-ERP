@@ -618,20 +618,35 @@ router.post('/declarations-fiscales/tva/preparer', requireRole(['admin']), zVali
     const montantTva = Math.round(tvaCollectee - tvaCharges.tva_deductible_xaf)
     const indicateurs = calculerIndicateursFinance(factures)
 
-    const { data, error } = await db
+    const declarationPayload = {
+      type:        'TVA',
+      periode:     body.periode,
+      statut:      'a_declarer',
+      montant_xaf: montantTva,
+      echeance,
+      notes:       body.notes ?? `TVA nette du ${start} au ${end} : collectee ${tvaCollectee} XAF - deductible ${tvaCharges.tva_deductible_xaf} XAF sur ${tvaCharges.charges_validees} charge(s) validee(s). Livraison client hors base TVA.`,
+      updated_at:  new Date().toISOString(),
+      sync_status: 'synced',
+    }
+
+    // Cette base ne garantit pas encore l'unicité type/periode. Éviter
+    // upsert(... onConflict) tant que la contrainte n'est pas déployée partout.
+    const { data: existingDeclaration, error: lookupError } = await db
       .from('declarations_fiscales')
-      .upsert({
-        type:        'TVA',
-        periode:     body.periode,
-        statut:      'a_declarer',
-        montant_xaf: montantTva,
-        echeance,
-        notes:       body.notes ?? `TVA nette du ${start} au ${end} : collectee ${tvaCollectee} XAF - deductible ${tvaCharges.tva_deductible_xaf} XAF sur ${tvaCharges.charges_validees} charge(s) validee(s). Livraison client hors base TVA.`,
-        updated_at:  new Date().toISOString(),
-        sync_status: 'synced',
-      }, { onConflict: 'type,periode' })
-      .select()
-      .single()
+      .select('id')
+      .eq('type', 'TVA')
+      .eq('periode', body.periode)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (lookupError) return c.json({ error: lookupError.message }, 500)
+
+    const declarationQuery = existingDeclaration
+      ? db.from('declarations_fiscales').update(declarationPayload).eq('id', existingDeclaration.id)
+      : db.from('declarations_fiscales').insert(declarationPayload)
+
+    const { data, error } = await declarationQuery.select().single()
 
     if (error) return c.json({ error: error.message }, 500)
     return c.json({
