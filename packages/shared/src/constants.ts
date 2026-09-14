@@ -19,8 +19,8 @@ export const CURRENCY_SYMBOL = 'FCFA'
  */
 export const BOUTIQUE_RETRAIT = {
   nom:    'TAFDIL — Accueil & Showroom',
-  ligne1: 'Carrefour Maeti — Zone industrielle',
-  ligne2: 'Entrée face à la station Total',
+  ligne1: 'Kotto',
+  ligne2: 'derrière école Mauryvanas',
   ville:  'Douala',
   pays:   'Cameroun',
   telephone: '+237 6 95 88 45 28',
