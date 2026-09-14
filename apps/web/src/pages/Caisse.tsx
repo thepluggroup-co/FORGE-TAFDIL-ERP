@@ -100,7 +100,15 @@ function RapportZView({ rapport, onNouvelleSession }: { rapport: RapportZ; onNou
   const ecart = rapport.ecart_xaf ?? 0
   return (
     <div className="flex flex-col items-center py-10">
-      <div className="w-full max-w-md bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #rapport-z-imprimable, #rapport-z-imprimable * { visibility: visible; }
+          #rapport-z-imprimable { position: absolute; top: 0; left: 0; width: 100%; }
+          .rapport-z-actions { display: none !important; }
+        }
+      `}</style>
+      <div id="rapport-z-imprimable" className="w-full max-w-md bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
         <div className="text-center">
           <h2 className="text-lg font-semibold text-[#212121]">Rapport Z — clôture de caisse</h2>
           <p className="text-xs text-gray-400 mt-1">{new Date(rapport.session.date_fermeture ?? Date.now()).toLocaleString('fr-CM')}</p>
@@ -139,7 +147,12 @@ function RapportZView({ rapport, onNouvelleSession }: { rapport: RapportZ; onNou
           </p>
         )}
 
-        <Button className="w-full justify-center" onClick={onNouvelleSession}>Nouvelle session</Button>
+        <div className="rapport-z-actions flex gap-3">
+          <Button variant="ghost" className="flex-1 justify-center" onClick={() => window.print()}>
+            <Printer className="h-4 w-4" /> Imprimer
+          </Button>
+          <Button className="flex-1 justify-center" onClick={onNouvelleSession}>Nouvelle session</Button>
+        </div>
       </div>
     </div>
   )
@@ -276,7 +289,7 @@ function EnvoyerRecu({ ticket }: { ticket: TicketVente }) {
 
 // ── Écran principal : vente ──────────────────────────────────────────────────────
 
-function VenteScreen({ sessionId, isResponsable }: { sessionId: string; isResponsable: boolean }) {
+function VenteScreen({ sessionId, isResponsable, onRapport }: { sessionId: string; isResponsable: boolean; onRapport: (rapport: RapportZ) => void }) {
   const [search, setSearch]           = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [categorie, setCategorie]     = useState('')
@@ -742,29 +755,22 @@ function VenteScreen({ sessionId, isResponsable }: { sessionId: string; isRespon
         onClose={() => setFermetureOpen(false)}
         sessionId={sessionId}
         fermerSession={fermerSession}
+        onRapport={onRapport}
       />
     </div>
   )
 }
 
 function FermetureModal({
-  isOpen, onClose, sessionId, fermerSession,
+  isOpen, onClose, sessionId, fermerSession, onRapport,
 }: {
   isOpen: boolean
   onClose: () => void
   sessionId: string
   fermerSession: ReturnType<typeof useFermerSession>
+  onRapport: (rapport: RapportZ) => void
 }) {
   const [fondFermeture, setFondFermeture] = useState<number>(0)
-  const [rapport, setRapport] = useState<RapportZ | null>(null)
-
-  if (rapport) {
-    return (
-      <Modal isOpen={isOpen} onClose={() => { setRapport(null); onClose(); window.location.reload() }} title="Session fermée" size="md">
-        <RapportZView rapport={rapport} onNouvelleSession={() => { setRapport(null); onClose(); window.location.reload() }} />
-      </Modal>
-    )
-  }
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Fermer la caisse" size="sm">
@@ -785,7 +791,7 @@ function FermetureModal({
             disabled={fermerSession.isPending}
             onClick={() => fermerSession.mutate(
               { sessionId, fond_fermeture_xaf: fondFermeture },
-              { onSuccess: (r) => setRapport(r) },
+              { onSuccess: onRapport },
             )}
           >
             {fermerSession.isPending ? 'Fermeture…' : 'Confirmer la fermeture'}
@@ -981,6 +987,7 @@ export default function Caisse() {
   const isResponsable = hasPermission('CAISSE', 'UPDATE')
   const { data: session, isLoading } = useSessionCourante()
   const [tab, setTab] = useState<'vente' | 'historique'>('vente')
+  const [rapport, setRapport] = useState<RapportZ | null>(null)
 
   return (
     <motion.div
@@ -1028,8 +1035,14 @@ export default function Caisse() {
       ) : !session ? (
         <OuvertureSession />
       ) : (
-        <VenteScreen sessionId={session.id} isResponsable={isResponsable} />
+        <VenteScreen sessionId={session.id} isResponsable={isResponsable} onRapport={setRapport} />
       )}
+
+      <Modal isOpen={Boolean(rapport)} onClose={() => setRapport(null)} title="Rapport Z — session fermée" size="md">
+        {rapport && (
+          <RapportZView rapport={rapport} onNouvelleSession={() => setRapport(null)} />
+        )}
+      </Modal>
     </motion.div>
   )
 }
