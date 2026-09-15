@@ -229,18 +229,6 @@ async function creerBonSortieShop(args: {
     .single()
 
   if (bonErr || !bon) {
-    if (bonErr?.code === '23505') {
-      const { data: concurrentBon } = await db
-        .from('bons_sortie')
-        .select('id, commande_id')
-        .or(args.commandeId
-          ? `commande_id.eq.${args.commandeId},demandeur.eq.${args.ref}`
-          : `demandeur.eq.${args.ref}`)
-        .order('created_at', { ascending: true })
-        .limit(1)
-        .maybeSingle()
-      if (concurrentBon) return concurrentBon
-    }
     throw new Error(bonErr?.message ?? 'Erreur création bon de sortie shop')
   }
 
@@ -1275,7 +1263,11 @@ shopErpRouter.put('/produits/:id/visibilite',
       .select('product_id, visible_shop')
       .single()
 
-    if (error || !data) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
+    if (error) {
+      console.error('[shop-erp] visibilite update:', error)
+      return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: error.message }, 500)
+    }
+    if (!data) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
 
     return c.json({ data })
   }
@@ -1299,7 +1291,11 @@ shopErpRouter.put('/produits/:id/prix',
       .select('product_id, prix_public')
       .single()
 
-    if (error || !data) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
+    if (error) {
+      console.error('[shop-erp] prix update:', error)
+      return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: error.message }, 500)
+    }
+    if (!data) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
 
     return c.json({ data })
   }
@@ -1356,7 +1352,11 @@ shopErpRouter.put('/produits/:id/vitrine',
       `)
       .single()
 
-    if (error || !data) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
+    if (error) {
+      console.error('[shop-erp] vitrine update:', error)
+      return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: error.message }, 500)
+    }
+    if (!data) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
 
     return c.json({ data })
   }
@@ -1371,12 +1371,16 @@ shopErpRouter.post('/produits/:id/images', async (c) => {
     return c.json({ error: 'Aucune image fournie', code: 'NO_FILE' }, 400)
   }
 
-  const { data: produit } = await db
+  const { data: produit, error: produitError } = await db
     .from('produits')
     .select('id')
     .eq('id', id)
     .single()
 
+  if (produitError) {
+    console.error('[shop-erp] images produit lookup:', produitError)
+    return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: produitError.message }, 500)
+  }
   if (!produit) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
 
   const bucket = 'produits-shop'
