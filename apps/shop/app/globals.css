@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-inter: 'Inter', sans-serif;
+    --font-jetbrains-mono: 'JetBrains Mono', monospace;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply font-forge text-forge-dark;
+  }
+
+  * {
+    @apply border-forge-steel-light;
+  }
+}
+
+@layer utilities {
+  .font-forge {
+    font-family: var(--font-inter), sans-serif;
+  }
+
+  .font-mono {
+    font-family: var(--font-jetbrains-mono), monospace;
+  }
+
+  /* Prix en XAF */
+  .price-xaf::after {
+    content: ' XAF';
+    @apply text-xs font-normal text-forge-steel;
+  }
+
+  /* Masonry layout — natif CSS (pas de JS requis) */
+  .masonry {
+    columns: 1;
+    column-gap: 1rem;
+  }
+  @media (min-width: 640px) { .masonry { columns: 2; } }
+  @media (min-width: 1024px) { .masonry { columns: 3; } }
+
+  .masonry-item {
+    break-inside: avoid;
+    margin-bottom: 1rem;
+  }
+}

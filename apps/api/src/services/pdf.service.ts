@@ -1,0 +1,1142 @@
+import PDFDocument from 'pdfkit'
+import { join } from 'node:path'
+import { supabaseAdmin } from '@forge/db'
+
+const db = supabaseAdmin!
+
+// ── Company info ───────────────────────────────────────────────────────────────
+const CO = {
+  nom:       'TAFDIL SARL',
+  activite:  'Microusine Métallurgique & BTP',
+  adresse:   'Kotto Mauryvanas, Douala, Cameroun',
+  tel:       '+237 695 884 528',
+  email:     'tafdilsarl@gmail.com',
+  niu:       'M052116085624A',
+  rccm:      'RC/DLA/2021/B/2624',
+  capital:   '10 000 000 XAF',
+  directeur: 'M. CARMEL TANEKEU',
+} as const
+
+// Logo TAFDIL — placer le fichier dans apps/api/src/assets/logo-tafdil.jpeg
+const LOGO_PATH = join(process.cwd(), 'src', 'assets', 'logo-tafdil.jpeg')
+
+// ── Design tokens ──────────────────────────────────────────────────────────────
+const C = {
+  red:      '#C62828',
+  redLight: '#FFEBEE',
+  redMid:   '#EF9A9A',
+  gray:     '#F3F4F6',
+  grayRow:  '#F9FAFB',
+  dark:     '#111827',
+  mid:      '#374151',
+  muted:    '#6B7280',
+  light:    '#9CA3AF',
+  white:    '#FFFFFF',
+  border:   '#E5E7EB',
+  blue:     '#EFF6FF',
+  blueMid:  '#1D4ED8',
+} as const
+
+// ── Layout ─────────────────────────────────────────────────────────────────────
+const ML       = 40       // margin left
+const PW       = 595      // A4 width pts
+const W        = 515      // usable width (595 - 40*2 + 5)
+const ROW_H    = 18
+const FOOTER_Y = 758      // footer separator Y
+const PAGE_END = 740      // max Y before page break
+
+// ── Table column X positions (absolute) ────────────────────────────────────────
+const COL = {
+  num: ML,          // w=28  →  68
+  des: ML + 28,     // w=205 → 273
+  qty: ML + 233,    // w=40  → 313
+  uni: ML + 273,    // w=50  → 363
+  pu:  ML + 323,    // w=90  → 413
+  tot: ML + 413,    // w=102 → end=555
+}
+
+// ── Interfaces ─────────────────────────────────────────────────────────────────
+
+export interface PdfLigne {
+  designation:          string
+  unite:                string
+  quantite:             number
+  prix_unitaire_ht_xaf: number
+  total_ht_xaf:         number
+  remise_xaf?:          number | null
+}
+
+export interface PdfClient {
+  nom:        string
+  adresse?:   string | null
+  telephone?: string | null
+  email?:     string | null
+  niu?:       string | null
+  type?:      string | null
+}
+
+export interface PdfFacture {
+  numero:               string
+  date_emission:        string
+  date_echeance:        string
+  total_ht_xaf:         number
+  tva_xaf:              number
+  frais_livraison_xaf?: number | null
+  total_ttc_xaf:        number
+  remise_globale_xaf?:  number | null
+  acompte_recu_xaf?:    number | null
+  net_a_payer_xaf?:     number | null
+  condition_paiement?:  string | null
+}
+
+export interface PdfDevis {
+  numero:          string
+  date_emission:   string
+  date_validite:   string
+  validite_jours?: number
+  total_ht_xaf:    number
+  tva_xaf:         number
+  total_ttc_xaf:   number
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function xaf(n: number): string {
+  return n.toLocaleString('fr-FR') + ' XAF'
+}
+
+function montantEnLettres(montant: number): string {
+  const n = Math.round(Math.abs(montant))
+  if (n === 0) return 'zéro franc CFA'
+
+  const UNITES = ['', 'un', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit',
+    'neuf', 'dix', 'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize',
+    'dix-sept', 'dix-huit', 'dix-neuf']
+  const DIZ = ['', '', 'vingt', 'trente', 'quarante', 'cinquante', 'soixante']
+
+  function s100(x: number): string {
+    if (x === 0) return ''
+    if (x < 20)  return UNITES[x]
+    const d = Math.floor(x / 10), u = x % 10
+    if (d === 7) return 'soixante-' + UNITES[10 + u]
+    if (d === 8) return u === 0 ? 'quatre-vingts' : `quatre-vingt-${UNITES[u]}`
+    if (d === 9) return u === 0 ? 'quatre-vingt-dix' : `quatre-vingt-${UNITES[10 + u]}`
+    return DIZ[d] + (u === 0 ? '' : u === 1 ? '-et-un' : `-${UNITES[u]}`)
+  }
+
+  function s1000(x: number): string {
+    const c = Math.floor(x / 100), r = x % 100
+    const cent = c === 0 ? '' : c === 1 ? 'cent' : `${UNITES[c]} cent${r === 0 ? 's' : ''}`
+    return [cent, s100(r)].filter(Boolean).join(' ')
+  }
+
+  const G = Math.floor(n / 1_000_000_000)
+  const M = Math.floor((n % 1_000_000_000) / 1_000_000)
+  const K = Math.floor((n % 1_000_000) / 1_000)
+  const R = n % 1_000
+  const parts: string[] = []
+  if (G > 0) parts.push(`${s1000(G)} milliard${G > 1 ? 's' : ''}`)
+  if (M > 0) parts.push(`${s1000(M)} million${M > 1 ? 's' : ''}`)
+  if (K > 0) parts.push(K === 1 ? 'mille' : `${s1000(K)} mille`)
+  if (R > 0) parts.push(s1000(R))
+  return parts.join(' ') + (n > 1 ? ' francs CFA' : ' franc CFA')
+}
+
+// ── Drawing helpers ────────────────────────────────────────────────────────────
+
+function drawFooter(doc: InstanceType<typeof PDFDocument>, page: number) {
+  doc.save()
+  doc.moveTo(ML, FOOTER_Y).lineTo(ML + W, FOOTER_Y)
+    .strokeColor(C.border).lineWidth(0.5).stroke()
+  doc.font('Helvetica').fontSize(6.5).fillColor(C.light)
+  doc.text(
+    `${CO.nom} — Capital : ${CO.capital} — NIU : ${CO.niu} — RCCM : ${CO.rccm}`,
+    ML, FOOTER_Y + 5, { align: 'center', width: W },
+  )
+  doc.text(
+    `${CO.adresse} — ${CO.tel} — ${CO.email}`,
+    ML, FOOTER_Y + 14, { align: 'center', width: W },
+  )
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
+    .text(`Page ${page}`, ML, FOOTER_Y + 14, { align: 'right', width: W })
+  doc.restore()
+}
+
+function drawHeader(
+  doc:      InstanceType<typeof PDFDocument>,
+  docType:  'FACTURE' | 'DEVIS' | 'BON DE LIVRAISON',
+  numero:   string,
+  dateLeft: string,
+  dateRight:string,
+  labelLeft: string,
+  labelRight: string,
+) {
+  // Background band
+  doc.rect(0, 0, PW, 118).fill(C.red)
+
+  // ── Left: company identity ──────────────────────────────────────────────────
+  // Logo TAFDIL (fond blanc + image, fallback texte si fichier absent)
+  try {
+    doc.rect(ML, 12, 50, 50).fill('#FFFFFF')
+    doc.image(LOGO_PATH, ML + 2, 13, { width: 46, height: 46 })
+  } catch {
+    doc.rect(ML, 14, 44, 44).fill('rgba(255,255,255,0.15)').stroke()
+    doc.font('Helvetica-Bold').fontSize(11).fillColor('white')
+      .text('TAFDIL', ML + 3, 30, { width: 44, align: 'center' })
+  }
+
+  doc.font('Helvetica-Bold').fontSize(16).fillColor('white')
+    .text(CO.nom, ML + 52, 16)
+  doc.font('Helvetica').fontSize(7.5).fillColor('rgba(255,255,255,0.85)')
+    .text(CO.activite, ML + 52, 36)
+    .text(CO.adresse, ML + 52, 47)
+    .text(`Tél : ${CO.tel}  |  ${CO.email}`, ML + 52, 57)
+    .text(`NIU : ${CO.niu}  |  RCCM : ${CO.rccm}`, ML + 52, 67)
+
+  // ── Right: document identity ────────────────────────────────────────────────
+  const RX = ML + W  // right edge
+
+  doc.font('Helvetica-Bold').fontSize(26).fillColor('white')
+    .text(docType, 0, 14, { align: 'right', width: RX })
+  doc.font('Helvetica-Bold').fontSize(12).fillColor(C.redMid)
+    .text(numero, 0, 46, { align: 'right', width: RX })
+  doc.font('Helvetica').fontSize(7.5).fillColor('rgba(255,255,255,0.85)')
+    .text(`${labelLeft} : ${dateLeft}`,  0, 64, { align: 'right', width: RX })
+    .text(`${labelRight} : ${dateRight}`, 0, 74, { align: 'right', width: RX })
+}
+
+function drawClientBox(doc: InstanceType<typeof PDFDocument>, client: PdfClient) {
+  doc.rect(ML, 126, W, 52).fill(C.gray)
+  doc.rect(ML, 126, 3, 52).fill(C.red)
+
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
+    .text('FACTURÉ À', ML + 12, 133)
+
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(C.dark)
+    .text(client.nom, ML + 12, 144)
+
+  const details = [
+    client.adresse,
+    client.telephone,
+    client.email,
+    client.niu && client.type === 'entreprise' ? `NIU : ${client.niu}` : null,
+  ].filter(Boolean).join('  ·  ')
+
+  if (details) {
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.mid)
+      .text(details, ML + 12, 158, { width: W - 20 })
+  }
+}
+
+function drawTableHeader(doc: InstanceType<typeof PDFDocument>, y: number) {
+  doc.rect(ML, y, W, 20).fill(C.red)
+  doc.font('Helvetica-Bold').fontSize(7.5).fillColor('white')
+  doc.text('N°',           COL.num + 2,  y + 6)
+  doc.text('DÉSIGNATION',  COL.des + 2,  y + 6)
+  doc.text('QTÉ',          COL.qty + 2,  y + 6)
+  doc.text('UNITÉ',        COL.uni + 2,  y + 6)
+  doc.text('P.U. HT',      COL.pu + 2,   y + 6)
+  doc.text('TOTAL HT',     COL.tot + 2,  y + 6)
+  return y + 20
+}
+
+function drawTableRow(
+  doc:   InstanceType<typeof PDFDocument>,
+  ligne: PdfLigne,
+  idx:   number,
+  y:     number,
+) {
+  doc.rect(ML, y, W, ROW_H).fill(idx % 2 === 0 ? C.grayRow : C.white)
+  doc.font('Helvetica').fontSize(8).fillColor(C.dark)
+  doc.text(String(idx + 1),                         COL.num + 2, y + 5)
+  doc.text(ligne.designation,                        COL.des + 2, y + 5, { width: 200, ellipsis: true })
+  doc.text(String(ligne.quantite),                   COL.qty + 2, y + 5)
+  doc.text(ligne.unite,                              COL.uni + 2, y + 5)
+  doc.text(ligne.prix_unitaire_ht_xaf.toLocaleString('fr-FR'), COL.pu + 2, y + 5, { width: 85, align: 'right' })
+  doc.text(ligne.total_ht_xaf.toLocaleString('fr-FR'),         COL.tot + 2, y + 5, { width: 97, align: 'right' })
+  // bottom border
+  doc.moveTo(ML, y + ROW_H).lineTo(ML + W, y + ROW_H)
+    .strokeColor(C.border).lineWidth(0.3).stroke()
+  return y + ROW_H
+}
+
+function drawTotals(
+  doc:       InstanceType<typeof PDFDocument>,
+  y:         number,
+  ht:        number,
+  tva:       number,
+  livraison: number,
+  ttc:       number,
+  opts?: {
+    brut_ht?:       number
+    remise_totale?: number
+    acompte?:       number
+  },
+): number {
+  const TX = COL.pu
+  const TW = W - (TX - ML)
+
+  const remise  = Math.round(opts?.remise_totale ?? 0)
+  const brut_ht = Math.round(opts?.brut_ht ?? ht)
+  const acompte = Math.round(opts?.acompte ?? 0)
+
+  y += 10
+
+  if (remise > 0) {
+    // Brut HT
+    doc.font('Helvetica').fontSize(9).fillColor(C.mid)
+    doc.text('Brut HT :',     TX, y, { width: 84 })
+    doc.font('Helvetica').fontSize(9).fillColor(C.dark)
+    doc.text(xaf(brut_ht), TX + 84, y, { width: TW - 84, align: 'right' })
+    y += 14
+
+    // Remise
+    doc.font('Helvetica').fontSize(9).fillColor(C.mid)
+    doc.text('(−) Remises :',  TX, y, { width: 84 })
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('#C62828')
+    doc.text(`-${xaf(remise)}`, TX + 84, y, { width: TW - 84, align: 'right' })
+    y += 14
+
+    // Separator
+    doc.moveTo(TX, y).lineTo(TX + TW, y).strokeColor(C.border).lineWidth(0.5).stroke()
+    y += 6
+  }
+
+  // HT net (base imposable)
+  doc.font('Helvetica').fontSize(9).fillColor(C.mid)
+  doc.text(remise > 0 ? 'Total HT net :' : 'Sous-total HT :', TX, y, { width: 84 })
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
+  doc.text(xaf(ht), TX + 84, y, { width: TW - 84, align: 'right' })
+  y += 16
+
+  // TVA
+  doc.font('Helvetica').fontSize(9).fillColor(C.mid)
+  doc.text('TVA (19,25%) :', TX, y, { width: 84 })
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
+  doc.text(xaf(tva), TX + 84, y, { width: TW - 84, align: 'right' })
+  y += 16
+
+  if (livraison > 0) {
+    doc.font('Helvetica').fontSize(9).fillColor(C.mid)
+    doc.text('Livraison :', TX, y, { width: 84 })
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
+    doc.text(xaf(livraison), TX + 84, y, { width: TW - 84, align: 'right' })
+    y += 8
+  } else {
+    y -= 8
+  }
+
+  // TTC box
+  doc.rect(TX, y, TW, 26).fill(C.red)
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('white')
+  doc.text('TOTAL TTC :', TX + 6, y + 8, { width: 84 })
+  doc.font('Helvetica-Bold').fontSize(11).fillColor('white')
+  doc.text(xaf(ttc), TX + 84, y + 7, { width: TW - 90, align: 'right' })
+  y += 34
+
+  if (acompte > 0) {
+    // Acompte reçu
+    doc.font('Helvetica').fontSize(9).fillColor(C.mid)
+    doc.text('(−) Acompte reçu :', TX, y, { width: 100 })
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.mid)
+    doc.text(`-${xaf(acompte)}`, TX + 100, y, { width: TW - 100, align: 'right' })
+    y += 14
+
+    const solde = Math.max(0, ttc - acompte)
+
+    // Solde box
+    doc.rect(TX, y, TW, 26).fill(C.blueMid)
+    doc.font('Helvetica-Bold').fontSize(10).fillColor('white')
+    doc.text('SOLDE À RÉGLER :', TX + 6, y + 8, { width: 110 })
+    doc.font('Helvetica-Bold').fontSize(11).fillColor('white')
+    doc.text(xaf(solde), TX + 110, y + 7, { width: TW - 116, align: 'right' })
+    y += 34
+
+    // Amount in words based on solde
+    const lettres = montantEnLettres(solde)
+    doc.rect(ML, y, W, 28).fill(C.blue)
+    doc.rect(ML, y, 3, 28).fill(C.blueMid)
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.muted)
+      .text('Solde arrêté à la somme de :', ML + 10, y + 6)
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.blueMid)
+      .text(lettres.toUpperCase(), ML + 10, y + 16, { width: W - 20 })
+    y += 36
+  } else {
+    // Amount in words based on TTC
+    const lettres = montantEnLettres(ttc)
+    doc.rect(ML, y, W, 28).fill(C.blue)
+    doc.rect(ML, y, 3, 28).fill(C.blueMid)
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.muted)
+      .text('Arrêté à la somme de :', ML + 10, y + 6)
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.blueMid)
+      .text(lettres.toUpperCase(), ML + 10, y + 16, { width: W - 20 })
+    y += 36
+  }
+
+  return y
+}
+
+function drawLegalMentions(doc: InstanceType<typeof PDFDocument>, y: number, tva: number): number {
+  y += 8
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
+    .text('MENTIONS LÉGALES ET FISCALES (DGI Cameroun)', ML, y)
+  y += 10
+  doc.font('Helvetica').fontSize(7).fillColor(C.muted)
+  const mentions = [
+    `• TVA collectée : ${xaf(tva)} au taux de 19,25% — CGI Cameroun Art. 125.`,
+    '• Facture assujettie à la TVA. Droit à déduction pour les assujettis — CGI Art. 145.',
+    '• Toute facture fictive ou falsifiée est passible de sanctions pénales — CGI Art. 538.',
+    '• Document à conserver 10 ans conformément à la réglementation camerounaise.',
+  ]
+  for (const m of mentions) {
+    doc.text(m, ML, y, { width: W })
+    y += 10
+  }
+  return y
+}
+
+function drawPaymentTerms(doc: InstanceType<typeof PDFDocument>, y: number, conditionLibelle?: string | null): number {
+  y += 10
+  doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.mid)
+    .text('CONDITIONS DE PAIEMENT', ML, y)
+  y += 10
+  doc.font('Helvetica').fontSize(7.5).fillColor(C.muted)
+  if (conditionLibelle) {
+    doc.text(`• Condition convenue : ${conditionLibelle}`, ML, y); y += 10
+  }
+  doc.text('• Mode de règlement : Virement bancaire / Chèque certifié / Espèces', ML, y); y += 10
+  doc.text('• Pénalités de retard : 1,5% par mois sur le montant TTC impayé', ML, y); y += 10
+  return y
+}
+
+function drawSignatureZone(doc: InstanceType<typeof PDFDocument>, y: number) {
+  y += 16
+  // Client signature
+  doc.rect(ML, y, 220, 62).stroke()
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
+    .text('BON POUR ACCORD — Signature & Cachet Client', ML + 6, y + 5)
+  // Company signature
+  doc.rect(ML + W - 220, y, 220, 62).stroke()
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
+    .text('La Direction', ML + W - 214, y + 5)
+  doc.font('Helvetica-Bold').fontSize(8).fillColor(C.dark)
+    .text(CO.directeur, ML + W - 214, y + 40)
+  doc.font('Helvetica').fontSize(7).fillColor(C.muted)
+    .text(CO.nom, ML + W - 214, y + 51)
+}
+
+function drawBtpConditions(doc: InstanceType<typeof PDFDocument>, y: number): number {
+  y += 10
+  doc.rect(ML, y, W, 8).fill(C.red)
+  doc.font('Helvetica-Bold').fontSize(7).fillColor('white')
+    .text('CONDITIONS GÉNÉRALES BTP — TAFDIL SARL', ML + 6, y + 1)
+  y += 12
+  doc.font('Helvetica').fontSize(7).fillColor(C.muted)
+  const cg = [
+    '• Les prix sont établis sur base des métrés et plans fournis. Toute modification entraîne un avenant tarifé.',
+    '• Les travaux débutent après versement d\'un acompte de 30% du montant TTC du devis accepté.',
+    '• TAFDIL SARL garantit ses travaux 2 ans (garantie décennale sur gros œuvre conformément au CCAG-BTP).',
+    '• Ce devis est valable pour la durée indiquée. Passé ce délai, les prix pourront être révisés.',
+    '• Tout arrêt de chantier imputable au client sera facturé selon le coût des immobilisations journalières.',
+  ]
+  for (const line of cg) {
+    doc.text(line, ML, y, { width: W }); y += 10
+  }
+  return y
+}
+
+// ── PDF builder (shared core) ──────────────────────────────────────────────────
+
+function buildPdf(
+  meta: {
+    title:              string
+    docType:            'FACTURE' | 'DEVIS'
+    numero:             string
+    labelLeft:          string
+    dateLeft:           string
+    labelRight:         string
+    dateRight:          string
+    conditionPaiement?: string | null
+    extraFn?:           (doc: InstanceType<typeof PDFDocument>, y: number) => number
+  },
+  client:  PdfClient,
+  lignes:  PdfLigne[],
+  totaux:  { ht: number; tva: number; livraison?: number; ttc: number; brut_ht?: number; remise_totale?: number; acompte?: number },
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: 0,
+      info: { Title: meta.title, Author: CO.nom, Subject: meta.docType },
+      bufferPages: true,
+    })
+
+    const chunks: Buffer[] = []
+    doc.on('data',  (c: Buffer) => chunks.push(c))
+    doc.on('end',   () => resolve(Buffer.concat(chunks)))
+    doc.on('error', reject)
+
+    let page = 1
+
+    // ── Page 1: header + client box ──────────────────────────────────────────
+    drawHeader(doc, meta.docType, meta.numero, meta.dateLeft, meta.dateRight, meta.labelLeft, meta.labelRight)
+    drawClientBox(doc, client)
+
+    // ── Table ────────────────────────────────────────────────────────────────
+    let y = drawTableHeader(doc, 186)
+
+    for (let i = 0; i < lignes.length; i++) {
+      // Page break before row overflows footer
+      if (y + ROW_H > PAGE_END) {
+        drawFooter(doc, page)
+        doc.addPage()
+        page++
+        // Continuation mini-header
+        doc.rect(0, 0, PW, 32).fill(C.red)
+        doc.font('Helvetica-Bold').fontSize(9).fillColor('white')
+          .text(`${CO.nom} — ${meta.docType} ${meta.numero} (suite)`, ML, 11, { width: W })
+        y = drawTableHeader(doc, 38)
+      }
+      y = drawTableRow(doc, lignes[i], i, y)
+    }
+
+    // ── Totals ───────────────────────────────────────────────────────────────
+    const totalsHeight = 240
+    if (y + totalsHeight > PAGE_END) {
+      drawFooter(doc, page)
+      doc.addPage()
+      page++
+      doc.rect(0, 0, PW, 32).fill(C.red)
+      doc.font('Helvetica-Bold').fontSize(9).fillColor('white')
+        .text(`${CO.nom} — ${meta.docType} ${meta.numero} (suite)`, ML, 11, { width: W })
+      y = 40
+    }
+
+    y = drawTotals(doc, y, totaux.ht, totaux.tva, Number(totaux.livraison ?? 0), totaux.ttc, {
+      brut_ht:       totaux.brut_ht,
+      remise_totale: totaux.remise_totale,
+      acompte:       totaux.acompte,
+    })
+
+    // ── Extra section (BTP conditions for devis) ─────────────────────────────
+    if (meta.extraFn) {
+      if (y + 100 > PAGE_END) {
+        drawFooter(doc, page)
+        doc.addPage()
+        page++
+        y = 40
+      }
+      y = meta.extraFn(doc, y)
+    }
+
+    // ── Legal mentions ───────────────────────────────────────────────────────
+    if (y + 80 > PAGE_END) {
+      drawFooter(doc, page)
+      doc.addPage()
+      page++
+      y = 40
+    }
+    y = drawLegalMentions(doc, y, totaux.tva)
+    y = drawPaymentTerms(doc, y, meta.conditionPaiement)
+
+    // ── Signature zone ───────────────────────────────────────────────────────
+    if (y + 90 > PAGE_END) {
+      drawFooter(doc, page)
+      doc.addPage()
+      page++
+      y = 40
+    }
+    drawSignatureZone(doc, y)
+
+    // ── Footer on last page ──────────────────────────────────────────────────
+    drawFooter(doc, page)
+
+    doc.end()
+  })
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────────
+
+export async function generateFacturePDF(
+  facture: PdfFacture,
+  client:  PdfClient,
+  lignes:  PdfLigne[],
+): Promise<Buffer> {
+  const remiseLignes  = Math.round(lignes.reduce((s, l) => s + Number(l.remise_xaf ?? 0), 0))
+  const remiseGlobale = Math.round(Number(facture.remise_globale_xaf ?? 0))
+  const remiseTotale  = remiseLignes + remiseGlobale
+  const brut_ht       = remiseTotale > 0 ? facture.total_ht_xaf + remiseTotale : undefined
+  const acompte       = Number(facture.acompte_recu_xaf ?? 0)
+
+  return buildPdf(
+    {
+      title:              facture.numero,
+      docType:            'FACTURE',
+      numero:             facture.numero,
+      labelLeft:          'Émission',
+      dateLeft:           facture.date_emission,
+      labelRight:         'Échéance',
+      dateRight:          facture.date_echeance,
+      conditionPaiement:  facture.condition_paiement ?? null,
+    },
+    client,
+    lignes,
+    {
+      ht:            facture.total_ht_xaf,
+      tva:           facture.tva_xaf,
+      livraison:     Number(facture.frais_livraison_xaf ?? 0),
+      ttc:           facture.total_ttc_xaf,
+      brut_ht,
+      remise_totale: remiseTotale > 0 ? remiseTotale : undefined,
+      acompte:       acompte > 0 ? acompte : undefined,
+    },
+  )
+}
+
+export async function generateDevisPDF(
+  devis:  PdfDevis,
+  client: PdfClient,
+  lignes: PdfLigne[],
+): Promise<Buffer> {
+  return buildPdf(
+    {
+      title:      devis.numero,
+      docType:    'DEVIS',
+      numero:     devis.numero,
+      labelLeft:  'Émission',
+      dateLeft:   devis.date_emission,
+      labelRight: `Validité (${devis.validite_jours ?? 30}j)`,
+      dateRight:  devis.date_validite,
+      extraFn:    drawBtpConditions,
+    },
+    client,
+    lignes,
+    { ht: devis.total_ht_xaf, tva: devis.tva_xaf, ttc: devis.total_ttc_xaf },
+  )
+}
+
+// ── Reçu de paiement / Quittance ──────────────────────────────────────────────
+
+export interface PdfRecu {
+  numero:        string   // ex: REC-2026-0012
+  credit_numero: string   // ex: CRD-2026-0005
+  client_nom:    string
+  date_paiement: string
+  montant_xaf:   number
+  solde_restant_xaf: number
+  type:          'total' | 'partiel'
+  notes?:        string
+}
+
+export async function generateRecuPDF(recu: PdfRecu): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true })
+    const chunks: Buffer[] = []
+    doc.on('data', (c: Buffer) => chunks.push(c))
+    doc.on('end',  () => resolve(Buffer.concat(chunks)))
+    doc.on('error', reject)
+
+    // ── En-tête rouge ──────────────────────────────────────────────────────────
+    doc.rect(0, 0, PW, 100).fill(C.red)
+    doc.rect(ML, 14, 44, 44).fill('rgba(255,255,255,0.15)').stroke()
+    try {
+      doc.rect(ML, 12, 44, 44).fill('#FFFFFF')
+      doc.image(LOGO_PATH, ML + 1, 13, { width: 42, height: 42 })
+    } catch {
+      doc.font('Helvetica-Bold').fontSize(11).fillColor('white')
+        .text('TAFDIL', ML + 3, 30, { width: 44, align: 'center' })
+    }
+
+    doc.font('Helvetica-Bold').fontSize(16).fillColor('white').text(CO.nom, ML + 52, 16)
+    doc.font('Helvetica').fontSize(7.5).fillColor('rgba(255,255,255,0.85)')
+      .text(CO.adresse, ML + 52, 36)
+      .text(`Tél : ${CO.tel}  |  ${CO.email}`, ML + 52, 47)
+
+    doc.font('Helvetica-Bold').fontSize(22).fillColor('white')
+      .text('REÇU DE PAIEMENT', 0, 16, { align: 'right', width: ML + W })
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(C.redMid)
+      .text(recu.numero, 0, 46, { align: 'right', width: ML + W })
+    doc.font('Helvetica').fontSize(7.5).fillColor('rgba(255,255,255,0.85)')
+      .text(`Date : ${recu.date_paiement}`, 0, 64, { align: 'right', width: ML + W })
+
+    // ── Bloc client ────────────────────────────────────────────────────────────
+    let y = 112
+    doc.rect(ML, y, W, 44).fill(C.gray)
+    doc.rect(ML, y, 3, 44).fill(C.red)
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('REÇU DE', ML + 12, y + 8)
+    doc.font('Helvetica-Bold').fontSize(12).fillColor(C.dark).text(recu.client_nom, ML + 12, y + 18)
+    y += 56
+
+    // ── Détail paiement ────────────────────────────────────────────────────────
+    y += 10
+    const lignes = [
+      { label: 'Référence crédit',   val: recu.credit_numero },
+      { label: 'Type de paiement',   val: recu.type === 'total' ? 'Solde total' : 'Paiement partiel' },
+      { label: 'Montant encaissé',   val: xaf(recu.montant_xaf), bold: true },
+      { label: 'Solde restant',      val: recu.solde_restant_xaf > 0 ? xaf(recu.solde_restant_xaf) : 'SOLDÉ ✓' },
+    ]
+    if (recu.notes) lignes.push({ label: 'Notes', val: recu.notes })
+
+    for (const l of lignes) {
+      doc.rect(ML, y, W, 22).fill(C.grayRow)
+      doc.moveTo(ML, y + 22).lineTo(ML + W, y + 22).strokeColor(C.border).lineWidth(0.3).stroke()
+      doc.font('Helvetica').fontSize(9).fillColor(C.muted).text(l.label, ML + 12, y + 7)
+      if ('bold' in l && l.bold) {
+        doc.font('Helvetica-Bold').fontSize(11).fillColor(C.red).text(l.val, ML + 200, y + 5, { width: W - 212, align: 'right' })
+      } else {
+        doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark).text(l.val, ML + 200, y + 7, { width: W - 212, align: 'right' })
+      }
+      y += 22
+    }
+
+    // ── Montant en lettres ─────────────────────────────────────────────────────
+    y += 14
+    const lettres = montantEnLettres(recu.montant_xaf)
+    doc.rect(ML, y, W, 28).fill(C.blue)
+    doc.rect(ML, y, 3, 28).fill(C.blueMid)
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.muted).text('Arrêté à la somme de :', ML + 10, y + 6)
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.blueMid)
+      .text(lettres.toUpperCase(), ML + 10, y + 16, { width: W - 20 })
+    y += 44
+
+    // ── Zone signatures ────────────────────────────────────────────────────────
+    y += 20
+    doc.rect(ML, y, 220, 62).stroke()
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('Signature & Cachet Client', ML + 6, y + 5)
+    doc.rect(ML + W - 220, y, 220, 62).stroke()
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('La Direction', ML + W - 214, y + 5)
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.dark).text(CO.directeur, ML + W - 214, y + 38)
+    doc.font('Helvetica').fontSize(7).fillColor(C.muted).text(CO.nom, ML + W - 214, y + 50)
+
+    // ── Pied de page ───────────────────────────────────────────────────────────
+    drawFooter(doc, 1)
+    doc.end()
+  })
+}
+
+// ── Attestation de formation (Gap 4 CDC MOD-05) ───────────────────────────────
+
+export interface PdfAttestation {
+  nom:          string
+  specialite:   string
+  niveau:       number    // 1-5
+  duree_mois:   number
+  date_delivrance: string
+}
+
+const NIVEAU_LABELS = ['', 'Initiation', 'Bases', 'Intermédiaire', 'Avancé', 'Expert']
+const MODULE_PLANS = [
+  'Sécurité atelier & EPI',
+  'Lecture de plans & métrologie',
+  'Soudure MIG/MAG — Bases',
+  'Découpe plasma & oxycoupage',
+  'Pliage hydraulique',
+  'Soudure TIG Inox & Alu',
+  'CNC & programmation',
+  'Contrôle qualité & finitions',
+  "Management d'équipe & projets",
+]
+
+export async function generateAttestationPDF(attest: PdfAttestation): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true })
+    const chunks: Buffer[] = []
+    doc.on('data', (c: Buffer) => chunks.push(c))
+    doc.on('end',  () => resolve(Buffer.concat(chunks)))
+    doc.on('error', reject)
+
+    // ── Bordure décorative ─────────────────────────────────────────────────────
+    doc.rect(20, 20, PW - 40, 802).stroke(C.red)
+    doc.rect(26, 26, PW - 52, 790).stroke(C.redMid)
+
+    // ── En-tête ────────────────────────────────────────────────────────────────
+    doc.rect(0, 0, PW, 140).fill(C.red)
+    doc.rect(60, 14, 44, 44).fill('rgba(255,255,255,0.15)').stroke()
+    try {
+      doc.rect(60, 14, 44, 44).fill('#FFFFFF')
+      doc.image(LOGO_PATH, 61, 15, { width: 42, height: 42 })
+    } catch {
+      doc.font('Helvetica-Bold').fontSize(11).fillColor('white')
+        .text('TAFDIL', 60, 30, { width: 44, align: 'center' })
+    }
+
+    doc.font('Helvetica-Bold').fontSize(13).fillColor('white').text(CO.nom, 115, 18)
+    doc.font('Helvetica').fontSize(8).fillColor('rgba(255,255,255,0.85)')
+      .text(CO.activite, 115, 34)
+      .text(`${CO.adresse}  |  ${CO.tel}`, 115, 44)
+      .text(`NIU : ${CO.niu}  |  RCCM : ${CO.rccm}`, 115, 54)
+
+    doc.font('Helvetica-Bold').fontSize(26).fillColor(C.redMid)
+      .text('ATTESTATION', 0, 72, { align: 'center', width: PW })
+    doc.font('Helvetica-Bold').fontSize(14).fillColor('white')
+      .text('DE FORMATION PROFESSIONNELLE', 0, 104, { align: 'center', width: PW })
+
+    // ── Corps ──────────────────────────────────────────────────────────────────
+    let y = 172
+    doc.font('Helvetica').fontSize(11).fillColor(C.mid)
+      .text('Nous soussignés, TAFDIL SARL, certifions que :', ML, y, { align: 'center', width: W })
+
+    y += 36
+    doc.rect(ML, y, W, 52).fill(C.gray)
+    doc.rect(ML, y, 4, 52).fill(C.red)
+    doc.font('Helvetica-Bold').fontSize(20).fillColor(C.dark)
+      .text(attest.nom.toUpperCase(), ML + 16, y + 14, { width: W - 32 })
+    doc.font('Helvetica').fontSize(9).fillColor(C.muted)
+      .text(`Spécialité : ${attest.specialite}`, ML + 16, y + 38)
+
+    y += 68
+    doc.font('Helvetica').fontSize(11).fillColor(C.mid).text(
+      `a suivi et validé avec succès la formation professionnelle en menuiserie métallique dispensée par TAFDIL SARL à Douala, Cameroun.`,
+      ML, y, { align: 'justify', width: W },
+    )
+
+    y += 48
+    const details = [
+      { label: 'Niveau atteint',         val: `Niveau ${attest.niveau} / 5 — ${NIVEAU_LABELS[attest.niveau] ?? ''}` },
+      { label: 'Durée de formation',     val: `${attest.duree_mois} mois` },
+      { label: 'Date de délivrance',     val: attest.date_delivrance },
+      { label: 'Organisme de formation', val: CO.nom },
+    ]
+
+    for (const d of details) {
+      doc.rect(ML, y, W, 24).fill(C.grayRow)
+      doc.moveTo(ML, y + 24).lineTo(ML + W, y + 24).strokeColor(C.border).lineWidth(0.3).stroke()
+      doc.font('Helvetica').fontSize(9).fillColor(C.muted).text(d.label, ML + 12, y + 8)
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark).text(d.val, ML + 220, y + 8, { width: W - 232, align: 'right' })
+      y += 24
+    }
+
+    y += 16
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.muted).text('MODULES VALIDÉS', ML, y)
+    y += 10
+    const modulesValidated = MODULE_PLANS.slice(0, Math.min(attest.niveau * 2, MODULE_PLANS.length))
+    for (const mod of modulesValidated) {
+      doc.font('Helvetica').fontSize(8).fillColor(C.mid)
+        .text(`✓  ${mod}`, ML + 10, y); y += 12
+    }
+
+    // ── Zone signatures ────────────────────────────────────────────────────────
+    y = Math.max(y + 24, 620)
+    doc.rect(ML, y, 200, 68).stroke()
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('Signature du bénéficiaire', ML + 6, y + 5)
+    doc.rect(ML + W - 200, y, 200, 68).stroke()
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted).text('Le Directeur', ML + W - 194, y + 5)
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.dark).text(CO.directeur, ML + W - 194, y + 42)
+    doc.font('Helvetica').fontSize(7).fillColor(C.muted).text(CO.nom, ML + W - 194, y + 54)
+
+    // ── Pied de page ───────────────────────────────────────────────────────────
+    doc.font('Helvetica').fontSize(7).fillColor(C.light)
+      .text(
+        `Document délivré le ${attest.date_delivrance} — ${CO.nom} — ${CO.adresse} — ${CO.tel}`,
+        ML, 770, { align: 'center', width: W },
+      )
+
+    doc.end()
+  })
+}
+
+// ── Supabase Storage upload ────────────────────────────────────────────────────
+
+const SIGNED_URL_TTL = 7 * 24 * 3600  // 7 days in seconds
+
+export async function uploadPDF(
+  buffer:   Buffer,
+  bucket:   string,
+  filename: string,
+): Promise<string> {
+  const client = db
+  const upload = () => client.storage
+    .from(bucket)
+    .upload(filename, buffer, { contentType: 'application/pdf', upsert: true })
+
+  let { error: upErr } = await upload()
+
+  // Some environments were deployed without the storage bucket migration.
+  // Create the private bucket once, then retry the upload instead of returning
+  // a URL that points to a non-existent bucket.
+  if (upErr?.message.toLowerCase().includes('bucket not found')) {
+    const { error: bucketErr } = await client.storage.createBucket(bucket, { public: false })
+    if (bucketErr && !bucketErr.message.toLowerCase().includes('already exists')) {
+      throw new Error(`Storage bucket creation failed (${bucket}): ${bucketErr.message}`)
+    }
+    ;({ error: upErr } = await upload())
+  }
+
+  if (upErr) {
+    console.error(`[pdf] storage upload error (${bucket}/${filename}):`, upErr.message)
+    throw new Error(`Storage PDF upload failed (${bucket}/${filename}): ${upErr.message}`)
+  }
+
+  const { data } = await client.storage
+    .from(bucket)
+    .createSignedUrl(filename, SIGNED_URL_TTL)
+
+  return data?.signedUrl ?? db.storage.from(bucket).getPublicUrl(filename).data.publicUrl
+}
+
+/**
+ * Upload une image PNG (signature client) dans le bucket spécifié.
+ * Renvoie le chemin storage (sans URL — sera servi via signed URL séparée).
+ */
+export async function uploadPng(
+  buffer:   Buffer,
+  bucket:   string,
+  filename: string,
+): Promise<string> {
+  const { error: upErr } = await db.storage
+    .from(bucket)
+    .upload(filename, buffer, { contentType: 'image/png', upsert: true })
+
+  if (upErr) {
+    throw new Error(`Storage upload PNG failed (${bucket}/${filename}): ${upErr.message}`)
+  }
+  return filename
+}
+
+export async function getSignedUrl(bucket: string, path: string): Promise<string> {
+  const { data } = await db.storage
+    .from(bucket)
+    .createSignedUrl(path, SIGNED_URL_TTL)
+  return data?.signedUrl ?? db.storage.from(bucket).getPublicUrl(path).data.publicUrl
+}
+
+// ── Bon de livraison (T03) ────────────────────────────────────────────────────
+
+export interface PdfBonLivraisonLigne {
+  designation: string
+  unite:       string
+  quantite:    number
+}
+
+export interface PdfBonLivraisonClient {
+  nom:       string
+  adresse?:   string | null
+  telephone?: string | null
+  email?:     string | null
+}
+
+export interface PdfBonLivraison {
+  numero:           string
+  date_emission:    string
+  commande_numero?: string | null
+  client:           PdfBonLivraisonClient
+  destination:      string
+  transporteur?:    string | null
+  livreur_nom?:     string | null
+  lignes:           PdfBonLivraisonLigne[]
+  signataire_nom:   string
+  signature_png_buffer: Buffer
+  geoloc?:          string | null
+}
+
+function drawBlHeader(
+  doc:      InstanceType<typeof PDFDocument>,
+  numero:   string,
+  dateLeft: string,
+  dateRight:string,
+  labelLeft: string,
+  labelRight: string,
+) {
+  drawHeader(doc, 'BON DE LIVRAISON', numero, dateLeft, dateRight, labelLeft, dateRight)
+}
+
+function drawBlClientBox(
+  doc:        InstanceType<typeof PDFDocument>,
+  client:     PdfBonLivraisonClient,
+  destination:string,
+  transporteur: string | null | undefined,
+  commandeNumero: string | null | undefined,
+) {
+  doc.rect(ML, 126, W, 64).fill(C.gray)
+  doc.rect(ML, 126, 3, 64).fill(C.red)
+
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
+    .text('DESTINATAIRE', ML + 12, 133)
+
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(C.dark)
+    .text(client.nom, ML + 12, 144)
+
+  const details = [
+    client.adresse,
+    client.telephone,
+    client.email,
+    commandeNumero ? `Réf. commande : ${commandeNumero}` : null,
+  ].filter(Boolean).join('  ·  ')
+
+  if (details) {
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.mid)
+      .text(details, ML + 12, 158, { width: W - 20 })
+  }
+
+  // Addresse de livraison (peut différer de l'adresse client — ex: lieu de chantier)
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
+    .text('ADRESSE DE LIVRAISON', ML + 12, 174)
+  doc.font('Helvetica').fontSize(8).fillColor(C.dark)
+    .text(destination, ML + 12, 184, { width: W - 20 })
+
+  if (transporteur) {
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.muted)
+      .text(`Transporteur : ${transporteur}`, ML + 12, 196)
+  }
+}
+
+function drawBlTable(
+  doc:   InstanceType<typeof PDFDocument>,
+  lignes: PdfBonLivraisonLigne[],
+  startY: number,
+): number {
+  // En-tête —Design identique à la facture pour cohérence
+  const COL_BL = {
+    num: ML,
+    des: ML + 28,
+    qty: ML + 333,
+    uni: ML + 373,
+    tot: ML + 423,
+  }
+  doc.rect(ML, startY, W, 20).fill(C.red)
+  doc.font('Helvetica-Bold').fontSize(7.5).fillColor('white')
+  doc.text('N°',           COL_BL.num + 2,  startY + 6)
+  doc.text('DÉSIGNATION',  COL_BL.des + 2,  startY + 6, { width: 300 })
+  doc.text('QTÉ',          COL_BL.qty + 2,  startY + 6)
+  doc.text('UNITÉ',        COL_BL.uni + 2,  startY + 6)
+  doc.text('QTÉ LIVRÉE',   COL_BL.tot + 2,  startY + 6)
+  let y = startY + 20
+
+  for (let i = 0; i < lignes.length; i++) {
+    if (y + ROW_H > PAGE_END) {
+      drawFooter(doc, 1) // simplifié — pas de multi-page pour un BL
+      doc.addPage()
+      y = 40
+    }
+    const l = lignes[i]
+    doc.rect(ML, y, W, ROW_H).fill(i % 2 === 0 ? C.grayRow : C.white)
+    doc.font('Helvetica').fontSize(8).fillColor(C.dark)
+    doc.text(String(i + 1),        COL_BL.num + 2, y + 5)
+    doc.text(l.designation,        COL_BL.des + 2, y + 5, { width: 300, ellipsis: true })
+    doc.text(String(l.quantite),   COL_BL.qty + 2, y + 5)
+    doc.text(l.unite,              COL_BL.uni + 2, y + 5)
+    doc.text(String(l.quantite),   COL_BL.tot + 2, y + 5)
+    doc.moveTo(ML, y + ROW_H).lineTo(ML + W, y + ROW_H)
+      .strokeColor(C.border).lineWidth(0.3).stroke()
+    y += ROW_H
+  }
+  return y
+}
+
+function drawBlSignatureBlock(
+  doc: InstanceType<typeof PDFDocument>,
+  startY: number,
+  signataireNom: string,
+  geoloc: string | null | undefined,
+  signatureBuffer: Buffer,
+  dateEmission: string,
+  livreurNom: string | null | undefined,
+): number {
+  let y = startY + 10
+
+  // Cadre signature client
+  const sigBoxW = 260
+  const sigBoxH = 110
+  doc.rect(ML, y, sigBoxW, sigBoxH).stroke()
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
+    .text('SIGNATURE CLIENT — BON POUR RÉCEPTION', ML + 6, y + 5)
+
+  // Embed PNG (max width = sigBoxW - 8, preserve aspect ratio)
+  try {
+    const targetW = sigBoxW - 12
+    const targetH = sigBoxH - 36
+    doc.image(signatureBuffer, ML + 6, y + 18, {
+      fit: [targetW, targetH],
+      align: 'center',
+      valign: 'center',
+    })
+  } catch (e) {
+    doc.font('Helvetica').fontSize(7).fillColor(C.red)
+      .text(`[Signature illisible : ${(e as Error).message}]`, ML + 6, y + 30, { width: sigBoxW - 12 })
+  }
+
+  doc.font('Helvetica-Bold').fontSize(8).fillColor(C.dark)
+    .text(signataireNom, ML + 6, y + sigBoxH - 14)
+  doc.font('Helvetica').fontSize(6.5).fillColor(C.muted)
+    .text(`Reçu le ${dateEmission}${geoloc ? ` · géoloc : ${geoloc}` : ''}`,
+      ML + 6, y + sigBoxH - 6, { width: sigBoxW - 12 })
+
+  // Cadre livreur (droite)
+  const livreurX = ML + W - sigBoxW
+  doc.rect(livreurX, y, sigBoxW, sigBoxH).stroke()
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
+    .text('LIVREUR', livreurX + 6, y + 5)
+  doc.font('Helvetica').fontSize(7).fillColor(C.mid)
+    .text('Document validé et remis au client à la date ci-dessus.',
+      livreurX + 6, y + 22, { width: sigBoxW - 12 })
+  if (livreurNom) {
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.dark)
+      .text(livreurNom, livreurX + 6, y + sigBoxH - 14)
+    doc.font('Helvetica').fontSize(6.5).fillColor(C.muted)
+      .text('Signature / Tampon', livreurX + 6, y + sigBoxH - 6)
+  }
+
+  y += sigBoxH + 10
+
+  // Mention juridique opposable
+  doc.rect(ML, y, W, 28).fill(C.redLight)
+  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.red)
+    .text('DOCUMENT OPPOSABLE — Mentions légales',
+      ML + 8, y + 4)
+  doc.font('Helvetica').fontSize(6.5).fillColor(C.muted)
+    .text(
+      'Le présent bon de livraison, signé par le client ou son représentant, ' +
+      'vaut accusé de réception et preuve de livraison conformément au Code de Commerce Cameroun. ' +
+      'Document à conserver 10 ans. Toute réclamation doit être adressée à TAFDIL SARL dans les 48h suivant la réception.',
+      ML + 8, y + 14, { width: W - 16 },
+    )
+  y += 36
+
+  return y
+}
+
+export async function generateBonLivraisonPDF(
+  bl: PdfBonLivraison,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: 0,
+      info: { Title: bl.numero, Author: CO.nom, Subject: 'BON DE LIVRAISON' },
+      bufferPages: true,
+    })
+
+    const chunks: Buffer[] = []
+    doc.on('data',  (c: Buffer) => chunks.push(c))
+    doc.on('end',   () => resolve(Buffer.concat(chunks)))
+    doc.on('error', reject)
+
+    drawBlHeader(
+      doc,
+      bl.numero,
+      bl.date_emission,
+      bl.commande_numero ? `Commande ${bl.commande_numero}` : '',
+      'Émission',
+      'Réf. cde',
+    )
+    drawBlClientBox(doc, bl.client, bl.destination, bl.transporteur, bl.commande_numero ?? null)
+
+    // Articles
+    const tableTopY = 220
+    const endY = drawBlTable(doc, bl.lignes, tableTopY)
+
+    // Signature
+    drawBlSignatureBlock(
+      doc,
+      endY,
+      bl.signataire_nom,
+      bl.geoloc ?? null,
+      bl.signature_png_buffer,
+      bl.date_emission,
+      bl.livreur_nom ?? null,
+    )
+
+    drawFooter(doc, 1)
+    doc.end()
+  })
+}

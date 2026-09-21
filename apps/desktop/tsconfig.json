@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "paths": {
+      "@forge/db":     ["../../packages/db/src"],
+      "@forge/db/*":   ["../../packages/db/src/*"],
+      "@forge/shared": ["../../packages/shared/src"],
+      "@forge/shared/*": ["../../packages/shared/src/*"]
+    }
+  },
+  "include": ["src", "electron.vite.config.ts"]
+}

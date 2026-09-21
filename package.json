@@ -1,0 +1,22 @@
+{
+  "name": "forge-tafdil",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n api,desktop,mobile,shop,web -c blue,yellow,green,magenta,cyan \"pnpm --filter @forge/api run dev\" \"pnpm --filter @forge/desktop run dev\" \"pnpm --filter @forge/mobile run dev\" \"pnpm --filter @forge/shop run dev\" \"pnpm --filter @forge/web run dev\"",
+    "dev:web": "concurrently -n api,web -c blue,cyan \"pnpm --filter @forge/api run dev\" \"pnpm --filter @forge/web run dev\"",
+    "build": "turbo build",
+    "test": "turbo test",
+    "lint": "turbo lint",
+    "format": "turbo format"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "turbo": "latest",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+    "packageManager": "pnpm@10.0.0"
+}

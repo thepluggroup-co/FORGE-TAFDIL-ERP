@@ -1,0 +1,305 @@
+import React, { useState, useMemo, useCallback } from 'react'
+
+export interface Column<T> {
+  id: string
+  header: string
+  accessor: keyof T | ((row: T) => React.ReactNode)
+  render?: (value: unknown, row: T) => React.ReactNode
+  sortable?: boolean
+  /** Set to true to exclude this column from CSV exports (e.g. action columns) */
+  csvSkip?: boolean
+  /** Optional override to get a clean string for CSV (avoids exporting JSX/IDs) */
+  csvValue?: (row: T) => string
+}
+
+export interface DataTableProps<T extends object> {
+  columns: Column<T>[]
+  data: T[]
+  onRowClick?: (row: T) => void
+  loading?: boolean
+  keyField?: keyof T
+  emptyMessage?: string
+  initialPageSize?: PageSize
+  pageSizeOptions?: PageSize[]
+}
+
+type SortDir = 'asc' | 'desc' | null
+type PageSize = 10 | 25 | 50 | 'all'
+
+const PAGE_SIZE_OPTIONS: PageSize[] = [10, 25, 50]
+
+function getCellValue<T extends object>(row: T, accessor: Column<T>['accessor']): unknown {
+  return typeof accessor === 'function' ? accessor(row) : (row as Record<PropertyKey, unknown>)[accessor as PropertyKey]
+}
+
+/** Returns a clean plain-text string for CSV, sanitising quotes and newlines. */
+function toCsvCell(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  const s = String(value).replace(/\r?\n/g, ' ').trim()
+  // Wrap in quotes if the value contains a comma, quote, or semicolon
+  return s.includes(',') || s.includes('"') || s.includes(';')
+    ? `"${s.replace(/"/g, '""')}"`
+    : s
+}
+
+function exportCsv<T extends object>(columns: Column<T>[], data: T[], filename = `export-${Date.now()}.csv`) {
+  // Filter out columns that should not appear in the CSV
+  const exportCols = columns.filter((c) => !c.csvSkip)
+
+  const headers = exportCols.map((c) => toCsvCell(c.header)).join(',')
+  const rows = data.map((row) =>
+    exportCols.map((c) => {
+      // Prefer explicit csvValue override (cleanest)
+      if (c.csvValue) return toCsvCell(c.csvValue(row))
+      const raw = getCellValue(row, c.accessor)
+      // If the raw value is a React element (JSX), fall back to empty string —
+      // this happens when accessor is a render function returning JSX.
+      if (raw !== null && typeof raw === 'object' && '$$typeof' in (raw as object)) return ''
+      return toCsvCell(raw)
+    }).join(',')
+  )
+
+  // Add BOM so Excel opens UTF-8 correctly
+  const csv = '﻿' + [headers, ...rows].join('\r\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function SkeletonRow({ cols }: { cols: number }) {
+  return (
+    <tr>
+      <td className="px-4 py-3"><div className="h-4 w-4 bg-gray-200 rounded animate-pulse" /></td>
+      {Array.from({ length: cols }).map((_, i) => (
+        <td key={i} className="px-4 py-3">
+          <div className="h-4 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * 13) % 30}%` }} />
+        </td>
+      ))}
+    </tr>
+  )
+}
+
+export function DataTable<T extends object>({
+  columns,
+  data,
+  onRowClick,
+  loading = false,
+  keyField,
+  emptyMessage = 'Aucun résultat',
+  initialPageSize = 10,
+  pageSizeOptions = PAGE_SIZE_OPTIONS,
+}: DataTableProps<T>) {
+  const [search, setSearch]   = useState('')
+  const [sortCol, setSortCol] = useState<string | null>(null)
+  const [sortDir, setSortDir] = useState<SortDir>(null)
+  const [page, setPage]       = useState(1)
+  const [pageSize, setPageSize] = useState<PageSize>(initialPageSize)
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return data
+    const q = search.toLowerCase()
+    return data.filter((row) =>
+      columns.some((col) => {
+        const v = getCellValue(row, col.accessor)
+        return String(v ?? '').toLowerCase().includes(q)
+      }),
+    )
+  }, [data, search, columns])
+
+  const sorted = useMemo(() => {
+    if (!sortCol || !sortDir) return filtered
+    const col = columns.find((c) => c.id === sortCol)
+    if (!col) return filtered
+    return [...filtered].sort((a, b) => {
+      const av = String(getCellValue(a, col.accessor) ?? '')
+      const bv = String(getCellValue(b, col.accessor) ?? '')
+      const cmp = av.localeCompare(bv, 'fr', { numeric: true })
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+  }, [filtered, sortCol, sortDir, columns])
+
+  const resolvedPageSize = pageSize === 'all' ? Math.max(sorted.length, 1) : pageSize
+  const totalPages = pageSize === 'all' ? 1 : Math.max(1, Math.ceil(sorted.length / resolvedPageSize))
+  const paginated  = pageSize === 'all' ? sorted : sorted.slice((page - 1) * resolvedPageSize, page * resolvedPageSize)
+
+  const toggleSort = useCallback((colId: string) => {
+    setSortCol((prev) => {
+      if (prev !== colId) { setSortDir('asc'); return colId }
+      setSortDir((d) => (d === 'asc' ? 'desc' : d === 'desc' ? null : 'asc'))
+      return colId
+    })
+    setPage(1)
+  }, [])
+
+  const toggleSelectAll = () => {
+    setSelected((prev) =>
+      prev.size === paginated.length
+        ? new Set()
+        : new Set(paginated.map((_, i) => (page - 1) * resolvedPageSize + i)),
+    )
+  }
+
+  const toggleRow = (idx: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      next.has(idx) ? next.delete(idx) : next.add(idx)
+      return next
+    })
+  }
+
+  // Rows to export: selected subset, or all filtered+sorted rows (not just current page)
+  const exportRows = selected.size > 0
+    ? [...selected].map((i) => sorted[i]).filter(Boolean) as T[]
+    : sorted
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 gap-3">
+        <div className="relative flex-1 max-w-xs">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35m0 0A7 7 0 104.65 4.65a7 7 0 0012 12z" />
+          </svg>
+          <input
+            type="search"
+            placeholder="Rechercher..."
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(1) }}
+            className="w-full pl-9 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg
+              focus:outline-none focus:ring-2 focus:ring-[#C62828] focus:border-transparent"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          {selected.size > 0 && (
+            <span className="text-xs text-[#C62828] font-medium">{selected.size} sélectionné(s)</span>
+          )}
+          <button
+            onClick={() => exportCsv(columns, exportRows)}
+            title={`Exporter ${exportRows.length} ligne(s) en CSV`}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg
+              border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Exporter CSV {selected.size > 0 ? `(${selected.size})` : `(${sorted.length})`}
+          </button>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ backgroundColor: '#C62828' }}>
+              <th className="px-4 py-3 w-10">
+                <input
+                  type="checkbox"
+                  checked={paginated.length > 0 && selected.size === paginated.length}
+                  onChange={toggleSelectAll}
+                  className="rounded border-white/50 text-white focus:ring-white/50"
+                />
+              </th>
+              {columns.map((col) => (
+                <th
+                  key={col.id}
+                  className="px-4 py-3 text-left text-xs font-semibold text-white uppercase tracking-wide whitespace-nowrap"
+                  style={{ cursor: col.sortable !== false ? 'pointer' : 'default', userSelect: 'none' }}
+                  onClick={() => col.sortable !== false && toggleSort(col.id)}
+                >
+                  <span className="flex items-center gap-1">
+                    {col.header}
+                    {col.sortable !== false && (
+                      <span className="opacity-60">
+                        {sortCol === col.id ? (sortDir === 'asc' ? '↑' : sortDir === 'desc' ? '↓' : '↕') : '↕'}
+                      </span>
+                    )}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {loading ? (
+              Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} cols={columns.length} />)
+            ) : paginated.length === 0 ? (
+              <tr>
+                <td colSpan={columns.length + 1} className="text-center py-12 text-sm text-gray-400">
+                  {emptyMessage}
+                </td>
+              </tr>
+            ) : (
+              paginated.map((row, rowIdx) => {
+                const absIdx = (page - 1) * resolvedPageSize + rowIdx
+                const isSelected = selected.has(absIdx)
+                const key = keyField ? String(row[keyField]) : absIdx
+
+                return (
+                  <tr
+                    key={key}
+                    onClick={() => onRowClick?.(row)}
+                    className={`transition-colors ${rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}
+                      ${onRowClick ? 'cursor-pointer hover:bg-[#FFEBEE]' : ''}
+                      ${isSelected ? 'bg-[#FFEBEE]' : ''}`}
+                  >
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleRow(absIdx)}
+                        className="rounded border-gray-300 text-[#C62828] focus:ring-[#C62828]"
+                      />
+                    </td>
+                    {columns.map((col) => {
+                      const raw = getCellValue(row, col.accessor)
+                      return (
+                        <td key={col.id} className="px-4 py-3 text-[#212121]">
+                          {col.render ? col.render(raw, row) : String(raw ?? '—')}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 text-sm text-gray-500">
+        <div className="flex items-center gap-2">
+          <span>Lignes :</span>
+          <select
+            value={String(pageSize)}
+            onChange={(e) => {
+              const value = e.target.value === 'all' ? 'all' : Number(e.target.value) as PageSize
+              setPageSize(value)
+              setPage(1)
+            }}
+            className="border border-gray-200 rounded-md px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+          >
+            {pageSizeOptions.map((n) => <option key={n} value={n}>{n === 'all' ? 'Toutes' : n}</option>)}
+          </select>
+          <span>{sorted.length} résultat{sorted.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <button onClick={() => setPage(1)} disabled={page === 1}
+            className="px-2 py-1 rounded-md hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed">«</button>
+          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}
+            className="px-2 py-1 rounded-md hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed">‹</button>
+          <span className="px-3 font-medium text-[#212121]">{page} / {totalPages}</span>
+          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages}
+            className="px-2 py-1 rounded-md hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed">›</button>
+          <button onClick={() => setPage(totalPages)} disabled={page === totalPages}
+            className="px-2 py-1 rounded-md hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed">»</button>
+        </div>
+      </div>
+    </div>
+  )
+}

@@ -1,0 +1,1 @@
+- [Imported pnpm setup](pnpm-import-setup.md) — imported FORGE workspaces may need pnpm runtime alignment before dependency checks.

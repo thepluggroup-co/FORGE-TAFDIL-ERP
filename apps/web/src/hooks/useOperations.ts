@@ -1,0 +1,666 @@
+﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import { apiClient } from '@/lib/api-client'
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PRODUCTION — JOBS
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface Job {
+  id: string; numero: string; produit_designation: string
+  type_job?: 'commande' | 'stock'
+  produit_id?: string | null; produit_ref?: string | null
+  categorie?: string | null; unite?: string | null
+  quantite_prevue?: number | null; quantite_produite?: number | null
+  prix_unitaire_xaf?: number | null; prix_public_xaf?: number | null
+  publier_shop?: boolean | null; description_produit?: string | null
+  machine_nom?: string | null; technicien_nom?: string | null
+  avancement_pct: number
+  statut: 'confirmed' | 'in_production' | 'pret' | 'delivered' | 'cancelled'
+  date_debut?: string | null; date_fin_prevue?: string | null; date_fin_reelle?: string | null
+  notes?: string | null; created_at: string; en_retard?: boolean
+}
+export interface CreateJobPayload {
+  type_job?: 'commande' | 'stock'
+  commande_id?: string
+  produit_id?: string
+  produit_ref?: string
+  produit_designation: string; machine_nom?: string; technicien_nom?: string
+  categorie?: string; unite?: string
+  quantite_prevue?: number
+  prix_unitaire_xaf?: number
+  prix_public_xaf?: number
+  publier_shop?: boolean
+  description_produit?: string
+  date_debut?: string; date_fin_prevue?: string; notes?: string
+}
+interface JobsResponse { data: Job[]; total: number }
+
+export function useJobs(params?: { statut?: string; search?: string }) {
+  return useQuery({
+    queryKey:  ['jobs', params],
+    queryFn:   () => {
+      const query = new URLSearchParams()
+      if (params?.statut) query.set('statut', params.statut)
+      if (params?.search) query.set('search', params.search)
+      const qs = query.toString()
+      return apiClient.get<JobsResponse>(`/api/production/jobs${qs ? `?${qs}` : ''}`)
+    },
+    staleTime: 20_000,
+  })
+}
+
+export function useCreateJob() {
+  const qc   = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateJobPayload) => apiClient.post<Job>('/api/production/jobs', payload),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['jobs'] }); toast.success('Job créé') },
+    onError:   (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateJobStatut() {
+  const qc   = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, statut, avancement_pct, quantite_produite, date_fin_reelle, notes }: {
+      id: string; statut: Job['statut']; avancement_pct?: number; quantite_produite?: number; date_fin_reelle?: string; notes?: string
+    }) => apiClient.patch<Job>(`/api/production/jobs/${id}/statut`, {
+      statut, avancement_pct, quantite_produite, date_fin_reelle, notes,
+    }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
+      void qc.invalidateQueries({ queryKey: ['stocks'] })
+      void qc.invalidateQueries({ queryKey: ['produits-shop'] })
+      void qc.invalidateQueries({ queryKey: ['commandes'] })
+      void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
+      void qc.invalidateQueries({ queryKey: ['factures'] })
+    },
+    onError:   (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateJobAvancement() {
+  const qc   = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, avancement_pct }: { id: string; avancement_pct: number }) =>
+      apiClient.patch<Job>(`/api/production/jobs/${id}/avancement`, { avancement_pct }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
+      void qc.invalidateQueries({ queryKey: ['stocks'] })
+      void qc.invalidateQueries({ queryKey: ['produits-shop'] })
+      void qc.invalidateQueries({ queryKey: ['commandes'] })
+      void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
+      void qc.invalidateQueries({ queryKey: ['factures'] })
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PROJETS
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface Projet {
+  id: string; nom: string; description?: string
+  client_id?: string | null; client_nom?: string
+  chef_projet_id?: string | null; chef_projet_nom?: string
+  assistant_id?: string | null
+  budget_xaf: number; depense_xaf: number; avancement_pct: number; alerte_budget?: boolean
+  statut: 'planifie' | 'en_cours' | 'suspendu' | 'livre' | 'annule'
+  date_debut?: string; deadline?: string; created_at: string
+  taches_projet?: Array<{ id: string; titre: string; statut: string; priorite: string; responsable_id?: string | null; date_echeance?: string | null }>
+}
+
+export interface ProjetMembre {
+  id: string; projet_id: string; employe_id: string; role_projet: string
+  heures_planifiees: number; heures_reelles: number
+  employes?: { id: string; nom: string; poste: string; departement?: string; telephone?: string } | null
+}
+
+export interface ProjetRessource {
+  id: string; projet_id: string; type: string; designation: string
+  employe_id?: string | null; produit_id?: string | null; equipement_id?: string | null
+  quantite: number; unite: string; cout_unitaire_xaf: number
+  statut: 'planifie' | 'disponible' | 'en_cours' | 'utilise' | 'manquant'
+  notes?: string | null; created_at: string
+  employes?: { nom: string; poste: string } | null
+  produits?: { designation: string } | null
+  equipements?: { code: string; designation: string } | null
+}
+
+export interface CreateProjetPayload {
+  nom: string; description?: string; client_nom?: string; chef_projet_nom?: string
+  client_id?: string; chef_projet_id?: string; budget_xaf?: number; date_debut?: string; deadline?: string
+}
+
+export interface AddRessourcePayload {
+  type: 'main_oeuvre' | 'intrant' | 'consommable' | 'equipement' | 'sous_traitant'
+  designation: string
+  employe_id?: string; produit_id?: string; equipement_id?: string
+  quantite: number; unite: string; cout_unitaire_xaf: number
+  statut?: string; notes?: string
+}
+interface ProjetsResponse { data: Projet[]; total: number }
+
+export function useProjets(params?: { statut?: string; search?: string }) {
+  return useQuery({
+    queryKey:  ['projets', params],
+    queryFn:   () => apiClient.get<ProjetsResponse>(`/api/projets${queryString(params)}`),
+    staleTime: 30_000,
+  })
+}
+
+export function useCreateProjet() {
+  const qc = useQueryClient()
+  return useMutation({
+    // client_nom/chef_projet_nom sont résolus côté API depuis client_id/
+    // chef_projet_id (apps/api/src/routes/operations.ts) — plus besoin de
+    // lookup client-side.
+    mutationFn: (payload: CreateProjetPayload) => apiClient.post<Projet>('/api/projets', payload),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['projets'] }); toast.success('Projet créé') },
+    onError:   (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateProjetStatut() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, statut, avancement_pct, depense_xaf }: {
+      id: string; statut: Projet['statut']; avancement_pct?: number; depense_xaf?: number
+    }) => apiClient.patch<Projet>(`/api/projets/${id}/statut`, { statut, avancement_pct, depense_xaf }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['projets'] }),
+    onError:   (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useProjetById(id: string | null) {
+  return useQuery({
+    queryKey:  ['projets', id],
+    queryFn:   () => apiClient.get<Projet>(`/api/projets/${id}`),
+    staleTime: 30_000,
+    enabled:   !!id,
+  })
+}
+
+// ── Tâches projet ─────────────────────────────────────────────────────────────
+
+export interface ProjetTache {
+  id: string; projet_id: string; titre: string; description?: string
+  responsable_id?: string | null; statut: 'todo' | 'en_cours' | 'done' | 'bloque'
+  priorite: 'basse' | 'normale' | 'haute' | 'critique'
+  date_echeance?: string | null; created_at: string; updated_at: string
+}
+
+export function useAddTacheProjet() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ projetId, payload }: {
+      projetId: string
+      payload: { titre: string; description?: string; responsable_id?: string; priorite?: string; date_echeance?: string }
+    }) => apiClient.post<ProjetTache>(`/api/projets/${projetId}/taches`, payload),
+    onSuccess: (_, vars) => {
+      void qc.invalidateQueries({ queryKey: ['projets', vars.projetId] })
+      void qc.invalidateQueries({ queryKey: ['projets'] })
+      toast.success('Tâche ajoutée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateTacheStatut() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ projetId, tacheId, statut }: { projetId: string; tacheId: string; statut: string }) =>
+      apiClient.patch<ProjetTache>(`/api/projets/${projetId}/taches/${tacheId}/statut`, { statut }),
+    onSuccess: (_, vars) => {
+      void qc.invalidateQueries({ queryKey: ['projets', vars.projetId] })
+      void qc.invalidateQueries({ queryKey: ['projets'] })
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+// ── Membres projet ─────────────────────────────────────────────────────────────
+
+export function useProjetMembres(projetId: string | null) {
+  return useQuery({
+    queryKey:  ['projets', projetId, 'membres'],
+    queryFn:   () => apiClient.get<{ data: ProjetMembre[]; total: number }>(`/api/projets/${projetId}/membres`),
+    staleTime: 30_000,
+    enabled:   !!projetId,
+  })
+}
+
+export function useAddMembreProjet() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ projetId, employe_id, role_projet, heures_planifiees }: {
+      projetId: string; employe_id: string; role_projet: string; heures_planifiees?: number
+    }) => apiClient.post<ProjetMembre>(`/api/projets/${projetId}/membres`, { employe_id, role_projet, heures_planifiees }),
+    onSuccess: (_, vars) => {
+      void qc.invalidateQueries({ queryKey: ['projets', vars.projetId, 'membres'] })
+      void qc.invalidateQueries({ queryKey: ['projets'] })
+      toast.success('Membre ajouté')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useRemoveMembreProjet() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ projetId, employeId }: { projetId: string; employeId: string }) =>
+      apiClient.delete<void>(`/api/projets/${projetId}/membres/${employeId}`),
+    onSuccess: (_, vars) => {
+      void qc.invalidateQueries({ queryKey: ['projets', vars.projetId, 'membres'] })
+      toast.success('Membre retiré')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+// ── Ressources projet ──────────────────────────────────────────────────────────
+
+export function useProjetRessources(projetId: string | null) {
+  return useQuery({
+    queryKey:  ['projets', projetId, 'ressources'],
+    queryFn:   () => apiClient.get<{ data: ProjetRessource[]; total: number; total_cout_xaf: number }>(
+      `/api/projets/${projetId}/ressources`
+    ),
+    staleTime: 30_000,
+    enabled:   !!projetId,
+  })
+}
+
+export function useAddRessourceProjet() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ projetId, payload }: { projetId: string; payload: AddRessourcePayload }) =>
+      apiClient.post<ProjetRessource>(`/api/projets/${projetId}/ressources`, payload),
+    onSuccess: (_, vars) => {
+      void qc.invalidateQueries({ queryKey: ['projets', vars.projetId, 'ressources'] })
+      void qc.invalidateQueries({ queryKey: ['projets'] })
+      toast.success('Ressource ajoutée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateRessourceStatut() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ projetId, ressourceId, statut }: { projetId: string; ressourceId: string; statut: string }) =>
+      apiClient.patch<ProjetRessource>(`/api/projets/${projetId}/ressources/${ressourceId}/statut`, { statut }),
+    onSuccess: (_, vars) => {
+      void qc.invalidateQueries({ queryKey: ['projets', vars.projetId, 'ressources'] })
+      void qc.invalidateQueries({ queryKey: ['projets'] })
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useDeleteRessourceProjet() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ projetId, ressourceId }: { projetId: string; ressourceId: string }) =>
+      apiClient.delete<void>(`/api/projets/${projetId}/ressources/${ressourceId}`),
+    onSuccess: (_, vars) => {
+      void qc.invalidateQueries({ queryKey: ['projets', vars.projetId, 'ressources'] })
+      toast.success('Ressource supprimée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LIVRAISONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface Livraison {
+  id: string
+  numero: string
+  commande_id?: string | null
+  client_id?: string | null
+  client_nom: string
+  destination: string
+  transporteur?: string | null
+  statut: 'en_preparation' | 'planifiee' | 'en_route' | 'en_transit' | 'livree' | 'echec_livraison' | 'annulee' | 'confirmed' | 'pret' | 'delivered' | 'cancelled'
+  date_depart?: string | null
+  date_livraison_prevue?: string | null
+  date_livraison_reelle?: string | null
+  notes?: string | null
+  livrable?: boolean
+  blocage_livraison_code?: string | null
+  blocage_livraison_message?: string | null
+  document_requis?: {
+    type?: 'bon_sortie' | 'facture' | string
+    label?: string
+    etat?: string | null
+    module?: string
+    url?: string
+    action?: string
+  } | null
+  facture_statut?: string | null
+  solde_restant_xaf?: number
+  created_at: string
+  livraisons_historique?: Array<{
+    id: string
+    ancien_statut: string | null
+    nouveau_statut: string
+    commentaire: string | null
+    changed_at: string
+  }>
+}
+
+export interface CommandePreteLivraison {
+  id: string
+  numero: string
+  client_id: string | null
+  client_nom: string
+  date_livraison_prevue: string | null
+  total_ttc_xaf: number
+  solde_restant_xaf?: number
+  facture_statut?: string | null
+  statut: 'pret'
+}
+
+export interface CreateLivraisonPayload {
+  client_nom: string
+  destination: string
+  transporteur?: string
+  client_id?: string
+  commande_id?: string
+  date_depart?: string
+  date_livraison_prevue?: string
+  notes?: string
+}
+
+interface LivraisonsResponse {
+  data: Livraison[]
+  total: number
+  page: number
+  per_page: number
+  total_pages: number
+}
+
+function queryString(params?: Record<string, string | number | undefined>) {
+  const qs = new URLSearchParams()
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') qs.set(key, String(value))
+  })
+  const value = qs.toString()
+  return value ? `?${value}` : ''
+}
+
+export function useLivraisons(params?: { statut?: string; search?: string; page?: number; per_page?: number }) {
+  return useQuery({
+    queryKey:  ['livraisons', params],
+    queryFn:   () => apiClient.get<LivraisonsResponse>(`/api/logistique/livraisons${queryString(params)}`),
+    staleTime: 20_000,
+    retry:     false,
+  })
+}
+
+export function useCommandesPretesLivraison() {
+  return useQuery({
+    queryKey: ['logistique', 'commandes-pretes'],
+    queryFn:  () => apiClient.get<{ data: CommandePreteLivraison[]; total: number }>('/api/logistique/commandes-pretes'),
+    staleTime: 20_000,
+  })
+}
+
+export function useCreateLivraison() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateLivraisonPayload) =>
+      apiClient.post<Livraison>('/api/logistique/livraisons', payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['livraisons'] })
+      void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
+      toast.success('Livraison créée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+interface SynchronisationWorkflowResult {
+  cible: 'factures' | 'livraisons' | 'tout'
+  total_bons_execute: number
+  total_commandes: number
+  commandes_resolues: number
+  factures_creees: number
+  factures_existantes: number
+  livraisons_creees: number
+  livraisons_existantes: number
+  details: Array<{
+    commande_id: string
+    reference: string
+    source: 'erp' | 'shop'
+    message: string
+    facture?: { action: 'creee' | 'existante'; numero?: string | null; statut?: string | null }
+    livraison?: { action: 'creee' | 'existante' | 'ignoree'; numero?: string | null; statut?: string | null }
+  }>
+  erreurs: Array<{ bon_id?: string | null; commande_id?: string | null; numero?: string | null; source?: 'erp' | 'shop'; etape?: string; message: string }>
+}
+
+function messageSynchronisationLivraisons(res: SynchronisationWorkflowResult) {
+  const creee = res.details.find((d) => d.livraison?.action === 'creee' && d.livraison?.numero)
+  const existante = res.details.find((d) => d.livraison?.action === 'existante' && d.livraison?.numero)
+  const ignoree = res.details.find((d) => d.livraison?.action === 'ignoree')
+  const erreur = res.erreurs[0]
+
+  if (creee?.livraison) {
+    return `Livraison ${creee.livraison?.numero ?? '(sans numero)'} creee pour ${creee.reference}. ${res.erreurs.length} erreur(s).`
+  }
+  if (existante?.livraison) {
+    return `Livraison ${existante.livraison?.numero ?? '(sans numero)'} deja existante pour ${existante.reference}. ${res.erreurs.length} erreur(s).`
+  }
+  if (erreur) {
+    return `Aucune livraison creee. ${erreur.numero ?? 'Commande'} : ${erreur.message}`
+  }
+  if (ignoree) {
+    return `${res.livraisons_creees} livraison(s) creee(s). Exemple ignore : ${ignoree.message}`
+  }
+  return `${res.livraisons_creees} livraison(s) creee(s), ${res.livraisons_existantes} deja existante(s).`
+}
+
+export function useSynchroniserLivraisons() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => apiClient.post<SynchronisationWorkflowResult>('/api/logistique/synchroniser-livraisons', {}, 60_000),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ['livraisons'] })
+      void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
+      void qc.invalidateQueries({ queryKey: ['commandes'] })
+      console.log('[sync livraisons] details', res.details)
+      if (res.erreurs.length > 0) console.error('[sync livraisons] erreurs', res.erreurs)
+      toast[res.erreurs.length > 0 ? 'warning' : 'success'](messageSynchronisationLivraisons(res))
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateLivraisonStatut() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, statut, date_depart, date_livraison_prevue, date_livraison_reelle, destination, transporteur, notes, paiement_livraison }: {
+      id: string
+      statut: Livraison['statut']
+      date_depart?: string
+      date_livraison_prevue?: string
+      date_livraison_reelle?: string
+      destination?: string
+      transporteur?: string
+      notes?: string
+      paiement_livraison?: {
+        montant_xaf: number
+        methode: 'mobile_money' | 'especes'
+        reference_ext?: string
+      }
+    }) => apiClient.patch<Livraison>(`/api/logistique/livraisons/${id}/statut`, {
+      statut,
+      date_depart,
+      date_livraison_prevue,
+      date_livraison_reelle,
+      destination,
+      transporteur,
+      commentaire: notes,
+      paiement_livraison,
+    }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['livraisons'] })
+      void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
+      void qc.invalidateQueries({ queryKey: ['commandes'] })
+      void qc.invalidateQueries({ queryKey: ['commandes-shop'] })
+      void qc.invalidateQueries({ queryKey: ['factures'] })
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+// MARKETING - CAMPAGNES
+export interface Campagne {
+  id: string; nom: string; description?: string; canal: string
+  budget_xaf: number; reach: number; leads_count: number; conversions_count: number
+  statut: 'planifie' | 'active' | 'pause' | 'termine' | 'annule'
+  date_debut: string; date_fin: string; created_at: string
+}
+export interface CampagneProduit {
+  id: string
+  campagne_id: string
+  product_id: string
+  remise_type: 'pct' | 'forfait'
+  remise_valeur: number
+  prix_promo_xaf: number | null
+  priorite: number
+  produits?: { ref: string; designation: string; categorie: string; unite: string }
+  produits_shop?: { prix_public: number | null; visible_shop: boolean; images?: string[] | null } | null
+}
+export interface CreateCampagnePayload {
+  nom: string; description?: string; canal: string; budget_xaf?: number
+  date_debut: string; date_fin: string
+}
+interface CampagnesResponse { data: Campagne[]; total: number }
+
+export function useCampagnes(params?: { statut?: string; search?: string }) {
+  return useQuery({
+    queryKey:  ['campagnes', params],
+    queryFn:   () => apiClient.get<CampagnesResponse>(`/api/marketing/campagnes${queryString(params)}`),
+    staleTime: 30_000,
+  })
+}
+
+export function useCreateCampagne() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateCampagnePayload) => apiClient.post<Campagne>('/api/marketing/campagnes', payload),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['campagnes'] }); toast.success('Campagne créée') },
+    onError:   (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateCampagneStatut() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, statut, reach, leads_count, conversions_count }: {
+      id: string; statut: Campagne['statut']; reach?: number; leads_count?: number; conversions_count?: number
+    }) => apiClient.patch<Campagne>(`/api/marketing/campagnes/${id}/statut`, { statut, reach, leads_count, conversions_count }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['campagnes'] }),
+    onError:   (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useCampagneProduits(campagneId?: string | null) {
+  return useQuery({
+    queryKey: ['campagne-produits', campagneId],
+    queryFn: () => apiClient.get<{ data: CampagneProduit[]; total: number }>(`/api/marketing/campagnes/${campagneId}/produits`),
+    enabled: Boolean(campagneId),
+    staleTime: 30_000,
+  })
+}
+
+export function useAjouterProduitCampagne() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: {
+      campagneId: string
+      product_id: string
+      remise_type: 'pct' | 'forfait'
+      remise_valeur: number
+      prix_promo_xaf?: number | null
+      priorite?: number
+    }) => apiClient.post(`/api/marketing/campagnes/${payload.campagneId}/produits`, {
+      product_id: payload.product_id,
+      remise_type: payload.remise_type,
+      remise_valeur: payload.remise_valeur,
+      prix_promo_xaf: payload.prix_promo_xaf ?? null,
+      priorite: payload.priorite ?? 0,
+    }),
+    onSuccess: (_, payload) => {
+      void qc.invalidateQueries({ queryKey: ['campagne-produits', payload.campagneId] })
+      toast.success('Produit ajoute a la campagne')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useRetirerProduitCampagne() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ campagneId, productId }: { campagneId: string; productId: string }) =>
+      apiClient.delete(`/api/marketing/campagnes/${campagneId}/produits/${productId}`),
+    onSuccess: (_, payload) => {
+      void qc.invalidateQueries({ queryKey: ['campagne-produits', payload.campagneId] })
+      toast.success('Produit retire de la campagne')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SÉCURITÉ — INCIDENTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface Incident {
+  id: string; type: string; description: string; zone: string; signale_par: string
+  statut: 'ouvert' | 'traite' | 'corrige' | 'resolu'
+  date_incident: string; date_resolution?: string; actions_correctives?: string; created_at: string
+}
+export interface CreateIncidentPayload {
+  type: string; description: string; zone: string; signale_par: string; date_incident: string
+}
+interface IncidentsResponse { data: Incident[]; total: number }
+
+export function useIncidents(params?: { statut?: string; search?: string }) {
+  return useQuery({
+    queryKey: ['incidents', params],
+    queryFn:  () => apiClient.get<IncidentsResponse>(`/api/securite/incidents${queryString(params)}`),
+    staleTime: 30_000,
+  })
+}
+
+export function useCreateIncident() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: CreateIncidentPayload) => apiClient.post<Incident>('/api/securite/incidents', payload),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['incidents'] }); toast.success('Incident signalé') },
+    onError:   (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useUpdateIncidentStatut() {
+  const qc = useQueryClient()
+  return useMutation({
+    // Le paramètre public reste `actions_correctrices` (aucun appelant à
+    // toucher) ; l'API attend `actions_correctives` (incidentStatutSchema).
+    mutationFn: ({ id, statut, date_resolution, actions_correctrices }: {
+      id: string; statut: Incident['statut']; date_resolution?: string; actions_correctrices?: string
+    }) => apiClient.patch<Incident>(`/api/securite/incidents/${id}/statut`, {
+      statut,
+      date_resolution: date_resolution ?? (statut === 'resolu' ? new Date().toISOString().slice(0, 10) : undefined),
+      actions_correctives: actions_correctrices,
+    }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['incidents'] }),
+    onError:   (err: Error) => toast.error(err.message),
+  })
+}
