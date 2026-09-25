@@ -19,6 +19,7 @@ import { verifierEligibiliteCredit } from '../services/credit-eligibility.servic
 import { ensureClient } from '../services/client-sync.service'
 import { resolveCommandeContext } from '../services/commande-workflow.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
+import { proposerDevis, devisCalculateSchema } from '../services/devis-calculation.service'
 import type { TypeCommande } from '../services/credit-eligibility.service'
 import type { HonoVariables } from '../types'
 
@@ -110,6 +111,17 @@ const devisLigneSchema = z.object({
   remise_valeur:        z.number().min(0).optional(),
   remise_motif:         z.string().optional(),
   ordre:                z.number().int().default(0),
+  // §11/§17 — traçabilité de la configuration (dimensions) et de la formule utilisée,
+  // renseignées automatiquement quand la ligne vient de POST /devis/calculate.
+  configuration:        z.record(z.unknown()).optional(),
+  formule_utilisee:     z.string().optional(),
+  // §18 — calcul automatique + ajustement manuel : la valeur calculée par le moteur
+  // est conservée à côté de la valeur retenue (quantite/prix_unitaire_ht_xaf ci-dessus),
+  // avec la trace de qui a ajusté, quand, et pourquoi.
+  quantite_calculee:      z.number().optional(),
+  cout_calcule_xaf:       z.number().optional(),
+  ajuste_manuellement:    z.boolean().default(false),
+  motif_ajustement:       z.string().optional(),
 })
 
 const devisSchema = z.object({
@@ -128,6 +140,14 @@ const devisSchema = z.object({
   remise_globale_motif: z.string().optional(),
   notes:                z.string().optional(),
   lignes:               z.array(devisLigneSchema).min(1),
+  // §21/§32 — optionnels, additifs : un devis créé sans ces champs se comporte
+  // exactement comme avant (§46 rétrocompatibilité). Un devis créé depuis
+  // POST /devis/calculate les renseigne pour figer le calcul au moment de
+  // la création (snapshot), avant qu'une fiche technique future ne change.
+  fiche_technique_id:  z.string().uuid().optional(),
+  config_snapshot:     z.record(z.unknown()).optional(),
+  ressources_snapshot: z.record(z.unknown()).optional(),
+  source_demande:      z.string().optional(),
 })
 
 const commandeLigneSchema = z.object({
@@ -187,12 +207,16 @@ interface TotauxResult {
 function calculerTotaux(
   lignes: Array<{ quantite: number; prix_unitaire_ht_xaf: number; remise_xaf?: number }>,
   remise_globale_xaf = 0,
+  // §19 — le devis est un DEVIS BRUT, sans TVA. Les call-sites `commandes` gardent
+  // le comportement historique (TVA_RATE) en ne passant pas ce paramètre ; les
+  // call-sites `devis` passent explicitement 0.
+  tva_rate = TVA_RATE,
 ): TotauxResult {
   const brut_ht        = Math.round(lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire_ht_xaf, 0))
   const remises_lignes = Math.round(lignes.reduce((s, l) => s + (l.remise_xaf ?? 0), 0))
   const remise_globale = Math.round(remise_globale_xaf)
   const total_ht_xaf   = Math.max(0, brut_ht - remises_lignes - remise_globale)
-  const tva_xaf        = Math.round(total_ht_xaf * TVA_RATE)
+  const tva_xaf        = Math.round(total_ht_xaf * tva_rate)
   const total_ttc_xaf  = total_ht_xaf + tva_xaf
   return {
     brut_ht_xaf:          brut_ht,
@@ -500,9 +524,29 @@ async function creerJobsProductionCommande(
     ordre: number | null
   }
 
-  const jobs = (lignes as LigneCommande[])
+  const lignesValides = (lignes as LigneCommande[])
     .filter((l) => Number(l.quantite ?? 0) > 0 && String(l.designation ?? '').trim() !== '')
-    .map((l, index) => ({
+
+  if (lignesValides.length === 0) return false
+
+  // §27 — Rattacher le détail matériaux/MO/équipements calculé par le moteur de
+  // devis (Phase 2), figé dans devis.ressources_snapshot au moment du devis
+  // (Phase 3). On ne peut l'attribuer avec certitude que s'il y a un seul job
+  // à créer pour cette commande : avec plusieurs lignes, le snapshot décrit
+  // l'ensemble du devis et rien ne permet aujourd'hui de le ventiler ligne par
+  // ligne — on ne l'invente pas, on laisse `ressources_besoin` à NULL dans ce
+  // cas plutôt que d'attribuer un total agrégé à un seul job par erreur.
+  let ressourcesBesoin: unknown = null
+  if (lignesValides.length === 1) {
+    const { data: cmd } = await db.from('commandes').select('devis_id').eq('id', commandeId).maybeSingle()
+    const devisId = (cmd as { devis_id?: string | null } | null)?.devis_id
+    if (devisId) {
+      const { data: devis } = await db.from('devis').select('ressources_snapshot').eq('id', devisId).maybeSingle()
+      ressourcesBesoin = (devis as { ressources_snapshot?: unknown } | null)?.ressources_snapshot ?? null
+    }
+  }
+
+  const jobs = lignesValides.map((l, index) => ({
       numero:              `OF-${commandeNumero}-${String(index + 1).padStart(2, '0')}`,
       commande_id:         commandeId,
       type_job:            'commande',
@@ -511,6 +555,7 @@ async function creerJobsProductionCommande(
       unite:               l.unite ?? 'unite',
       quantite_prevue:     Number(l.quantite),
       prix_unitaire_xaf:   Number(l.prix_unitaire_ht_xaf ?? 0),
+      ressources_besoin:   ressourcesBesoin,
       avancement_pct:      0,
       statut:              'confirmed',
       date_debut:          new Date().toISOString(),
@@ -942,6 +987,26 @@ router.get('/devis/:id', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   return c.json(mapDevis(data))
 })
 
+// §34 — POST /devis/calculate : calcule une PROPOSITION de devis à partir
+// d'une fiche technique (matériaux/MO/équipements, quantité facturable,
+// total HT). N'écrit rien en base — c'est un aperçu que le front affiche
+// avant que l'opérateur ne décide d'enregistrer le devis via POST /devis.
+router.post('/devis/calculate', requirePermission('COMMERCIAL', 'READ'), zValidator('json', devisCalculateSchema), async (c) => {
+  const input = c.req.valid('json')
+  const resultat = await proposerDevis(input)
+
+  if (!resultat.ok) {
+    // FICHE_TECHNIQUE_INTROUVABLE / RESSOURCES_MANQUANTES / QUANTITE_INVALIDE / DIMENSIONS_* / ERREUR_DB
+    const status: ContentfulStatusCode = resultat.erreurs.some((e) => e.code === 'ERREUR_DB') ? 500 : 422
+    return c.json({ error: 'Calcul impossible', erreurs: resultat.erreurs }, status)
+  }
+
+  return c.json({
+    ficheTechniqueId: resultat.ficheTechniqueId,
+    ...resultat.resultat.proposition,
+  })
+})
+
 router.post('/devis', requirePermission('COMMERCIAL', 'CREATE'), zValidator('json', devisSchema), async (c) => {
   const user = c.get('user')
   const body = c.req.valid('json')
@@ -968,7 +1033,7 @@ router.post('/devis', requirePermission('COMMERCIAL', 'CREATE'), zValidator('jso
         ...l,
         remise_xaf: calculerRemiseLigne(l.quantite, l.prix_unitaire_ht_xaf, l.remise_type, l.remise_valeur),
       }))
-      const { brut_ht_xaf, remise_totale_ht_xaf, ...dbTotaux } = calculerTotaux(lignesAvecRemise, body.remise_globale_xaf ?? 0)
+      const { brut_ht_xaf, remise_totale_ht_xaf, ...dbTotaux } = calculerTotaux(lignesAvecRemise, body.remise_globale_xaf ?? 0, 0) // §19 : devis brut, TVA = 0
 
       // Garde éligibilité remise
       if (remise_totale_ht_xaf > 0) {
@@ -985,6 +1050,11 @@ router.post('/devis', requirePermission('COMMERCIAL', 'CREATE'), zValidator('jso
           condition_paiement_id: body.condition_paiement_id ?? null,
           remise_globale_motif: body.remise_globale_motif ?? null,
           notes: body.notes ?? null,
+          // §21/§32 — additifs, absents en mode manuel classique (§46 rétrocompatibilité)
+          fiche_technique_id:  body.fiche_technique_id ?? null,
+          config_snapshot:     body.config_snapshot ?? null,
+          ressources_snapshot: body.ressources_snapshot ?? null,
+          source_demande:      body.source_demande ?? null,
           created_by: user.id, sync_status: 'synced', ...dbTotaux,
         })
         .select().single()
@@ -1004,6 +1074,15 @@ router.post('/devis', requirePermission('COMMERCIAL', 'CREATE'), zValidator('jso
         remise_motif:  l.remise_motif ?? null,
         applique_par_id: user.id,
         ordre: l.ordre !== 0 ? l.ordre : i,
+        // §11/§17/§18 — additifs
+        configuration:        l.configuration ?? null,
+        formule_utilisee:     l.formule_utilisee ?? null,
+        quantite_calculee:    l.quantite_calculee ?? null,
+        cout_calcule_xaf:     l.cout_calcule_xaf ?? null,
+        ajuste_manuellement:  l.ajuste_manuellement ?? false,
+        ajuste_par_id:        l.ajuste_manuellement ? user.id : null,
+        ajuste_le:            l.ajuste_manuellement ? new Date().toISOString() : null,
+        motif_ajustement:     l.motif_ajustement ?? null,
       }))
 
       const { data: lignesData, error: lignesErr } = await db.from('devis_lignes').insert(lignes).select()
@@ -1153,6 +1232,7 @@ router.put('/devis/:id', requirePermission('COMMERCIAL', 'UPDATE'), zValidator('
     const { brut_ht_xaf: _b, remise_totale_ht_xaf: _r, ...dbTotaux } = calculerTotaux(
       lignesAvecRemise,
       (body.remise_globale_xaf as number | undefined) ?? 0,
+      0, // §19 : devis brut, TVA = 0
     )
     Object.assign(updates, dbTotaux)
     if (body.remise_globale_motif !== undefined) updates.remise_globale_motif = body.remise_globale_motif
@@ -1747,6 +1827,28 @@ router.post('/devis/:id/transformer-commande', requirePermission('COMMERCIAL', '
 
   const numeroCommande = await genererNumero('commandes', 'CMD')
 
+  // §37 — Verrou d'idempotence : réclame atomiquement le devis AVANT de créer
+  // la commande. `.in('statut', [...])` dans le WHERE de l'UPDATE fait de cette
+  // opération un test-and-set atomique côté Postgres — contrairement à l'ancien
+  // code, qui ne marquait `transforme` qu'APRÈS la création de la commande et
+  // laissait donc une fenêtre où deux requêtes concurrentes passaient toutes
+  // les deux le contrôle de statut lu en tête de route (§23/§37, Test 11).
+  const { data: claimed, error: claimErr } = await db
+    .from('devis')
+    .update({ statut: 'transforme', updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .in('statut', ['brouillon', 'envoye', 'accepte'])
+    .select('id')
+    .maybeSingle()
+
+  if (claimErr) return c.json({ error: claimErr.message, code: 'CLAIM_FAILED' }, 500)
+  if (!claimed) {
+    return c.json({
+      error: 'Ce devis vient d\'être transformé (ou son statut modifié) par une autre requête. Aucune commande créée.',
+      code:  'ALREADY_TRANSFORMED',
+    }, 409)
+  }
+
   const { data: commande, error: cmdErr } = await db
     .from('commandes')
     .insert({
@@ -1774,7 +1876,15 @@ router.post('/devis/:id/transformer-commande', requirePermission('COMMERCIAL', '
     .select()
     .single()
 
-  if (cmdErr || !commande) return c.json({ error: cmdErr?.message, code: 'CREATE_FAILED' }, 400)
+  if (cmdErr || !commande) {
+    // Compensation best-effort : on a réclamé le devis mais la commande n'a pas pu être
+    // créée. Ce n'est PAS une transaction ACID (Supabase-js ne le permet pas across-tables
+    // sans fonction RPC dédiée) — entre ce revert et l'échec, une fenêtre existe encore.
+    // Documenté ici plutôt que présenté comme résolu : une vraie garantie nécessiterait
+    // d'encapsuler toute la séquence dans une fonction Postgres appelée via .rpc().
+    await db.from('devis').update({ statut: currentStatut, updated_at: new Date().toISOString() }).eq('id', id)
+    return c.json({ error: cmdErr?.message, code: 'CREATE_FAILED' }, 400)
+  }
 
   const cmd = commande as { id: string; numero: string }
 
@@ -1794,10 +1904,6 @@ router.post('/devis/:id/transformer-commande', requirePermission('COMMERCIAL', '
       ordre:                l.ordre,
     })),
   )
-
-  await db.from('devis')
-    .update({ statut: 'transforme', updated_at: new Date().toISOString() })
-    .eq('id', id)
 
   await db.from('historique_commandes').insert({
     commande_id:    cmd.id,
@@ -1894,6 +2000,90 @@ router.get('/commandes', requirePermission('COMMERCIAL', 'READ'), async (c) => {
     per_page:    perPage,
     total_pages: Math.ceil((count ?? 0) / perPage),
   })
+})
+
+// §31 — Timeline unifiée devis → commande → production → livraison, alimentée
+// UNIQUEMENT par les événements réels déjà tracés ailleurs (historique_commandes,
+// jobs_production, factures, versements_factures, livraisons_historique). Aucun
+// nouveau statut parallèle : lecture seule, agrégation, rien n'est écrit ici.
+router.get('/commandes/:id/timeline', requirePermission('COMMERCIAL', 'READ'), async (c) => {
+  const { id } = c.req.param()
+
+  const { data: commande, error: cmdErr } = await db
+    .from('commandes')
+    .select('id, numero, devis_id, statut, statut_paiement, created_at')
+    .eq('id', id)
+    .maybeSingle()
+
+  if (cmdErr || !commande) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
+
+  type Evenement = { horodatage: string; etape: string; detail?: string | null; source: string }
+  const evenements: Evenement[] = []
+
+  const cmdRow = commande as { id: string; numero: string; devis_id: string | null; created_at: string }
+
+  if (cmdRow.devis_id) {
+    const { data: devis } = await db
+      .from('devis')
+      .select('numero, source_demande, statut, created_at, updated_at')
+      .eq('id', cmdRow.devis_id)
+      .maybeSingle()
+    if (devis) {
+      const d = devis as { numero: string; source_demande: string | null; created_at: string; updated_at: string }
+      evenements.push({
+        horodatage: d.created_at,
+        etape: 'Devis en préparation',
+        detail: `${d.numero}${d.source_demande ? ` — canal : ${d.source_demande}` : ''}`,
+        source: 'devis',
+      })
+      evenements.push({ horodatage: d.updated_at, etape: 'Devis validé / commande confirmée', detail: d.numero, source: 'devis' })
+    }
+  }
+
+  const { data: histo } = await db
+    .from('historique_commandes')
+    .select('ancien_statut, nouveau_statut, commentaire, created_at')
+    .eq('commande_id', id)
+    .order('created_at', { ascending: true })
+  for (const h of (histo ?? []) as Array<{ ancien_statut: string | null; nouveau_statut: string; commentaire: string | null; created_at: string }>) {
+    evenements.push({ horodatage: h.created_at, etape: `Commande : ${h.ancien_statut ?? '—'} → ${h.nouveau_statut}`, detail: h.commentaire, source: 'commande' })
+  }
+
+  const { data: factures } = await db
+    .from('factures')
+    .select('numero, statut, created_at, versements_factures(montant_xaf, date_versement, mode_paiement)')
+    .eq('commande_id', id)
+  for (const f of (factures ?? []) as Array<{ numero: string; statut: string; created_at: string; versements_factures: Array<{ montant_xaf: number; date_versement: string; mode_paiement: string | null }> }>) {
+    evenements.push({ horodatage: f.created_at, etape: 'Facture émise', detail: `${f.numero} (${f.statut})`, source: 'facture' })
+    for (const v of f.versements_factures ?? []) {
+      evenements.push({ horodatage: v.date_versement, etape: 'Acompte / paiement reçu', detail: `${v.montant_xaf} XAF${v.mode_paiement ? ` — ${v.mode_paiement}` : ''}`, source: 'paiement' })
+    }
+  }
+
+  const { data: jobs } = await db
+    .from('jobs_production')
+    .select('numero, statut, avancement_pct, date_debut, date_fin_reelle, produit_designation')
+    .eq('commande_id', id)
+    .order('created_at', { ascending: true })
+  for (const j of (jobs ?? []) as Array<{ numero: string; statut: string; avancement_pct: number; date_debut: string | null; date_fin_reelle: string | null; produit_designation: string }> ) {
+    if (j.date_debut) evenements.push({ horodatage: j.date_debut, etape: 'Production lancée', detail: `${j.numero} — ${j.produit_designation}`, source: 'production' })
+    if (j.date_fin_reelle) evenements.push({ horodatage: j.date_fin_reelle, etape: 'Production terminée', detail: j.numero, source: 'production' })
+    else if (j.statut === 'in_production') evenements.push({ horodatage: j.date_debut ?? cmdRow.created_at, etape: 'Production en cours', detail: `${j.numero} (${j.avancement_pct}%)`, source: 'production' })
+  }
+
+  const { data: livraisons } = await db
+    .from('livraisons')
+    .select('numero, date_depart, date_livraison_prevue, date_livraison_reelle, livraisons_historique(nouveau_statut, commentaire, changed_at)')
+    .eq('commande_id', id)
+  for (const l of (livraisons ?? []) as Array<{ numero: string; date_depart: string | null; date_livraison_reelle: string | null; livraisons_historique: Array<{ nouveau_statut: string; commentaire: string | null; changed_at: string }> }>) {
+    for (const h of l.livraisons_historique ?? []) {
+      evenements.push({ horodatage: h.changed_at, etape: `Livraison : ${h.nouveau_statut}`, detail: `${l.numero}${h.commentaire ? ` — ${h.commentaire}` : ''}`, source: 'livraison' })
+    }
+  }
+
+  evenements.sort((a, b) => new Date(a.horodatage).getTime() - new Date(b.horodatage).getTime())
+
+  return c.json({ commande_id: id, commande_numero: cmdRow.numero, evenements })
 })
 
 router.get('/commandes/:id', requirePermission('COMMERCIAL', 'READ'), async (c) => {

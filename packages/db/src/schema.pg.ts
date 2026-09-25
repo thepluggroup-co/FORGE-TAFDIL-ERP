@@ -5,7 +5,7 @@
  */
 import {
   pgTable, uuid, text, integer, real, boolean,
-  timestamp, pgEnum,
+  timestamp, pgEnum, jsonb,
 } from 'drizzle-orm/pg-core'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -48,6 +48,9 @@ export const imputationPayeurEnum   = pgEnum('imputation_payeur_enum',  ['entrep
 export const statutPreparationEnum  = pgEnum('statut_preparation_enum', ['a_preparer', 'en_cours', 'pret'])
 export const remiseTypeEnum         = pgEnum('remise_type_enum',        ['pct', 'forfait'])
 export const caisseSessionStatutEnum = pgEnum('caisse_session_statut', ['ouverte', 'fermee'])
+export const ressourceTypeEnum      = pgEnum('ressource_type',      ['materiau', 'main_oeuvre', 'equipement'])
+export const ficheTechniqueStatutEnum = pgEnum('fiche_technique_statut', ['brouillon', 'active', 'archivee'])
+export const modeCalculDevisEnum    = pgEnum('mode_calcul_devis',   ['quantitatif', 'surface', 'lineaire', 'volume', 'poids', 'forfait', 'qualitatif'])
 export const ticketVenteStatutEnum   = pgEnum('ticket_vente_statut',   ['paye', 'annule', 'rembourse'])
 export const paiementTicketModeEnum  = pgEnum('paiement_ticket_mode',  ['espece', 'orange_money', 'mtn_momo', 'credit', 'carte'])
 export const remboursementCaisseStatutEnum = pgEnum('remboursement_caisse_statut', ['en_attente', 'paye', 'en_retard'])
@@ -106,13 +109,54 @@ export type NouveauClientPg = typeof clientsPg.$inferInsert
 // PRODUITS / STOCKS
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ── Largeur de gamme : familles et catégories ───────────────────────────────
+// (MASTER PROMPT V3 §8 — Famille → Catégorie → Modèle(=produit) → Configuration)
+
+export const produitFamillesPg = pgTable('produit_familles', {
+  id:          id(),
+  code:        text('code').notNull().unique(),
+  designation: text('designation').notNull(),
+  description: text('description'),
+  atelier:     text('atelier'), // 'Métallerie' | 'Ferronnerie' | 'Les deux' | null — libre, non contraint
+  ordre:       integer('ordre').notNull().default(0),
+  actif:       boolean('actif').notNull().default(true),
+  createdAt:   ts('created_at'),
+  updatedAt:   ts('updated_at'),
+})
+
+export const produitCategoriesPg = pgTable('produit_categories', {
+  id:                     id(),
+  familleId:              uuid('famille_id').notNull().references(() => produitFamillesPg.id),
+  code:                   text('code').notNull().unique(),
+  designation:            text('designation').notNull(),
+  description:            text('description'),
+  uniteFacturationDefaut: uuid('unite_facturation_defaut_id').references(() => unitesFacturationPg.id),
+  ordre:                  integer('ordre').notNull().default(0),
+  actif:                  boolean('actif').notNull().default(true),
+  createdAt:              ts('created_at'),
+  updatedAt:              ts('updated_at'),
+})
+
+// ── Unités de facturation centralisées (§9/§10 — ne pas coder en dur) ───────
+
+export const unitesFacturationPg = pgTable('unites_facturation', {
+  id:           id(),
+  code:         text('code').notNull().unique(), // 'm2', 'ml', 'm3', 'kg', 'l', 'h', 'forfait', 'unite'
+  libelle:      text('libelle').notNull(),
+  modeCalcul:   modeCalculDevisEnum('mode_calcul').notNull(),
+  actif:        boolean('actif').notNull().default(true),
+  ordre:        integer('ordre').notNull().default(0),
+})
+
 export const produitsPg = pgTable('produits', {
   id:             id(),
   ref:            text('ref').notNull().unique(),
   designation:    text('designation').notNull(),
   description:    text('description'),
-  categorie:      text('categorie').notNull(),
+  categorie:      text('categorie').notNull(), // legacy — conservé pour compatibilité, ne pas supprimer
+  categorieId:    uuid('categorie_id').references(() => produitCategoriesPg.id), // nouveau — nullable, migration progressive
   unite:          text('unite').notNull().default('unité'),
+  uniteFacturationId: uuid('unite_facturation_id').references(() => unitesFacturationPg.id), // nullable, remplace `unite` à terme
   stockActuel:    real('stock_actuel').notNull().default(0),
   stockMin:       real('stock_min').notNull().default(5),
   stockCritique:  real('stock_critique').notNull().default(2),
@@ -128,6 +172,40 @@ export const produitsPg = pgTable('produits', {
 
 export type ProduitPg       = typeof produitsPg.$inferSelect
 export type NouveauProduitPg = typeof produitsPg.$inferInsert
+
+// ── Fiches techniques (§14/§15 — profondeur de gamme, versionnées) ─────────
+// Liée au modèle (= une ligne `produits`). Une seule version 'active' à la fois
+// par produit (contrainte posée en SQL, pas exprimable proprement ici).
+
+export const ficheTechniquePg = pgTable('fiche_technique', {
+  id:          id(),
+  produitId:   uuid('produit_id').notNull().references(() => produitsPg.id),
+  version:     integer('version').notNull().default(1),
+  statut:      ficheTechniqueStatutEnum('statut').notNull().default('brouillon'),
+  modeCalcul:  modeCalculDevisEnum('mode_calcul').notNull(),
+  uniteFacturationId: uuid('unite_facturation_id').references(() => unitesFacturationPg.id),
+  notes:       text('notes'),
+  createdBy:   uuid('created_by').references(() => profilesPg.id),
+  createdAt:   ts('created_at'),
+  updatedAt:   ts('updated_at'),
+})
+
+export const ficheTechniqueRessourcesPg = pgTable('fiche_technique_ressources', {
+  id:                     id(),
+  ficheTechniqueId:       uuid('fiche_technique_id').notNull().references(() => ficheTechniquePg.id),
+  type:                   ressourceTypeEnum('type').notNull(),
+  ressourceProduitId:     uuid('ressource_produit_id').references(() => produitsPg.id),     // type = materiau
+  ressourceEquipementId:  uuid('ressource_equipement_id').references(() => equipementsPg.id), // type = equipement
+  designation:            text('designation').notNull(),
+  unite:                  text('unite').notNull(),
+  quantiteParUnite:       real('quantite_par_unite').notNull(), // ex : 4 kg d'acier par m²
+  coutUnitaireReferenceXaf: real('cout_unitaire_reference_xaf').notNull().default(0),
+  tempsReferenceH:        real('temps_reference_h'),
+  ordre:                  integer('ordre').notNull().default(0),
+  actif:                  boolean('actif').notNull().default(true),
+  createdAt:              ts('created_at'),
+  updatedAt:              ts('updated_at'),
+})
 
 export const mouvementsStockPg = pgTable('mouvements_stock', {
   id:         id(),
@@ -262,10 +340,17 @@ export const devisPg = pgTable('devis', {
   remiseGlobaleXaf:    real('remise_globale_xaf').default(0),
   remiseGlobaleMotif:  text('remise_globale_motif'),
   totalHtXaf:          real('total_ht_xaf').notNull().default(0),
-  tvaXaf:              real('tva_xaf').notNull().default(0),
-  totalTtcXaf:         real('total_ttc_xaf').notNull().default(0),
+  tvaXaf:              real('tva_xaf').notNull().default(0), // §19 — non appliqué au devis ; conservé pour compat, doit rester à 0 sur les nouveaux devis
+  totalTtcXaf:         real('total_ttc_xaf').notNull().default(0), // idem — la TVA se calcule désormais à la facture
   netAPayerXaf:        real('net_a_payer_xaf'),
   notes:               text('notes'),
+  // §32/§33 — traçabilité du canal d'origine, toutes provenances convergent vers `devis`
+  sourceDemande:       text('source_demande'), // 'web' | 'whatsapp' | 'telephone' | 'boutique' | 'bureau' | 'commercial' — libre, extensible
+  // §21 — snapshot figé au moment du calcul/validation : une fiche technique modifiée demain
+  // ne doit jamais changer un devis déjà émis.
+  ficheTechniqueId:    uuid('fiche_technique_id').references(() => ficheTechniquePg.id),
+  configSnapshot:      jsonb('config_snapshot'),      // dimensions/quantité/options saisies
+  ressourcesSnapshot:  jsonb('ressources_snapshot'),  // détail matériaux/MO/équipements calculés, figé
   createdBy:           uuid('created_by').references(() => profilesPg.id),
   createdAt:           ts('created_at'),
   updatedAt:           ts('updated_at'),
@@ -289,6 +374,17 @@ export const devisLignesPg = pgTable('devis_lignes', {
   remiseMotif:       text('remise_motif'),
   appliqueParId:     uuid('applique_par_id'),
   ordre:             integer('ordre').notNull().default(0),
+  // §11/§17 — configuration de la ligne (dimensions saisies) et formule utilisée pour le calcul,
+  // pour audit même si la fiche technique change ensuite
+  configuration:     jsonb('configuration'),
+  formuleUtilisee:   text('formule_utilisee'),
+  // §18 — calcul automatique + ajustement manuel, avec traçabilité (§39)
+  quantiteCalculee:    real('quantite_calculee'),
+  coutCalculeXaf:      real('cout_calcule_xaf'),
+  ajusteManuellement:  boolean('ajuste_manuellement').notNull().default(false),
+  ajusteParId:         uuid('ajuste_par_id').references(() => profilesPg.id),
+  ajusteLe:            tsN('ajuste_le'),
+  motifAjustement:     text('motif_ajustement'),
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -756,7 +852,12 @@ export const jobsProductionPg = pgTable('jobs_production', {
   id:                 id(),
   numero:             text('numero').notNull().unique(),
   commandeId:         uuid('commande_id').references(() => commandesPg.id),
+  typeJob:            text('type_job'),
+  produitId:          uuid('produit_id').references(() => produitsPg.id),
   produitDesignation: text('produit_designation').notNull(),
+  unite:              text('unite'),
+  quantitePrevue:     real('quantite_prevue'),
+  prixUnitaireXaf:    real('prix_unitaire_xaf'),
   machineId:          uuid('machine_id').references(() => machinesPg.id),
   machineNom:         text('machine_nom'),
   technicienId:       uuid('technicien_id').references(() => employesPg.id),
@@ -767,6 +868,8 @@ export const jobsProductionPg = pgTable('jobs_production', {
   dateFinPrevue:      tsN('date_fin_prevue'),
   dateFinReelle:      tsN('date_fin_reelle'),
   notes:              text('notes'),
+  // §27 — bill of materials figé, voir migration Phase 4 pour le détail
+  ressourcesBesoin:   jsonb('ressources_besoin'),
   createdBy:          uuid('created_by').references(() => profilesPg.id),
   createdAt:          ts('created_at'),
   updatedAt:          ts('updated_at'),
