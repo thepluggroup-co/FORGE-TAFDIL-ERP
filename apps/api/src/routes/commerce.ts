@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import { requirePermission } from '../middleware/permission.middleware'
+import { writeAuditLog } from '../services/rbacService'
 import { generateDevisPDF, uploadPDF } from '../services/pdf.service'
 import { localCreateDevis, localCreateCommande, getClientsLocal, getCommandesLocal } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
@@ -1088,6 +1089,26 @@ router.post('/devis', requirePermission('COMMERCIAL', 'CREATE'), zValidator('jso
       const { data: lignesData, error: lignesErr } = await db.from('devis_lignes').insert(lignes).select()
       if (lignesErr) { await db.from('devis').delete().eq('id', devisId); throw new Error(lignesErr.message) }
 
+      // §39 — audit métier : création du devis, et traçage individuel de
+      // chaque ligne ajustée manuellement (celle-ci porte déjà quantite_calculee
+      // vs quantite retenue + motif — l'audit log en garde une trace séparée,
+      // consultable même si la ligne est modifiée à nouveau plus tard).
+      writeAuditLog({
+        userId: user.id, actionType: 'DEVIS_CREATED', module: 'COMMERCIAL',
+        resourceType: 'devis', resourceId: devisId,
+        payloadAfter: { numero, total_ht_xaf: (devis as { total_ht_xaf: number }).total_ht_xaf, nb_lignes: lignes.length },
+      })
+      for (const l of lignes) {
+        if (l.ajuste_manuellement) {
+          writeAuditLog({
+            userId: user.id, actionType: 'DEVIS_LIGNE_AJUSTEE', module: 'COMMERCIAL',
+            resourceType: 'devis_ligne', resourceId: devisId,
+            payloadBefore: { quantite_calculee: l.quantite_calculee, cout_calcule_xaf: l.cout_calcule_xaf },
+            payloadAfter:  { quantite_retenue: l.quantite, prix_unitaire_retenu_xaf: l.prix_unitaire_ht_xaf, motif: l.motif_ajustement },
+          })
+        }
+      }
+
       let pdf_url: string | null = null
       try {
         const dv = devis as { total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number }
@@ -1130,7 +1151,7 @@ router.put('/devis/:id', requirePermission('COMMERCIAL', 'UPDATE'), zValidator('
 
   const { data: existing, error: existingError } = await db
     .from('devis')
-    .select('statut, client_id, client_nom')
+    .select('statut, client_id, client_nom, total_ht_xaf')
     .eq('id', id)
     .single()
 
@@ -1142,7 +1163,7 @@ router.put('/devis/:id', requirePermission('COMMERCIAL', 'UPDATE'), zValidator('
   }
   if (!existing) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
 
-  const existingDevis = existing as { statut: string; client_id: string | null; client_nom: string }
+  const existingDevis = existing as { statut: string; client_id: string | null; client_nom: string; total_ht_xaf: number }
   const currentStatut = existingDevis.statut
   // Bloquer modification si déjà transformé ou expiré/refusé définitif
   if (['transforme', 'expire'].includes(currentStatut)) {
@@ -1247,10 +1268,16 @@ router.put('/devis/:id', requirePermission('COMMERCIAL', 'UPDATE'), zValidator('
 
   if (error) return c.json({ error: error.message }, 400)
 
+  writeAuditLog({
+    userId: user.id, actionType: 'DEVIS_UPDATED', module: 'COMMERCIAL',
+    resourceType: 'devis', resourceId: id,
+    payloadBefore: { total_ht_xaf: existingDevis.total_ht_xaf, statut: currentStatut },
+    payloadAfter:  { total_ht_xaf: (data as { total_ht_xaf: number }).total_ht_xaf, statut: (data as { statut: string }).statut },
+  })
+
   if (lignes) {
     await db.from('devis_lignes').delete().eq('devis_id', id)
-    await db.from('devis_lignes').insert(
-      lignes.map((l, i) => ({
+    const nouvellesLignes = lignes.map((l, i) => ({
         devis_id:             id,
         produit_id:           l.produit_id ?? null,
         designation:          l.designation,
@@ -1265,8 +1292,30 @@ router.put('/devis/:id', requirePermission('COMMERCIAL', 'UPDATE'), zValidator('
         remise_xaf:           calculerRemiseLigne(l.quantite, l.prix_unitaire_ht_xaf, l.remise_type, l.remise_valeur),
         remise_motif:         l.remise_motif ?? null,
         ordre:                l.ordre !== undefined ? l.ordre : i,
-      })),
-    )
+        // §11/§17/§18 — mêmes champs additifs que POST /devis, oubliés dans
+        // une version antérieure de cette route : une édition perdait la
+        // provenance du calcul (configuration, formule, valeur calculée).
+        configuration:        l.configuration ?? null,
+        formule_utilisee:     l.formule_utilisee ?? null,
+        quantite_calculee:    l.quantite_calculee ?? null,
+        cout_calcule_xaf:     l.cout_calcule_xaf ?? null,
+        ajuste_manuellement:  l.ajuste_manuellement ?? false,
+        ajuste_par_id:        l.ajuste_manuellement ? user.id : null,
+        ajuste_le:            l.ajuste_manuellement ? new Date().toISOString() : null,
+        motif_ajustement:     l.motif_ajustement ?? null,
+    }))
+    await db.from('devis_lignes').insert(nouvellesLignes)
+
+    for (const l of nouvellesLignes) {
+      if (l.ajuste_manuellement) {
+        writeAuditLog({
+          userId: user.id, actionType: 'DEVIS_LIGNE_AJUSTEE', module: 'COMMERCIAL',
+          resourceType: 'devis_ligne', resourceId: id,
+          payloadBefore: { quantite_calculee: l.quantite_calculee, cout_calcule_xaf: l.cout_calcule_xaf },
+          payloadAfter:  { quantite_retenue: l.quantite, prix_unitaire_retenu_xaf: l.prix_unitaire_ht_xaf, motif: l.motif_ajustement },
+        })
+      }
+    }
   }
 
   return c.json(data)
@@ -1658,6 +1707,16 @@ publicDevisRouter.post('/devis/approuver/:token', async (c) => {
     updated_at:          new Date().toISOString(),
   }).eq('id', d.id)
 
+  // §39 — audit métier. Route publique non authentifiée : userId omis
+  // volontairement (rbac_audit_logs.user_id est nullable pour ce cas précis,
+  // "actions anonymes" selon son propre commentaire SQL).
+  writeAuditLog({
+    actionType: 'DEVIS_VALIDATION_CLIENT', module: 'COMMERCIAL',
+    resourceType: 'devis', resourceId: d.id,
+    payloadBefore: { statut: d.statut },
+    payloadAfter:  { statut: body.decision, commentaire: body.commentaire ?? null, decideur: 'client (lien public)' },
+  })
+
   const isAccepted = body.decision === 'accepte'
   const decisionDate = new Date().toLocaleString('fr-FR')
 
@@ -1921,6 +1980,15 @@ router.post('/devis/:id/transformer-commande', requirePermission('COMMERCIAL', '
   })
 
   await syncCreditForCommande(cmd.id, user.id)
+
+  // §39 — audit métier : conversion devis → commande, point sensible car
+  // irréversible (§23) et déjà protégé par le verrou atomique (§37, Phase 3).
+  writeAuditLog({
+    userId: user.id, actionType: 'DEVIS_CONVERTI_COMMANDE', module: 'COMMERCIAL',
+    resourceType: 'devis', resourceId: d.id,
+    payloadBefore: { devis_numero: d.numero, statut: currentStatut },
+    payloadAfter:  { commande_id: cmd.id, commande_numero: cmd.numero, total_ttc_xaf: d.total_ttc_xaf },
+  })
 
   return c.json({ commande, devis_numero: d.numero, commande_numero: cmd.numero }, 201)
 })

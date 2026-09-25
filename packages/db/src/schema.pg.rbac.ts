@@ -34,6 +34,8 @@ export const auditActionEnum = pgEnum('audit_action_type', [
   'ROLE_CHANGED', 'PERMISSION_CHANGED', 'SETTINGS_CHANGED',
   'LOGIN_SUCCESS', 'LOGIN_FAILED', 'LOGOUT', 'DATA_EXPORT',
   'PASSWORD_RESET', 'PASSWORD_CHANGED', 'SESSION_EXPIRED',
+  'DEVIS_CREATED', 'DEVIS_UPDATED', 'DEVIS_LIGNE_AJUSTEE',
+  'DEVIS_VALIDATION_CLIENT', 'DEVIS_CONVERTI_COMMANDE',
 ])
 
 // ── rbac_roles ────────────────────────────────────────────────────────────────
