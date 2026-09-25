@@ -2002,6 +2002,90 @@ router.get('/commandes', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   })
 })
 
+// §31 — Timeline unifiée devis → commande → production → livraison, alimentée
+// UNIQUEMENT par les événements réels déjà tracés ailleurs (historique_commandes,
+// jobs_production, factures, versements_factures, livraisons_historique). Aucun
+// nouveau statut parallèle : lecture seule, agrégation, rien n'est écrit ici.
+router.get('/commandes/:id/timeline', requirePermission('COMMERCIAL', 'READ'), async (c) => {
+  const { id } = c.req.param()
+
+  const { data: commande, error: cmdErr } = await db
+    .from('commandes')
+    .select('id, numero, devis_id, statut, statut_paiement, created_at')
+    .eq('id', id)
+    .maybeSingle()
+
+  if (cmdErr || !commande) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
+
+  type Evenement = { horodatage: string; etape: string; detail?: string | null; source: string }
+  const evenements: Evenement[] = []
+
+  const cmdRow = commande as { id: string; numero: string; devis_id: string | null; created_at: string }
+
+  if (cmdRow.devis_id) {
+    const { data: devis } = await db
+      .from('devis')
+      .select('numero, source_demande, statut, created_at, updated_at')
+      .eq('id', cmdRow.devis_id)
+      .maybeSingle()
+    if (devis) {
+      const d = devis as { numero: string; source_demande: string | null; created_at: string; updated_at: string }
+      evenements.push({
+        horodatage: d.created_at,
+        etape: 'Devis en préparation',
+        detail: `${d.numero}${d.source_demande ? ` — canal : ${d.source_demande}` : ''}`,
+        source: 'devis',
+      })
+      evenements.push({ horodatage: d.updated_at, etape: 'Devis validé / commande confirmée', detail: d.numero, source: 'devis' })
+    }
+  }
+
+  const { data: histo } = await db
+    .from('historique_commandes')
+    .select('ancien_statut, nouveau_statut, commentaire, created_at')
+    .eq('commande_id', id)
+    .order('created_at', { ascending: true })
+  for (const h of (histo ?? []) as Array<{ ancien_statut: string | null; nouveau_statut: string; commentaire: string | null; created_at: string }>) {
+    evenements.push({ horodatage: h.created_at, etape: `Commande : ${h.ancien_statut ?? '—'} → ${h.nouveau_statut}`, detail: h.commentaire, source: 'commande' })
+  }
+
+  const { data: factures } = await db
+    .from('factures')
+    .select('numero, statut, created_at, versements_factures(montant_xaf, date_versement, mode_paiement)')
+    .eq('commande_id', id)
+  for (const f of (factures ?? []) as Array<{ numero: string; statut: string; created_at: string; versements_factures: Array<{ montant_xaf: number; date_versement: string; mode_paiement: string | null }> }>) {
+    evenements.push({ horodatage: f.created_at, etape: 'Facture émise', detail: `${f.numero} (${f.statut})`, source: 'facture' })
+    for (const v of f.versements_factures ?? []) {
+      evenements.push({ horodatage: v.date_versement, etape: 'Acompte / paiement reçu', detail: `${v.montant_xaf} XAF${v.mode_paiement ? ` — ${v.mode_paiement}` : ''}`, source: 'paiement' })
+    }
+  }
+
+  const { data: jobs } = await db
+    .from('jobs_production')
+    .select('numero, statut, avancement_pct, date_debut, date_fin_reelle, produit_designation')
+    .eq('commande_id', id)
+    .order('created_at', { ascending: true })
+  for (const j of (jobs ?? []) as Array<{ numero: string; statut: string; avancement_pct: number; date_debut: string | null; date_fin_reelle: string | null; produit_designation: string }> ) {
+    if (j.date_debut) evenements.push({ horodatage: j.date_debut, etape: 'Production lancée', detail: `${j.numero} — ${j.produit_designation}`, source: 'production' })
+    if (j.date_fin_reelle) evenements.push({ horodatage: j.date_fin_reelle, etape: 'Production terminée', detail: j.numero, source: 'production' })
+    else if (j.statut === 'in_production') evenements.push({ horodatage: j.date_debut ?? cmdRow.created_at, etape: 'Production en cours', detail: `${j.numero} (${j.avancement_pct}%)`, source: 'production' })
+  }
+
+  const { data: livraisons } = await db
+    .from('livraisons')
+    .select('numero, date_depart, date_livraison_prevue, date_livraison_reelle, livraisons_historique(nouveau_statut, commentaire, changed_at)')
+    .eq('commande_id', id)
+  for (const l of (livraisons ?? []) as Array<{ numero: string; date_depart: string | null; date_livraison_reelle: string | null; livraisons_historique: Array<{ nouveau_statut: string; commentaire: string | null; changed_at: string }> }>) {
+    for (const h of l.livraisons_historique ?? []) {
+      evenements.push({ horodatage: h.changed_at, etape: `Livraison : ${h.nouveau_statut}`, detail: `${l.numero}${h.commentaire ? ` — ${h.commentaire}` : ''}`, source: 'livraison' })
+    }
+  }
+
+  evenements.sort((a, b) => new Date(a.horodatage).getTime() - new Date(b.horodatage).getTime())
+
+  return c.json({ commande_id: id, commande_numero: cmdRow.numero, evenements })
+})
+
 router.get('/commandes/:id', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { id } = c.req.param()
 
