@@ -38,6 +38,12 @@ export const AUDIT_ACTIONS = [
   'ROLE_CHANGED', 'PERMISSION_CHANGED', 'SETTINGS_CHANGED',
   'LOGIN_SUCCESS', 'LOGIN_FAILED', 'LOGOUT', 'DATA_EXPORT',
   'PASSWORD_RESET', 'PASSWORD_CHANGED', 'SESSION_EXPIRED',
+  // §39 Master Prompt V3 — traçabilité métier devis (prix, quantités, ajustements,
+  // validation, conversion commande). Le reste de la table est un audit
+  // sécurité/accès ; celles-ci en font un audit métier — même table, même
+  // format, réutilisée plutôt que dupliquée (principe §4.1 du brief).
+  'DEVIS_CREATED', 'DEVIS_UPDATED', 'DEVIS_LIGNE_AJUSTEE',
+  'DEVIS_VALIDATION_CLIENT', 'DEVIS_CONVERTI_COMMANDE',
 ] as const
 
 export type AuditActionType = typeof AUDIT_ACTIONS[number]
