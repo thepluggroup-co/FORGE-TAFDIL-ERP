@@ -97,6 +97,15 @@ function asLivreur(userId = LIVREUR_ID) {
 
 describe('T03 — POST /api/logistique/livraisons/:id/signature', () => {
   beforeEach(() => {
+    // RBAC : aucun de ces tests n'exerce un refus de permission (les rejets
+    // testés ici — FORBIDDEN_NOT_OWN_LIVRAISON, INVALID_STATE — sont des
+    // règles métier internes à la route, après le middleware RBAC). Sans
+    // ce mockResolvedValue, checkPermission() (un vi.fn() sans retour
+    // configuré) résout `undefined`, et permission.middleware.ts plante sur
+    // `result.allowed` → 500 systématique. Diagnostiqué le 26/09/2026,
+    // voir docs/DETTE-TESTS-2026-09-26.md.
+    vi.mocked(checkPermission).mockResolvedValue({ allowed: true, roleName: 'livreur' })
+
     // Restaurer le comportement par défaut du mock (réinitialiser la file des
     // mockReturnValueOnce du test précédent)
     vi.mocked(supabase.from).mockReset()

@@ -4,7 +4,7 @@ import {
   Plus, Trash2, MessageCircle, Mail, ArrowRightLeft, Send,
   FileText, Loader2, Check, X, ChevronLeft, ChevronRight,
   Edit2, Eye, Clock, AlertTriangle, Link, CheckCircle, OctagonX,
-  ShieldCheck,
+  ShieldCheck, Settings2,
 } from 'lucide-react'
 import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
@@ -19,9 +19,10 @@ import { apiClient } from '@/lib/api-client'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/context/AuthContext'
 import { usePermissions } from '@/hooks/useRbac'
-import type { Devis as DevisApi, DevisLigne, CreateDevisPayload } from '@/hooks/useDevis'
+import type { Devis as DevisApi, DevisLigne, CreateDevisPayload, PropositionDevis } from '@/hooks/useDevis'
 import type { Client } from '@/hooks/useClients'
 import { DevisPreview } from '@/components/devis/DevisPreview'
+import { Configurateur } from '@/components/devis/Configurateur'
 import { useProduitsShop, type ProduitShopErp } from '@/hooks/useProduitsShop'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -47,7 +48,24 @@ const STATUT_COLORS: Record<string, { bg: string; text: string }> = {
 interface LocalLigne {
   id: string; produitId?: string; designation: string; categorie: Categorie
   quantite: number; prixUnitaire: number; unite: string
+  // §11/§17/§18 — renseignés uniquement quand la ligne provient du Configurateur (calcul automatique)
+  configuration?: Record<string, unknown>
+  formuleUtilisee?: string
+  ficheTechniqueId?: string
+  quantiteCalculee?: number
+  coutCalculeXaf?: number
+  ajusteManuellement?: boolean
+  motifAjustement?: string
 }
+
+const CANAUX = [
+  { value: 'web',        label: 'Plateforme web' },
+  { value: 'whatsapp',   label: 'WhatsApp' },
+  { value: 'telephone',  label: 'Téléphone' },
+  { value: 'boutique',   label: 'Boutique' },
+  { value: 'bureau',     label: 'Bureau (visite directe)' },
+  { value: 'commercial', label: 'Commercial terrain' },
+]
 
 function calcTotals(lignes: LocalLigne[]) {
   const totalHT = lignes.reduce((s, l) => s + l.quantite * l.prixUnitaire, 0)
@@ -383,11 +401,12 @@ const CAT_LABELS: Record<Categorie, string> = { materiaux: 'Matériaux', 'main-o
 
 interface FormState {
   clientId: string; clientNom: string; clientTel: string; clientEmail: string
+  sourceDemande: string
   lignes: LocalLigne[]; validite: 15 | 30 | 45; acompte: number; conditionPaiementId: string; notes: string
 }
 
 const DEFAULT_FORM: FormState = {
-  clientId: '', clientNom: '', clientTel: '', clientEmail: '',
+  clientId: '', clientNom: '', clientTel: '', clientEmail: '', sourceDemande: 'web',
   lignes: [newLine()], validite: 30, acompte: 30,
   conditionPaiementId: '', notes: '',
 }
@@ -459,6 +478,7 @@ function DevisFormPanel({
       clientNom:          cli.nom ?? '',
       clientTel:          cli.telephone ?? '',
       clientEmail:        cli.email ?? '',
+      sourceDemande:      (editingDevis.source_demande as string | null) ?? 'web',
       lignes:             lignesExist.length > 0 ? lignesExist : [newLine()],
       validite:           (editingDevis.validite_jours as 15 | 30 | 45) ?? 30,
       acompte:            (editingDevis.acompte_pct as number) ?? 30,
@@ -467,8 +487,44 @@ function DevisFormPanel({
     }
   })
 
+  // Configurateur (§40) — modal ouverte pour la ligne en cours de configuration
+  const [configuringLineId, setConfiguringLineId] = useState<string | null>(null)
+
   const updateLine = (id: string, field: keyof LocalLigne, value: string | number | Categorie) =>
-    setForm((f) => ({ ...f, lignes: f.lignes.map((l) => l.id === id ? { ...l, [field]: value } : l) }))
+    setForm((f) => ({
+      ...f,
+      lignes: f.lignes.map((l) => {
+        if (l.id !== id) return l
+        const next = { ...l, [field]: value }
+        // §18 — modifier quantité/prix après un calcul automatique = ajustement manuel,
+        // traçable et motivé (la valeur calculée d'origine, elle, reste inchangée).
+        if ((field === 'quantite' || field === 'prixUnitaire') && l.quantiteCalculee !== undefined) {
+          next.ajusteManuellement = true
+        }
+        return next
+      }),
+    }))
+
+  const applyConfigurateur = (lineId: string, proposition: PropositionDevis) => {
+    setForm((f) => ({
+      ...f,
+      lignes: f.lignes.map((l) => l.id !== lineId ? l : {
+        ...l,
+        quantite:            proposition.quantiteFacturable,
+        prixUnitaire:        proposition.quantiteFacturable > 0
+          ? Math.round(proposition.totalHtXaf / proposition.quantiteFacturable)
+          : proposition.totalHtXaf,
+        configuration:       proposition.configSnapshot,
+        formuleUtilisee:     proposition.formuleUtilisee,
+        ficheTechniqueId:    proposition.ficheTechniqueId,
+        quantiteCalculee:    proposition.quantiteFacturable,
+        coutCalculeXaf:      proposition.totalHtXaf,
+        ajusteManuellement:  false,
+        motifAjustement:     undefined,
+      }),
+    }))
+    toast.success('Calcul appliqué à la ligne')
+  }
 
   const categorieFromProduit = (produit: ProduitShopErp): Categorie => {
     if (produit.categorie === 'main_oeuvre') return 'main-oeuvre'
@@ -497,9 +553,12 @@ function DevisFormPanel({
 
   const { totalHT, tva, totalTTC } = calcTotals(form.lignes)
 
+  // §18 — un ajustement manuel après calcul automatique doit être motivé
+  const ajustementsSansMotif = form.lignes.some((l) => l.ajusteManuellement && !l.motifAjustement?.trim())
+
   const stepValid = [
     form.clientNom.trim() !== '',
-    form.lignes.some((l) => l.designation && l.prixUnitaire > 0),
+    form.lignes.some((l) => l.designation && l.prixUnitaire > 0) && !ajustementsSansMotif,
     form.conditionPaiementId.trim() !== '',
     form.conditionPaiementId.trim() !== '',
   ][step] ?? true
@@ -514,6 +573,14 @@ function DevisFormPanel({
     const today    = new Date().toISOString().slice(0, 10)
     const dateValid = addDays(today, form.validite)
 
+    const lignesRetenues = form.lignes.filter((l) => l.designation && l.prixUnitaire > 0)
+    const lignesCalculees = lignesRetenues.filter((l) => l.quantiteCalculee !== undefined)
+    // §21 — snapshot devis figé uniquement quand le devis ne repose que sur UN SEUL
+    // calcul automatique : le cas courant "un devis = un modèle configuré" du brief.
+    // Un devis multi-lignes garde sa traçabilité complète au niveau de chaque ligne
+    // (configuration/formule_utilisee/quantite_calculee/cout_calcule_xaf ci-dessous).
+    const snapshotUnique = lignesCalculees.length === 1 ? lignesCalculees[0] : null
+
     const payload: CreateDevisPayload = {
       client_id:           form.clientId || undefined,
       client_nom:          form.clientNom.trim(),
@@ -525,17 +592,24 @@ function DevisFormPanel({
       acompte_pct:           form.acompte,
       condition_paiement_id: form.conditionPaiementId,
       notes:               form.notes || undefined,
-      lignes: form.lignes
-        .filter((l) => l.designation && l.prixUnitaire > 0)
-        .map((l, i) => ({
-          produit_id:           l.produitId || undefined,
-          designation:          l.designation,
-          categorie:            mapCategorie(l.categorie),
-          unite:                l.unite || 'unité',
-          quantite:             l.quantite,
-          prix_unitaire_ht_xaf: l.prixUnitaire,
-          ordre:                i,
-        })),
+      source_demande:      form.sourceDemande || undefined,
+      fiche_technique_id:  snapshotUnique?.ficheTechniqueId,
+      config_snapshot:     snapshotUnique?.configuration,
+      lignes: lignesRetenues.map((l, i) => ({
+        produit_id:           l.produitId || undefined,
+        designation:          l.designation,
+        categorie:            mapCategorie(l.categorie),
+        unite:                l.unite || 'unité',
+        quantite:             l.quantite,
+        prix_unitaire_ht_xaf: l.prixUnitaire,
+        ordre:                i,
+        configuration:        l.configuration,
+        formule_utilisee:     l.formuleUtilisee,
+        quantite_calculee:    l.quantiteCalculee,
+        cout_calcule_xaf:     l.coutCalculeXaf,
+        ajuste_manuellement:  l.ajusteManuellement,
+        motif_ajustement:     l.motifAjustement,
+      })),
     }
 
     if (editingDevis) {
@@ -551,6 +625,7 @@ function DevisFormPanel({
     : (created ? 'Devis créé !' : 'Nouveau devis')
 
   return (
+    <>
     <SlideOver isOpen={true} onClose={onClose} title={title} width="xl">
       {created ? (
         /* ── Écran succès création ── */
@@ -640,6 +715,13 @@ function DevisFormPanel({
                         className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
                     </div>
                   </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Canal de la demande</label>
+                    <select value={form.sourceDemande} onChange={(e) => setForm((f) => ({ ...f, sourceDemande: e.target.value }))}
+                      className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
+                      {CANAUX.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                    </select>
+                  </div>
                 </div>
               )}
 
@@ -648,21 +730,48 @@ function DevisFormPanel({
                 <div className="space-y-3">
                   {form.lignes.map((ligne) => (
                     <div key={ligne.id} className="border border-gray-100 bg-gray-50 rounded-xl p-3 space-y-2">
-                      <div>
-                        <label className="block text-[10px] text-gray-400 mb-0.5">Produit catalogue</label>
-                        <select
-                          value={ligne.produitId ?? ''}
-                          onChange={(e) => applyProduitToLine(ligne.id, e.target.value)}
-                          className="w-full px-2.5 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-                        >
-                          <option value="">Saisie libre / aucun produit</option>
-                          {produitsCatalogue.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.ref ? `${p.ref} - ` : ''}{p.nom} - {p.unite || 'unité'} - stock {p.stock_actuel}
-                            </option>
-                          ))}
-                        </select>
+                      <div className="flex gap-2 items-end">
+                        <div className="flex-1">
+                          <label className="block text-[10px] text-gray-400 mb-0.5">Produit catalogue</label>
+                          <select
+                            value={ligne.produitId ?? ''}
+                            onChange={(e) => applyProduitToLine(ligne.id, e.target.value)}
+                            className="w-full px-2.5 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                          >
+                            <option value="">Saisie libre / aucun produit</option>
+                            {produitsCatalogue.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.ref ? `${p.ref} - ` : ''}{p.nom} - {p.unite || 'unité'} - stock {p.stock_actuel}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        {ligne.produitId && (
+                          <button type="button" onClick={() => setConfiguringLineId(ligne.id)}
+                            title="Calcul automatique (dimensions → fiche technique)"
+                            className="flex items-center gap-1 px-2.5 py-2 text-xs font-medium rounded-lg border transition-colors"
+                            style={{ borderColor: '#C62828', color: '#C62828' }}>
+                            <Settings2 className="h-3.5 w-3.5" /> Configurer
+                          </button>
+                        )}
                       </div>
+                      {ligne.quantiteCalculee !== undefined && (
+                        <div className={`flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-lg ${ligne.ajusteManuellement ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
+                          <Check className="h-3 w-3 shrink-0" />
+                          {ligne.ajusteManuellement
+                            ? `Calculé automatiquement (${ligne.quantiteCalculee} ${ligne.unite}) puis ajusté manuellement`
+                            : `Calculé automatiquement — ${ligne.formuleUtilisee}`}
+                        </div>
+                      )}
+                      {ligne.ajusteManuellement && (
+                        <input value={ligne.motifAjustement ?? ''}
+                          onChange={(e) => setForm((f) => ({
+                            ...f,
+                            lignes: f.lignes.map((l) => l.id === ligne.id ? { ...l, motifAjustement: e.target.value } : l),
+                          }))}
+                          placeholder="Motif de l'ajustement (obligatoire) *"
+                          className="w-full px-2.5 py-2 text-xs border border-amber-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-amber-400" />
+                      )}
                       <div className="flex gap-2">
                         <input value={ligne.designation}
                           onChange={(e) => setForm((f) => ({
@@ -802,6 +911,20 @@ function DevisFormPanel({
         </>
       )}
     </SlideOver>
+    {configuringLineId && (() => {
+      const ligneEnCours = form.lignes.find((l) => l.id === configuringLineId)
+      const produitEnCours = produitsCatalogue.find((p) => p.id === ligneEnCours?.produitId)
+      if (!produitEnCours) return null
+      return (
+        <Configurateur
+          isOpen={true}
+          onClose={() => setConfiguringLineId(null)}
+          produit={produitEnCours}
+          onApply={(proposition) => applyConfigurateur(configuringLineId, proposition)}
+        />
+      )
+    })()}
+    </>
   )
 }
 

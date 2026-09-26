@@ -9,11 +9,20 @@ n'est pas un effet de bord de cette phase, la dette existait déjà.
 
 ## Progrès de cette session
 
-**132 → 69 échecs (297 → 360 / 429 tests verts).** Commit `dff1ba2` sur
-`main`. Fichiers entièrement réparés (0 échec, vérifié) :
-`rapports.test.ts`, `auth.test.ts`, `05-inventaire.test.ts`,
-`01-antisurstock.test.ts`, `livraison-signature.test.ts`, et
-`paiements.test.ts`.
+**132 → 66 échecs (297 → 367 / 433 tests verts).** Fichiers entièrement
+réparés (0 échec, vérifié) : `rapports.test.ts`, `auth.test.ts`,
+`05-inventaire.test.ts`, `01-antisurstock.test.ts`, `paiements.test.ts`
+(commit `dff1ba2`), et `livraison-signature.test.ts` (commit ultérieur —
+voir correction ci-dessous).
+
+**Correction du 26/09 (soir)** : ce document affirmait plus tôt dans la
+session que `livraison-signature.test.ts` était entièrement réparé. C'était
+faux — 3 tests sur 6 échouaient encore (500 au lieu du code attendu),
+pour la raison exposée plus bas (`checkPermission` mocké mais jamais
+configuré). Rectifié ici plutôt que laissé tel quel, conformément à la
+consigne de ne jamais présenter un correctif comme acquis sans l'avoir
+revérifié. Le fichier est maintenant réellement 6/6 vert (fix appliqué,
+voir section suivante).
 
 ## Cause dominante identifiée : RBAC non mocké
 
@@ -106,7 +115,28 @@ bien un retour** — voir la note ajoutée à `livraison-signature.test.ts`
 ci-dessous) plutôt que de dépendre du fallback RBAC réel dont
 `commerce.test.ts` dépend pour ses tests déjà verts.
 
-## Fichiers encore en échec (69 tests, 14 fichiers) — au 26/09/2026
+## Fix mécanique — `livraison-signature.test.ts` (3 → 0 échec)
+
+Cause : `checkPermission` était mocké (`vi.fn()`) mais **jamais configuré**
+avec un retour. `await checkPermission(...)` résolvait donc `undefined`, et
+`permission.middleware.ts` plantait sur `result.allowed` → 500 sur les 3
+tests qui passent par une route protégée sans que le test lui-même ne pose
+de mock RBAC explicite (S3, S5, S6).
+
+Fix (un seul ajout, dans le `beforeEach` global du fichier) :
+
+```ts
+vi.mocked(checkPermission).mockResolvedValue({ allowed: true, roleName: 'livreur' })
+```
+
+Aucun de ces tests n'exerce un refus RBAC (les rejets testés —
+`FORBIDDEN_NOT_OWN_LIVRAISON`, `INVALID_STATE` — sont des règles métier
+internes à la route, après le middleware), donc un `allowed: true`
+systématique en `beforeEach` suffit ; pas besoin de `mockResolvedValueOnce`
+par test. Vérifié : 6/6 verts après le fix, aucune régression sur le reste
+de la suite (69 → 66 échecs, 364 → 367 verts).
+
+## Fichiers encore en échec (66 tests, 13 fichiers) — au 26/09/2026
 
 | Fichier | Échecs | Nature (à vérifier au cas par cas) |
 |---|---|---|
@@ -119,11 +149,55 @@ ci-dessous) plutôt que de dépendre du fallback RBAC réel dont
 | `rh.test.ts` | 4 | RBAC non fait |
 | `03-pipeline-commande.test.ts` | 4 | RBAC non fait |
 | `bons.test.ts` | 3 | RBAC partiellement fait — reste probablement lié à la garde préparation ci-dessus |
-| `livraison-signature.test.ts` | 3 | RBAC mocké mais jamais configuré : `checkPermission` est un `vi.fn()` sans `mockResolvedValue`, donc `await checkPermission(...)` résout `undefined` et `permission.middleware.ts` plante sur `result.allowed` (500 au lieu du code attendu). Diagnostiqué le 26/09 en écrivant `phase6-devis-commande.test.ts` : le fix est d'ajouter `vi.mocked(checkPermission).mockResolvedValue({ allowed: true, roleName: '<rôle>' })` (ou `mockResolvedValueOnce` par requête si un test attend un refus). Non corrigé ici pour rester dans le périmètre Phase 6 — fix mécanique, à faire au prochain passage. |
 | `stocks.test.ts` | 2 | RBAC partiellement fait |
 | `inviteRedirect.test.ts` | 2 | Non diagnostiqué |
 | `02-workflow-bon.test.ts` | 2 | RBAC non fait |
 | `shop.test.ts` | 1 | Non diagnostiqué |
+
+## Phase 6 — UI Configurateur Produit (§40) + canal de la demande (§32/§41.A)
+
+Le moteur de calcul (`POST /devis/calculate`, §13/§35) était complet côté
+API depuis une phase précédente mais **n'était appelé par aucune
+interface** — aucun écran ne permettait de saisir des dimensions et de
+déclencher un calcul automatique. Ajouté :
+
+- `apps/web/src/hooks/useDevis.ts` : hook `useCalculerDevis()` +
+  types `CalculerDevisInput`/`PropositionDevis` (typage 1:1 du contrat
+  retourné par la route), et extension de `CreateDevisPayload` avec les
+  champs déjà supportés côté API mais jusqu'ici jamais envoyés par l'UI :
+  `source_demande`, `fiche_technique_id`, `config_snapshot`,
+  et par ligne `configuration`/`formule_utilisee`/`quantite_calculee`/
+  `cout_calcule_xaf`/`ajuste_manuellement`/`motif_ajustement`.
+- `apps/web/src/components/devis/Configurateur.tsx` : modale §40 —
+  dimensions → quantité → Calculer → quantité facturable + montant brut +
+  détail technique (matériaux/main-d'œuvre/équipements) dépliable. Gère
+  explicitement le cas `FICHE_TECHNIQUE_INTROUVABLE` (422) comme une
+  invitation à la saisie manuelle (§46), pas comme une erreur.
+- `apps/web/src/pages/Devis.tsx` : bouton "Configurer" par ligne (visible
+  dès qu'un produit du catalogue est sélectionné) qui ouvre la modale et,
+  au clic sur "Appliquer", renseigne quantité/prix unitaire ET les champs
+  de traçabilité de la ligne. Ajout aussi d'un sélecteur **Canal de la
+  demande** (§32/§41.A : web/whatsapp/téléphone/boutique/bureau/commercial)
+  à l'étape Client, absent jusqu'ici de l'écran alors que l'API le
+  supportait déjà (voir Tests 17/18 ci-dessus). Ajout du §18 (ajustement
+  manuel) : modifier quantité/prix après un calcul automatique marque la
+  ligne `ajuste_manuellement` et exige un motif avant de pouvoir valider.
+
+**Portée volontairement limitée** — honnêteté sur ce qui n'est PAS fait :
+ceci couvre le Configurateur (§40) et une partie de l'écran Admin Devis
+(§41.A — canal ; §41.F — ajustement manuel). Ça ne couvre PAS §41 dans son
+ensemble : pas de navigation Famille→Catégorie→Modèle (aucune API
+`GET /products/:id/configuration` ni de CRUD familles/catégories n'existe
+encore côté backend — seul `POST /devis/calculate` avec un `produitId`
+déjà connu existe), pas de refonte visuelle des sections B/C/D/E de
+l'écran (produit/configuration/calcul/ressources affichés en un bloc
+plutôt qu'en sections distinctes), pas de vue client simplifiée (§42). Le
+snapshot devis figé (`fiche_technique_id`/`config_snapshot`) n'est envoyé
+que quand le devis ne contient qu'UNE ligne calculée — un devis
+multi-lignes garde sa traçabilité complète au niveau de chaque ligne mais
+pas au niveau du snapshot devis (limitation du schéma existant, pas
+contournée ici). Vérifié : `tsc --noEmit` et `vite build` passent sans
+nouvelle erreur (comparé à la baseline avant ce changement).
 
 ## Comment reprendre
 

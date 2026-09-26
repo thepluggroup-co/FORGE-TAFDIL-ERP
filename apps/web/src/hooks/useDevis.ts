@@ -53,11 +53,76 @@ export interface CreateDevisPayload {
   acompte_pct: number
   condition_paiement_id: string
   notes?: string
+  // §32 — canal d'origine de la demande (web, whatsapp, telephone, boutique, bureau, commercial…)
+  source_demande?: string
+  // §21 — snapshot figé, renseigné uniquement quand le devis dérive d'un unique
+  // calcul automatique (Configurateur, §40) : évite qu'une évolution future de la
+  // fiche technique ne modifie rétroactivement ce devis.
+  fiche_technique_id?: string
+  config_snapshot?: Record<string, unknown>
+  ressources_snapshot?: Record<string, unknown>
   lignes: Array<{
     produit_id?: string
     designation: string; categorie: string; unite: string
     quantite: number; prix_unitaire_ht_xaf: number; ordre: number; description?: string
+    // §11/§17/§18 — traçabilité du calcul automatique (Configurateur), quand la ligne en dérive
+    configuration?: Record<string, unknown>
+    formule_utilisee?: string
+    quantite_calculee?: number
+    cout_calcule_xaf?: number
+    ajuste_manuellement?: boolean
+    motif_ajustement?: string
   }>
+}
+
+// ── Configurateur (§40) — calcul automatique via la fiche technique active ─────
+
+export interface DimensionsInput {
+  largeur?: number; hauteur?: number; longueur?: number
+  epaisseur?: number; diametre?: number; poids?: number
+  surface?: number; volume?: number
+}
+
+export interface CalculerDevisInput {
+  produitId: string
+  quantite: number
+  dimensions?: DimensionsInput
+  options?: Record<string, unknown>
+}
+
+export interface RessourceCalculee {
+  ressourceId: string
+  type: 'materiau' | 'main_oeuvre' | 'equipement'
+  designation: string
+  unite: string
+  quantiteCalculee: number
+  coutUnitaireXaf: number
+  totalXaf: number
+  tempsCalculeH?: number
+}
+
+export interface PropositionDevis {
+  ficheTechniqueId: string
+  produitId: string
+  modeCalcul: string
+  quantiteFacturable: number
+  formuleUtilisee: string
+  configSnapshot: { dimensions?: DimensionsInput; quantite: number; options?: Record<string, unknown> }
+  lignes: RessourceCalculee[]
+  totalMateriauxXaf: number
+  totalMainOeuvreXaf: number
+  totalEquipementsXaf: number
+  totalHtXaf: number
+}
+
+export function useCalculerDevis() {
+  return useMutation({
+    mutationFn: (input: CalculerDevisInput) =>
+      apiClient.post<PropositionDevis>('/api/devis/calculate', input),
+    // Pas de toast d'erreur global ici : le Configurateur affiche l'erreur
+    // inline (ex. "Aucune fiche technique active" n'est pas une erreur réseau,
+    // c'est une invitation à basculer en saisie manuelle — §46).
+  })
 }
 
 interface DevisResponse { data: Devis[]; total: number }
