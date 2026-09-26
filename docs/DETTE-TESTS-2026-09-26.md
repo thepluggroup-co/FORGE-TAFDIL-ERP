@@ -77,6 +77,35 @@ toucher au reste. Changé d'avis en cours de route, reverté avant commit —
 `commerce.test.ts` reste donc à l'état documenté ci-dessous (8 échecs),
 non aggravé.
 
+## Phase 6 — §47 Test 11 et Tests 17/18 (nouveau fichier, isolé)
+
+Ajouté `apps/api/src/__tests__/phase6-devis-commande.test.ts` (4 tests, 4/4
+verts, n'affecte aucun des 69 échecs ci-dessous — total suite : 429 → 433
+tests, 360 → 364 verts) :
+
+- **Test 11 (§37)** : simule la course entre deux conversions concurrentes
+  du même devis. Le SELECT initial résout `statut: 'accepte'` (passe les
+  gardes), puis l'UPDATE-claim (`.in('statut', [...]).select('id').maybeSingle()`)
+  résout `{ data: null, error: null }` — exactement ce que renverrait
+  Supabase si une autre requête avait déjà gagné la course. Vérifie 409
+  `ALREADY_TRANSFORMED` ET qu'aucune commande n'est insérée
+  (`expect(supabase.from).toHaveBeenCalledTimes(3)`, donc pas d'appel
+  `commandes`/`commandes_lignes` supplémentaire). Un second test couvre le
+  cas nominal (verrou réclamé avec succès → 201) pour éviter un test qui ne
+  vérifierait qu'un chemin d'échec.
+- **Tests 17/18 (source_demande)** : POST /devis avec un client connecté
+  (`client_id` renseigné) et avec un client hors plateforme (`client_id`
+  absent, juste `client_nom` + `source_demande: 'whatsapp'`) — vérifie dans
+  les deux cas que le payload d'INSERT porte bien `source_demande` et que la
+  réponse le reflète.
+
+Fichier volontairement isolé de `commerce.test.ts` : il mocke
+`rbacService.checkPermission` et `client-sync.service.ensureClient`
+directement (comme `livraison-signature.test.ts`, mais **en configurant
+bien un retour** — voir la note ajoutée à `livraison-signature.test.ts`
+ci-dessous) plutôt que de dépendre du fallback RBAC réel dont
+`commerce.test.ts` dépend pour ses tests déjà verts.
+
 ## Fichiers encore en échec (69 tests, 14 fichiers) — au 26/09/2026
 
 | Fichier | Échecs | Nature (à vérifier au cas par cas) |
@@ -90,7 +119,7 @@ non aggravé.
 | `rh.test.ts` | 4 | RBAC non fait |
 | `03-pipeline-commande.test.ts` | 4 | RBAC non fait |
 | `bons.test.ts` | 3 | RBAC partiellement fait — reste probablement lié à la garde préparation ci-dessus |
-| `livraison-signature.test.ts` | 3 | RBAC déjà mocké — cause restante non diagnostiquée |
+| `livraison-signature.test.ts` | 3 | RBAC mocké mais jamais configuré : `checkPermission` est un `vi.fn()` sans `mockResolvedValue`, donc `await checkPermission(...)` résout `undefined` et `permission.middleware.ts` plante sur `result.allowed` (500 au lieu du code attendu). Diagnostiqué le 26/09 en écrivant `phase6-devis-commande.test.ts` : le fix est d'ajouter `vi.mocked(checkPermission).mockResolvedValue({ allowed: true, roleName: '<rôle>' })` (ou `mockResolvedValueOnce` par requête si un test attend un refus). Non corrigé ici pour rester dans le périmètre Phase 6 — fix mécanique, à faire au prochain passage. |
 | `stocks.test.ts` | 2 | RBAC partiellement fait |
 | `inviteRedirect.test.ts` | 2 | Non diagnostiqué |
 | `02-workflow-bon.test.ts` | 2 | RBAC non fait |
