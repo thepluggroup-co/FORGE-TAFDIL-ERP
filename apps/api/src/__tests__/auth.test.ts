@@ -10,6 +10,12 @@ import { describe, it, expect, vi } from 'vitest'
 import jwt from 'jsonwebtoken'
 import { TEST_JWT_SECRET } from './helpers'
 
+vi.mock('../services/rbacService', () => ({
+  checkPermission:           vi.fn(),
+  writeAuditLog:             vi.fn(),
+  invalidatePermissionCache: vi.fn(),
+}))
+
 vi.mock('@forge/db/supabase', () => {
   // Chaîne sûre par défaut — ne crashe jamais, retourne data=[] sans erreur
   const safeChain = () => {
@@ -39,6 +45,7 @@ vi.mock('@forge/db/supabase', () => {
 })
 
 import app from '../app'
+import { checkPermission } from '../services/rbacService'
 
 // Route protégée : POST /api/stocks/:id/mouvement (requireRole operateur+)
 const PROTECTED_POST = '/api/stocks/some-id/mouvement'
@@ -239,6 +246,8 @@ describe('Test 11 — Rôle insuffisant → 403 FORBIDDEN', () => {
       TEST_JWT_SECRET,
       { expiresIn: '1h' },
     )
+
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' } as never)
 
     const res = await app.request('/api/stocks', {
       method:  'GET',

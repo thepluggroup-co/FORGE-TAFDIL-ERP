@@ -10,6 +10,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mkChain, authHeaders } from './helpers'
 
+vi.mock('../services/rbacService', () => ({
+  checkPermission:           vi.fn().mockResolvedValue({ allowed: false, roleName: 'COMMERCIAL' }),
+  writeAuditLog:             vi.fn(),
+  invalidatePermissionCache: vi.fn(),
+}))
+
 vi.mock('@forge/db/supabase', () => {
   // Chaîne sûre par défaut — ne crashe jamais, retourne data=[] sans erreur
   const safeChain = () => {
@@ -40,6 +46,7 @@ vi.mock('@forge/db/supabase', () => {
 
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
+import { checkPermission } from '../services/rbacService'
 
 // ── Fixtures : 20 produits avec statuts variés ─────────────────────────────────
 
@@ -87,6 +94,8 @@ describe('TEST-05 : Inventaire journalier automatique', () => {
   })
 
   it('retourne un rapport complet avec tous les produits et les produits sous seuil identifiés', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'ADMIN' })
+
     const mockFrom = vi.mocked(supabase.from)
 
     // 1. from('produits').select('*').order().order()

@@ -10,6 +10,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mkChain, authHeaders } from './helpers'
 
+vi.mock('../services/rbacService', () => ({
+  checkPermission:           vi.fn(),
+  writeAuditLog:             vi.fn(),
+  invalidatePermissionCache: vi.fn(),
+}))
+
 vi.mock('@forge/db/supabase', () => {
   // Chaîne sûre par défaut — ne crashe jamais, retourne data=[] sans erreur
   const safeChain = () => {
@@ -40,6 +46,7 @@ vi.mock('@forge/db/supabase', () => {
 
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
+import { checkPermission } from '../services/rbacService'
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -63,6 +70,7 @@ describe('Test 1 — GET /api/stocks retourne un tableau paginé', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('retourne data[], total, page avec statut 200', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: [PRODUIT], count: 1, error: null }) as never,
     )
@@ -91,6 +99,7 @@ describe('Test 1 — GET /api/stocks retourne un tableau paginé', () => {
   })
 
   it('filtre par statut=alerte', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: [PRODUIT], count: 1, error: null }) as never,
     )
@@ -106,6 +115,7 @@ describe('Test 1 — GET /api/stocks retourne un tableau paginé', () => {
   })
 
   it('retourne data vide si aucun produit', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: [], count: 0, error: null }) as never,
     )
@@ -125,6 +135,7 @@ describe('Test 2 — POST mouvement sortie > stock → 422', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('retourne 422 INSUFFICIENT_STOCK quand quantite > stock_actuel', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
     // RPC non déployée → fallback JS (mockImplementation pour robustesse vitest 2.x)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(vi.mocked(supabase.rpc) as any).mockImplementation(async () => ({
@@ -159,6 +170,7 @@ describe('Test 2 — POST mouvement sortie > stock → 422', () => {
   })
 
   it('retourne 400 si quantite ≤ 0', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
     const res = await app.request(`/api/stocks/${PRODUIT_ID}/mouvement`, {
       method:  'POST',
       headers: new Headers(authHeaders('operateur')),
@@ -175,6 +187,8 @@ describe('Test 3 — POST mouvement entree valide → stock_actuel augmente', ()
     const STOCK_INITIAL = 20
     const QUANTITE      = 15
     const STOCK_FINAL   = STOCK_INITIAL + QUANTITE // 35
+
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
 
     // RPC fn_mouvement_stock → succès atomique
     vi.mocked(supabase.rpc).mockResolvedValueOnce({

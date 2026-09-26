@@ -16,6 +16,12 @@ import { mkChain, authHeaders } from '../helpers'
 
 // ── Mocks globaux ──────────────────────────────────────────────────────────────
 
+vi.mock('../../services/rbacService', () => ({
+  checkPermission:           vi.fn(),
+  writeAuditLog:             vi.fn(),
+  invalidatePermissionCache: vi.fn(),
+}))
+
 vi.mock('@forge/db/supabase', () => {
   // Chaîne sûre par défaut — ne crashe jamais, retourne data=[] sans erreur
   const safeChain = () => {
@@ -72,6 +78,7 @@ vi.mock('@forge/ai', () => ({
 import app from '../../app'
 import { supabase } from '@forge/db/supabase'
 import { anthropic } from '@forge/ai'
+import { checkPermission } from '../../services/rbacService'
 
 // ── Compteur de résultats ──────────────────────────────────────────────────────
 
@@ -210,6 +217,7 @@ describe('🌅 MATIN — Ouverture système', () => {
       }) as never,
     )
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res  = await app.request('/api/stocks/alertes', { headers: authHeaders('admin') })
     const body = await res.json() as { total: number; urgence: { rupture: number; critique: number; alerte: number } }
 
@@ -238,6 +246,7 @@ describe('🌅 MATIN — Ouverture système', () => {
       mkChain({ data: [], error: null }) as never,
     )
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res  = await app.request('/api/stocks/inventaire/journalier', { headers: authHeaders('admin') })
     const body = await res.json() as {
       date: string; total_references: number; valeur_totale_xaf: number
@@ -273,6 +282,7 @@ describe('🔧 ATELIER — Workflow bon de sortie', () => {
     // audit middleware (POST 201) : from('audit_log').insert().then()
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request('/api/bons', {
       method:  'POST',
       headers: authHeaders('operateur'),
@@ -305,6 +315,7 @@ describe('🔧 ATELIER — Workflow bon de sortie', () => {
       }) as never,
     )
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res  = await app.request(`/api/bons/${BON_ID}`, { headers: authHeaders('admin') })
     const body = await res.json() as { id: string; bons_sortie_lignes: unknown[] }
 
@@ -327,6 +338,7 @@ describe('🔧 ATELIER — Workflow bon de sortie', () => {
     // audit middleware (PUT 200)
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request(`/api/bons/${BON_ID}/valider`, {
       method:  'PUT',
       headers: authHeaders('admin'),
@@ -359,6 +371,7 @@ describe('🔧 ATELIER — Workflow bon de sortie', () => {
     // audit middleware (PUT 200)
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request(`/api/bons/${BON_ID}/executer`, {
       method:  'PUT',
       headers: authHeaders('operateur'),
@@ -382,6 +395,7 @@ describe('🔧 ATELIER — Workflow bon de sortie', () => {
       }) as never,
     )
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request(`/api/bons/${BON_ID}/executer`, {
       method:  'PUT',
       headers: authHeaders('operateur'),
@@ -407,6 +421,7 @@ describe('💼 COMMERCE — Devis et commandes', () => {
   it('T09 — POST /api/clients crée un nouveau client entreprise', async () => {
     mockFrom().mockReturnValueOnce(mkChain({ data: CLIENT, error: null }) as never)
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request('/api/clients', {
       method:  'POST',
       headers: authHeaders('admin'),
@@ -444,6 +459,7 @@ describe('💼 COMMERCE — Devis et commandes', () => {
       }) as never,
     )
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request('/api/devis', {
       method:  'POST',
       headers: authHeaders('admin'),
@@ -492,6 +508,7 @@ describe('💼 COMMERCE — Devis et commandes', () => {
     // 9 : audit middleware (POST 201)
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request(`/api/devis/${DEVIS_ID}/transformer-commande`, {
       method:  'POST',
       headers: authHeaders('admin'),
@@ -525,6 +542,7 @@ describe('💼 COMMERCE — Devis et commandes', () => {
     // insert historique
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request(`/api/commandes/${CMD_ID}/statut`, {
       method:  'PATCH',
       headers: authHeaders('admin'),
@@ -551,6 +569,7 @@ describe('💼 COMMERCE — Devis et commandes', () => {
     // insert historique
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request(`/api/commandes/${CMD_ID}/statut`, {
       method:  'PATCH',
       headers: authHeaders('admin'),
@@ -593,6 +612,7 @@ describe('💰 FINANCE — Facturation et crédits', () => {
     // 5 : audit middleware (POST 201)
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request('/api/factures', {
       method:  'POST',
       headers: authHeaders('admin'),
@@ -627,6 +647,7 @@ describe('💰 FINANCE — Facturation et crédits', () => {
     // insert credit
     mockFrom().mockReturnValueOnce(mkChain({ data: CREDIT, error: null }) as never)
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request('/api/credits', {
       method:  'POST',
       headers: authHeaders('admin'),
@@ -666,6 +687,7 @@ describe('💰 FINANCE — Facturation et crédits', () => {
       }) as never,
     )
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res  = await app.request('/api/credits/alertes', { headers: authHeaders('admin') })
     const body = await res.json() as {
       total: number; echus: number; montant_total_xaf: number
@@ -702,6 +724,7 @@ describe('🤖 IA — Assistant et recommandations stock', () => {
       usage:   { input_tokens: 180, output_tokens: 22 },
     })
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request('/api/ai/chat', {
       method:  'POST',
       headers: authHeaders('admin'),
@@ -747,6 +770,7 @@ describe('🤖 IA — Assistant et recommandations stock', () => {
       usage: { input_tokens: 500, output_tokens: 80 },
     })
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request('/api/ai/recommandations/stock', {
       headers: authHeaders('admin'),
     })
@@ -798,6 +822,7 @@ describe('🌇 SOIR — Inventaire journalier et clôture', () => {
       }) as never,
     )
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res  = await app.request('/api/stocks/inventaire/journalier', { headers: authHeaders('admin') })
     const body = await res.json() as {
       date: string; total_references: number; valeur_totale_xaf: number; mouvements_du_jour: number

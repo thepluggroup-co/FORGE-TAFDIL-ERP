@@ -94,6 +94,8 @@ describe('L1 — GET /api/logistique/livraisons : liste paginée', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('retourne 200 avec data + pagination', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' } as never)
+
     // Séquence DB : 1 appel → livraisons list
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: [LIVRAISON_BASE], count: 1, error: null }) as never,
@@ -115,6 +117,8 @@ describe('L1 — GET /api/logistique/livraisons : liste paginée', () => {
   })
 
   it('retourne 403 pour apprenant', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: false, roleName: 'APPRENANT' } as never)
+
     const res = await app.request('/api/logistique/livraisons', {
       headers: new Headers(authHeaders('apprenant')),
     })
@@ -128,6 +132,8 @@ describe('L2 — GET /api/logistique/livraisons/mes-livraisons : route mobile', 
   beforeEach(() => vi.clearAllMocks())
 
   it('retourne 200 avec les livraisons assignées au user courant', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' } as never)
+
     // Séquence DB : 1 appel → livraisons WHERE livreur_id = user.id
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: [{ ...LIVRAISON_BASE, livreur_id: USER_ID }], count: 1, error: null }) as never,
@@ -146,6 +152,8 @@ describe('L2 — GET /api/logistique/livraisons/mes-livraisons : route mobile', 
   it('n\'est pas capturé par GET /livraisons/:id (ordre des routes)', async () => {
     // Si /mes-livraisons était après /:id, "mes-livraisons" serait traité comme un :id
     // et retournerait 404 (PGRST116 ou similaire)
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: [], count: 0, error: null }) as never,
     )
@@ -165,6 +173,8 @@ describe('L3 — GET /api/logistique/livraisons/:id : détail', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('retourne 200 avec la livraison complète', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' } as never)
+
     // Séquence DB : 1 appel → livraison single
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: LIVRAISON_BASE, error: null }) as never,
@@ -181,6 +191,8 @@ describe('L3 — GET /api/logistique/livraisons/:id : détail', () => {
   })
 
   it('retourne 404 si livraison inconnue', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: null, error: { code: 'PGRST116', message: 'not found' } }) as never,
     )
@@ -206,6 +218,8 @@ describe('L4 — POST /api/logistique/livraisons : création', () => {
     //   2. livraisons count pour genererNumeroLivraison (then)
     //   3. livraisons insert (single)
     //   4. livraisons_historique insert (then)
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: { id: CMD_ID, numero: 'CMD-001' }, error: null }) as never,
     )
@@ -232,6 +246,8 @@ describe('L4 — POST /api/logistique/livraisons : création', () => {
   })
 
   it('retourne 422 COMMANDE_NOT_FOUND si commande inconnue', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+
     // Séquence DB : 1 appel → commandes check retourne null
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: null, error: { code: 'PGRST116', message: 'not found' } }) as never,
@@ -249,7 +265,9 @@ describe('L4 — POST /api/logistique/livraisons : création', () => {
   })
 
   it('retourne 403 si rôle operateur (admin/superviseur requis)', async () => {
-    // Pas de DB calls — bloqué par requireRole avant même d'arriver au handler
+    // Pas de DB calls — bloqué par requirePermission avant même d'arriver au handler
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: false, roleName: 'COMMERCIAL' } as never)
+
     const res = await app.request('/api/logistique/livraisons', {
       method:  'POST',
       headers: new Headers(authHeaders('operateur')),
@@ -259,6 +277,9 @@ describe('L4 — POST /api/logistique/livraisons : création', () => {
   })
 
   it('retourne 400 si commande_id manquant (Zod)', async () => {
+    // requirePermission (checkPermission) s'exécute avant le zValidator
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+
     // Zod rejette avant DB
     const res = await app.request('/api/logistique/livraisons', {
       method:  'POST',
@@ -279,6 +300,8 @@ describe('L5 — PATCH /api/logistique/livraisons/:id/statut : state machine', (
     //   1. livraisons fetch (single)
     //   2. livraisons update (single)
     //   3. livraisons_historique insert (then)
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: { ...LIVRAISON_BASE, statut: 'planifiee' }, error: null }) as never,
     )
@@ -301,6 +324,8 @@ describe('L5 — PATCH /api/logistique/livraisons/:id/statut : state machine', (
   })
 
   it('en_preparation → planifiee : 200 (auto-créée → confirmée)', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: { ...LIVRAISON_BASE, statut: 'en_preparation' }, error: null }) as never,
     )
@@ -323,6 +348,8 @@ describe('L5 — PATCH /api/logistique/livraisons/:id/statut : state machine', (
   })
 
   it('en_route → livree : 200', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: { ...LIVRAISON_BASE, statut: 'en_route' }, error: null }) as never,
     )
@@ -343,6 +370,8 @@ describe('L5 — PATCH /api/logistique/livraisons/:id/statut : state machine', (
   })
 
   it('livree → en_route : 422 INVALID_TRANSITION', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+
     // 1 seul appel DB — la state machine rejette après le fetch
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: { ...LIVRAISON_BASE, statut: 'livree' }, error: null }) as never,
@@ -360,6 +389,8 @@ describe('L5 — PATCH /api/logistique/livraisons/:id/statut : state machine', (
   })
 
   it('echec_livraison → en_route : 422 INVALID_TRANSITION', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: { ...LIVRAISON_BASE, statut: 'echec_livraison' }, error: null }) as never,
     )
@@ -376,6 +407,9 @@ describe('L5 — PATCH /api/logistique/livraisons/:id/statut : state machine', (
   })
 
   it('operateur 403 si livraison ne lui est pas assignée', async () => {
+    // permission accordée (VALIDATE) — le 403 vient de la vérification d'ownership dans le handler
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' } as never)
+
     // livreur_id différent de l'utilisateur courant (test-user-uid-001)
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({
@@ -396,6 +430,8 @@ describe('L5 — PATCH /api/logistique/livraisons/:id/statut : state machine', (
   })
 
   it('retourne 404 si livraison inconnue', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: null, error: { code: 'PGRST116', message: 'not found' } }) as never,
     )
@@ -417,7 +453,9 @@ describe('L6 — PATCH /api/logistique/livraisons/:id/assigner : attribution liv
 
   it('assigne un livreur 200 — admin (SUPER_ADMIN via mock service)', async () => {
     // checkPermission est mocké au niveau service → pas de mocks DB pour le RBAC
+    // checkPermission est appelé 2 fois : 1x par requirePermission (middleware) + 1x explicitement dans le handler assigner
     // Séquence DB (4 appels) : livraisons fetch → profiles livreur → livraisons update → historique
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
     vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
 
     vi.mocked(supabase.from).mockReturnValueOnce(
@@ -461,6 +499,8 @@ describe('L6 — PATCH /api/logistique/livraisons/:id/assigner : attribution liv
 
   it('retourne 422 LIVREUR_NOT_FOUND si profil inconnu', async () => {
     // Séquence DB (2 appels) : livraisons fetch → profiles null → 422
+    // checkPermission est appelé 2 fois : 1x middleware + 1x handler assigner
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
     vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
 
     vi.mocked(supabase.from).mockReturnValueOnce(
@@ -482,7 +522,9 @@ describe('L6 — PATCH /api/logistique/livraisons/:id/assigner : attribution liv
   })
 
   it('retourne 400 si livreur_id absent (Zod)', async () => {
-    // Zod rejette avant toute DB call ou checkPermission
+    // requirePermission (middleware) s'exécute avant le zValidator — 1 seul appel checkPermission
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+
     const res = await app.request(`/api/logistique/livraisons/${LIV_ID}/assigner`, {
       method:  'PATCH',
       headers: new Headers(authHeaders('admin')),
@@ -498,6 +540,8 @@ describe('L7 — GET /api/logistique/preparation/resume : dashboard', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('retourne 200 avec 4 compteurs numériques', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+
     // 4 requêtes count en parallèle — toutes sur safe chain (count:0 par défaut)
     const res = await app.request('/api/logistique/preparation/resume', {
       headers: new Headers(authHeaders('admin')),

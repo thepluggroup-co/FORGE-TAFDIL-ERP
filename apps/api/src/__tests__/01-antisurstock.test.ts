@@ -13,6 +13,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mkChain, authHeaders } from './helpers'
 
+vi.mock('../services/rbacService', () => ({
+  checkPermission:           vi.fn(),
+  writeAuditLog:             vi.fn(),
+  invalidatePermissionCache: vi.fn(),
+}))
+
 vi.mock('@forge/db/supabase', () => {
   // Chaîne sûre par défaut — ne crashe jamais, retourne data=[] sans erreur
   const safeChain = () => {
@@ -43,6 +49,7 @@ vi.mock('@forge/db/supabase', () => {
 
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
+import { checkPermission } from '../services/rbacService'
 
 const PRODUIT_ID = 'prod-test-concurrent-uuid-001'
 const QTE        = 7
@@ -69,6 +76,9 @@ describe('TEST-01 : Anti-survente de stock concurrent', () => {
       data:  null,
       error: { code: 'P0001', message: 'Stock insuffisant — transaction annulée' },
     } as never)
+
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
 
     const headers = new Headers(authHeaders('operateur'))
     const body    = JSON.stringify({ type: 'sortie', quantite: QTE })

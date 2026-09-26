@@ -10,6 +10,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mkChain, authHeaders } from './helpers'
 
+vi.mock('../services/rbacService', () => ({
+  checkPermission:           vi.fn(),
+  writeAuditLog:             vi.fn(),
+  invalidatePermissionCache: vi.fn(),
+}))
+
 vi.mock('@forge/db/supabase', () => {
   // Chaîne sûre par défaut — ne crashe jamais, retourne data=[] sans erreur
   const safeChain = () => {
@@ -40,6 +46,7 @@ vi.mock('@forge/db/supabase', () => {
 
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
+import { checkPermission } from '../services/rbacService'
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -100,6 +107,8 @@ describe('Test 5 — POST /api/bons crée un bon avec statut soumis', () => {
       mkChain({ data: BON_LIGNES, error: null }) as never,
     )
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
+
     const res = await app.request('/api/bons', {
       method:  'POST',
       headers: new Headers(authHeaders('operateur')),
@@ -122,6 +131,7 @@ describe('Test 5 — POST /api/bons crée un bon avec statut soumis', () => {
   })
 
   it('retourne 400 si lignes est vide (Zod)', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
     const res = await app.request('/api/bons', {
       method:  'POST',
       headers: new Headers(authHeaders('operateur')),
@@ -157,6 +167,8 @@ describe('Test 6 — PUT /api/bons/:id/valider change statut en valide', () => {
       mkChain({ data: BON_VALIDE, error: null }) as never,
     )
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'ADMIN' })
+
     const res = await app.request(`/api/bons/${BON_ID}/valider`, {
       method:  'PUT',
       headers: new Headers(authHeaders('admin')),
@@ -178,6 +190,8 @@ describe('Test 6 — PUT /api/bons/:id/valider change statut en valide', () => {
       }) as never,
     )
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'ADMIN' })
+
     const res = await app.request(`/api/bons/${BON_ID}/valider`, {
       method:  'PUT',
       headers: new Headers(authHeaders('admin')),
@@ -190,6 +204,8 @@ describe('Test 6 — PUT /api/bons/:id/valider change statut en valide', () => {
   })
 
   it('retourne 403 FORBIDDEN si rôle operateur (directeur/admin requis)', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: false, roleName: 'OPERATEUR' })
+
     const res = await app.request(`/api/bons/${BON_ID}/valider`, {
       method:  'PUT',
       headers: new Headers(authHeaders('operateur')),
@@ -210,6 +226,8 @@ describe('Test 7 — PUT /api/bons/:id/executer avec mauvais code_unique → 422
       }) as never,
     )
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
+
     const res = await app.request(`/api/bons/${BON_ID}/executer`, {
       method:  'PUT',
       headers: new Headers(authHeaders('operateur')),
@@ -229,6 +247,8 @@ describe('Test 7 — PUT /api/bons/:id/executer avec mauvais code_unique → 422
         error: null,
       }) as never,
     )
+
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
 
     const res = await app.request(`/api/bons/${BON_ID}/executer`, {
       method:  'PUT',
@@ -260,6 +280,8 @@ describe('Test 8 — PUT /api/bons/:id/executer avec bon code_unique → succès
       error: null,
     } as never)
 
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
+
     const res = await app.request(`/api/bons/${BON_ID}/executer`, {
       method:  'PUT',
       headers: new Headers(authHeaders('operateur')),
@@ -281,6 +303,7 @@ describe('Test 8 — PUT /api/bons/:id/executer avec bon code_unique → succès
     const bonAvecMontant = { ...BON_VALIDE, montant_total_xaf: 50_000, nature_transaction: 'comptant', imputation_payeur: 'atelier', bons_sortie_lignes: BON_LIGNES }
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: bonAvecMontant, error: null }) as never)
     vi.mocked(supabase.rpc).mockResolvedValueOnce({ data: { success: true, bon_id: BON_ID }, error: null } as never)
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
 
     const res = await app.request(`/api/bons/${BON_ID}/executer`, {
       method:  'PUT',
@@ -302,6 +325,8 @@ describe('Test 8 — PUT /api/bons/:id/executer avec bon code_unique → succès
       data:  null,
       error: { code: '42883', message: 'function fn_executer_bon does not exist' },
     } as never)
+
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
 
     const res = await app.request(`/api/bons/${BON_ID}/executer`, {
       method:  'PUT',
@@ -330,6 +355,7 @@ describe('Test 9 — POST /api/bons avec nature=comptant', () => {
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: BON_LIGNES, error: null }) as never,  // insert lignes
     )
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
 
     const res = await app.request('/api/bons', {
       method:  'POST',
@@ -349,6 +375,7 @@ describe('Test 9 — POST /api/bons avec nature=comptant', () => {
   })
 
   it('retourne 400 si nature_transaction manquant (Zod)', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
     const res = await app.request('/api/bons', {
       method:  'POST',
       headers: new Headers(authHeaders('operateur')),
@@ -369,6 +396,7 @@ describe('Test 10 — PUT /api/bons/:id/valider refuse credit sans commande', ()
         error: null,
       }) as never,
     )
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'ADMIN' })
 
     const res = await app.request(`/api/bons/${BON_ID}/valider`, {
       method:  'PUT',
@@ -389,6 +417,7 @@ describe('Test 10 — PUT /api/bons/:id/valider refuse credit sans commande', ()
         error: null,
       }) as never,
     )
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'ADMIN' })
 
     const res = await app.request(`/api/bons/${BON_ID}/valider`, {
       method:  'PUT',
@@ -417,6 +446,7 @@ describe('Test 11 — PUT /api/bons/:id/valider refuse deduction_acompte sans ac
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: { montant_acompte_xaf: 0 }, error: null }) as never,
     )
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'ADMIN' })
 
     const res = await app.request(`/api/bons/${BON_ID}/valider`, {
       method:  'PUT',
@@ -436,6 +466,7 @@ describe('Test 11 — PUT /api/bons/:id/valider refuse deduction_acompte sans ac
         error: null,
       }) as never,
     )
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'ADMIN' })
 
     const res = await app.request(`/api/bons/${BON_ID}/valider`, {
       method:  'PUT',

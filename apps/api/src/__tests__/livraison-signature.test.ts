@@ -57,6 +57,7 @@ vi.mock('../services/email.service', () => ({
 
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
+import { checkPermission } from '../services/rbacService'
 import { notifyLivraisonConfirmeeAvecBL } from '../services/notifications'
 import { sendBlEmail } from '../services/email.service'
 

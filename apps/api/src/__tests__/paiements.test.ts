@@ -11,7 +11,7 @@
  *  - POST /api/paiements/webhook   (signature, payload invalide, payment.complete, payment.failed)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkChain } from './helpers'
 
 vi.mock('@forge/db/supabase', () => {
@@ -48,6 +48,23 @@ vi.mock('../services/finance-core.service', () => ({
 vi.mock('../services/workflow-notifications.service', () => ({
   notifyWorkflow: vi.fn().mockResolvedValue(undefined),
 }))
+// resolveCommandeContext ferait sinon de vrais appels DB supplémentaires
+// (hors du périmètre de ces tests webhook) → mocké au niveau service, comme
+// les deux ci-dessus.
+vi.mock('../services/commande-workflow.service', () => ({
+  resolveCommandeContext: vi.fn().mockResolvedValue({ commandeId: null }),
+}))
+
+// nokashStatusRequest() (apps/api/src/routes/paiements.ts) appelle fetch()
+// directement (pas de client injecté à mocker) — le webhook re-vérifie
+// TOUJOURS le statut réel auprès de NOKASH avant d'agir (le payload du
+// callback n'est jamais fait confiance, cf. commentaire au-dessus de la route).
+// On stub donc global.fetch pour simuler la réponse de cette revérification.
+function mockNokashStatusRequest(data: { status: string; amount?: number } | null) {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    json: async () => ({ status: data ? 'REQUEST_OK' : 'ERROR', message: 'ok', data }),
+  }))
+}
 
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
@@ -55,6 +72,10 @@ import { supabase } from '@forge/db/supabase'
 const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
 beforeEach(() => vi.clearAllMocks())
+// vi.stubGlobal('fetch', ...) (webhook tests) ne doit jamais fuiter vers les
+// tests suivants — sans quoi un stub oublié rendrait /initier "injoignable"
+// silencieusement vrai au lieu de tester le vrai fetch réseau.
+afterEach(() => vi.unstubAllGlobals())
 
 // ── POST /api/paiements/initier ──────────────────────────────────────────────
 
@@ -171,10 +192,11 @@ describe('POST /api/paiements/webhook', () => {
     expect(res.status).toBe(400)
   })
 
-  it('retourne 200 received:true pour un événement non géré', async () => {
+  it('retourne 200 received:true pour un statut re-vérifié non final (pending)', async () => {
+    mockNokashStatusRequest({ status: 'PENDING', amount: 1000 })
     const res = await app.request('/api/paiements/webhook', {
       method: 'POST', headers: JSON_HEADERS,
-      body: JSON.stringify({ event: 'payment.unknown', data: { reference: 'X' } }),
+      body: JSON.stringify({ id: 'REF-UNK', status: 'PENDING', amount: 1000, phone: '699000000', orderId: 'REF-UNK' }),
     })
     expect(res.status).toBe(200)
     const body = await res.json() as { received: boolean }
@@ -182,12 +204,13 @@ describe('POST /api/paiements/webhook', () => {
   })
 
   it('payment.complete : commande introuvable → received:true (évite retries)', async () => {
+    mockNokashStatusRequest({ status: 'SUCCESS', amount: 10000 })
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: null, error: { message: 'not found' } }) as never,
     )
     const res = await app.request('/api/paiements/webhook', {
       method: 'POST', headers: JSON_HEADERS,
-      body: JSON.stringify({ event: 'payment.complete', data: { reference: 'REF-X', amount: 10000 } }),
+      body: JSON.stringify({ id: 'REF-X', status: 'SUCCESS', amount: 10000, phone: '699000000', orderId: 'REF-X' }),
     })
     expect(res.status).toBe(200)
     const body = await res.json() as { received: boolean }
@@ -195,6 +218,7 @@ describe('POST /api/paiements/webhook', () => {
   })
 
   it('payment.complete : montant ne correspond pas → anti-fraude → received:true sans update', async () => {
+    mockNokashStatusRequest({ status: 'SUCCESS', amount: 999 })
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({
         data: { id: 'c1', ref: 'CMD-009', montant_ttc: 50000, mode_paiement: 'integral', lignes: [], erp_commande_id: null },
@@ -203,7 +227,7 @@ describe('POST /api/paiements/webhook', () => {
     )
     const res = await app.request('/api/paiements/webhook', {
       method: 'POST', headers: JSON_HEADERS,
-      body: JSON.stringify({ event: 'payment.complete', data: { reference: 'REF-FRAUDE', amount: 999 } }),
+      body: JSON.stringify({ id: 'REF-FRAUDE', status: 'SUCCESS', amount: 999, phone: '699000000', orderId: 'REF-FRAUDE' }),
     })
     expect(res.status).toBe(200)
     const body = await res.json() as { received: boolean }
@@ -211,6 +235,7 @@ describe('POST /api/paiements/webhook', () => {
   })
 
   it('payment.complete : paiement total correct → update + received:true', async () => {
+    mockNokashStatusRequest({ status: 'SUCCESS', amount: 50000 })
     // fetch commande
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({
@@ -225,7 +250,7 @@ describe('POST /api/paiements/webhook', () => {
     )
     const res = await app.request('/api/paiements/webhook', {
       method: 'POST', headers: JSON_HEADERS,
-      body: JSON.stringify({ event: 'payment.complete', data: { reference: 'REF-OK', amount: 50000 } }),
+      body: JSON.stringify({ id: 'REF-OK', status: 'SUCCESS', amount: 50000, phone: '699000000', orderId: 'REF-OK' }),
     })
     expect(res.status).toBe(200)
     const body = await res.json() as { received: boolean }
@@ -233,6 +258,7 @@ describe('POST /api/paiements/webhook', () => {
   })
 
   it('payment.failed : marque la commande en échec → received:true', async () => {
+    mockNokashStatusRequest({ status: 'FAILED' })
     // fetch commande
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: { ref: 'CMD-011', client_nom: 'Test', client_telephone: null }, error: null }) as never,
@@ -243,7 +269,7 @@ describe('POST /api/paiements/webhook', () => {
     )
     const res = await app.request('/api/paiements/webhook', {
       method: 'POST', headers: JSON_HEADERS,
-      body: JSON.stringify({ event: 'payment.failed', data: { reference: 'REF-FAIL' } }),
+      body: JSON.stringify({ id: 'REF-FAIL', status: 'FAILED', phone: '699000000', orderId: 'REF-FAIL' }),
     })
     expect(res.status).toBe(200)
     const body = await res.json() as { received: boolean }

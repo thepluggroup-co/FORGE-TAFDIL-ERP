@@ -17,6 +17,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mkChain, authHeaders } from './helpers'
 
+vi.mock('../services/rbacService', () => ({
+  checkPermission:           vi.fn(),
+  writeAuditLog:             vi.fn(),
+  invalidatePermissionCache: vi.fn(),
+}))
+
 vi.mock('@forge/db/supabase', () => {
   const safeChain = () => {
     const c: Record<string, unknown> = {}
@@ -46,6 +52,7 @@ vi.mock('@forge/db/supabase', () => {
 
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
+import { checkPermission } from '../services/rbacService'
 
 // Réinstalle la chaîne sûre par défaut + vide la file mockReturnValueOnce résiduelle
 function resetFromDefault() {
@@ -85,6 +92,7 @@ describe('RBAC rapports', () => {
   })
 
   it('retourne 403 pour un rôle operateur', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: false, roleName: 'OPERATEUR' })
     const res = await app.request('/api/rapports/balance', { headers: new Headers(authHeaders('operateur')) })
     expect(res.status).toBe(403)
     const body = await res.json() as { code: string }
@@ -96,6 +104,7 @@ describe('RBAC rapports', () => {
 
 describe('GET /api/rapports/grand-livre', () => {
   it('retourne 400 MISSING_PARAM si compte absent', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request('/api/rapports/grand-livre', { headers: new Headers(authHeaders('admin')) })
     expect(res.status).toBe(400)
     const body = await res.json() as { code: string }
@@ -103,6 +112,7 @@ describe('GET /api/rapports/grand-livre', () => {
   })
 
   it('retourne le grand livre avec solde progressif et totaux pour un compte', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const lignes411 = ECRITURES.filter(e => e.compte_syscohada === '411')
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: lignes411, error: null }) as never)
 
@@ -124,6 +134,7 @@ describe('GET /api/rapports/grand-livre', () => {
 
 describe('GET /api/rapports/balance', () => {
   it('agrège les comptes et indique l équilibre débit/crédit', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: ECRITURES, error: null }) as never)
 
     const res = await app.request('/api/rapports/balance?exercice=2026', {
@@ -152,6 +163,7 @@ describe('GET /api/rapports/balance', () => {
 
 describe('GET /api/rapports/synthese', () => {
   it('retourne le bloc comptabilité + finance + rapprochement', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     // comptesAgreges
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: ECRITURES, error: null }) as never)
     // financeAgregee
@@ -171,6 +183,7 @@ describe('GET /api/rapports/synthese', () => {
 
 describe('GET /api/rapports/controles', () => {
   it('retourne la liste des contrôles de cohérence comptable', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     // comptesAgreges
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: ECRITURES, error: null }) as never)
     // financeAgregee
@@ -194,6 +207,7 @@ describe('GET /api/rapports/controles', () => {
 
 describe('GET /api/rapports/cloture', () => {
   it('retourne les étapes de pré-clôture et le statut clôturable', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: ECRITURES, error: null }) as never) // comptes
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [], error: null }) as never)         // finance
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [], error: null }) as never)         // charges
@@ -214,6 +228,7 @@ describe('GET /api/rapports/cloture', () => {
 
 describe('GET /api/rapports/declarations/tva', () => {
   it('calcule TVA collectée, déductible et nette', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const tvaEcritures = ECRITURES.filter(e => ['4431', '4432'].includes(e.compte_syscohada))
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: tvaEcritures, error: null }) as never)
 
@@ -235,6 +250,7 @@ describe('GET /api/rapports/declarations/tva', () => {
 
 describe('GET /api/rapports/plan-comptable', () => {
   it('retourne le plan complet pour un opérateur (pas de requireRole)', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
     const res = await app.request('/api/rapports/plan-comptable', {
       headers: new Headers(authHeaders('operateur')),
     })
@@ -245,6 +261,7 @@ describe('GET /api/rapports/plan-comptable', () => {
   })
 
   it('filtre les comptes par classe', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
     const res = await app.request('/api/rapports/plan-comptable?classe=4', {
       headers: new Headers(authHeaders('operateur')),
     })
@@ -258,6 +275,7 @@ describe('GET /api/rapports/plan-comptable', () => {
 
 describe('GET /api/rapports/remises', () => {
   it('agrège les remises devis + commandes', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     // devis_lignes
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
       data: [{ remise_type: 'pct', remise_valeur: 10, remise_xaf: 5000, remise_motif: 'fidélité',
@@ -282,6 +300,7 @@ describe('GET /api/rapports/remises', () => {
 
 describe('GET /api/rapports/grand-livre.xls', () => {
   it('retourne un fichier Excel avec content-type ms-excel', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: ECRITURES.filter(e => e.compte_syscohada === '411'), error: null }) as never,
     )
@@ -294,6 +313,7 @@ describe('GET /api/rapports/grand-livre.xls', () => {
   })
 
   it('retourne 400 MISSING_PARAM si compte absent', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
     const res = await app.request('/api/rapports/grand-livre.xls', {
       headers: new Headers(authHeaders('admin')),
     })
