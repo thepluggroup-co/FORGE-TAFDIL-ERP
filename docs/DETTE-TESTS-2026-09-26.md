@@ -61,6 +61,22 @@ raisons métier), puis mettre à jour les fixtures/mocks des tests concernés
 en conséquence plutôt que d'assouplir le code de prod pour faire passer les
 tests.
 
+**Mise en garde testée en pratique** : le pattern "mocker `rbacService` en
+bloc" (`vi.mock('../services/rbacService', ...)` + `checkPermission`
+mocké systématiquement) NE marche PAS partout — testé sur
+`commerce.test.ts` : l'appliquer à l'aveugle a fait passer les échecs de 8
+à 22, parce que ce fichier reposait déjà, pour la plupart de ses tests, sur
+le VRAI `checkPermission` qui résout correctement via le fallback
+`LEGACY_ROLE_MAP` + l'octroi automatique SUPER_ADMIN (rbacService.ts lignes
+~191-197) sans jamais toucher aux mocks DB. Bloquer ce mécanisme en mockant
+`checkPermission` a cassé tout ce qui marchait déjà. Pour ce fichier
+précis, le bon fix est chirurgical : ajouter les `mockReturnValueOnce`
+manquants pour les 1-2 appels `.from()` RBAC (`rbac_user_profiles`,
+`rbac_roles`) uniquement sur les tests qui échouent réellement, sans
+toucher au reste. Changé d'avis en cours de route, reverté avant commit —
+`commerce.test.ts` reste donc à l'état documenté ci-dessous (8 échecs),
+non aggravé.
+
 ## Fichiers encore en échec (69 tests, 14 fichiers) — au 26/09/2026
 
 | Fichier | Échecs | Nature (à vérifier au cas par cas) |
