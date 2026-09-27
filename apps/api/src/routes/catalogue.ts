@@ -2,7 +2,11 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
-import { champsDimensionsPourMode, ModeCalculSchema, TypeRessourceSchema, type ModeCalcul } from '@forge/shared'
+import {
+  champsDimensionsPourMode, ModeCalculSchema, TypeRessourceSchema, type ModeCalcul,
+  TypeGammeSchema, modeCommercialDepuisTypeGamme, resoudreTypeGamme, verifierPlacementFamille,
+  type TypeGamme, type ArbreFamilles,
+} from '@forge/shared'
 import { requirePermission } from '../middleware/permission.middleware'
 import type { HonoVariables } from '../types'
 
@@ -13,7 +17,9 @@ const router = new Hono<{ Variables: HonoVariables }>()
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export type TypeGamme = 'catalogue' | 'sur_mesure' | 'configuration'
+// Type et règles de mode commercial : source unique dans @forge/shared
+// (catalogue-commercial.ts). Réexporté ici pour les imports existants.
+export type { TypeGamme }
 
 interface ModeleTypeGammeRow {
   type_gamme: TypeGamme | null
@@ -28,12 +34,28 @@ interface FamilleTypeGammeRow {
  * renseigné, sinon celui de sa famille (héritage).
  */
 export function resolveTypeGamme(modele: ModeleTypeGammeRow, famille: FamilleTypeGammeRow): TypeGamme {
-  return modele.type_gamme ?? famille.type_gamme
+  return resoudreTypeGamme(modele, famille) ?? famille.type_gamme
+}
+
+/** Champs de mode ajoutés aux réponses : type_gamme (historique) + commercial_mode (Catalogue Hybride). */
+function avecModeCommercial(typeGamme: TypeGamme | null) {
+  return typeGamme ? modeCommercialDepuisTypeGamme(typeGamme) : null
+}
+
+/**
+ * Charge l'arbre id → parent_id de toutes les familles (table de référence
+ * courte) pour vérifier profondeur et cycles avant écriture. Réponse
+ * inattendue → arbre vide : le contrôle est alors ignoré, jamais bloquant à tort.
+ */
+async function chargerArbreFamilles(): Promise<ArbreFamilles> {
+  const { data } = await db.from('familles').select('id, parent_id')
+  const lignes = Array.isArray(data) ? data as Array<{ id: string; parent_id: string | null }> : []
+  return new Map(lignes.map((f) => [f.id, f.parent_id ?? null]))
 }
 
 // ── Schémas Zod ────────────────────────────────────────────────────────────────
 
-const typeGammeSchema = z.enum(['catalogue', 'sur_mesure', 'configuration'])
+const typeGammeSchema = TypeGammeSchema
 
 const createFamilleSchema = z.object({
   nom:        z.string().min(1).max(200),
@@ -113,8 +135,13 @@ router.get('/familles', requirePermission('PRODUCTION', 'READ'), async (c) => {
 
   if (error) return c.json({ error: error.message }, 500)
 
+  const familles = ((data ?? []) as Array<Record<string, unknown> & { type_gamme: TypeGamme }>).map((f) => ({
+    ...f,
+    commercial_mode: avecModeCommercial(f.type_gamme),
+  }))
+
   return c.json({
-    data,
+    data:        familles,
     total:       count ?? 0,
     page,
     per_page:    perPage,
@@ -128,6 +155,11 @@ router.post(
   zValidator('json', createFamilleSchema),
   async (c) => {
     const body = c.req.valid('json')
+
+    if (body.parent_id) {
+      const placement = verifierPlacementFamille(null, body.parent_id, await chargerArbreFamilles())
+      if (!placement.ok) return c.json({ error: placement.message, code: placement.code }, 422)
+    }
 
     const { data, error } = await db
       .from('familles')
@@ -147,6 +179,12 @@ router.put(
   async (c) => {
     const { id } = c.req.param()
     const body = c.req.valid('json')
+
+    // Seul un changement de parent peut rendre l'arbre trop profond ou cyclique.
+    if (body.parent_id !== undefined) {
+      const placement = verifierPlacementFamille(id, body.parent_id ?? null, await chargerArbreFamilles())
+      if (!placement.ok) return c.json({ error: placement.message, code: placement.code }, 422)
+    }
 
     const { data, error } = await db
       .from('familles')
@@ -181,9 +219,11 @@ router.get('/modeles', requirePermission('PRODUCTION', 'READ'), async (c) => {
 
   const enriched = (data ?? []).map((m: Record<string, unknown>) => {
     const famille = (m.familles ?? { type_gamme: null }) as FamilleTypeGammeRow
+    const typeGammeEffectif = resolveTypeGamme({ type_gamme: (m.type_gamme ?? null) as TypeGamme | null }, famille)
     return {
       ...m,
-      type_gamme_effectif: resolveTypeGamme({ type_gamme: (m.type_gamme ?? null) as TypeGamme | null }, famille),
+      type_gamme_effectif:      typeGammeEffectif,
+      commercial_mode_effectif: avecModeCommercial(typeGammeEffectif),
     }
   })
 
@@ -292,10 +332,13 @@ router.get('/modeles/:id/configuration', requirePermission('PRODUCTION', 'READ')
     .eq('modele_id', id)
     .order('ordre')
 
+  const typeGammeEffectif = resolveTypeGamme({ type_gamme: m.type_gamme ?? null }, famille)
+
   return c.json({
     modele: {
       ...modeleSansJointure,
-      type_gamme_effectif: resolveTypeGamme({ type_gamme: m.type_gamme ?? null }, famille),
+      type_gamme_effectif:      typeGammeEffectif,
+      commercial_mode_effectif: avecModeCommercial(typeGammeEffectif),
     },
     fiche_technique_disponible: Boolean(ficheTechnique),
     mode_calcul:       modeCalcul,

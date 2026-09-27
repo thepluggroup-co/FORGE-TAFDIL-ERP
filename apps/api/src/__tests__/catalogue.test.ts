@@ -226,10 +226,91 @@ describe('GET /api/catalogue/familles — pagination', () => {
       data: unknown[]; total: number; page: number; per_page: number; total_pages: number
     }
     expect(body.data).toHaveLength(2)
+    expect((body.data[0] as { commercial_mode?: string }).commercial_mode).toBe('CONFIGURABLE')
     expect(body.total).toBe(2)
     expect(body.page).toBe(1)
     expect(body.per_page).toBe(20)
     expect(body.total_pages).toBe(1)
+  })
+})
+
+// ── Catalogue Hybride Phase 1 : hiérarchie Catégorie → Famille → Sous-famille ──
+
+/**
+ * `familles` renvoie l'arbre complet (id, parent_id) quand la requête est
+ * attendue comme liste (lecture de contrôle) et `ecriture` sur .single()
+ * (insert/update). La chaîne insert est renvoyée pour vérifier qu'elle n'a
+ * pas été appelée en cas de refus.
+ */
+function mockFamillesAvecArbre(arbre: Array<{ id: string; parent_id: string | null }>, ecriture: unknown) {
+  const chaines: Array<{ insert: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> }> = []
+  vi.mocked(supabase.from).mockImplementation(((table: string) => {
+    if (table !== 'familles') return mkChain({ data: null, error: null })
+    const chain = mkChain({ data: ecriture, error: null }) as Record<string, unknown>
+    chain['then'] = (resolve: (v: unknown) => void, reject: (e: unknown) => void) =>
+      Promise.resolve({ data: arbre, error: null }).then(resolve, reject)
+    chaines.push(chain as never)
+    return chain
+  }) as never)
+  return chaines
+}
+
+const SOUS_FAMILLE_ID = '44444444-4444-4444-8444-444444444444'
+const ARBRE_3_NIVEAUX = [
+  { id: FAMILLE_RACINE_ID, parent_id: null },
+  { id: FAMILLE_ENFANT_ID, parent_id: FAMILLE_RACINE_ID },
+  { id: SOUS_FAMILLE_ID,   parent_id: FAMILLE_ENFANT_ID },
+]
+
+describe('Hiérarchie des familles — profondeur max 3 et cycles', () => {
+  it('crée une sous-famille (niveau 3)', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'MANAGER' })
+    mockFamillesAvecArbre(ARBRE_3_NIVEAUX, { id: 'nouvelle', parent_id: FAMILLE_ENFANT_ID })
+
+    const res = await app.request('/api/catalogue/familles', {
+      method: 'POST', headers: new Headers(authHeaders('admin')),
+      body: JSON.stringify({ nom: 'Portails battants', parent_id: FAMILLE_ENFANT_ID, type_gamme: 'configuration' }),
+    })
+    expect(res.status).toBe(201)
+  })
+
+  it('refuse un 4ᵉ niveau (422 PROFONDEUR_MAX_DEPASSEE) sans rien écrire', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'MANAGER' })
+    const chaines = mockFamillesAvecArbre(ARBRE_3_NIVEAUX, null)
+
+    const res = await app.request('/api/catalogue/familles', {
+      method: 'POST', headers: new Headers(authHeaders('admin')),
+      body: JSON.stringify({ nom: 'Trop profond', parent_id: SOUS_FAMILLE_ID, type_gamme: 'catalogue' }),
+    })
+    expect(res.status).toBe(422)
+    expect((await res.json() as { code: string }).code).toBe('PROFONDEUR_MAX_DEPASSEE')
+    expect(chaines.every((ch) => ch.insert.mock.calls.length === 0)).toBe(true)
+  })
+
+  it('refuse de placer une famille sous sa propre sous-famille (422 CYCLE_HIERARCHIE)', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'MANAGER' })
+    const chaines = mockFamillesAvecArbre(ARBRE_3_NIVEAUX, null)
+
+    const res = await app.request(`/api/catalogue/familles/${FAMILLE_RACINE_ID}`, {
+      method: 'PUT', headers: new Headers(authHeaders('admin')),
+      body: JSON.stringify({ parent_id: SOUS_FAMILLE_ID }),
+    })
+    expect(res.status).toBe(422)
+    expect((await res.json() as { code: string }).code).toBe('CYCLE_HIERARCHIE')
+    expect(chaines.every((ch) => ch.update.mock.calls.length === 0)).toBe(true)
+  })
+
+  it('un PUT qui ne change pas le parent ne relit pas l’arbre', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'MANAGER' })
+    const chaines = mockFamillesAvecArbre(ARBRE_3_NIVEAUX, { ...FAMILLE_RACINE, nom: 'Renommée' })
+
+    const res = await app.request(`/api/catalogue/familles/${FAMILLE_RACINE_ID}`, {
+      method: 'PUT', headers: new Headers(authHeaders('admin')),
+      body: JSON.stringify({ nom: 'Renommée' }),
+    })
+    expect(res.status).toBe(200)
+    // un seul appel familles : l'update (l'audit middleware écrit dans audit_log, pas familles)
+    expect(chaines).toHaveLength(1)
   })
 })
 
@@ -257,6 +338,7 @@ describe('GET /api/catalogue/modeles — pagination + résolution type_gamme', (
       total: number; page: number; per_page: number; total_pages: number
     }
     expect(body.data[0].type_gamme_effectif).toBe('configuration')
+    expect((body.data[0] as { commercial_mode_effectif?: string }).commercial_mode_effectif).toBe('CONFIGURABLE')
     expect(body.total).toBe(1)
     expect(body.page).toBe(1)
     expect(body.per_page).toBe(20)
