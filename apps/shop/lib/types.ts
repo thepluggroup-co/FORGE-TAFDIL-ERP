@@ -1,13 +1,17 @@
-export type Disponibilite = 'disponible' | 'stock_faible' | 'indisponible'
+export type Disponibilite = 'disponible' | 'stock_faible' | 'indisponible' | 'sur_commande'
 
 export interface Produit {
+  /** 'modele' = produit fini STANDARD fabriqué sur commande ; absent/'produit' = article de stock */
+  type_article?: 'produit' | 'modele'
+  commercial_mode?: 'STANDARD'
   id: string
   ref: string
   nom: string
   description?: string | null
   categorie: string
   unite: string
-  stock_actuel: number
+  /** null = produit fini fabriqué sur commande (pas de stock) */
+  stock_actuel: number | null
   seuil_alerte: number
   prix_public: number | null
   prix_barre_xaf?: number | null

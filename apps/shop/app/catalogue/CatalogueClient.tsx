@@ -65,12 +65,14 @@ function normalize(value: string) {
 function statusLabel(disponibilite: Disponibilite) {
   if (disponibilite === 'stock_faible') return 'Stock faible'
   if (disponibilite === 'indisponible') return 'Sur commande'
+  if (disponibilite === 'sur_commande') return 'Fabriqué sur commande'
   return 'Disponible'
 }
 
 function statusClass(disponibilite: Disponibilite) {
   if (disponibilite === 'stock_faible') return 'bg-amber-100 text-amber-700'
   if (disponibilite === 'indisponible') return 'bg-gray-100 text-gray-600'
+  if (disponibilite === 'sur_commande') return 'bg-indigo-100 text-indigo-700'
   return 'bg-green-100 text-green-700'
 }
 
@@ -188,7 +190,7 @@ export function CatalogueClient({ initialProduits, initialSearch = '', initialCa
     return result.sort((a, b) => {
       if (sort === 'prix_asc') return (a.prix_public ?? Number.MAX_SAFE_INTEGER) - (b.prix_public ?? Number.MAX_SAFE_INTEGER)
       if (sort === 'prix_desc') return (b.prix_public ?? 0) - (a.prix_public ?? 0)
-      if (sort === 'stock') return b.stock_actuel - a.stock_actuel
+      if (sort === 'stock') return (b.stock_actuel ?? 0) - (a.stock_actuel ?? 0)
       return Number(b.disponibilite === 'disponible') - Number(a.disponibilite === 'disponible')
     })
   }, [availability, categorie, delivery, maxPrice, produits, search, selectedBrands, sort])
@@ -220,7 +222,7 @@ export function CatalogueClient({ initialProduits, initialSearch = '', initialCa
   }
 
   const handleAddToCart = (produit: Produit) => {
-    void addItem({ id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images?.[0] ?? null }, 1)
+    void addItem({ id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images?.[0] ?? null, type_article: produit.type_article }, 1)
   }
 
   return (

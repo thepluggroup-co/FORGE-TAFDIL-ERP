@@ -11,16 +11,32 @@ const SESSION_STALE_MS = 24 * 60 * 60 * 1000
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+export type TypeArticle = 'produit' | 'modele'
+
 export interface CartItem {
   id: string
   ref: string
   nom: string
   prix: number | null
   quantite: number
-  stock_actuel: number
+  /** null = produit fini fabriqué sur commande : pas de plafond de stock. */
+  stock_actuel: number | null
   seuil_alerte: number
   image: string | null
   stock_insuffisant?: boolean
+  /** 'modele' = produit fini STANDARD (commandé via modele_id) ; absent = article de stock (anciens paniers). */
+  type_article?: TypeArticle
+}
+
+/** Quantité maximale commandable (illimitée pour un article sur commande). */
+export function quantiteMax(item: Pick<CartItem, 'stock_actuel'>): number {
+  return item.stock_actuel ?? Number.POSITIVE_INFINITY
+}
+
+/** Article bloquant la commande : stock épuisé ou insuffisant (jamais pour un article sur commande). */
+export function estIndisponible(item: Pick<CartItem, 'stock_actuel' | 'stock_insuffisant'>): boolean {
+  if (item.stock_actuel === null) return false
+  return Boolean(item.stock_insuffisant) || item.stock_actuel <= 0
 }
 
 export interface CartTotals {
@@ -36,6 +52,7 @@ interface AddPayload {
   nom: string
   prix: number | null
   image: string | null
+  type_article?: TypeArticle
 }
 
 interface CartStore {
@@ -90,7 +107,7 @@ export const useCartStore = create<CartStore>()(
 
       addItem: async (payload, quantite = 1) => {
         const apiUrl = ''
-        let stockActuel = 9999
+        let stockActuel: number | null = payload.type_article === 'modele' ? null : 9999
         let seuilAlerte = 0
 
         try {
@@ -98,11 +115,15 @@ export const useCartStore = create<CartStore>()(
           if (res.ok) {
             const json = await res.json()
             const p = json.data
-            if (p) {
-              stockActuel = p.stock_actuel ?? 9999
+            if (p && (p.type_article === 'modele' || p.stock_actuel === null)) {
+              // Produit fini fabriqué sur commande : aucun plafond de stock.
+              stockActuel = null
+            } else if (p) {
+              const stock: number = p.stock_actuel ?? 9999
+              stockActuel = stock
               seuilAlerte = p.seuil_alerte ?? 0
 
-              if (stockActuel <= 0) {
+              if (stock <= 0) {
                 toast.error(`${payload.nom} est indisponible`)
                 return
               }
@@ -110,15 +131,15 @@ export const useCartStore = create<CartStore>()(
               const alreadyInCart = get().items.find(i => i.id === payload.id)?.quantite ?? 0
               const totalDemande = alreadyInCart + quantite
 
-              if (totalDemande > stockActuel) {
-                const adjusted = stockActuel - alreadyInCart
+              if (totalDemande > stock) {
+                const adjusted = stock - alreadyInCart
                 if (adjusted <= 0) {
                   toast.warning(`Vous avez déjà le stock max pour ${payload.nom}`)
                   return
                 }
                 quantite = adjusted
                 toast.warning(
-                  `Stock disponible : ${stockActuel} unité${stockActuel > 1 ? 's' : ''}. Quantité ajustée.`
+                  `Stock disponible : ${stock} unité${stock > 1 ? 's' : ''}. Quantité ajustée.`
                 )
               }
             }
@@ -178,6 +199,9 @@ export const useCartStore = create<CartStore>()(
               const json = await res.json()
               const p = json.data
               if (!p) return item
+              if (p.type_article === 'modele' || p.stock_actuel === null) {
+                return { ...item, type_article: 'modele' as const, stock_actuel: null, stock_insuffisant: false }
+              }
               return {
                 ...item,
                 stock_actuel: p.stock_actuel ?? 0,

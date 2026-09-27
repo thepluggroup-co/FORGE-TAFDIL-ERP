@@ -12,6 +12,7 @@ const DISPO_CONFIG: Record<Disponibilite, { label: string; bg: string; text: str
   disponible:   { label: 'Disponible',   bg: '#dcfce7', text: '#15803d' },
   stock_faible: { label: 'Stock faible', bg: '#fef3c7', text: '#d97706' },
   indisponible: { label: 'Sur commande', bg: '#f3f4f6', text: '#6b7280' },
+  sur_commande: { label: 'Fabriqué sur commande', bg: '#e0e7ff', text: '#4338ca' },
 }
 
 export function BadgeDisponibilite({ dispo }: { dispo: Disponibilite }) {
@@ -44,7 +45,7 @@ export function ProductCard({ produit }: Props) {
 
   const handleAddToCart = () => {
     void addItem(
-      { id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null },
+      { id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null, type_article: produit.type_article },
       1
     )
   }
