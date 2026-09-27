@@ -111,6 +111,12 @@ export type NouveauClientPg = typeof clientsPg.$inferInsert
 
 // ── Largeur de gamme : familles et catégories ───────────────────────────────
 // (MASTER PROMPT V3 §8 — Famille → Catégorie → Modèle(=produit) → Configuration)
+//
+// @deprecated produit_familles / produit_categories / produits.categorie_id :
+// jamais utilisés par le code. La hiérarchie officielle est l'arbre `familles`
+// (Catégorie → Famille → Sous-famille) + `modeles` — voir famillesPg plus bas et
+// ARCHITECTURE/COMMERCIAL_MODES.md (décision D2). Conservés (aucun DROP) ; ne
+// pas y brancher de nouveau code.
 
 export const produitFamillesPg = pgTable('produit_familles', {
   id:          id(),

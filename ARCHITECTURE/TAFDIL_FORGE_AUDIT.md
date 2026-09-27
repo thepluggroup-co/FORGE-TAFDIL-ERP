@@ -281,6 +281,28 @@ Protocole à chaque migration (§38-39) : `SELECT count(*)` avant/après sur cha
 - **D6 — Rôles** : le brief liste CLIENT/COMMERCIAL/TECHNICIEN/PRODUCTION/ACHATS/DIRECTION/ADMIN ; l'existant a SUPER_ADMIN, MANAGER, COMMERCIAL, CAISSIER, MAGASINIER, FORMATEUR, LIVREUR, READONLY. Recommandation : **ne pas créer de rôles maintenant**, ajouter une permission dédiée à la visibilité des coûts/marges en Phase 4 et l'attribuer aux rôles existants.
 - **D7 — Phase 0 bis sécurité** : corriger le prix de confiance du shop et les politiques RLS **avant** la Phase 1 ?
 
+## Décisions validées (27/09/2026)
+
+| Décision | Réponse |
+|---|---|
+| D1 | Oui : `modeles` source de vérité + vitrine `modeles_shop` (Phase 2) |
+| D2 | Oui : arbre `familles` (3 niveaux) ; `produit_familles`/`produit_categories` dépréciés sans suppression |
+| D3 | Oui : valeurs `type_gamme` conservées, mappées en `CommercialMode` dans le code |
+| D4 | `cout_unitaire_reference_xaf` est un **coût** saisi par l'utilisateur ; la marge sera un **taux saisi par l'utilisateur** (paramétrable, Phase 4) |
+| D5, D6 | En attente (non bloquantes avant les Phases 4-5) |
+| D7 | Oui : fait (Phase 0 bis) |
+
+## Avancement
+
+| Phase | État | Livrables |
+|---|---|---|
+| 0 — Audit | ✅ | ce document |
+| 0 bis — Sécurité shop | ✅ | prix/frais recalculés serveur, auth optionnelle vendeur, audit `VENTE_PRIX_FORCE`, réf web cryptographique, migration `20260930_shop_securite_prix_rls.sql` |
+| 1 — Fondations produits | ✅ | `CommercialMode` ([COMMERCIAL_MODES.md](COMMERCIAL_MODES.md)), hiérarchie 3 niveaux contrôlée, dépréciation documentée, migration `20261001_catalogue_hybride_phase1_hierarchie.sql` (métadonnées seules) |
+| 2 — Standard | ⏳ | attend validation de la Phase 1 |
+
+**Reste ouvert après la Phase 0 bis** : la lecture publique de `commandes_shop` (`commandes_shop_select_public`) est encore en place, car la page de suivi du shop et l'ERP web (hooks + Realtime) lisent la table directement. Il faut d'abord faire passer ces lectures par le serveur, puis retirer la politique.
+
 ## Préalable Git
 
 L'arbre de travail contient 68 fichiers modifiés non commités sur `main` (dont les corrections de tests qui font passer la suite à 473/473). Avant la Phase 1 : commiter ce travail (ou le mettre de côté), puis créer `feat/catalogue-hybride-phase1` — convention `feat/…` déjà utilisée (`feat/master-prompt-v3-phases-1-4`).
