@@ -86,6 +86,13 @@ vi.mock('../middleware/auth', () => ({
     c.set('requestId', 'test-request')
     await next()
   },
+  // Auth optionnelle de POST /api/shop/commandes : 'Bearer invalide' simule un jeton rejeté.
+  verifierBearer: async (authHeader: string | undefined) => {
+    if (!authHeader?.startsWith('Bearer ') || authHeader === 'Bearer invalide') {
+      return { ok: false, status: 401, error: 'Token invalide', code: 'INVALID_TOKEN' }
+    }
+    return { ok: true, user: { id: 'vendeur-1', email: 'vendeur@tafdil.cm', role: 'operateur' } }
+  },
 }))
 // RBAC mocké directement (plutôt que de laisser tourner le vrai checkPermission
 // contre la DB mockée) : shopErpRouter fait désormais un appel DB dans
@@ -100,7 +107,7 @@ vi.mock('../services/rbacService', () => ({
 
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
-import { checkPermission } from '../services/rbacService'
+import { checkPermission, writeAuditLog } from '../services/rbacService'
 
 /** Autorise la requête suivante — à appeler juste avant chaque app.request() protégé. */
 function allow(roleName = 'SUPER_ADMIN') {
@@ -208,6 +215,38 @@ const VALID_COMMANDE = {
   lignes: [{ product_id: '11111111-1111-1111-1111-111111111111', designation: 'Profilé', quantite: 2, prix_unitaire: 5000 }],
   mode_paiement:    'mtn_momo',
 }
+const PID = '11111111-1111-1111-1111-111111111111'
+
+/** Séquence DB commune d'une commande anonyme jusqu'à la tarification incluse. */
+function mockProduitEtVitrine(opts: {
+  prixPublic?: number; visible?: boolean; minCommande?: number; promo?: Record<string, unknown> | null
+} = {}) {
+  // 1. produits (existence + stock)
+  vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+    data: { id: PID, designation: 'Profilé', stock_actuel: 100, unite: 'm', prix_unitaire_xaf: 3000 }, error: null,
+  }) as never)
+  // 2. produits_shop (prix public, visibilité, minimum)
+  vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+    data: [{ product_id: PID, prix_public: opts.prixPublic ?? 5000, visible_shop: opts.visible ?? true, min_commande: opts.minCommande ?? 1 }],
+    error: null,
+  }) as never)
+  // 3. campagnes_produits (promotions actives)
+  vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+    data: opts.promo ? [opts.promo] : [], error: null,
+  }) as never)
+}
+
+/** Suite de la séquence : condition de paiement puis insert commandes_shop (chaîne renvoyée pour inspection). */
+function mockConditionEtInsert() {
+  vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+    data: { id: 'cp1', acompte_pct: 100, delai_solde_jours: 0 }, error: null,
+  }) as never)
+  const insertShop = mkChain({ data: { id: 'cs1', ref: 'WEB-2026-ABCDEF' }, error: null })
+  vi.mocked(supabase.from).mockReturnValueOnce(insertShop as never)
+  // commande ERP : échec volontaire → le reste du workflow est court-circuité
+  vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: { message: 'erp skip' } }) as never)
+  return insertShop as unknown as { insert: ReturnType<typeof vi.fn> }
+}
 
 describe('POST /api/shop/commandes', () => {
   it('retourne 400 si payload invalide (Zod : téléphone trop court)', async () => {
@@ -229,18 +268,8 @@ describe('POST /api/shop/commandes', () => {
   })
 
   it('accepte un retrait en boutique sans adresse de livraison', async () => {
-    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
-      data: { id: 'p1', designation: 'Profilé', stock_actuel: 100, unite: 'm' }, error: null,
-    }) as never)
-    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
-      data: { id: 'p1', designation: 'Profilé', stock_actuel: 100, unite: 'm' }, error: null,
-    }) as never)
-    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
-      data: [{ id: 'cs1', ref: 'WEB-2026-1234' }], error: null,
-    }) as never)
-    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
-      data: null, error: { message: 'erp skip' },
-    }) as never)
+    mockProduitEtVitrine()
+    mockConditionEtInsert()
 
     const res = await app.request('/api/shop/commandes', {
       method: 'POST', headers: JSON_HEADERS,
@@ -280,11 +309,9 @@ describe('POST /api/shop/commandes', () => {
   })
 
   it('crée la commande et retourne ref (happy path)', async () => {
-    // 1. fetch produit (stock ok)
-    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
-      data: { id: 'p1', designation: 'Profilé', stock_actuel: 100, unite: 'm' }, error: null,
-    }) as never)
-    // 2. lecture condition de paiement
+    // 1-3. produit, vitrine, promotions
+    mockProduitEtVitrine()
+    // 4. lecture condition de paiement
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
       data: { id: 'cp1', acompte_pct: 50, delai_solde_jours: 14 }, error: null,
     }) as never)
@@ -312,7 +339,145 @@ describe('POST /api/shop/commandes', () => {
     })
     expect(res.status).toBe(201)
     const body = await res.json() as { ref: string; montant_ttc: number }
-    expect(body.ref).toMatch(/^WEB-\d{4}-\d{4}$/)
+    expect(body.ref).toMatch(/^WEB-\d{4}-[A-HJ-NP-Z2-9]{6}$/)
+  })
+})
+
+// ── Phase 0 bis (D7) : le prix d'une commande web est fixé par le serveur ────
+
+describe('POST /api/shop/commandes — tarification serveur', () => {
+  it('ignore un prix falsifié et applique prix_public', async () => {
+    mockProduitEtVitrine({ prixPublic: 5000 })
+    const insertShop = mockConditionEtInsert()
+
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS,
+      body: JSON.stringify({ ...VALID_COMMANDE, lignes: [{ ...VALID_COMMANDE.lignes[0], prix_unitaire: 1 }] }),
+    })
+
+    expect(res.status).toBe(201)
+    const body = await res.json() as { montant_ttc: number }
+    // 2 × 5000 = 10 000 HT + TVA 19,25 % (1 925), pas de ville → livraison sur devis (0)
+    expect(body.montant_ttc).toBe(11925)
+    const payload = insertShop.insert.mock.calls[0][0] as { lignes: Array<{ prix_unitaire: number }>; montant_ht: number }
+    expect(payload.lignes[0].prix_unitaire).toBe(5000)
+    expect(payload.montant_ht).toBe(10000)
+  })
+
+  it('applique la promotion active, comme le catalogue affiché', async () => {
+    mockProduitEtVitrine({
+      prixPublic: 5000,
+      promo: {
+        campagne_id: 'camp-1', product_id: PID, remise_type: 'pct', remise_valeur: 10,
+        prix_promo_xaf: null, priorite: 1, campagnes_marketing: { nom: 'Rentrée', date_fin: '2099-12-31' },
+      },
+    })
+    const insertShop = mockConditionEtInsert()
+
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(VALID_COMMANDE),
+    })
+
+    expect(res.status).toBe(201)
+    const payload = insertShop.insert.mock.calls[0][0] as { lignes: Array<{ prix_unitaire: number }> }
+    expect(payload.lignes[0].prix_unitaire).toBe(4500)
+  })
+
+  it('recalcule les frais de livraison depuis la ville (frais envoyés ignorés)', async () => {
+    mockProduitEtVitrine({ prixPublic: 5000 })
+    const insertShop = mockConditionEtInsert()
+
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS,
+      body: JSON.stringify({ ...VALID_COMMANDE, client_ville: 'Douala', frais_livraison: 0 }),
+    })
+
+    expect(res.status).toBe(201)
+    const payload = insertShop.insert.mock.calls[0][0] as { frais_livraison: number; montant_ttc: number }
+    expect(payload.frais_livraison).toBe(2000)
+    expect(payload.montant_ttc).toBe(13925)
+  })
+
+  it('refuse un produit non visible en ligne (422 PRODUIT_NON_EN_VENTE)', async () => {
+    mockProduitEtVitrine({ visible: false })
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(VALID_COMMANDE),
+    })
+    expect(res.status).toBe(422)
+    expect((await res.json() as { code: string }).code).toBe('PRODUIT_NON_EN_VENTE')
+  })
+
+  it('refuse un produit sans prix public (422 PRIX_INDISPONIBLE)', async () => {
+    mockProduitEtVitrine({ prixPublic: 0 })
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(VALID_COMMANDE),
+    })
+    expect(res.status).toBe(422)
+    expect((await res.json() as { code: string }).code).toBe('PRIX_INDISPONIBLE')
+  })
+
+  it('refuse une quantité sous le minimum de commande (422 QUANTITE_MINIMALE)', async () => {
+    mockProduitEtVitrine({ minCommande: 5 })
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(VALID_COMMANDE),
+    })
+    expect(res.status).toBe(422)
+    expect((await res.json() as { code: string }).code).toBe('QUANTITE_MINIMALE')
+  })
+
+  it('refuse une vente « boutique » anonyme (403)', async () => {
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS,
+      body: JSON.stringify({ ...VALID_COMMANDE, source: 'boutique', mode_livraison: 'retrait_boutique' }),
+    })
+    expect(res.status).toBe(403)
+  })
+
+  it('refuse un jeton présent mais invalide, sans repli silencieux sur le prix catalogue (401)', async () => {
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: { ...JSON_HEADERS, Authorization: 'Bearer invalide' },
+      body: JSON.stringify(VALID_COMMANDE),
+    })
+    expect(res.status).toBe(401)
+  })
+
+  it('refuse un membre du personnel sans droit de vente (403)', async () => {
+    vi.mocked(checkPermission)
+      .mockResolvedValueOnce({ allowed: false, roleName: 'READONLY' })
+      .mockResolvedValueOnce({ allowed: false, roleName: 'READONLY' })
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: { ...JSON_HEADERS, Authorization: 'Bearer valide' },
+      body: JSON.stringify(VALID_COMMANDE),
+    })
+    expect(res.status).toBe(403)
+  })
+
+  it('laisse le personnel autorisé fixer un prix, et trace l’écart (VENTE_PRIX_FORCE)', async () => {
+    allow('COMMERCIAL')
+    // personnel : pas de lecture des promotions
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: { id: PID, designation: 'Profilé', stock_actuel: 100, unite: 'm', prix_unitaire_xaf: 3000 }, error: null,
+    }) as never)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: [{ product_id: PID, prix_public: 5000, visible_shop: true, min_commande: 1 }], error: null,
+    }) as never)
+    const insertShop = mockConditionEtInsert()
+
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: { ...JSON_HEADERS, Authorization: 'Bearer valide' },
+      body: JSON.stringify({ ...VALID_COMMANDE, lignes: [{ ...VALID_COMMANDE.lignes[0], prix_unitaire: 4000 }] }),
+    })
+
+    expect(res.status).toBe(201)
+    const payload = insertShop.insert.mock.calls[0][0] as { lignes: Array<{ prix_unitaire: number }> }
+    expect(payload.lignes[0].prix_unitaire).toBe(4000)
+    expect(writeAuditLog).toHaveBeenCalledWith(expect.objectContaining({
+      actionType: 'VENTE_PRIX_FORCE',
+      userId:     'vendeur-1',
+      payloadAfter: expect.objectContaining({
+        ecarts: [{ product_id: PID, prix_reference: 5000, prix_saisi: 4000 }],
+      }),
+    }))
   })
 })
 

@@ -44,6 +44,9 @@ export const AUDIT_ACTIONS = [
   // format, réutilisée plutôt que dupliquée (principe §4.1 du brief).
   'DEVIS_CREATED', 'DEVIS_UPDATED', 'DEVIS_LIGNE_AJUSTEE',
   'DEVIS_VALIDATION_CLIENT', 'DEVIS_CONVERTI_COMMANDE',
+  // Vente shop/boutique où le personnel a fixé un prix différent du prix de
+  // référence (le client anonyme, lui, ne peut jamais fixer de prix).
+  'VENTE_PRIX_FORCE',
 ] as const
 
 export type AuditActionType = typeof AUDIT_ACTIONS[number]

@@ -1,15 +1,17 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { randomUUID } from 'crypto'
+import { randomUUID, randomBytes } from 'crypto'
 import { supabaseAdmin } from '@forge/db'
-import { FRAIS_LIVRAISON } from '@forge/shared'
+import { FRAIS_LIVRAISON, fraisLivraisonWeb } from '@forge/shared'
 import { notifyCommandeSms } from '../services/sms.service'
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 import { ensureClient } from '../services/client-sync.service'
 import { ensureFactureForCommande, solderCreditsForCommande, syncCreditForCommande } from '../services/finance-core.service'
 import { requirePermission } from '../middleware/permission.middleware'
+import { verifierBearer } from '../middleware/auth'
+import { checkPermission, writeAuditLog } from '../services/rbacService'
 
 const db = supabaseAdmin!
 import type { HonoVariables } from '../types'
@@ -24,9 +26,15 @@ const smsResendAttempts = new Map<string, number>()
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
+// Sans 0/O/1/I : la référence est dictée au téléphone et recopiée depuis un SMS.
+// 32 symboles → aucun biais modulo sur un octet ; 32^6 ≈ 1 milliard de valeurs.
+// L'unicité reste garantie par la contrainte UNIQUE de commandes_shop.ref
+// (nouvel essai à l'insertion en cas de collision, voir POST /commandes).
+const ALPHABET_REF = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
 function genRef(): string {
   const year = new Date().getFullYear()
-  const seq  = String(Math.floor(Math.random() * 9000) + 1000) // simplifié — voir note ci-dessous
+  const seq  = Array.from(randomBytes(6), (b) => ALPHABET_REF[b % ALPHABET_REF.length]).join('')
   return `WEB-${year}-${seq}`
 }
 
@@ -265,6 +273,119 @@ async function creerBonSortieShop(args: {
   return bon
 }
 
+// ── Tarification serveur des commandes shop ───────────────────────────────────
+// Le prix envoyé par le navigateur n'est JAMAIS une source de vérité pour une
+// commande anonyme : on repart de produits_shop.prix_public (+ promotion active,
+// même règle que l'affichage du catalogue). Seul le personnel authentifié
+// (vente en boutique) peut fixer un prix, et tout écart au prix de référence
+// est tracé dans rbac_audit_logs.
+
+type LigneDemandee = { product_id: string; designation: string; quantite: number; prix_unitaire: number }
+type LigneTarifee  = LigneDemandee
+
+type ResultatTarification =
+  | { ok: true; lignes: LigneTarifee[]; ecartsPrix: Array<{ product_id: string; prix_reference: number | null; prix_saisi: number }> }
+  | { ok: false; status: 422; error: string; code: string; details?: Record<string, unknown> }
+
+interface ProduitShopTarifRow {
+  product_id:   string
+  prix_public:  number | null
+  visible_shop: boolean
+  min_commande: number | null
+}
+
+async function tarifierLignesShop(
+  lignes: LigneDemandee[],
+  produits: Map<string, { designation: string; prix_unitaire_xaf: number | null }>,
+  venteParPersonnel: boolean,
+): Promise<ResultatTarification> {
+  const ids = [...new Set(lignes.map((l) => l.product_id))]
+  const { data, error } = await db
+    .from('produits_shop')
+    .select('product_id, prix_public, visible_shop, min_commande')
+    .in('product_id', ids)
+
+  if (error) {
+    console.error('[shop] tarification produits_shop:', error.message)
+    return { ok: false, status: 422, error: 'Tarification indisponible, réessayez', code: 'TARIFICATION_INDISPONIBLE' }
+  }
+
+  const vitrine = new Map(((data ?? []) as ProduitShopTarifRow[]).map((r) => [r.product_id, r]))
+  const promos  = venteParPersonnel ? new Map<string, PromoActive>() : await promotionsActives(ids)
+
+  const tarifees: LigneTarifee[] = []
+  const ecartsPrix: Array<{ product_id: string; prix_reference: number | null; prix_saisi: number }> = []
+
+  for (const ligne of lignes) {
+    const produit     = produits.get(ligne.product_id)
+    const designation = produit?.designation ?? ligne.designation
+    const row         = vitrine.get(ligne.product_id)
+    const prixPublic  = Math.round(Number(row?.prix_public ?? 0))
+
+    if (venteParPersonnel) {
+      const reference = prixPublic > 0 ? prixPublic : (produit?.prix_unitaire_xaf ?? null)
+      if (reference === null || Math.round(ligne.prix_unitaire) !== Math.round(reference)) {
+        ecartsPrix.push({ product_id: ligne.product_id, prix_reference: reference, prix_saisi: ligne.prix_unitaire })
+      }
+      tarifees.push({ ...ligne, designation })
+      continue
+    }
+
+    if (!row || !row.visible_shop) {
+      return {
+        ok: false, status: 422, code: 'PRODUIT_NON_EN_VENTE',
+        error: `« ${designation} » n'est pas en vente en ligne`,
+        details: { product_id: ligne.product_id },
+      }
+    }
+    if (prixPublic <= 0) {
+      return {
+        ok: false, status: 422, code: 'PRIX_INDISPONIBLE',
+        error: `« ${designation} » n'a pas de prix public`,
+        details: { product_id: ligne.product_id },
+      }
+    }
+    const minimum = Number(row.min_commande ?? 1)
+    if (ligne.quantite < minimum) {
+      return {
+        ok: false, status: 422, code: 'QUANTITE_MINIMALE',
+        error: `Quantité minimale pour « ${designation} » : ${minimum}`,
+        details: { product_id: ligne.product_id, minimum, demande: ligne.quantite },
+      }
+    }
+
+    const prix = prixPromo(prixPublic, promos.get(ligne.product_id)) ?? prixPublic
+    tarifees.push({ product_id: ligne.product_id, designation, quantite: ligne.quantite, prix_unitaire: prix })
+  }
+
+  return { ok: true, lignes: tarifees, ecartsPrix }
+}
+
+/**
+ * Authentification OPTIONNELLE de POST /commandes.
+ * - pas d'en-tête Authorization → client anonyme du site (prix imposés)
+ * - en-tête valide + droit de vente (COMMERCIAL:CREATE ou CAISSE:CREATE) → personnel
+ * - en-tête présent mais invalide / sans droit → refus explicite, jamais de
+ *   repli silencieux sur le prix catalogue (le vendeur croirait son prix appliqué)
+ */
+async function identifierVendeur(authHeader: string | undefined): Promise<
+  | { ok: true; vendeur: HonoVariables['user'] | null }
+  | { ok: false; status: 401 | 403 | 500; error: string; code: string }
+> {
+  if (!authHeader) return { ok: true, vendeur: null }
+
+  const verification = await verifierBearer(authHeader)
+  if (!verification.ok) return verification
+
+  const { user } = verification
+  const commercial = await checkPermission(user.id, 'COMMERCIAL', 'CREATE', user.role)
+  if (commercial.allowed) return { ok: true, vendeur: user }
+  const caisse = await checkPermission(user.id, 'CAISSE', 'CREATE', user.role)
+  if (caisse.allowed) return { ok: true, vendeur: user }
+
+  return { ok: false, status: 403, error: 'Droit de vente requis pour fixer un prix', code: 'FORBIDDEN' }
+}
+
 // ── Schémas Zod ────────────────────────────────────────────────────────────────
 
 const ligneCommandeSchema = z.object({
@@ -423,6 +544,17 @@ shopRouter.get('/categories', async (c) => {
 shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) => {
   const body = c.req.valid('json')
 
+  const identification = await identifierVendeur(c.req.header('Authorization'))
+  if (!identification.ok) {
+    return c.json({ error: identification.error, code: identification.code }, identification.status)
+  }
+  const vendeur = identification.vendeur
+
+  // Une vente « boutique » saute la création de la commande ERP : réservée au personnel.
+  if (body.source === 'boutique' && !vendeur) {
+    return c.json({ error: 'Vente boutique réservée au personnel authentifié', code: 'FORBIDDEN' }, 403)
+  }
+
   if (body.mode_livraison === 'livraison' && (!body.client_adresse || body.client_adresse.trim().length < 5)) {
     return c.json({
       error: 'L\'adresse de livraison est obligatoire pour une commande livrée',
@@ -438,10 +570,11 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   }
 
   // 1. Vérifier disponibilité stock pour chaque ligne
+  const produitsLus = new Map<string, { designation: string; prix_unitaire_xaf: number | null }>()
   for (const ligne of body.lignes) {
     const { data: produit } = await db
       .from('produits')
-      .select('id, designation, stock_actuel, unite')
+      .select('id, designation, stock_actuel, unite, prix_unitaire_xaf')
       .eq('id', ligne.product_id)
       .single()
 
@@ -465,7 +598,24 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
         },
       }, 409)
     }
+
+    produitsLus.set(ligne.product_id, {
+      designation:       produit.designation,
+      prix_unitaire_xaf: produit.prix_unitaire_xaf ?? null,
+    })
   }
+
+  // 1 bis. Prix et frais recalculés côté serveur — jamais ceux du navigateur
+  const tarification = await tarifierLignesShop(body.lignes, produitsLus, Boolean(vendeur))
+  if (!tarification.ok) {
+    return c.json({ error: tarification.error, code: tarification.code, details: tarification.details }, tarification.status)
+  }
+  const lignes = tarification.lignes
+  const fraisLivraisonServeur = body.mode_livraison === 'retrait_boutique'
+    ? 0
+    : vendeur
+      ? body.frais_livraison
+      : (fraisLivraisonWeb(body.client_ville) ?? 0) // null = zone « sur devis », facturée après contact
 
   // 2. Vérifier éligibilité crédit si condition ≠ P100
   const clientId = await ensureClient({
@@ -484,9 +634,9 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     .eq('code', condCode)
     .maybeSingle()
   if (condCode !== 'P100') {
-    const montantEstime = Math.round(body.lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0))
+    const montantEstime = Math.round(lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0))
     const tvaEstimee    = Math.round(montantEstime * TVA_RATE)
-    const ttcEstime     = Math.round(montantEstime + tvaEstimee + body.frais_livraison)
+    const ttcEstime     = Math.round(montantEstime + tvaEstimee + fraisLivraisonServeur)
 
     const eligibilite = await verifierEligibiliteCredit(clientId, ttcEstime, 'web', condCode)
     if (!eligibilite.eligible) {
@@ -498,8 +648,8 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   }
 
   // 4. Calculer montants : la livraison est ajoutee apres TVA.
-  const montant_ht       = Math.round(body.lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0))
-  const frais_livraison  = Math.round(body.frais_livraison)
+  const montant_ht       = Math.round(lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0))
+  const frais_livraison  = Math.round(fraisLivraisonServeur)
   const tva              = Math.round(montant_ht * TVA_RATE)
   const montant_ttc      = Math.round(montant_ht + tva + frais_livraison)
   const cp = conditionPaiement as { id?: string; acompte_pct?: number | null; delai_solde_jours?: number | null } | null
@@ -508,11 +658,11 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     ? new Date(Date.now() + Number(cp.delai_solde_jours) * 86400_000).toISOString().slice(0, 10)
     : null
 
-  // 5. Générer référence unique
-  const ref = genRef()
+  // 5. Référence unique (voir genRef) — réessayée à l'insertion si collision
+  let ref = genRef()
 
   // 6. Lignes JSONB
-  const lignesJson = body.lignes.map((l) => ({
+  const lignesJson = lignes.map((l) => ({
     product_id:     l.product_id,
     designation:    l.designation,
     quantite:       l.quantite,
@@ -521,7 +671,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   }))
 
   // 7. Insérer commande_shop
-  const { data: commandeShop, error: errShop } = await db
+  const insererCommandeShop = () => db
     .from('commandes_shop')
     .insert({
       ref,
@@ -545,9 +695,28 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     .select('id, ref')
     .single()
 
+  let { data: commandeShop, error: errShop } = await insererCommandeShop()
+  for (let essai = 1; essai < 3 && errShop?.code === '23505'; essai++) {
+    ref = genRef()
+    ;({ data: commandeShop, error: errShop } = await insererCommandeShop())
+  }
+
   if (errShop || !commandeShop) {
     console.error('[shop] insert commandes_shop:', errShop)
     return c.json({ error: 'Erreur création commande', code: 'DB_ERROR' }, 500)
+  }
+
+  if (vendeur && tarification.ecartsPrix.length > 0) {
+    writeAuditLog({
+      userId:        vendeur.id,
+      actionType:    'VENTE_PRIX_FORCE',
+      module:        body.source === 'boutique' ? 'CAISSE' : 'COMMERCIAL',
+      resourceType:  'commandes_shop',
+      resourceId:    commandeShop.id,
+      payloadAfter:  { ref, ecarts: tarification.ecartsPrix },
+      ipAddress:     c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip'),
+      userAgent:     c.req.header('user-agent'),
+    })
   }
 
   const isBoutiqueSale = body.source === 'boutique'
@@ -587,7 +756,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
         .eq('id', commandeShop.id)
 
       // Insérer les lignes ERP
-      const lignesErp = body.lignes.map((l, i) => ({
+      const lignesErp = lignes.map((l, i) => ({
         commande_id:          erpCommande.id,
         produit_id:           l.product_id,
         designation:          l.designation,
@@ -612,7 +781,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
           clientNom:       body.client_nom,
           clientTelephone: body.client_telephone,
           montantTtc:      montant_ttc,
-          lignes:          body.lignes,
+          lignes:          lignes,
         })
       } catch (e) {
         console.error('[shop] auto bon sortie:', e)
@@ -623,7 +792,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
             clientNom:       body.client_nom,
             clientTelephone: body.client_telephone,
             montantTtc:      montant_ttc,
-            lignes:          body.lignes,
+            lignes:          lignes,
           })
         } catch (fallbackError) {
           console.error('[shop] auto bon sortie fallback:', fallbackError)
@@ -650,7 +819,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
           clientNom:       body.client_nom,
           clientTelephone: body.client_telephone,
           montantTtc:      montant_ttc,
-          lignes:          body.lignes,
+          lignes:          lignes,
         })
         await notifyWorkflow({
           event:   'stock.bon_sortie_a_preparer',
@@ -675,7 +844,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
         clientNom:       body.client_nom,
         clientTelephone: body.client_telephone,
         montantTtc:      montant_ttc,
-        lignes:          body.lignes,
+        lignes:          lignes,
       })
     } catch (e) {
       console.error('[shop] auto bon sortie boutique:', e)

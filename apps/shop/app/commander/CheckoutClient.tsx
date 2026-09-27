@@ -12,7 +12,7 @@ import { z } from 'zod'
 import { toast } from 'sonner'
 import { useCartStore, computeTotal } from '@/lib/cart'
 import type { CartItem, CartTotals } from '@/lib/cart'
-import { FRAIS_LIVRAISON, BOUTIQUE_RETRAIT } from '@forge/shared'
+import { fraisLivraisonWeb, BOUTIQUE_RETRAIT } from '@forge/shared'
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
@@ -52,11 +52,12 @@ const STEPS: { id: Step; label: string }[] = [
   { id: 4, label: 'Confirmation' },
 ]
 
+// null = tarif sur devis (contact commercial). Même règle que le recalcul serveur.
 const FRAIS: Record<Ville, number | null> = {
-  Douala:    FRAIS_LIVRAISON.douala.tarif,
-  Yaounde:   FRAIS_LIVRAISON.yaounde.tarif,
-  Bafoussam: null, // tarif sur devis — contact commercial
-  Autres:    null, // tarif sur devis — contact commercial
+  Douala:    fraisLivraisonWeb('Douala'),
+  Yaounde:   fraisLivraisonWeb('Yaounde'),
+  Bafoussam: fraisLivraisonWeb('Bafoussam'),
+  Autres:    fraisLivraisonWeb('Autres'),
 }
 
 const MODE_LABEL: Record<ModePaiement, string> = {
