@@ -299,7 +299,10 @@ Protocole à chaque migration (§38-39) : `SELECT count(*)` avant/après sur cha
 | 0 — Audit | ✅ | ce document |
 | 0 bis — Sécurité shop | ✅ | prix/frais recalculés serveur, auth optionnelle vendeur, audit `VENTE_PRIX_FORCE`, réf web cryptographique, migration `20260930_shop_securite_prix_rls.sql` |
 | 1 — Fondations produits | ✅ | `CommercialMode` ([COMMERCIAL_MODES.md](COMMERCIAL_MODES.md)), hiérarchie 3 niveaux contrôlée, dépréciation documentée, migration `20261001_catalogue_hybride_phase1_hierarchie.sql` (métadonnées seules) |
-| 2 — Standard | ⏳ | attend validation de la Phase 1 |
+| 2 — Standard | ✅ | vitrine `modeles_shop`, produits finis STANDARD au panier (fabriqués sur commande), onglet ERP « Produits finis », CAS 1 pilote testé, migration `20261002_catalogue_hybride_phase2_modeles_shop.sql` |
+| 3 — Configurable (P003) | ⏳ | attend validation de la Phase 2 |
+
+**Tests** : sur ce poste, la suite complète sature la mémoire avec le parallélisme par défaut (`heap out of memory`). Il faut la lancer avec `npx vitest run --maxWorkers=2`.
 
 **Reste ouvert après la Phase 0 bis** : la lecture publique de `commandes_shop` (`commandes_shop_select_public`) est encore en place, car la page de suivi du shop et l'ERP web (hooks + Realtime) lisent la table directement. Il faut d'abord faire passer ces lectures par le serveur, puis retirer la politique.
 

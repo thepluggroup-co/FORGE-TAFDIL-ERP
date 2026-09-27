@@ -60,7 +60,24 @@ Tous les ajouts sont additifs ; les champs existants ne changent pas.
 
 Les écritures continuent d'accepter `type_gamme` (`catalogue` / `configuration` / `sur_mesure`).
 
-## 5. Ce qui vient ensuite
+## 5. Parcours STANDARD (Phase 2)
 
-- **Phase 2 (STANDARD)** : exposer au site TAFDIL les modèles dont le mode effectif est `STANDARD`, via une vitrine `modeles_shop` calquée sur `produits_shop` (D1).
-- **Phase 3 (CONFIGURABLE)** : produit pilote P003 — paramètres bornés ; au-delà des bornes, bascule en `QUOTE`.
+Deux sortes d'articles STANDARD cohabitent sur le site (`type_article`) :
+
+| `type_article` | Source | Vitrine | Stock | Commande |
+|---|---|---|---|---|
+| `produit` | `produits` (stock / négoce) | `produits_shop` | plafonné par `stock_actuel`, bon de sortie magasin | `product_id` |
+| `modele` | `modeles` (produit fini) | `modeles_shop` | **fabriqué sur commande** (`stock_actuel: null`, `disponibilite: 'sur_commande'`) | `modele_id` |
+
+Règles serveur pour une ligne `modele_id` (`POST /api/shop/commandes`) :
+- le modèle doit être actif et de mode effectif `STANDARD`, sinon `422 MODE_NON_STANDARD` ; cette règle vaut **aussi pour le personnel** : un modèle configurable ou sur devis ne passe jamais par le panier ;
+- client anonyme : le modèle doit être en vitrine, avec un prix public > 0 et un minimum de commande respecté ; le prix appliqué est celui de `modeles_shop.prix_public` ;
+- aucun bon de sortie n'est créé ; une alerte `production.commande_standard_a_fabriquer` est envoyée ; la ligne ERP porte `commandes_lignes.modele_id`.
+
+Gestion ERP : onglet **Boutique → Produits finis**, qui appelle `GET /api/shop-erp/modeles` et `PUT /api/shop-erp/modeles/:id/vitrine`. Seuls les modèles STANDARD y figurent. La mise en vente exige un prix, et chaque changement de prix est tracé (`PRIX_VITRINE_MODIFIE`).
+
+Pas encore couvert : les promotions sur les produits finis (les campagnes ciblent `produits`) et l'envoi d'images pour un modèle depuis l'ERP (l'API accepte des URL).
+
+## 6. Ce qui vient ensuite
+
+- **Phase 3 (CONFIGURABLE)** : produit pilote P003, avec des paramètres bornés ; au-delà des bornes, le produit bascule en `QUOTE`.
