@@ -28,6 +28,10 @@ export * from './schema-rbac'
 export * from './schema.pg.rbac'
 export { runRbacSeed, ROLE_PERMISSIONS_MATRIX, SEED_ROLES, IMMUTABLE_PERMISSIONS } from './seeds/rbac'
 
+// ── Module Catalogue produits finis (Phase 1) ─────────────────────────────────
+export { runCatalogueSeed, SEED_FAMILLES } from './seeds/catalogue'
+export type { TypeGamme } from './seeds/catalogue'
+
 // ── Synchronisation offline-first ─────────────────────────────────────────────
 export {
   syncToCloud,

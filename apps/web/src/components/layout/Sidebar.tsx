@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Wrench, Package, ShoppingCart, FileText, DollarSign, Users,
   GraduationCap, Kanban, Truck, Megaphone, Shield, Brain, Wifi,
   Store, LogOut, ChevronLeft, ChevronRight, ChevronDown, Settings, Crown, Hammer, Building2,
-  Receipt,
+  Receipt, FolderTree,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
@@ -43,6 +43,7 @@ const NAV_GROUPS: NavGroup[] = [
       { path: '/caisse',       label: 'Caisse',       icon: Receipt,       requiredModule: 'CAISSE' },
       { path: '/boutique',     label: 'Boutique',     icon: Store, dynamicBadge: true, requiredModule: 'COMMERCIAL' },
       { path: '/production',   label: 'Production',   icon: Wrench,        requiredModule: 'PRODUCTION' },
+      { path: '/catalogue',    label: 'Catalogue',    icon: FolderTree,    requiredModule: 'PRODUCTION' },
       { path: '/commandes',    label: 'Commandes',    icon: ShoppingCart,  requiredModule: 'COMMERCIAL' },
       { path: '/stocks',       label: 'Stocks',       icon: Package,       requiredModule: 'STOCK' },
       { path: '/fournisseurs', label: 'Fournisseurs', icon: Building2,     requiredModule: 'STOCK' },

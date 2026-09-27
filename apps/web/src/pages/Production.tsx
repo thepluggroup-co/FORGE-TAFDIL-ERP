@@ -4,6 +4,7 @@ import { Wrench, Gauge, AlertTriangle, Clock, Plus, Play, CheckCircle2, Package 
 import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatDate } from '@/lib/utils'
+import { uniteOptions } from '@/lib/constants'
 import { useJobs, useCreateJob, useUpdateJobStatut } from '@/hooks/useOperations'
 import type { Job } from '@/hooks/useOperations'
 import { useStocks } from '@/hooks/useStocks'
@@ -282,11 +283,13 @@ export default function Production() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Unité</label>
-                  <input
+                  <select
                     value={form.unite}
                     onChange={(e) => setForm((f) => ({ ...f, unite: e.target.value }))}
                     className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-                  />
+                  >
+                    {uniteOptions(form.unite).map((u) => <option key={u} value={u}>{u}</option>)}
+                  </select>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">

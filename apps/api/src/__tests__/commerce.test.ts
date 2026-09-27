@@ -64,7 +64,12 @@ vi.mock('../services/sms.service', () => ({
 
 vi.mock('../services/finance-core.service', () => ({
   enregistrerPaiementCommande: vi.fn().mockResolvedValue({ ok: true }),
-  ensureFactureForCommande:    vi.fn().mockResolvedValue({ id: 'fac-test-001' }),
+  ensureFactureForCommande:    vi.fn().mockResolvedValue({ facture: { id: 'fac-test-001' }, created: true }),
+  // §37/moteur de crédit (transformer-commande) — importés par commerce.ts mais
+  // jusqu'ici absents du mock, plantant dès qu'un test atteignait ce chemin.
+  getFactureActiveByCommande:  vi.fn().mockResolvedValue(null),
+  solderCreditsForCommande:    vi.fn().mockResolvedValue(undefined),
+  syncCreditForCommande:       vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock('../services/credit-eligibility.service', () => ({
@@ -82,6 +87,10 @@ vi.mock('../services/offline-fallback', () => ({
   withOfflineFallback: vi.fn().mockImplementation(
     (_label: string, onlineFn: () => unknown) => onlineFn()
   ),
+  // app.ts (error handler global) importe isNetworkError pour distinguer une panne
+  // réseau Supabase d'une vraie erreur applicative — absent du mock, l'appel
+  // plantait avec "isNetworkError is not a function" dès qu'une route jetait.
+  isNetworkError: vi.fn().mockReturnValue(false),
 }))
 
 import app from '../app'
@@ -105,6 +114,11 @@ const CLIENT = {
   sync_status:    'synced',
 }
 
+// date_validite doit toujours rester dans le futur : GET /devis (liste) auto-expire
+// en place tout devis dont la date de validité est dépassée (mutation directe de
+// l'objet reçu, cf. routes/commerce.ts) — un objet fixture partagé (const DEVIS,
+// même référence utilisée par plusieurs tests) et une date figée dans le passé
+// corrompent alors silencieusement les tests suivants qui réutilisent DEVIS.
 const DEVIS = {
   id:              DEVIS_ID,
   numero:          'DEV-2026-0001',
@@ -112,7 +126,7 @@ const DEVIS = {
   client_nom:      'SODECOTON',
   client_id:       CLIENT_ID,
   date_emission:   '2026-06-01',
-  date_validite:   '2026-06-30',
+  date_validite:   `${new Date().getFullYear() + 1}-06-30`,
   total_ht_xaf:    500_000,
   tva_xaf:         96_250,
   total_ttc_xaf:   596_250,
@@ -143,6 +157,8 @@ const DEVIS_CREATE_BODY = {
   client_id:     CLIENT_ID,
   date_emission: '2026-06-01',
   date_validite: '2026-06-30',
+  // condition_paiement_id (UUID) est désormais requis par le schéma Zod du devis
+  condition_paiement_id: '11111111-1111-1111-1111-111111111111',
   lignes: [{ designation: 'Aluminium 6060', unite: 'kg', quantite: 100, prix_unitaire_ht_xaf: 5_000 }],
 }
 
@@ -152,6 +168,12 @@ describe('C1 — GET /api/clients : liste paginée', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('retourne 200 avec data + total + pagination', async () => {
+    // Premier appel HTTP du fichier : cache RBAC froid → checkPermission() interroge
+    // réellement rbac_user_profiles puis rbac_roles avant la logique métier — sans
+    // ces 2 mocks, ces appels consomment par erreur celui destiné à la liste clients
+    // (cause dominante, cf. docs/DETTE-TESTS-2026-09-26.md).
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never) // rbac_user_profiles
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never) // rbac_roles
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: [CLIENT], count: 1, error: null }) as never,
     )
@@ -286,6 +308,11 @@ describe('C5 — POST /api/devis : création devis avec PDF', () => {
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: null, count: 0, error: null }) as never,
     )
+    // ensureClient(client_id fourni) → trouve le client existant
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: CLIENT, error: null }) as never)
+    // ensureClient : CLIENT n'a pas de champ updated_at/pays → mergeMissing() les
+    // juge manquants et déclenche un update() pour les combler
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
     // insert devis
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: DEVIS, error: null }) as never,
@@ -365,9 +392,12 @@ describe('C6 — PATCH /api/devis/:id/statut : transition devis', () => {
   })
 
   it('retourne 403 si rôle operateur (superviseur requis)', async () => {
+    // userId dédié : évite d'hériter du cache RBAC SUPER_ADMIN partagé (voir C1 et
+    // docs/DETTE-TESTS-2026-09-26.md) — sans ça, ce test hérite du rôle mis en cache
+    // par un test 'admin' antérieur pour l'userId par défaut, et le 403 n'arrive jamais.
     const res = await app.request(`/api/devis/${DEVIS_ID}/statut`, {
       method:  'PATCH',
-      headers: new Headers(authHeaders('operateur')),
+      headers: new Headers(authHeaders('operateur', 'test-uid-c6-deny')),
       body:    JSON.stringify({ statut: 'envoye' }),
     })
     expect(res.status).toBe(403)
@@ -447,6 +477,125 @@ describe('C8 — PATCH /api/commandes/:id/statut : transitions commande', () => 
   })
 })
 
+describe('C8b — GET /api/commandes/:id/production : vue production (§34)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('retourne 200 avec les jobs et le récapitulatif', async () => {
+    // fetch commande (existence)
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({ data: { id: COMMANDE_ID }, error: null }) as never,
+    )
+    // fetch jobs_production
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({
+        data: [{
+          id: 'job-001', numero: 'JOB-2026-0001', type_job: 'fabrication',
+          produit_id: 'mod-001', produit_designation: 'Porte métallique', unite: 'unité',
+          quantite_prevue: 2, prix_unitaire_xaf: 50_000, ressources_besoin: null,
+          statut: 'in_production', avancement_pct: 40,
+          date_debut: '2026-06-01T00:00:00Z', date_fin_prevue: '2026-06-05T00:00:00Z', date_fin_reelle: null,
+          notes: null, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z',
+          machines: null, employes: null,
+        }],
+        error: null,
+      }) as never,
+    )
+
+    const res  = await app.request(`/api/commandes/${COMMANDE_ID}/production`, { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { commande_id: string; jobs: unknown[]; total: number; recapitulatif: { en_cours: number } }
+    expect(body.commande_id).toBe(COMMANDE_ID)
+    expect(body.total).toBe(1)
+    expect(body.recapitulatif.en_cours).toBe(1)
+  })
+
+  it('retourne 404 si commande introuvable', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({ data: null, error: null }) as never,
+    )
+
+    const res = await app.request(`/api/commandes/inconnue-id/production`, { headers: new Headers(authHeaders('admin')) })
+    expect(res.status).toBe(404)
+  })
+
+  it('retourne 401 sans token', async () => {
+    const res = await app.request(`/api/commandes/${COMMANDE_ID}/production`, { headers: new Headers({ 'Content-Type': 'application/json' }) })
+    expect(res.status).toBe(401)
+  })
+})
+
+describe('C8c — PATCH /api/commandes/:id/statut → in_production : auto-création jobs_production (Phase 4)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('crée un job de production par ligne réelle de la commande', async () => {
+    const lignesCommande = [
+      { produit_id: null, designation: 'Porte métallique', unite: 'unité', quantite: 2, prix_unitaire_ht_xaf: 100_000, total_ht_xaf: 200_000, ordre: 1 },
+      { produit_id: null, designation: 'Grille aluminium', unite: 'unité', quantite: 1, prix_unitaire_ht_xaf: 100_000, total_ht_xaf: 100_000, ordre: 2 },
+    ]
+    const insertedJobs: Record<string, unknown>[] = []
+
+    vi.mocked(supabase.from).mockImplementation(((table: string) => {
+      if (table === 'commandes') {
+        return mkChain({ data: { id: COMMANDE_ID, statut: 'confirmed', numero: 'CMD-2026-0001', client_id: null, total_ttc_xaf: 300_000 }, error: null }) as never
+      }
+      if (table === 'commandes_lignes') return mkChain({ data: lignesCommande, error: null }) as never
+      if (table === 'jobs_production') {
+        return {
+          ...mkChain({ data: [], error: null }),
+          insert: vi.fn().mockImplementation((rows: Record<string, unknown>[]) => {
+            insertedJobs.push(...rows)
+            return mkChain({ data: rows, error: null })
+          }),
+        } as never
+      }
+      if (table === 'bons_sortie') return mkChain({ data: null, count: 0, error: null }) as never
+      return mkChain({ data: null, count: 0, error: null }) as never
+    }) as never)
+
+    const res = await app.request(`/api/commandes/${COMMANDE_ID}/statut`, {
+      method:  'PATCH',
+      headers: new Headers(authHeaders('admin')),
+      body:    JSON.stringify({ statut: 'in_production' }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(insertedJobs).toHaveLength(2)
+    expect(insertedJobs[0]).toMatchObject({
+      commande_id: COMMANDE_ID, type_job: 'commande',
+      produit_designation: 'Porte métallique', quantite_prevue: 2, prix_unitaire_xaf: 100_000,
+      statut: 'confirmed',
+    })
+    expect(insertedJobs[1]).toMatchObject({ produit_designation: 'Grille aluminium', quantite_prevue: 1 })
+  })
+
+  it('ne recrée pas de jobs si des jobs existent déjà pour cette commande (idempotence)', async () => {
+    const insertSpy = vi.fn()
+
+    vi.mocked(supabase.from).mockImplementation(((table: string) => {
+      if (table === 'commandes') {
+        return mkChain({ data: { id: COMMANDE_ID, statut: 'confirmed', numero: 'CMD-2026-0001', client_id: null, total_ttc_xaf: 300_000 }, error: null }) as never
+      }
+      if (table === 'jobs_production') {
+        return {
+          ...mkChain({ data: [{ id: 'job-existant' }], error: null }),
+          insert: insertSpy.mockReturnValue(mkChain({ data: [], error: null })),
+        } as never
+      }
+      if (table === 'bons_sortie') return mkChain({ data: null, count: 0, error: null }) as never
+      return mkChain({ data: null, count: 0, error: null }) as never
+    }) as never)
+
+    const res = await app.request(`/api/commandes/${COMMANDE_ID}/statut`, {
+      method:  'PATCH',
+      headers: new Headers(authHeaders('admin')),
+      body:    JSON.stringify({ statut: 'in_production' }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+})
+
 describe('C9 — POST /api/devis/:id/transformer-commande', () => {
   beforeEach(() => vi.clearAllMocks())
 
@@ -518,9 +667,11 @@ describe('C10 — POST /api/commandes/:id/paiements : acompte', () => {
   })
 
   it('retourne 403 si rôle apprenant', async () => {
+    // userId dédié : évite le cache RBAC SUPER_ADMIN partagé (voir C1/C6 et
+    // docs/DETTE-TESTS-2026-09-26.md)
     const res = await app.request(`/api/commandes/${COMMANDE_ID}/paiements`, {
       method:  'POST',
-      headers: new Headers(authHeaders('apprenant')),
+      headers: new Headers(authHeaders('apprenant', 'test-uid-c10-deny')),
       body:    JSON.stringify(VALID_BODY),
     })
     expect(res.status).toBe(403)

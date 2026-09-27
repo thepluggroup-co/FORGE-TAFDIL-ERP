@@ -68,6 +68,20 @@ vi.mock('../../services/notifications', () => ({
   notifyStatutChange: vi.fn().mockResolvedValue(undefined),
 }))
 
+// POST /devis/:id/transformer-commande appelle désormais ensureFactureForCommande()
+// et syncCreditForCommande() (moteur de crédit, cf. docs/DETTE-TESTS-2026-09-26.md) —
+// mockées directement plutôt que de rejouer leur propre cascade de requêtes DB.
+vi.mock('../../services/finance-core.service', () => ({
+  enregistrerPaiementCommande:       vi.fn(),
+  ensureFactureForCommande:          vi.fn().mockResolvedValue({ facture: null, created: false }),
+  getFactureActiveByCommande:        vi.fn().mockResolvedValue(null),
+  solderCreditsForCommande:          vi.fn().mockResolvedValue(undefined),
+  syncCreditForCommande:             vi.fn().mockResolvedValue(null),
+  syncCreditForFacture:              vi.fn().mockResolvedValue(null),
+  backfillCreditsClients:            vi.fn().mockResolvedValue(undefined),
+  statutCreditDepuisSoldeEtEcheance: vi.fn().mockReturnValue('en_cours'),
+}))
+
 vi.mock('@forge/ai', () => ({
   anthropic: {
     messages: { create: vi.fn() },
@@ -119,6 +133,9 @@ const BON_SOUMIS = {
 }
 
 const BON_VALIDE = { ...BON_SOUMIS, statut: 'valide' }
+// Un bon "valide" prêt à être exécuté exige désormais un préparateur assigné
+// et une préparation marquée "prête" (garde PREPARATION_REQUIRED, routes/bons.ts).
+const BON_PRET_A_EXECUTER = { ...BON_VALIDE, preparateur_id: 'preparateur-uid-jc-001', statut_preparation: 'pret' }
 
 const BON_LIGNES = [
   { id: 'lig-001', bon_id: BON_ID, produit_id: 'prod-001',
@@ -331,10 +348,9 @@ describe('🔧 ATELIER — Workflow bon de sortie', () => {
   it('T06 — PUT /api/bons/:id/valider approuve le bon', async () => {
     // fetch bon pour vérifier statut=soumis
     mockFrom().mockReturnValueOnce(mkChain({ data: BON_SOUMIS, error: null }) as never)
-    // update statut → 'valide'
+    // update statut → 'valide' (le handler ne fait plus de lookup "resolveCommandeIdForBon"
+    // — supprimé depuis, cf. routes/bons.ts)
     mockFrom().mockReturnValueOnce(mkChain({ data: BON_VALIDE, error: null }) as never)
-    // resolveCommandeIdForBon → from('commandes_shop') (demandeur non-vide + commande_id null)
-    mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
     // audit middleware (PUT 200)
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 
@@ -354,10 +370,10 @@ describe('🔧 ATELIER — Workflow bon de sortie', () => {
   })
 
   it('T07 — PUT /api/bons/:id/executer avec bon code_unique → succès RPC', async () => {
-    // fetch bon (statut=valide)
+    // fetch bon (statut=valide, préparation prête)
     mockFrom().mockReturnValueOnce(
       mkChain({
-        data:  { ...BON_VALIDE, bons_sortie_lignes: BON_LIGNES },
+        data:  { ...BON_PRET_A_EXECUTER, bons_sortie_lignes: BON_LIGNES },
         error: null,
       }) as never,
     )
@@ -366,7 +382,8 @@ describe('🔧 ATELIER — Workflow bon de sortie', () => {
       data:  { success: true, bon_id: BON_ID },
       error: null,
     })
-    // resolveCommandeIdForBon → from('commandes_shop') (demandeur non-vide + commande_id null)
+    // ensureWorkflowApresExecutionBon → resolveCommandeContext → from('bons_sortie')
+    // (bon_id renseigné même si commande_id est null)
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
     // audit middleware (PUT 200)
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
@@ -446,6 +463,12 @@ describe('💼 COMMERCE — Devis et commandes', () => {
   it('T10 — POST /api/devis crée un devis avec PDF généré', async () => {
     // genererNumero : count devis du jour → 0
     mockFrom().mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)
+    // ensureClient(client_id fourni) → from('clients').select(...).eq('id',...).maybeSingle()
+    // trouve le client existant directement (pas de 2e lookup par nom, pas d'insert)
+    mockFrom().mockReturnValueOnce(mkChain({ data: CLIENT, error: null }) as never)
+    // ensureClient : CLIENT n'a pas de champ updated_at → mergeMissing() le juge
+    // manquant et déclenche un update() pour le combler
+    mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
     // insert devis
     mockFrom().mockReturnValueOnce(mkChain({ data: DEVIS, error: null }) as never)
     // insert devis_lignes
@@ -463,12 +486,15 @@ describe('💼 COMMERCE — Devis et commandes', () => {
     const res = await app.request('/api/devis', {
       method:  'POST',
       headers: authHeaders('admin'),
+      // condition_paiement_id (UUID, FK conditions_paiement) est désormais requis
+      // par le schéma Zod du devis — "conditions_paiement" (libellé libre) n'existe
+      // plus comme champ de création.
       body:    JSON.stringify({
-        client_id:           CLIENT_ID,
-        client_nom:          'SOGEA Cameroun',
-        date_emission:       TODAY,
-        date_validite:       `${YEAR}-12-31`,
-        conditions_paiement: 'Virement bancaire',
+        client_id:             CLIENT_ID,
+        client_nom:            'SOGEA Cameroun',
+        date_emission:         TODAY,
+        date_validite:         `${YEAR}-12-31`,
+        condition_paiement_id: '11111111-1111-1111-1111-111111111111',
         lignes: [{
           designation: 'Poutre HEB 200', categorie: 'materiaux',
           unite: 'ml', quantite: 10, prix_unitaire_ht_xaf: 100_000,
@@ -497,14 +523,16 @@ describe('💼 COMMERCE — Devis et commandes', () => {
     mockFrom().mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)
     // 4 : genererNumero pour CMD — count commandes du jour
     mockFrom().mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)
-    // 5 : insert commande
+    // 5 : §37 verrou d'idempotence — update devis → 'transforme' AVANT la création de
+    // la commande (test-and-set atomique ; réclamé avec succès → .maybeSingle() renvoie la ligne)
+    mockFrom().mockReturnValueOnce(mkChain({ data: { id: DEVIS_ID }, error: null }) as never)
+    // 6 : insert commande
     mockFrom().mockReturnValueOnce(mkChain({ data: COMMANDE, error: null }) as never)
-    // 6 : insert commandes_lignes
-    mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
-    // 7 : update devis → statut='transforme'
+    // 7 : insert commandes_lignes
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
     // 8 : insert historique_commandes
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
+    // ensureFactureForCommande / syncCreditForCommande sont mockées (voir en tête de fichier)
     // 9 : audit middleware (POST 201)
     mockFrom().mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
 

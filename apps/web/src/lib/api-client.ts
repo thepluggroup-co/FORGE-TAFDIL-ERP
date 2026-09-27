@@ -143,7 +143,7 @@ async function request<T>(
 
     // ── Other non-OK ───────────────────────────────────────────────────────
     if (!res.ok) {
-      const data = await res.json().catch(() => ({})) as { error?: unknown; message?: string }
+      const data = await res.json().catch(() => ({})) as { error?: unknown; message?: string; code?: string }
       // data.error can be a Zod error object (from @hono/zod-validator) — serialize safely
       const errMsg =
         typeof data.error === 'string'
@@ -151,7 +151,13 @@ async function request<T>(
           : typeof data.message === 'string'
             ? data.message
             : `Erreur ${res.status}`
-      throw new Error(errMsg)
+      // .code est attaché en plus du message (ex: ACTIVE_ORDERS sur DELETE /clients/:id)
+      // pour permettre à l'appelant de distinguer une erreur métier précise sans
+      // parser le texte — les appelants existants qui ne lisent que .message
+      // ne sont pas affectés.
+      const error = new Error(errMsg) as Error & { code?: string }
+      if (typeof data.code === 'string') error.code = data.code
+      throw error
     }
 
     // 204 No Content — pas de corps JSON

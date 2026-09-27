@@ -1,14 +1,16 @@
 import { FileText } from 'lucide-react'
 import { formatDate, formatXAF } from '@/lib/utils'
 
-const TVA_RATE = 0.1925
-
 export interface DevisPreviewLine {
   id?: string | number
   designation: string
   quantite: number
   prix_unitaire_ht_xaf: number
   unite?: string | null
+  // §42 — dimensions saisies (Configurateur, §40) : sûr à montrer au client (« comment
+  // c'est dimensionné »), à la différence du coût calculé / de la formule / des
+  // ressources, qui restent des informations internes (§41) jamais envoyées ici.
+  configuration?: Record<string, unknown> | null
 }
 
 export interface DevisPreviewData {
@@ -38,9 +40,31 @@ function safeFormatDate(value?: string | null) {
   return value ? formatDate(value) : '-'
 }
 
+const DIMENSION_LABELS: Record<string, string> = {
+  largeur: 'Largeur', hauteur: 'Hauteur', longueur: 'Longueur',
+  epaisseur: 'Épaisseur', diametre: 'Diamètre', poids: 'Poids',
+  surface: 'Surface', volume: 'Volume',
+}
+
+/** §42 — résume la configuration (dimensions) en une ligne lisible par le client. */
+function formatConfiguration(configuration?: Record<string, unknown> | null): string | null {
+  if (!configuration) return null
+  const dimensions = configuration.dimensions as Record<string, number> | undefined
+  const parts: string[] = []
+  if (dimensions) {
+    for (const [key, label] of Object.entries(DIMENSION_LABELS)) {
+      const v = dimensions[key]
+      if (typeof v === 'number' && !Number.isNaN(v)) parts.push(`${label} ${v}`)
+    }
+  }
+  if (parts.length === 0) return null
+  return parts.join(' × ')
+}
+
 export function DevisPreview({ devis, compact = false }: DevisPreviewProps) {
   const acompte = devis.acompte_pct ?? 0
-  const acompteXaf = Math.round((devis.total_ttc_xaf * acompte) / 100)
+  // §17-19 — l'acompte se calcule sur le montant brut du devis (pas de TVA à en retirer)
+  const acompteXaf = Math.round((devis.total_ht_xaf * acompte) / 100)
 
   return (
     <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -97,9 +121,14 @@ export function DevisPreview({ devis, compact = false }: DevisPreviewProps) {
               </tr>
             </thead>
             <tbody>
-              {devis.lignes.map((ligne, index) => (
+              {devis.lignes.map((ligne, index) => {
+                const config = formatConfiguration(ligne.configuration)
+                return (
                 <tr key={ligne.id ?? index} className="border-t border-gray-100">
-                  <td className="px-3 py-2.5 text-[#212121]">{ligne.designation}</td>
+                  <td className="px-3 py-2.5 text-[#212121]">
+                    {ligne.designation}
+                    {config && <p className="mt-0.5 text-[11px] font-normal text-gray-400">{config}</p>}
+                  </td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-right text-gray-600">
                     {ligne.quantite} {ligne.unite ?? 'u.'}
                   </td>
@@ -110,7 +139,8 @@ export function DevisPreview({ devis, compact = false }: DevisPreviewProps) {
                     {formatXAF(ligne.quantite * ligne.prix_unitaire_ht_xaf)}
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -127,18 +157,11 @@ export function DevisPreview({ devis, compact = false }: DevisPreviewProps) {
             {devis.notes ? <p className="mt-2 text-gray-500">{devis.notes}</p> : null}
           </div>
 
+          {/* §17-19/§41.G — le devis est un montant brut, sans TVA */}
           <div className="space-y-1 text-sm">
-            <div className="flex justify-between text-gray-500">
-              <span>Total HT</span>
-              <span className="font-semibold text-[#212121]">{formatXAF(devis.total_ht_xaf)}</span>
-            </div>
-            <div className="flex justify-between text-gray-500">
-              <span>TVA {(TVA_RATE * 100).toFixed(2)}%</span>
-              <span>{formatXAF(devis.tva_xaf)}</span>
-            </div>
             <div className="mt-2 flex justify-between rounded-lg bg-[#C62828] px-3 py-2 font-black text-white">
-              <span>Total TTC</span>
-              <span>{formatXAF(devis.total_ttc_xaf)}</span>
+              <span>Montant brut du devis</span>
+              <span>{formatXAF(devis.total_ht_xaf)}</span>
             </div>
           </div>
         </div>

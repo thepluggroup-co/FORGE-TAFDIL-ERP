@@ -87,9 +87,25 @@ vi.mock('../middleware/auth', () => ({
     await next()
   },
 }))
+// RBAC mocké directement (plutôt que de laisser tourner le vrai checkPermission
+// contre la DB mockée) : shopErpRouter fait désormais un appel DB dans
+// requirePermission avant la logique métier des routes, ce qui décale la
+// consommation des mockReturnValueOnce destinés aux requêtes des handlers
+// (même cause dominante que dans operations.test.ts, cf. docs/DETTE-TESTS-2026-09-26.md).
+vi.mock('../services/rbacService', () => ({
+  checkPermission:           vi.fn(),
+  writeAuditLog:             vi.fn(),
+  invalidatePermissionCache: vi.fn(),
+}))
 
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
+import { checkPermission } from '../services/rbacService'
+
+/** Autorise la requête suivante — à appeler juste avant chaque app.request() protégé. */
+function allow(roleName = 'SUPER_ADMIN') {
+  vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName })
+}
 
 function resetFromDefault() {
   const safeChain = () => {
@@ -342,6 +358,7 @@ describe('GET /api/shop-erp/produits', () => {
       error: null,
     }) as never)
 
+    allow()
     const res = await app.request('/api/shop-erp/produits', { headers: new Headers(authHeaders('admin')) })
     expect(res.status).toBe(200)
     const body = await res.json() as { data: unknown[]; total: number }
@@ -351,6 +368,7 @@ describe('GET /api/shop-erp/produits', () => {
 
 describe('PUT /api/shop-erp/produits/:id/visibilite', () => {
   it('retourne 400 si payload invalide (Zod)', async () => {
+    allow()
     const res = await app.request('/api/shop-erp/produits/p1/visibilite', {
       method: 'PUT', headers: new Headers(authHeaders('admin')),
       body: JSON.stringify({ visible: 'oui' }),
@@ -359,6 +377,7 @@ describe('PUT /api/shop-erp/produits/:id/visibilite', () => {
   })
 
   it('retourne 404 si produit introuvable', async () => {
+    allow()
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: { message: 'not found' } }) as never)
     const res = await app.request('/api/shop-erp/produits/p1/visibilite', {
       method: 'PUT', headers: new Headers(authHeaders('admin')),
@@ -368,6 +387,7 @@ describe('PUT /api/shop-erp/produits/:id/visibilite', () => {
   })
 
   it('met à jour la visibilité (happy path)', async () => {
+    allow()
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
       data: { product_id: 'p1', visible_shop: false }, error: null,
     }) as never)
@@ -383,6 +403,7 @@ describe('PUT /api/shop-erp/produits/:id/visibilite', () => {
 
 describe('PUT /api/shop-erp/produits/:id/prix', () => {
   it('retourne 400 si prix négatif (Zod)', async () => {
+    allow()
     const res = await app.request('/api/shop-erp/produits/p1/prix', {
       method: 'PUT', headers: new Headers(authHeaders('admin')),
       body: JSON.stringify({ prix: -10 }),
@@ -391,6 +412,7 @@ describe('PUT /api/shop-erp/produits/:id/prix', () => {
   })
 
   it('met à jour le prix (happy path)', async () => {
+    allow()
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
       data: { product_id: 'p1', prix_public: 7500 }, error: null,
     }) as never)

@@ -9,6 +9,7 @@ import { requirePermission } from '../middleware/permission.middleware'
 import { notifyCommandeSms } from '../services/sms.service'
 import { enregistrerPaiementCommande, ensureFactureForCommande, getFactureActiveByCommande } from '../services/finance-core.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
+import { chargerJobsProductionCommande } from '../services/commande-workflow.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
@@ -694,71 +695,12 @@ router.patch(
 router.get('/production/historique/:commande_id', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { commande_id } = c.req.param()
 
-  const { data, error } = await db
-    .from('jobs_production')
-    .select(`
-      id, numero, produit_designation, statut, avancement_pct,
-      date_debut, date_fin_prevue, date_fin_reelle, notes,
-      created_at, updated_at,
-      machines(id, nom, type, statut),
-      employes(id, nom, poste)
-    `)
-    .eq('commande_id', commande_id)
-    .order('created_at', { ascending: true })
-
-  if (error) return c.json({ error: error.message }, 500)
-
-  const today = new Date()
-
-  const enriched = (data ?? []).map((j: Record<string, unknown>) => {
-    const debut      = j.date_debut      ? new Date(j.date_debut as string)      : null
-    const finPrevue  = j.date_fin_prevue ? new Date(j.date_fin_prevue as string)  : null
-    const finReelle  = j.date_fin_reelle ? new Date(j.date_fin_reelle as string)  : null
-
-    const duree_prevue_h = debut && finPrevue
-      ? Math.round((finPrevue.getTime() - debut.getTime()) / 3600000 * 10) / 10
-      : null
-
-    const duree_reelle_h = debut && finReelle
-      ? Math.round((finReelle.getTime() - debut.getTime()) / 3600000 * 10) / 10
-      : null
-
-    const en_retard = finPrevue && !finReelle &&
-      !['delivered', 'cancelled'].includes(j.statut as string) &&
-      today > finPrevue
-
-    return {
-      ...j,
-      statut:         j.statut as string,
-      avancement_pct: j.avancement_pct as number,
-      duree_prevue_h,
-      duree_reelle_h,
-      en_retard,
-      ecart_h: duree_prevue_h && duree_reelle_h
-        ? Math.round((duree_reelle_h - duree_prevue_h) * 10) / 10
-        : null,
-    }
-  })
-
-  // Récapitulatif
-  const total          = enriched.length
-  const termines       = enriched.filter(j => j.statut === 'delivered').length
-  const enRetard       = enriched.filter(j => j.en_retard).length
-  const avancementMoyen = total > 0
-    ? Math.round(enriched.reduce((s, j) => s + ((j.avancement_pct as number) ?? 0), 0) / total)
-    : 0
-
-  return c.json({
-    commande_id,
-    jobs:              enriched,
-    total,
-    recapitulatif: {
-      termines,
-      en_cours:         enriched.filter(j => j.statut === 'in_production').length,
-      en_retard:        enRetard,
-      avancement_moyen: avancementMoyen,
-    },
-  })
+  try {
+    const recap = await chargerJobsProductionCommande(commande_id)
+    return c.json({ commande_id, ...recap })
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 500)
+  }
 })
 
 // ══════════════════════════════════════════════════════════════════════════════

@@ -3,7 +3,7 @@
 import Image from 'next/image'
 import Link from 'next/link'
 import type { ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowRight,
@@ -196,6 +196,14 @@ export function CatalogueClient({ initialProduits, initialSearch = '', initialCa
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const currentPage = Math.min(page, pageCount)
   const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+
+  // Ne scrolle pas au premier rendu — seulement quand la page affichée change
+  // réellement (changement de page ou de filtre, qui remet aussi page à 1).
+  const isFirstRender = useRef(true)
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return }
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [currentPage])
 
   const resetFilters = () => {
     setSearch('')

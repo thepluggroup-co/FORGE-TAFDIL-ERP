@@ -51,6 +51,17 @@ export function useCreateProduit() {
   })
 }
 
+// PUT /api/stocks/:id — recalcule déjà le statut stock côté serveur si stock_actuel change.
+export function useUpdateProduit() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Partial<CreateProduitPayload> }) =>
+      apiClient.put<StockProduit>(`/api/stocks/${id}`, payload),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['stocks'] }); toast.success('Produit mis à jour') },
+    onError:   (err: Error) => toast.error(err.message),
+  })
+}
+
 export interface MouvementStock {
   id: string
   created_at: string

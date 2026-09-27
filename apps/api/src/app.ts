@@ -24,6 +24,7 @@ import { creditRouter } from './routes/credit'
 import { profileRouter } from './routes/profile'
 import { fournisseursRouter } from './routes/fournisseurs'
 import { logistiqueRouter } from './routes/logistique'
+import { catalogueRouter } from './routes/catalogue'
 import { demarrerCronRelances } from './services/relances-cron.service'
 import { demarrerCronReappro } from './services/reappro-cron.service'
 import { checkOverdueInstallments } from './services/creditService'
@@ -147,6 +148,7 @@ api.route('/credit',      creditRouter)
 api.route('/profile',     profileRouter)
 api.route('/fournisseurs', fournisseursRouter)
 api.route('/caisse',      caisseRouter)
+api.route('/catalogue',   catalogueRouter)
 
 app.route('/api', api)
 

@@ -179,7 +179,11 @@ export type NouveauProduitPg = typeof produitsPg.$inferInsert
 
 export const ficheTechniquePg = pgTable('fiche_technique', {
   id:          id(),
-  produitId:   uuid('produit_id').notNull().references(() => produitsPg.id),
+  // Phase 2 — repointé sur modeles (catalogue produits finis, Phase 1) : une fiche
+  // technique décrit COMMENT fabriquer un modèle (ex: PM-01), pas un article de
+  // stock. `produits` (matières premières) n'intervient qu'au niveau des ressources
+  // ci-dessous (fiche_technique_ressources.ressourceProduitId).
+  modeleId:    uuid('modele_id').notNull().references(() => modelesPg.id),
   version:     integer('version').notNull().default(1),
   statut:      ficheTechniqueStatutEnum('statut').notNull().default('brouillon'),
   modeCalcul:  modeCalculDevisEnum('mode_calcul').notNull(),
@@ -1169,3 +1173,64 @@ export const paiementsTicketPg = pgTable('paiements_ticket', {
 
 export type PaiementTicketPg        = typeof paiementsTicketPg.$inferSelect
 export type NouveauPaiementTicketPg = typeof paiementsTicketPg.$inferInsert
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CATALOGUE PRODUITS FINIS — Familles / Modèles / Spécifications (Phase 1)
+// ══════════════════════════════════════════════════════════════════════════════
+// Arbre de classification des produits finis fabriqués par TAFDIL (charpente,
+// portails, citernes, etc). Sans rapport avec `produits` (stock de matières
+// premières/consommables) : le lien entre les deux se fera en Phase 2 via
+// fiche_technique_ressources. Purement additif — aucune table existante touchée.
+
+export const typeGammeEnum = pgEnum('type_gamme', ['catalogue', 'sur_mesure', 'configuration'])
+
+export const famillesPg = pgTable('familles', {
+  id:          id(),
+  nom:         text('nom').notNull(),
+  // parent_id : auto-référence. Sans .references() (forward ref non supporté sans
+  // AnyPgColumn) — même contournement que bonsSortiePg.commandeId/devisId ci-dessus.
+  // La contrainte FK réelle est posée en SQL brut dans la migration.
+  parentId:    uuid('parent_id'),
+  typeGamme:   typeGammeEnum('type_gamme').notNull(),
+  ordre:       integer('ordre').notNull().default(0),
+  actif:       boolean('actif').notNull().default(true),
+  createdAt:   ts('created_at'),
+  updatedAt:   ts('updated_at'),
+})
+
+export type FamillePg       = typeof famillesPg.$inferSelect
+export type NouvelleFamillePg = typeof famillesPg.$inferInsert
+
+export const modelesPg = pgTable('modeles', {
+  id:                id(),
+  familleId:         uuid('famille_id').notNull().references(() => famillesPg.id),
+  reference:         text('reference').notNull().unique(),
+  designation:       text('designation').notNull(),
+  description:       text('description'),
+  // Texte libre conservé pour compat affichage/écriture front (§46) ; la
+  // source de vérité est unites_facturation, référencée par uniteFacturationId
+  // ci-dessous et résolue automatiquement par l'API à chaque écriture.
+  uniteFacturation:  text('unite_facturation').notNull().default('unite'),
+  uniteFacturationId: uuid('unite_facturation_id').references(() => unitesFacturationPg.id),
+  // nullable : hérite du type_gamme de la famille si non renseigné —
+  // voir resolveTypeGamme() dans apps/api/src/routes/catalogue.ts.
+  typeGamme:         typeGammeEnum('type_gamme'),
+  actif:             boolean('actif').notNull().default(true),
+  createdAt:         ts('created_at'),
+  updatedAt:         ts('updated_at'),
+})
+
+export type ModelePg       = typeof modelesPg.$inferSelect
+export type NouveauModelePg = typeof modelesPg.$inferInsert
+
+export const modeleSpecificationsPg = pgTable('modele_specifications', {
+  id:        id(),
+  modeleId:  uuid('modele_id').notNull().references(() => modelesPg.id),
+  cle:       text('cle').notNull(),
+  valeur:    text('valeur').notNull(),
+  unite:     text('unite'),
+  ordre:     integer('ordre').notNull().default(0),
+})
+
+export type ModeleSpecificationPg       = typeof modeleSpecificationsPg.$inferSelect
+export type NouvelleModeleSpecificationPg = typeof modeleSpecificationsPg.$inferInsert

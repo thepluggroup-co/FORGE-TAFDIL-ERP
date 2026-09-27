@@ -60,6 +60,15 @@ vi.mock('@forge/ai', () => ({
   FORGE_MODEL: 'claude-sonnet-4-6',
 }))
 
+// RBAC mocké directement : /ai/chat vérifie désormais REPORTS:READ, et le
+// profil RBAC mocké via supabase.from (data: [] — truthy) serait interprété à
+// tort comme "utilisateur désactivé" par rbacService (cf. shop.test.ts).
+vi.mock('../services/rbacService', () => ({
+  checkPermission:           vi.fn().mockResolvedValue({ allowed: true, roleName: 'SUPER_ADMIN' }),
+  writeAuditLog:             vi.fn(),
+  invalidatePermissionCache: vi.fn(),
+}))
+
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
 import { anthropic } from '@forge/ai'

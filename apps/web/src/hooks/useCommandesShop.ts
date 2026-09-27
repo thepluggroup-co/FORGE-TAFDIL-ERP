@@ -5,7 +5,7 @@ import { apiClient } from '@/lib/api-client'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export type StatutPaiement = 'en_attente' | 'paye' | 'echec' | 'rembourse'
+export type StatutPaiement = 'en_attente' | 'paye' | 'paye_partiel' | 'echec' | 'rembourse'
 export type StatutCommandeShop = 'recue' | 'confirmee' | 'en_preparation' | 'expediee' | 'livree' | 'annulee'
 export type ModePaiement = 'mtn_momo' | 'orange_money' | 'livraison'
 

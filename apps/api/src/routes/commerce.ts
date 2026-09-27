@@ -9,7 +9,7 @@ const db = supabaseAdmin!
 import { requireRole } from '../middleware/rbac'
 import { requirePermission } from '../middleware/permission.middleware'
 import { writeAuditLog } from '../services/rbacService'
-import { generateDevisPDF, uploadPDF } from '../services/pdf.service'
+import { generateDevisPDF, uploadPDF, type PdfRessourcesSnapshot } from '../services/pdf.service'
 import { localCreateDevis, localCreateCommande, getClientsLocal, getCommandesLocal } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
 import { notifyStatutChange } from '../services/notifications'
@@ -18,7 +18,7 @@ import { enregistrerPaiementCommande, ensureFactureForCommande, solderCreditsFor
 import { enqueueEmail, notifyWhatsApp, sendEmailDirect } from '../services/email-queue.service'
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
 import { ensureClient } from '../services/client-sync.service'
-import { resolveCommandeContext } from '../services/commande-workflow.service'
+import { resolveCommandeContext, chargerJobsProductionCommande } from '../services/commande-workflow.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 import { proposerDevis, devisCalculateSchema } from '../services/devis-calculation.service'
 import type { TypeCommande } from '../services/credit-eligibility.service'
@@ -1115,14 +1115,16 @@ router.post('/devis', requirePermission('COMMERCIAL', 'CREATE'), zValidator('jso
         const pdfBuf = await generateDevisPDF(
           { numero, date_emission: body.date_emission, date_validite: body.date_validite,
             validite_jours: body.validite_jours, total_ht_xaf: dv.total_ht_xaf,
-            tva_xaf: dv.tva_xaf, total_ttc_xaf: dv.total_ttc_xaf },
+            tva_xaf: dv.tva_xaf, total_ttc_xaf: dv.total_ttc_xaf,
+            notes: body.notes ?? null,
+            ressources_snapshot: (body.ressources_snapshot ?? null) as PdfRessourcesSnapshot | null },
           {
             nom: body.client_nom,
             adresse: body.client_adresse ?? null,
             telephone: body.client_telephone ?? null,
             email: body.client_email ?? null,
           },
-          (lignesData ?? []) as { designation: string; unite: string; quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number }[],
+          (lignesData ?? []) as { designation: string; unite: string; quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number; configuration?: Record<string, unknown> | null }[],
         )
         pdf_url = await uploadPDF(pdfBuf, 'devis', `${numero}.pdf`)
         if (pdf_url) await db.from('devis').update({ pdf_url }).eq('id', devisId)
@@ -1382,20 +1384,21 @@ router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'U
       date_emission, date_validite, validite_jours,
       acompte_pct, conditions_paiement, condition_paiement_id,
       cp:conditions_paiement!condition_paiement_id(libelle),
-      total_ht_xaf, tva_xaf, total_ttc_xaf,
-      devis_lignes(designation, unite, quantite, prix_unitaire_ht_xaf, total_ht_xaf, ordre)
+      total_ht_xaf, tva_xaf, total_ttc_xaf, notes, ressources_snapshot,
+      devis_lignes(designation, unite, quantite, prix_unitaire_ht_xaf, total_ht_xaf, ordre, configuration)
     `)
     .eq('id', id)
     .single()
 
   if (!devis) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
 
-  type LigneRow = { designation: string; unite: string; quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number; ordre: number }
+  type LigneRow = { designation: string; unite: string; quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number; ordre: number; configuration?: Record<string, unknown> | null }
   const d = devis as {
     statut: string; numero: string; client_nom: string; client_id: string | null
     date_emission: string; date_validite: string; validite_jours: number; acompte_pct: number
     conditions_paiement: string | null; cp: { libelle: string } | null
     total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number
+    notes: string | null; ressources_snapshot: PdfRessourcesSnapshot | null
     devis_lignes: LigneRow[]
   }
 
@@ -1458,6 +1461,8 @@ router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'U
         total_ht_xaf:   d.total_ht_xaf,
         tva_xaf:        d.tva_xaf,
         total_ttc_xaf:  d.total_ttc_xaf,
+        notes:               d.notes,
+        ressources_snapshot: d.ressources_snapshot,
       },
       { nom: d.client_nom, adresse: clientAdresse, telephone: clientTelephone, email: clientEmail, niu: clientNiu, type: clientType },
       lignesSorted,
@@ -1654,7 +1659,10 @@ publicDevisRouter.get('/devis/approuver/:token', async (c) => {
 
   const { data } = await db
     .from('devis')
-    .select('id, numero, client_nom, total_ht_xaf, tva_xaf, total_ttc_xaf, date_validite, statut, token_expires_at, approuve_par_client, devis_lignes(designation, quantite, prix_unitaire_ht_xaf, unite)')
+    // §42 — vue client : dimensions (configuration) exposées pour que le client comprenne
+    // comment son devis est calculé ; jamais cout_calcule_xaf/formule_utilisee/ressources
+    // (coûts internes, marge) — ceux-ci restent réservés à la vue interne (§41).
+    .select('id, numero, client_nom, total_ht_xaf, tva_xaf, total_ttc_xaf, date_validite, statut, token_expires_at, approuve_par_client, devis_lignes(designation, quantite, prix_unitaire_ht_xaf, unite, configuration)')
     .eq('token_approbation', token)
     .single()
 
@@ -2074,6 +2082,28 @@ router.get('/commandes', requirePermission('COMMERCIAL', 'READ'), async (c) => {
 // UNIQUEMENT par les événements réels déjà tracés ailleurs (historique_commandes,
 // jobs_production, factures, versements_factures, livraisons_historique). Aucun
 // nouveau statut parallèle : lecture seule, agrégation, rien n'est écrit ici.
+// §34 — vue production d'une commande (mêmes données que
+// GET /production/historique/:commande_id côté module Production ;
+// factorisé dans commande-workflow.service pour ne pas dupliquer la requête).
+router.get('/commandes/:id/production', requirePermission('COMMERCIAL', 'READ'), async (c) => {
+  const { id } = c.req.param()
+
+  const { data: commande, error: cmdErr } = await db
+    .from('commandes')
+    .select('id')
+    .eq('id', id)
+    .maybeSingle()
+
+  if (cmdErr || !commande) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
+
+  try {
+    const recap = await chargerJobsProductionCommande(id)
+    return c.json({ commande_id: id, ...recap })
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 500)
+  }
+})
+
 router.get('/commandes/:id/timeline', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { id } = c.req.param()
 
@@ -2618,7 +2648,7 @@ publicRouter.get('/api/commandes/public/:ref', async (c) => {
 
 const statutCommandeWebSchema = z.object({
   statut_commande:   z.enum(['recue', 'confirmee', 'en_preparation', 'expediee', 'livree', 'annulee']),
-  statut_paiement:   z.enum(['en_attente', 'paye', 'echec', 'rembourse']).optional(),
+  statut_paiement:   z.enum(['en_attente', 'paye', 'paye_partiel', 'echec', 'rembourse']).optional(),
   payment_reference: z.string().max(100).optional(),
 })
 

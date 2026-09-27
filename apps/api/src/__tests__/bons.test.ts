@@ -262,6 +262,11 @@ describe('Test 7 — PUT /api/bons/:id/executer avec mauvais code_unique → 422
   })
 })
 
+// Un bon "valide" prêt à être exécuté exige désormais un préparateur assigné
+// et une préparation marquée "prête" (garde PREPARATION_REQUIRED, routes/bons.ts) —
+// règle ajoutée après l'écriture de ce fichier, cf. docs/DETTE-TESTS-2026-09-26.md.
+const BON_PRET_A_EXECUTER = { ...BON_VALIDE, preparateur_id: 'preparateur-uid-001', statut_preparation: 'pret' }
+
 describe('Test 8 — PUT /api/bons/:id/executer avec bon code_unique → succès', () => {
   beforeEach(() => vi.clearAllMocks())
 
@@ -269,7 +274,7 @@ describe('Test 8 — PUT /api/bons/:id/executer avec bon code_unique → succès
     // Fetch bon (statut: 'valide', numero = code_unique)
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({
-        data:  { ...BON_VALIDE, bons_sortie_lignes: BON_LIGNES },
+        data:  { ...BON_PRET_A_EXECUTER, bons_sortie_lignes: BON_LIGNES },
         error: null,
       }) as never,
     )
@@ -300,7 +305,7 @@ describe('Test 8 — PUT /api/bons/:id/executer avec bon code_unique → succès
   })
 
   it('génère une écriture comptable si bon exécuté avec nature=comptant et montant', async () => {
-    const bonAvecMontant = { ...BON_VALIDE, montant_total_xaf: 50_000, nature_transaction: 'comptant', imputation_payeur: 'atelier', bons_sortie_lignes: BON_LIGNES }
+    const bonAvecMontant = { ...BON_PRET_A_EXECUTER, montant_total_xaf: 50_000, nature_transaction: 'comptant', imputation_payeur: 'atelier', bons_sortie_lignes: BON_LIGNES }
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: bonAvecMontant, error: null }) as never)
     vi.mocked(supabase.rpc).mockResolvedValueOnce({ data: { success: true, bon_id: BON_ID }, error: null } as never)
     vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
@@ -316,7 +321,7 @@ describe('Test 8 — PUT /api/bons/:id/executer avec bon code_unique → succès
   it('retourne 503 RPC_MISSING si fn_executer_bon absente', async () => {
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({
-        data:  { ...BON_VALIDE, bons_sortie_lignes: BON_LIGNES },
+        data:  { ...BON_PRET_A_EXECUTER, bons_sortie_lignes: BON_LIGNES },
         error: null,
       }) as never,
     )

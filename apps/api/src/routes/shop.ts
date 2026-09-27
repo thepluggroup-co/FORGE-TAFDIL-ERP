@@ -9,6 +9,7 @@ import { verifierEligibiliteCredit } from '../services/credit-eligibility.servic
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 import { ensureClient } from '../services/client-sync.service'
 import { ensureFactureForCommande, solderCreditsForCommande, syncCreditForCommande } from '../services/finance-core.service'
+import { requirePermission } from '../middleware/permission.middleware'
 
 const db = supabaseAdmin!
 import type { HonoVariables } from '../types'
@@ -1122,12 +1123,26 @@ function extFromFile(file: File): string {
   return byType && /^[a-z0-9]{2,5}$/.test(byType) ? byType : 'jpg'
 }
 
+const IMAGE_EXT_CONTENT_TYPE: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
+  webp: 'image/webp', heic: 'image/heic', heif: 'image/heif', bmp: 'image/bmp',
+}
+
+// Certains navigateurs/OS (iPhone HEIC, copies Windows) envoient un File.type
+// vide — on retombe alors sur l'extension avant de rejeter le fichier.
+function resolveImageContentType(file: File): string | null {
+  if (file.type.startsWith('image/')) return file.type
+  if (file.type) return null
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+  return IMAGE_EXT_CONTENT_TYPE[ext] ?? null
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // GET /api/shop-erp/analytics
 // KPIs + CA mensuel comparé ERP vs Shop (6 derniers mois)
 // ══════════════════════════════════════════════════════════════════════════════
 
-shopErpRouter.get('/analytics', async (c) => {
+shopErpRouter.get('/analytics', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const today     = new Date().toISOString().split('T')[0]
   const debutMois = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
 
@@ -1199,7 +1214,7 @@ shopErpRouter.get('/analytics', async (c) => {
 // Tous les produits avec visibilité shop + stock ERP
 // ══════════════════════════════════════════════════════════════════════════════
 
-shopErpRouter.get('/produits', async (c) => {
+shopErpRouter.get('/produits', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   await syncProduitsShopManquants()
 
   const { data, error } = await db
@@ -1251,6 +1266,7 @@ shopErpRouter.get('/produits', async (c) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 shopErpRouter.put('/produits/:id/visibilite',
+  requirePermission('COMMERCIAL', 'UPDATE'),
   zValidator('json', z.object({ visible: z.boolean() })),
   async (c) => {
     const id      = c.req.param('id')
@@ -1263,11 +1279,14 @@ shopErpRouter.put('/produits/:id/visibilite',
       .select('product_id, visible_shop')
       .single()
 
+    // PGRST116 = aucune ligne ne correspond au .eq('product_id', id) : c'est un
+    // 404 (produit introuvable), pas une panne DB — doit être vérifié avant le
+    // cas d'erreur générique, sinon un produit inexistant renvoie 500.
+    if (!data || error?.code === 'PGRST116') return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
     if (error) {
       console.error('[shop-erp] visibilite update:', error)
       return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: error.message }, 500)
     }
-    if (!data) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
 
     return c.json({ data })
   }
@@ -1279,6 +1298,7 @@ shopErpRouter.put('/produits/:id/visibilite',
 // ══════════════════════════════════════════════════════════════════════════════
 
 shopErpRouter.put('/produits/:id/prix',
+  requirePermission('COMMERCIAL', 'UPDATE'),
   zValidator('json', z.object({ prix: z.number().min(0) })),
   async (c) => {
     const id    = c.req.param('id')
@@ -1291,11 +1311,13 @@ shopErpRouter.put('/produits/:id/prix',
       .select('product_id, prix_public')
       .single()
 
+    // PGRST116 = aucune ligne ne correspond (produit introuvable) — cf. note
+    // identique sur PUT /visibilite ci-dessus.
+    if (!data || error?.code === 'PGRST116') return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
     if (error) {
       console.error('[shop-erp] prix update:', error)
       return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: error.message }, 500)
     }
-    if (!data) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
 
     return c.json({ data })
   }
@@ -1307,6 +1329,7 @@ shopErpRouter.put('/produits/:id/prix',
 // ══════════════════════════════════════════════════════════════════════════════
 
 shopErpRouter.put('/produits/:id/vitrine',
+  requirePermission('COMMERCIAL', 'UPDATE'),
   zValidator('json', z.object({
     visible_shop: z.boolean().optional(),
     prix_public: z.number().min(0).nullable().optional(),
@@ -1362,7 +1385,7 @@ shopErpRouter.put('/produits/:id/vitrine',
   }
 )
 
-shopErpRouter.post('/produits/:id/images', async (c) => {
+shopErpRouter.post('/produits/:id/images', requirePermission('COMMERCIAL', 'UPDATE'), async (c) => {
   const id = c.req.param('id')
   const form = await c.req.formData()
   const files = form.getAll('images').filter(item => item instanceof File) as unknown as File[]
@@ -1387,36 +1410,45 @@ shopErpRouter.post('/produits/:id/images', async (c) => {
   await db.storage.createBucket(bucket, { public: true }).catch(() => {})
 
   const urls: string[] = []
+  const errors: Array<{ file: string; error: string }> = []
 
   for (const file of files.slice(0, 12)) {
-    if (!file.type.startsWith('image/')) {
-      return c.json({ error: 'Seuls les fichiers image sont acceptes', code: 'INVALID_FILE' }, 400)
+    const contentType = resolveImageContentType(file)
+    if (!contentType) {
+      errors.push({ file: file.name, error: 'Seuls les fichiers image sont acceptes' })
+      continue
     }
     if (file.size > 5 * 1024 * 1024) {
-      return c.json({ error: 'Image trop lourde, maximum 5 Mo', code: 'FILE_TOO_LARGE' }, 413)
+      errors.push({ file: file.name, error: 'Image trop lourde, maximum 5 Mo' })
+      continue
     }
 
     const ext = extFromFile(file)
     const path = `${id}/${Date.now()}-${randomUUID()}.${ext}`
     const buffer = Buffer.from(await file.arrayBuffer())
     const { error } = await db.storage.from(bucket).upload(path, buffer, {
-      contentType: file.type || 'image/jpeg',
+      contentType,
       upsert: false,
     })
 
     if (error) {
       console.error('[shop-erp] upload image produit:', error)
-      return c.json({ error: 'Erreur upload image', details: error.message }, 500)
+      errors.push({ file: file.name, error: error.message })
+      continue
     }
 
     const { data } = db.storage.from(bucket).getPublicUrl(path)
     urls.push(data.publicUrl)
   }
 
-  return c.json({ data: { urls } }, 201)
+  if (urls.length === 0) {
+    return c.json({ error: 'Aucune image n\'a pu etre televersee', code: 'ALL_FAILED', errors }, 400)
+  }
+
+  return c.json({ data: { urls, errors } }, 201)
 })
 
-shopErpRouter.get('/devis-web', async (c) => {
+shopErpRouter.get('/devis-web', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { statut } = c.req.query()
 
   let query = db
@@ -1442,6 +1474,7 @@ shopErpRouter.get('/devis-web', async (c) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 shopErpRouter.patch('/devis-web/:id/statut',
+  requirePermission('COMMERCIAL', 'UPDATE'),
   zValidator('json', z.object({ statut: z.enum(['nouvelle', 'en_cours', 'traitee', 'refusee']) })),
   async (c) => {
     const id = c.req.param('id')
@@ -1468,6 +1501,7 @@ const creerErpSchema = z.object({
 })
 
 shopErpRouter.post('/devis/:id/creer-erp',
+  requirePermission('COMMERCIAL', 'CREATE'),
   zValidator('json', creerErpSchema),
   async (c) => {
     const id   = c.req.param('id')
@@ -1564,6 +1598,7 @@ shopErpRouter.post('/devis/:id/creer-erp',
 
 shopErpRouter.patch(
   '/commandes/:id/annuler',
+  requirePermission('COMMERCIAL', 'VALIDATE'),
   zValidator('json', z.object({ motif: z.string().min(1).max(200) })),
   async (c) => {
     const id            = c.req.param('id')

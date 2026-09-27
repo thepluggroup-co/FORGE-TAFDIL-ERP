@@ -18,7 +18,7 @@ import { z } from 'zod'
 const db = supabaseAdmin!
 
 export const devisCalculateSchema = z.object({
-  produitId: z.string().uuid(),
+  modeleId: z.string().uuid(),
   quantite: z.number().positive(),
   dimensions: DimensionsSchema.optional(),
   options: z.record(z.unknown()).optional(),
@@ -30,7 +30,7 @@ export type DevisCalculateRequest = z.infer<typeof devisCalculateSchema>
 
 interface FicheTechniqueRow {
   id: string
-  produit_id: string
+  modele_id: string
   version: number
   statut: string
   mode_calcul: string
@@ -53,7 +53,7 @@ export type ProposerDevisResultat =
   | { ok: false; erreurs: Array<{ code: string; message: string }> }
 
 /**
- * Charge la fiche technique ACTIVE du produit et ses ressources, puis calcule
+ * Charge la fiche technique ACTIVE du modèle et ses ressources, puis calcule
  * la proposition de devis brut via le moteur pur.
  *
  * §21 — Cette fonction ne fait QUE proposer un calcul. Elle n'écrit rien.
@@ -64,8 +64,8 @@ export type ProposerDevisResultat =
 export async function proposerDevis(input: DevisCalculateRequest): Promise<ProposerDevisResultat> {
   const { data: fiche, error: ficheError } = await db
     .from('fiche_technique')
-    .select('id, produit_id, version, statut, mode_calcul, unite_facturation_id')
-    .eq('produit_id', input.produitId)
+    .select('id, modele_id, version, statut, mode_calcul, unite_facturation_id')
+    .eq('modele_id', input.modeleId)
     .eq('statut', 'active')
     .maybeSingle()
 
@@ -75,7 +75,7 @@ export async function proposerDevis(input: DevisCalculateRequest): Promise<Propo
   if (!fiche) {
     return {
       ok: false,
-      erreurs: [{ code: 'FICHE_TECHNIQUE_INTROUVABLE', message: "Aucune fiche technique active pour ce produit. Créez-en une avant de calculer un devis, ou saisissez la ligne manuellement (§46)." }],
+      erreurs: [{ code: 'FICHE_TECHNIQUE_INTROUVABLE', message: "Aucune fiche technique active pour ce modèle. Créez-en une avant de calculer un devis, ou saisissez la ligne manuellement (§46)." }],
     }
   }
 
@@ -104,7 +104,7 @@ export async function proposerDevis(input: DevisCalculateRequest): Promise<Propo
   }))
 
   const resultat = calculerDevisBrut(
-    { produitId: input.produitId, modeCalcul, quantite: input.quantite, dimensions: input.dimensions, options: input.options },
+    { modeleId: input.modeleId, modeCalcul, quantite: input.quantite, dimensions: input.dimensions, options: input.options },
     ressources,
   )
 

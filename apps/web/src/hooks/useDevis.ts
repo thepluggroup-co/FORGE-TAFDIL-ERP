@@ -13,6 +13,15 @@ export interface DevisLigne {
   quantite: number
   prix_unitaire_ht_xaf: number
   unite?: string
+  // §11/§17/§18 — traçabilité du calcul automatique (Configurateur), présente
+  // uniquement quand la ligne dérive de POST /devis/calculate (§46 : absente
+  // sur les devis/lignes historiques, purement additive).
+  configuration?: Record<string, unknown> | null
+  formule_utilisee?: string | null
+  quantite_calculee?: number | null
+  cout_calcule_xaf?: number | null
+  ajuste_manuellement?: boolean
+  motif_ajustement?: string | null
 }
 
 export interface Devis {
@@ -38,6 +47,11 @@ export interface Devis {
   commentaire_client: string | null
   client: { id: string; nom: string; telephone?: string | null; email?: string | null }
   lignes: DevisLigne[]
+  // §21 — snapshot figé du calcul (fiche technique + config + ressources), renseigné
+  // uniquement quand le devis dérive d'un unique calcul automatique (Configurateur, §40).
+  fiche_technique_id?: string | null
+  config_snapshot?: Record<string, unknown> | null
+  ressources_snapshot?: { lignes: RessourceCalculee[]; totalMateriauxXaf: number; totalMainOeuvreXaf: number; totalEquipementsXaf: number } | null
 }
 
 export interface CreateDevisPayload {
@@ -60,7 +74,7 @@ export interface CreateDevisPayload {
   // fiche technique ne modifie rétroactivement ce devis.
   fiche_technique_id?: string
   config_snapshot?: Record<string, unknown>
-  ressources_snapshot?: Record<string, unknown>
+  ressources_snapshot?: { lignes: RessourceCalculee[]; totalMateriauxXaf: number; totalMainOeuvreXaf: number; totalEquipementsXaf: number }
   lignes: Array<{
     produit_id?: string
     designation: string; categorie: string; unite: string
@@ -84,7 +98,7 @@ export interface DimensionsInput {
 }
 
 export interface CalculerDevisInput {
-  produitId: string
+  modeleId: string
   quantite: number
   dimensions?: DimensionsInput
   options?: Record<string, unknown>
@@ -103,7 +117,7 @@ export interface RessourceCalculee {
 
 export interface PropositionDevis {
   ficheTechniqueId: string
-  produitId: string
+  modeleId: string
   modeCalcul: string
   quantiteFacturable: number
   formuleUtilisee: string

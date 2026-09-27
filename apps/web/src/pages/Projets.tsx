@@ -7,6 +7,7 @@ import {
 import { PageHeader, KpiCard, DataTable, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
+import { uniteOptions } from '@/lib/constants'
 import { toast } from 'sonner'
 import {
   useProjets, useCreateProjet, useUpdateProjetStatut, useProjetById,
@@ -201,10 +202,11 @@ function OngletRessources({ projetId, canEdit }: { projetId: string; canEdit: bo
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Unité</label>
-              <input value={form.unite}
+              <select value={form.unite}
                 onChange={(e) => setForm((f) => ({ ...f, unite: e.target.value }))}
-                placeholder="jour, kg, m²…"
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]">
+                {uniteOptions(form.unite).map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">P.U. (XAF)</label>

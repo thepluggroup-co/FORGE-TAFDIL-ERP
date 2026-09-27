@@ -51,7 +51,7 @@ export interface RessourceTechnique {
 }
 
 export interface DevisCalculInput {
-  produitId: string
+  modeleId: string
   modeCalcul: ModeCalcul
   quantite: number                  // nombre de pièces/forfaits demandés (ex : 2 barrières identiques)
   dimensions?: Dimensions
@@ -70,7 +70,7 @@ export interface RessourceCalculee {
 }
 
 export interface PropositionDevis {
-  produitId: string
+  modeleId: string
   modeCalcul: ModeCalcul
   quantiteFacturable: number
   formuleUtilisee: string
@@ -187,6 +187,46 @@ export function calculerQuantiteFacturable(
   }
 }
 
+// ── §34 — champs de dimension pertinents pour un mode de calcul ─────────
+// Source unique pour GET /catalogue/modeles/:id/configuration (apps/api) et,
+// si besoin un jour, un rendu de formulaire côté web sans aller-retour API :
+// si une formule change ci-dessus, ce mapping doit changer avec elle.
+
+export interface ChampDimension {
+  cle:   'largeur' | 'hauteur' | 'longueur' | 'poids'
+  label: string
+  unite: string
+}
+
+const CHAMPS_DIMENSIONS_META: Record<ChampDimension['cle'], Omit<ChampDimension, 'cle'>> = {
+  largeur:  { label: 'Largeur',  unite: 'm' },
+  hauteur:  { label: 'Hauteur',  unite: 'm' },
+  longueur: { label: 'Longueur', unite: 'm' },
+  poids:    { label: 'Poids',    unite: 'kg' },
+}
+
+function champ(cle: ChampDimension['cle']): ChampDimension {
+  return { cle, ...CHAMPS_DIMENSIONS_META[cle] }
+}
+
+export function champsDimensionsPourMode(modeCalcul: ModeCalcul): ChampDimension[] {
+  switch (modeCalcul) {
+    case 'surface':  return [champ('largeur'), champ('hauteur')]
+    case 'lineaire': return [champ('longueur')]
+    case 'volume':   return [champ('longueur'), champ('largeur'), champ('hauteur')]
+    case 'poids':    return [champ('poids')]
+    case 'quantitatif':
+    case 'forfait':
+    case 'qualitatif':
+      return []
+    default: {
+      // Exhaustivité, même logique que calculerQuantiteFacturable ci-dessus.
+      const modeNonTraite: never = modeCalcul
+      return modeNonTraite
+    }
+  }
+}
+
 // ── Étape 2 : application de la fiche technique aux ressources (§16) ────
 
 export function calculerRessources(
@@ -224,7 +264,7 @@ export function calculerDevisBrut(
   if (ressourcesDisponibles.length === 0) {
     return {
       ok: false,
-      erreurs: [{ code: 'RESSOURCES_MANQUANTES', message: 'Aucune ressource définie sur la fiche technique active de ce produit — impossible de chiffrer.' }],
+      erreurs: [{ code: 'RESSOURCES_MANQUANTES', message: 'Aucune ressource définie sur la fiche technique active de ce modèle — impossible de chiffrer.' }],
     }
   }
 
@@ -237,7 +277,7 @@ export function calculerDevisBrut(
   return {
     ok: true,
     proposition: {
-      produitId: input.produitId,
+      modeleId: input.modeleId,
       modeCalcul: input.modeCalcul,
       quantiteFacturable: etape1.quantiteFacturable,
       formuleUtilisee: etape1.formule,

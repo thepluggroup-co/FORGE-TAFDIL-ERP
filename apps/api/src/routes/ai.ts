@@ -182,7 +182,7 @@ const chatSchema = z.object({
 // POST /ai/chat — Chat avec contexte live
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.post('/ai/chat', zValidator('json', chatSchema), async (c) => {
+router.post('/ai/chat', requirePermission('REPORTS', 'READ'), zValidator('json', chatSchema), async (c) => {
   const body = c.req.valid('json')
 
   let ctx: ForgeContext | null = null
@@ -313,7 +313,7 @@ router.get('/ai/rapport-hebdo', requireRole(['admin']), async (c) => {
 // GET /ai/alertes — Agrégation intelligente de toutes les alertes
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/ai/alertes', async (c) => {
+router.get('/ai/alertes', requirePermission('REPORTS', 'READ'), async (c) => {
   const today  = new Date().toISOString().slice(0, 10)
   const in7j   = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)
   const in30j  = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)

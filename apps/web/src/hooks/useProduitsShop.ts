@@ -89,12 +89,19 @@ export function useUpdateVitrineProduit() {
   })
 }
 
+export interface UploadImagesResult {
+  data: {
+    urls:   string[]
+    errors: Array<{ file: string; error: string }>
+  }
+}
+
 export function useUploadImagesProduit() {
   return useMutation({
     mutationFn: ({ id, files }: { id: string; files: File[] }) => {
       const form = new FormData()
       files.forEach((file) => form.append('images', file))
-      return apiClient.postForm<{ data: { urls: string[] } }>(`/api/shop-erp/produits/${id}/images`, form)
+      return apiClient.postForm<UploadImagesResult>(`/api/shop-erp/produits/${id}/images`, form)
     },
     onError: (err: Error) => toast.error(err.message),
   })

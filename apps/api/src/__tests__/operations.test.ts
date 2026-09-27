@@ -59,9 +59,45 @@ vi.mock('../services/finance-core.service', () => ({
 vi.mock('../services/workflow-notifications.service', () => ({
   notifyWorkflow: vi.fn().mockResolvedValue(undefined),
 }))
+// POST /logistique/livraisons (servi par routes/logistique.ts, monté avant
+// operationsRouter — cf. app.ts) appelle verifierCommandeLivrable(), qui
+// dépend de ce service pour résoudre le bon de sortie livrable ; on mocke la
+// fonction de haut niveau plutôt que de rejouer sa cascade de requêtes DB.
+vi.mock('../services/commande-workflow.service', () => ({
+  resolveBonSortieLivrableForCommande: vi.fn(),
+  synchroniserCommandesWorkflow:       vi.fn().mockResolvedValue(undefined),
+  resolveCommandeContext:              vi.fn().mockResolvedValue(null),
+  ensureWorkflowApresExecutionBon:     vi.fn().mockResolvedValue(undefined),
+  ensureWorkflowApresPreparationBon:   vi.fn().mockResolvedValue(undefined),
+}))
+// RBAC mocké directement (plutôt que de laisser tourner le vrai checkPermission
+// contre la DB mockée) : ce fichier teste plusieurs rôles avec le MÊME userId
+// (authHeaders() par défaut, cf. helpers.ts) — le cache mémoire de rbacService
+// (_permCache, keyé par userId) survivrait donc entre tests et ferait fuiter
+// les permissions d'un rôle vers les requêtes suivantes sous un autre rôle.
+// Mocker checkPermission court-circuite aussi le vrai loadPermissionsFromDb,
+// qui consommait par erreur les mockReturnValueOnce destinés à la logique
+// métier (cause dominante documentée dans docs/DETTE-TESTS-2026-09-26.md).
+vi.mock('../services/rbacService', () => ({
+  checkPermission:           vi.fn(),
+  writeAuditLog:             vi.fn(),
+  invalidatePermissionCache: vi.fn(),
+}))
 
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
+import { checkPermission } from '../services/rbacService'
+import { resolveBonSortieLivrableForCommande } from '../services/commande-workflow.service'
+import { getFactureActiveByCommande } from '../services/finance-core.service'
+
+/** Autorise la requête suivante — à appeler juste avant chaque `app.request()` protégé. */
+function allow(roleName = 'MANAGER') {
+  vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName })
+}
+/** Refuse la requête suivante (403 attendu par le middleware). */
+function deny(roleName = 'COMMERCIAL') {
+  vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: false, roleName, reason: 'TEST_DENY' })
+}
 
 function resetFromDefault() {
   const safeChain = () => {
@@ -90,6 +126,7 @@ describe('GET /api/production/jobs', () => {
   })
 
   it('retourne la liste paginée avec flag en_retard', async () => {
+    allow('COMMERCIAL')
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
       data: [{ id: 'j1', statut: 'in_production', date_fin_prevue: '2000-01-01', produit_designation: 'Portail' }],
       count: 1, error: null,
@@ -104,6 +141,7 @@ describe('GET /api/production/jobs', () => {
 
 describe('GET /api/production/jobs/:id', () => {
   it('retourne 404 si job introuvable', async () => {
+    allow('SUPER_ADMIN')
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: { message: 'x' } }) as never)
     const res = await app.request('/api/production/jobs/unknown', { headers: new Headers(authHeaders('admin')) })
     expect(res.status).toBe(404)
@@ -112,6 +150,7 @@ describe('GET /api/production/jobs/:id', () => {
 
 describe('POST /api/production/jobs', () => {
   it('retourne 400 si produit_designation manquant (Zod)', async () => {
+    allow('COMMERCIAL')
     const res = await app.request('/api/production/jobs', {
       method: 'POST', headers: new Headers(authHeaders('operateur')),
       body: JSON.stringify({ type_job: 'commande' }),
@@ -120,6 +159,7 @@ describe('POST /api/production/jobs', () => {
   })
 
   it('retourne 422 MACHINE_PANNE si machine en panne', async () => {
+    allow('COMMERCIAL')
     // fetch machine → statut panne
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
       data: { nom: 'CNC-1', statut: 'panne' }, error: null,
@@ -134,6 +174,7 @@ describe('POST /api/production/jobs', () => {
   })
 
   it('cree un job avec plusieurs ressources malgre categorie absente du schema cache', async () => {
+    allow('COMMERCIAL')
     const countChain = mkChain({ data: null, count: 2, error: null })
     const firstInsertChain = mkChain({
       data: null,
@@ -183,6 +224,7 @@ describe('POST /api/production/jobs', () => {
 
 describe('GET /api/projets', () => {
   it('retourne la liste avec alerte_budget', async () => {
+    allow('COMMERCIAL')
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
       data: [{ id: 'pr1', nom: 'Chantier', budget_xaf: 1000, depense_xaf: 2000 }],
       count: 1, error: null,
@@ -196,6 +238,7 @@ describe('GET /api/projets', () => {
 
 describe('POST /api/projets', () => {
   it('retourne 403 pour un opérateur (admin/superviseur requis)', async () => {
+    deny('COMMERCIAL')
     const res = await app.request('/api/projets', {
       method: 'POST', headers: new Headers(authHeaders('operateur')),
       body: JSON.stringify({ nom: 'Projet X' }),
@@ -204,6 +247,7 @@ describe('POST /api/projets', () => {
   })
 
   it('retourne 400 si nom manquant (Zod)', async () => {
+    allow('SUPER_ADMIN')
     const res = await app.request('/api/projets', {
       method: 'POST', headers: new Headers(authHeaders('admin')),
       body: JSON.stringify({ description: 'sans nom' }),
@@ -212,6 +256,7 @@ describe('POST /api/projets', () => {
   })
 
   it('crée un projet et retourne 201', async () => {
+    allow('SUPER_ADMIN')
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
       data: { id: 'pr2', nom: 'Projet X', statut: 'planifie', budget_xaf: 500000 }, error: null,
     }) as never)
@@ -227,6 +272,7 @@ describe('POST /api/projets', () => {
 
 describe('PATCH /api/projets/:id/statut', () => {
   it('retourne 404 si projet introuvable', async () => {
+    allow('SUPER_ADMIN')
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
     const res = await app.request('/api/projets/pr1/statut', {
       method: 'PATCH', headers: new Headers(authHeaders('admin')),
@@ -236,6 +282,7 @@ describe('PATCH /api/projets/:id/statut', () => {
   })
 
   it('retourne 422 INVALID_TRANSITION si transition interdite', async () => {
+    allow('SUPER_ADMIN')
     // projet livré → on tente en_cours (non autorisé)
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
       data: { statut: 'livre', budget_xaf: 0, depense_xaf: 0 }, error: null,
@@ -254,6 +301,7 @@ describe('PATCH /api/projets/:id/statut', () => {
 
 describe('GET /api/logistique/livraisons', () => {
   it('retourne la liste des livraisons', async () => {
+    allow('COMMERCIAL')
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
       data: [{ id: 'l1', numero: 'LIV-2026-001', statut: 'planifiee' }], count: 1, error: null,
     }) as never)
@@ -268,6 +316,7 @@ describe('POST /api/logistique/livraisons', () => {
   const CMD_UUID = '11111111-1111-1111-1111-111111111111'
 
   it('retourne 400 si commande_id manquant (Zod)', async () => {
+    allow('MANAGER')
     const res = await app.request('/api/logistique/livraisons', {
       method: 'POST', headers: new Headers(authHeaders('superviseur')),
       body: JSON.stringify({ client_nom: 'X', destination: 'Douala' }),
@@ -276,6 +325,7 @@ describe('POST /api/logistique/livraisons', () => {
   })
 
   it('retourne 422 COMMANDE_NOT_FOUND si commande introuvable', async () => {
+    allow('MANAGER')
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: { code: 'PGRST116' } }) as never)
     const res = await app.request('/api/logistique/livraisons', {
       method: 'POST', headers: new Headers(authHeaders('superviseur')),
@@ -287,8 +337,18 @@ describe('POST /api/logistique/livraisons', () => {
   })
 
   it('crée une livraison liée à une commande (happy path)', async () => {
+    allow('SUPER_ADMIN')
     // 1. fetch commande
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: { id: CMD_UUID, numero: 'CMD-001' }, error: null }) as never)
+    // verifierCommandeLivrable() : bon de sortie livrable + facture valide (§ logistique.ts)
+    vi.mocked(resolveBonSortieLivrableForCommande).mockResolvedValueOnce({
+      context:     { commandeId: CMD_UUID, ref: 'CMD-001', commande: { numero: 'CMD-001' } } as never,
+      bonLivrable: { id: 'bs1', numero: 'BS-2026-001', statut: 'pret' } as never,
+      dernierBon:  { id: 'bs1', numero: 'BS-2026-001', statut: 'pret' } as never,
+    })
+    vi.mocked(getFactureActiveByCommande).mockResolvedValueOnce({
+      numero: 'FAC-2026-001', statut: 'valide', total_ttc_xaf: 500000, montant_paye_xaf: 0,
+    } as never)
     // 2. count livraisons pour numéro
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, count: 4, error: null }) as never)
     // 3. insert livraison
@@ -305,6 +365,7 @@ describe('POST /api/logistique/livraisons', () => {
   })
 
   it('retourne 403 pour un opérateur', async () => {
+    deny('COMMERCIAL')
     const res = await app.request('/api/logistique/livraisons', {
       method: 'POST', headers: new Headers(authHeaders('operateur')),
       body: JSON.stringify({ client_nom: 'X', destination: 'Douala', commande_id: CMD_UUID }),
@@ -317,6 +378,7 @@ describe('POST /api/logistique/livraisons', () => {
 
 describe('POST /api/marketing/campagnes', () => {
   it('retourne 403 pour un opérateur', async () => {
+    deny('COMMERCIAL')
     const res = await app.request('/api/marketing/campagnes', {
       method: 'POST', headers: new Headers(authHeaders('operateur')),
       body: JSON.stringify({ nom: 'Promo' }),
@@ -329,6 +391,7 @@ describe('POST /api/marketing/campagnes', () => {
 
 describe('POST /api/securite/incidents', () => {
   it('retourne 400 si payload invalide (Zod)', async () => {
+    allow('COMMERCIAL')
     const res = await app.request('/api/securite/incidents', {
       method: 'POST', headers: new Headers(authHeaders('operateur')),
       body: JSON.stringify({}),

@@ -36,8 +36,24 @@ vi.mock('@forge/db/supabase', () => {
   return { supabase: mockClient, supabaseAdmin: mockClient }
 })
 
+// requirePermission('STOCK', ...) interroge rbacService.checkPermission(), qui
+// sans ce mock ferait de vrais appels .from('rbac_user_profiles'/'rbac_roles')
+// contre le mock ci-dessus — consommant par erreur les mockReturnValueOnce
+// positionnels ci-dessous, prévus uniquement pour la logique métier des bons
+// (cause dominante documentée dans docs/DETTE-TESTS-2026-09-26.md).
+vi.mock('../services/rbacService', () => ({
+  checkPermission:           vi.fn(),
+  writeAuditLog:             vi.fn(),
+  invalidatePermissionCache: vi.fn(),
+}))
+
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
+import { checkPermission } from '../services/rbacService'
+
+function allow(roleName: string) {
+  vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName })
+}
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -91,18 +107,22 @@ describe('TEST-02 : Workflow complet bon de sortie', () => {
     mockFrom.mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
     // 5. valider : select existant (statut check)
     mockFrom.mockReturnValueOnce(mkChain({ data: BON_SOUMIS, error: null }) as never)
-    // 6. valider : update statut → 'valide'
+    // 6. valider : update statut → 'valide' (le handler ne fait plus de lookup
+    // "resolveCommandeIdForBon" — supprimé depuis, cf. routes/bons.ts:506)
     mockFrom.mockReturnValueOnce(
       mkChain({ data: { ...BON_SOUMIS, statut: 'valide' }, error: null }) as never,
     )
-    // 7. valider : resolveCommandeIdForBon → from('commandes_shop')
+    // 7. auditMiddleware (PUT /bons/:id/valider 200) : from('audit_log').insert().then()
     mockFrom.mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
-    // 8. auditMiddleware (PUT /bons/:id/valider 200) : from('audit_log').insert().then()
-    mockFrom.mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
-    // 9. executer : select bon avec lignes
+    // 8. executer : select bon avec lignes — un préparateur assigné + préparation
+    // "prête" sont désormais exigés avant exécution (garde PREPARATION_REQUIRED,
+    // routes/bons.ts:831) : on simule qu'un atelier a préparé le bon entre-temps.
     mockFrom.mockReturnValueOnce(
       mkChain({
-        data:  { ...BON_SOUMIS, statut: 'valide', bons_sortie_lignes: LIGNES },
+        data:  {
+          ...BON_SOUMIS, statut: 'valide', bons_sortie_lignes: LIGNES,
+          preparateur_id: 'preparateur-uid-001', statut_preparation: 'pret',
+        },
         error: null,
       }) as never,
     )
@@ -116,6 +136,7 @@ describe('TEST-02 : Workflow complet bon de sortie', () => {
     } as never)
 
     // ── ÉTAPE 1 : POST /api/bons ───────────────────────────────────────────────
+    allow('COMMERCIAL')
     const createRes = await app.request('/api/bons', {
       method:  'POST',
       headers: new Headers(authHeaders('operateur')),
@@ -139,6 +160,7 @@ describe('TEST-02 : Workflow complet bon de sortie', () => {
     expect(mockChannel).toHaveBeenCalledWith('forge-bons')
 
     // ── ÉTAPE 3 : PUT /api/bons/:id/valider ───────────────────────────────────
+    allow('SUPER_ADMIN')
     const validerRes = await app.request(`/api/bons/${BON_ID}/valider`, {
       method:  'PUT',
       headers: new Headers(authHeaders('admin')),
@@ -150,6 +172,7 @@ describe('TEST-02 : Workflow complet bon de sortie', () => {
     expect(validatedBon.statut).toBe('valide')
 
     // ── ÉTAPE 4 : PUT /api/bons/:id/executer ──────────────────────────────────
+    allow('COMMERCIAL')
     const executerRes = await app.request(`/api/bons/${BON_ID}/executer`, {
       method:  'PUT',
       headers: new Headers(authHeaders('operateur')),
@@ -180,6 +203,7 @@ describe('TEST-02 : Workflow complet bon de sortie', () => {
       mkChain({ data: { ...BON_SOUMIS, statut: 'execute' }, error: null }) as never,
     )
 
+    allow('SUPER_ADMIN')
     const res = await app.request(`/api/bons/${BON_ID}/valider`, {
       method:  'PUT',
       headers: new Headers(authHeaders('admin')),

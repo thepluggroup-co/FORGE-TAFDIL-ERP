@@ -64,6 +64,25 @@ export interface PdfLigne {
   prix_unitaire_ht_xaf: number
   total_ht_xaf:         number
   remise_xaf?:          number | null
+  // §41 — dimensions saisies via le Configurateur (§40), affichées sous la
+  // désignation dans le PDF devis (gabarit TAFDIL) pour que chaque produit
+  // porte ses informations complètes.
+  configuration?:       Record<string, unknown> | null
+}
+
+export interface PdfRessourceLigne {
+  type:             'materiau' | 'main_oeuvre' | 'equipement'
+  designation:      string
+  quantiteCalculee: number
+  unite:            string
+  totalXaf:         number
+}
+
+export interface PdfRessourcesSnapshot {
+  lignes:              PdfRessourceLigne[]
+  totalMateriauxXaf:   number
+  totalMainOeuvreXaf:  number
+  totalEquipementsXaf: number
 }
 
 export interface PdfClient {
@@ -97,12 +116,22 @@ export interface PdfDevis {
   total_ht_xaf:    number
   tva_xaf:         number
   total_ttc_xaf:   number
+  notes?:               string | null
+  ressources_snapshot?: PdfRessourcesSnapshot | null
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function xaf(n: number): string {
   return n.toLocaleString('fr-FR') + ' XAF'
+}
+
+// toLocaleString('fr-FR') groupe les milliers avec un espace fine insécable
+// (U+202F), absent de l'encodage WinAnsi des polices de base pdfkit (Helvetica) —
+// il s'affiche comme un glyphe erroné. Formatage manuel avec un espace normal
+// pour le gabarit devis (voir generateDevisPDF et ses helpers ci-dessous).
+function montantPdf(n: number): string {
+  return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
 }
 
 function montantEnLettres(montant: number): string {
@@ -593,26 +622,262 @@ export async function generateFacturePDF(
   )
 }
 
+// ── Devis — gabarit TAFDIL (copie du modèle papier fourni) ────────────────────
+// Rendu dédié, indépendant de buildPdf() : le devis suit le gabarit exact
+// remis par la direction (en-tête, bloc DOIT/NIU/RCCM/BP, encart DQE, tableau
+// ITEM/DESIGNATION/QTE/PU/PT, lignes CONSOMMABLE/MAIN D'ŒUVRE/MONTANT TOTAL,
+// "Arrêté à la somme de", signature, pied de page) — la facture continue
+// d'utiliser buildPdf() séparément, non affectée par ce chantier.
+
+const DCOL = {
+  item: { x: ML,       w: 35  },
+  des:  { x: ML + 35,  w: 255 },
+  qte:  { x: ML + 290, w: 50  },
+  pu:   { x: ML + 340, w: 85  },
+  pt:   { x: ML + 425, w: 90  },
+} as const
+
+const DEVIS_ROW_H       = 20
+const DEVIS_ROW_H_CONF  = 30  // ligne avec sous-texte dimensions (§40)
+const DEVIS_PAGE_END    = 740
+
+const MOIS_FR = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin',
+  'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre']
+
+function formatDateLongFr(dateStr: string): string {
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return dateStr
+  return `${String(d.getDate()).padStart(2, '0')} ${MOIS_FR[d.getMonth()]} ${d.getFullYear()}`
+}
+
+const DEVIS_DIM_LABELS: Record<string, string> = {
+  largeur: 'L', hauteur: 'H', longueur: 'Long', epaisseur: 'Ép', diametre: 'Ø', poids: 'Poids', surface: 'Surface', volume: 'Volume',
+}
+
+/** §41 — résumé lisible des dimensions saisies via le Configurateur (§40), affiché sous la désignation. */
+function formatConfigForPdf(configuration?: Record<string, unknown> | null): string | null {
+  if (!configuration) return null
+  const dimensions = configuration.dimensions as Record<string, number> | undefined
+  if (!dimensions) return null
+  const parts: string[] = []
+  for (const [key, label] of Object.entries(DEVIS_DIM_LABELS)) {
+    const v = dimensions[key]
+    if (typeof v === 'number' && !Number.isNaN(v)) parts.push(`${label} ${v}`)
+  }
+  return parts.length > 0 ? parts.join(' × ') : null
+}
+
+const RESSOURCE_LABELS_PDF: Record<PdfRessourceLigne['type'], string> = {
+  materiau: 'Matériaux', main_oeuvre: "Main-d'œuvre", equipement: 'Équipements',
+}
+
+function drawDevisHeaderTafdil(doc: InstanceType<typeof PDFDocument>) {
+  const H = 108
+  doc.rect(0, 0, PW, H).fill('#FFFFFF')
+
+  // Accent diagonal rouge/noir (coin bas-gauche de l'en-tête, cf. gabarit papier)
+  doc.polygon([0, H], [150, H], [0, H - 52]).fill(C.red)
+  doc.polygon([0, H], [96, H], [0, H - 26]).fill('#1A1A1A')
+
+  try {
+    doc.image(LOGO_PATH, ML - 6, 12, { width: 62, height: 62 })
+  } catch { /* logo optionnel — le reste du gabarit reste correct sans lui */ }
+
+  doc.font('Helvetica-Bold').fontSize(17).fillColor(C.dark)
+    .text(CO.nom, 0, 14, { align: 'center', width: PW })
+  doc.font('Helvetica').fontSize(7.5).fillColor(C.mid)
+    .text('Etude - Conception - Réalisation - Conseil - Formation - Entretien - Menuiserie Métallique et Alluminium', 60, 37, { align: 'center', width: PW - 120 })
+    .text('Vente de Matériel - et Accessoires', 60, 47, { align: 'center', width: PW - 120 })
+  doc.font('Helvetica-Bold').fontSize(8).fillColor(C.dark)
+    .text(`NIU: ${CO.niu}`, 0, 61, { align: 'center', width: PW })
+
+  doc.moveTo(0, H).lineTo(PW, H).strokeColor(C.red).lineWidth(2.5).stroke()
+}
+
+/** Bloc "Douala le ..." / DOIT / NIU / RCCM / BP puis l'encart bleu N° devis + DQE. */
+function drawDevisInfoBlock(doc: InstanceType<typeof PDFDocument>, y0: number, devis: PdfDevis, client: PdfClient): number {
+  let y = y0
+  const RX = ML + W
+
+  doc.font('Helvetica').fontSize(9).fillColor(C.dark)
+    .text(`Douala le ${formatDateLongFr(devis.date_emission)}`, 0, y, { align: 'right', width: RX })
+  y += 24
+
+  const rows: Array<[string, string]> = [
+    ['DOIT :',  client.nom ?? ''],
+    ['NIU :',   client.niu ?? ''],
+    ['RCCM :',  ''],
+    ['BP :',    ''],
+  ]
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
+  for (const [label, val] of rows) {
+    doc.text(val ? `${label} ${val}` : label, 0, y, { align: 'right', width: RX })
+    y += 15
+  }
+  y += 14
+
+  const boxH = 56
+  doc.rect(ML, y, W, boxH).fill(C.blue)
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(C.dark)
+    .text(`TAFDIL/DLA/DEVIS N° ${devis.numero}`, ML, y + 10, { align: 'center', width: W, underline: true })
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
+    .text('DQE :', ML + 14, y + 32)
+  if (devis.notes) {
+    doc.font('Helvetica').fontSize(8.5).fillColor(C.mid)
+      .text(devis.notes, ML + 52, y + 32, { width: W - 66 })
+  }
+  return y + boxH + 16
+}
+
+function drawDevisTableHeader(doc: InstanceType<typeof PDFDocument>, y: number): number {
+  doc.rect(ML, y, W, DEVIS_ROW_H).strokeColor('#000000').lineWidth(0.5).stroke()
+  let x = ML
+  for (const col of Object.values(DCOL)) {
+    doc.moveTo(x, y).lineTo(x, y + DEVIS_ROW_H).strokeColor('#000000').lineWidth(0.5).stroke()
+    x += col.w
+  }
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
+  doc.text('ITEM',        DCOL.item.x, y + 6, { width: DCOL.item.w, align: 'center' })
+  doc.text('DESIGNATION', DCOL.des.x,  y + 6, { width: DCOL.des.w,  align: 'center' })
+  doc.text('QTE',         DCOL.qte.x,  y + 6, { width: DCOL.qte.w,  align: 'center' })
+  doc.text('PU',          DCOL.pu.x,   y + 6, { width: DCOL.pu.w,   align: 'center' })
+  doc.text('PT',          DCOL.pt.x,   y + 6, { width: DCOL.pt.w,   align: 'center' })
+  return y + DEVIS_ROW_H
+}
+
+function drawDevisRow(doc: InstanceType<typeof PDFDocument>, ligne: PdfLigne, itemNo: number, y: number): number {
+  const configDetail = formatConfigForPdf(ligne.configuration)
+  const h = configDetail ? DEVIS_ROW_H_CONF : DEVIS_ROW_H
+
+  doc.rect(ML, y, W, h).strokeColor('#000000').lineWidth(0.5).stroke()
+  let x = ML
+  for (const col of Object.values(DCOL)) {
+    doc.moveTo(x, y).lineTo(x, y + h).strokeColor('#000000').lineWidth(0.5).stroke()
+    x += col.w
+  }
+
+  const textY = configDetail ? y + 5 : y + 6
+  doc.font('Helvetica').fontSize(8.5).fillColor(C.dark)
+  doc.text(String(itemNo), DCOL.item.x, textY, { width: DCOL.item.w, align: 'center' })
+  doc.text(ligne.designation, DCOL.des.x + 4, textY, { width: DCOL.des.w - 8, ellipsis: true })
+  if (configDetail) {
+    doc.font('Helvetica-Oblique').fontSize(6.5).fillColor(C.muted)
+      .text(configDetail, DCOL.des.x + 4, textY + 11, { width: DCOL.des.w - 8 })
+  }
+  doc.font('Helvetica').fontSize(8.5).fillColor(C.dark)
+  doc.text(`${ligne.quantite} ${ligne.unite}`, DCOL.qte.x, textY, { width: DCOL.qte.w, align: 'center' })
+  doc.text(montantPdf(ligne.prix_unitaire_ht_xaf), DCOL.pu.x, textY, { width: DCOL.pu.w - 6, align: 'right' })
+  doc.text(montantPdf(ligne.total_ht_xaf), DCOL.pt.x, textY, { width: DCOL.pt.w - 6, align: 'right' })
+  return y + h
+}
+
+/** Ligne récapitulative pleine largeur (CONSOMMABLE / MAIN D'ŒUVRE / MONTANT TOTAL du gabarit). */
+function drawDevisSummaryRow(doc: InstanceType<typeof PDFDocument>, label: string, amount: number, y: number, strong = false): number {
+  const h = DEVIS_ROW_H
+  doc.rect(ML, y, W, h).strokeColor('#000000').lineWidth(0.5).stroke()
+  doc.moveTo(DCOL.item.x + DCOL.item.w, y).lineTo(DCOL.item.x + DCOL.item.w, y + h).strokeColor('#000000').lineWidth(0.5).stroke()
+  doc.moveTo(DCOL.pt.x, y).lineTo(DCOL.pt.x, y + h).strokeColor('#000000').lineWidth(0.5).stroke()
+  doc.font('Helvetica-Bold').fontSize(strong ? 9.5 : 9).fillColor(C.dark)
+  doc.text(label, DCOL.des.x, y + 6, { width: DCOL.des.w + DCOL.qte.w + DCOL.pu.w, align: 'center' })
+  doc.text(`${montantPdf(amount)} F`, DCOL.pt.x, y + 6, { width: DCOL.pt.w - 6, align: 'right' })
+  return y + h
+}
+
+/** §41.D — détail des ressources (matériaux/MO/équipements) des produits catalogue de ce devis. */
+function drawDevisRessourcesDetail(doc: InstanceType<typeof PDFDocument>, y: number, snapshot: PdfRessourcesSnapshot): number {
+  doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.dark)
+    .text('DÉTAIL DES RESSOURCES (produits catalogue — calcul automatique)', ML, y)
+  y += 14
+
+  for (const type of ['materiau', 'main_oeuvre', 'equipement'] as const) {
+    const items = snapshot.lignes.filter((r) => r.type === type)
+    if (items.length === 0) continue
+    doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.muted).text(RESSOURCE_LABELS_PDF[type], ML, y)
+    y += 10
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.dark)
+    for (const r of items) {
+      doc.text(r.designation, ML + 10, y, { width: 260 })
+      doc.text(`${r.quantiteCalculee} ${r.unite}`, ML + 280, y, { width: 100, align: 'right' })
+      doc.text(`${montantPdf(r.totalXaf)} XAF`, ML + 390, y, { width: W - 350, align: 'right' })
+      y += 10
+    }
+    y += 4
+  }
+  return y
+}
+
+function drawDevisSignatureAndFooter(doc: InstanceType<typeof PDFDocument>, y: number) {
+  y += 30
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.red)
+    .text('LA DIRECTION', 0, y, { align: 'right', width: ML + W })
+  y += 14
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
+    .text(CO.directeur, 0, y, { align: 'right', width: ML + W })
+
+  // Pied de page — coordonnées TAFDIL, fidèle au gabarit
+  doc.moveTo(ML, FOOTER_Y).lineTo(ML + W, FOOTER_Y).strokeColor(C.border).lineWidth(0.5).stroke()
+  doc.font('Helvetica').fontSize(7.5).fillColor(C.mid)
+    .text(`${CO.tel}  •  ${CO.email}  •  www.tafdil.com`, ML, FOOTER_Y + 6, { align: 'center', width: W })
+    .text(CO.adresse, ML, FOOTER_Y + 16, { align: 'center', width: W })
+}
+
 export async function generateDevisPDF(
   devis:  PdfDevis,
   client: PdfClient,
   lignes: PdfLigne[],
 ): Promise<Buffer> {
-  return buildPdf(
-    {
-      title:      devis.numero,
-      docType:    'DEVIS',
-      numero:     devis.numero,
-      labelLeft:  'Émission',
-      dateLeft:   devis.date_emission,
-      labelRight: `Validité (${devis.validite_jours ?? 30}j)`,
-      dateRight:  devis.date_validite,
-      extraFn:    drawBtpConditions,
-    },
-    client,
-    lignes,
-    { ht: devis.total_ht_xaf, tva: devis.tva_xaf, ttc: devis.total_ttc_xaf },
-  )
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: 'A4', margin: 0,
+      info: { Title: devis.numero, Author: CO.nom, Subject: 'DEVIS' },
+      bufferPages: true,
+    })
+    const chunks: Buffer[] = []
+    doc.on('data',  (c: Buffer) => chunks.push(c))
+    doc.on('end',   () => resolve(Buffer.concat(chunks)))
+    doc.on('error', reject)
+
+    drawDevisHeaderTafdil(doc)
+    let y = drawDevisInfoBlock(doc, 122, devis, client)
+    y = drawDevisTableHeader(doc, y)
+
+    for (let i = 0; i < lignes.length; i++) {
+      if (y + DEVIS_ROW_H_CONF > DEVIS_PAGE_END) {
+        doc.addPage()
+        doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
+          .text(`${CO.nom} — DEVIS ${devis.numero} (suite)`, ML, 20, { width: W })
+        y = drawDevisTableHeader(doc, 44)
+      }
+      y = drawDevisRow(doc, lignes[i], i + 1, y)
+    }
+
+    const totalMateriaux  = devis.ressources_snapshot?.totalMateriauxXaf ?? 0
+    const totalMainOeuvre = (devis.ressources_snapshot?.totalMainOeuvreXaf ?? 0) + (devis.ressources_snapshot?.totalEquipementsXaf ?? 0)
+
+    if (y + DEVIS_ROW_H * 3 > DEVIS_PAGE_END) { doc.addPage(); y = 40 }
+    y = drawDevisSummaryRow(doc, 'CONSOMMABLE',   totalMateriaux,     y)
+    y = drawDevisSummaryRow(doc, "MAIN D'ŒUVRE",  totalMainOeuvre,    y)
+    y = drawDevisSummaryRow(doc, 'MONTANT TOTAL', devis.total_ht_xaf, y, true)
+    y += 16
+
+    if (devis.ressources_snapshot && devis.ressources_snapshot.lignes.length > 0) {
+      if (y + 100 > DEVIS_PAGE_END) { doc.addPage(); y = 40 }
+      y = drawDevisRessourcesDetail(doc, y, devis.ressources_snapshot)
+      y += 10
+    }
+
+    if (y + 30 > DEVIS_PAGE_END) { doc.addPage(); y = 40 }
+    doc.font('Helvetica').fontSize(9).fillColor(C.dark)
+      .text('Arrêté le présent devis à la somme de : ', ML, y, { continued: true })
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.red)
+      .text(`${montantEnLettres(devis.total_ht_xaf).toUpperCase()}.`)
+    y += 20
+
+    if (y + 90 > DEVIS_PAGE_END) { doc.addPage(); y = 40 }
+    drawDevisSignatureAndFooter(doc, y)
+
+    doc.end()
+  })
 }
 
 // ── Reçu de paiement / Quittance ──────────────────────────────────────────────

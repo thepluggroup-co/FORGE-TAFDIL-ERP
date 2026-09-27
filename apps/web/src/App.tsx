@@ -80,6 +80,7 @@ const Securite     = lazy(() => import('@/pages/Securite'))
 const IoT          = lazy(() => import('@/pages/IoT'))
 const Formation    = lazy(() => import('@/pages/Formation'))
 const Boutique     = lazy(() => import('@/pages/Boutique'))
+const Catalogue    = lazy(() => import('@/pages/Catalogue'))
 const ModulePage   = lazy(() => import('@/pages/ModulePage'))
 const Account           = lazy(() => import('@/pages/Account'))
 const AdminSettings     = lazy(() => import('@/pages/AdminSettings'))
@@ -233,6 +234,7 @@ function AppRoutes() {
           <Route path="/iot" element={<Shell requiredModule="PRODUCTION"><IoT /></Shell>} />
           <Route path="/formation" element={<Shell requiredModule="HR"><Formation /></Shell>} />
           <Route path="/boutique" element={<Shell requiredModule="COMMERCIAL"><Boutique /></Shell>} />
+          <Route path="/catalogue" element={<Shell requiredModule="PRODUCTION"><Catalogue /></Shell>} />
 
           {/* Équipements */}
           <Route path="/equipements" element={<Shell requiredModule="PRODUCTION"><Equipements /></Shell>} />

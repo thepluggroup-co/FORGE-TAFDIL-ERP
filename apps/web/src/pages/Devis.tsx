@@ -9,6 +9,7 @@ import {
 import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
+import { uniteOptions } from '@/lib/constants'
 import { toast } from 'sonner'
 import {
   useDevis, useCreateDevis, useUpdateDevis, useDeleteDevis,
@@ -19,11 +20,12 @@ import { apiClient } from '@/lib/api-client'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/context/AuthContext'
 import { usePermissions } from '@/hooks/useRbac'
-import type { Devis as DevisApi, DevisLigne, CreateDevisPayload, PropositionDevis } from '@/hooks/useDevis'
+import type { Devis as DevisApi, DevisLigne, CreateDevisPayload, PropositionDevis, RessourceCalculee } from '@/hooks/useDevis'
 import type { Client } from '@/hooks/useClients'
 import { DevisPreview } from '@/components/devis/DevisPreview'
-import { Configurateur } from '@/components/devis/Configurateur'
+import { Configurateur, RESSOURCE_LABELS } from '@/components/devis/Configurateur'
 import { useProduitsShop, type ProduitShopErp } from '@/hooks/useProduitsShop'
+import { useModeles, useFamilles } from '@/hooks/useCatalogue'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -32,7 +34,12 @@ type Categorie = 'materiaux' | 'main-oeuvre' | 'equipement'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const TVA = 0.1925
+// §17-19 — le devis est un montant BRUT, sans TVA (l'API calcule déjà avec
+// un taux de TVA à 0 — voir commerce.ts, POST /devis, "§19 : devis brut,
+// TVA = 0"). Ce taux ne sert plus qu'à extraire le HT d'un prix public
+// boutique déjà TTC (ligne créée depuis le catalogue produits — un besoin
+// de tarification réelle, distinct du calcul du devis lui-même).
+const TVA_BOUTIQUE = 0.1925
 
 const STATUT_COLORS: Record<string, { bg: string; text: string }> = {
   brouillon: { bg: '#f3f4f6', text: '#6b7280' },
@@ -48,6 +55,15 @@ const STATUT_COLORS: Record<string, { bg: string; text: string }> = {
 interface LocalLigne {
   id: string; produitId?: string; designation: string; categorie: Categorie
   quantite: number; prixUnitaire: number; unite: string
+  // A. Produit — bascule Quincaillerie (stock, produitId) / Catalogue (produits
+  // finis, modeleId) : les deux sont mutuellement exclusifs pour une même
+  // ligne (voir setSourceLigne). Par défaut 'quincaillerie' pour toute ligne
+  // créée avant ce chantier (§46, rétrocompatibilité).
+  sourceLigne?: 'quincaillerie' | 'catalogue'
+  // Modèle du catalogue produits finis (Phase 1) choisi pour le calcul automatique
+  // (Configurateur, §40) — distinct de produitId (matière première/article de stock).
+  // Non persisté : seul le résultat du calcul (champs ci-dessous) l'est sur la ligne.
+  modeleId?: string
   // §11/§17/§18 — renseignés uniquement quand la ligne provient du Configurateur (calcul automatique)
   configuration?: Record<string, unknown>
   formuleUtilisee?: string
@@ -56,6 +72,12 @@ interface LocalLigne {
   coutCalculeXaf?: number
   ajusteManuellement?: boolean
   motifAjustement?: string
+  // §41.E — détail des ressources (matériaux/MO/équipements) du dernier calcul appliqué,
+  // conservé côté formulaire pour affichage (perdu sinon dès la fermeture du Configurateur)
+  ressourcesDetail?: RessourceCalculee[]
+  totalMateriauxXaf?: number
+  totalMainOeuvreXaf?: number
+  totalEquipementsXaf?: number
 }
 
 const CANAUX = [
@@ -69,7 +91,7 @@ const CANAUX = [
 
 function calcTotals(lignes: LocalLigne[]) {
   const totalHT = lignes.reduce((s, l) => s + l.quantite * l.prixUnitaire, 0)
-  return { totalHT, tva: Math.round(totalHT * TVA), totalTTC: Math.round(totalHT * (1 + TVA)) }
+  return { totalHT }
 }
 
 function mapCategorie(cat: Categorie): 'materiaux' | 'main_oeuvre' | 'equipement' {
@@ -82,9 +104,27 @@ function addDays(dateStr: string, days: number) {
 }
 
 const newLine = (): LocalLigne => ({
-  id: Math.random().toString(36).slice(2), produitId: '',
+  id: Math.random().toString(36).slice(2), produitId: '', modeleId: '', sourceLigne: 'quincaillerie',
   designation: '', categorie: 'materiaux', quantite: 1, prixUnitaire: 0, unite: 'unité',
 })
+
+const DIMENSION_LABELS_ADMIN: Record<string, string> = {
+  largeur: 'L', hauteur: 'H', longueur: 'Long', epaisseur: 'Ép', diametre: 'Ø', poids: 'Poids',
+}
+
+/** §41.C — résumé lisible des dimensions saisies dans le Configurateur (§40). */
+function formatConfigDetail(configuration?: Record<string, unknown>): string | null {
+  if (!configuration) return null
+  const dimensions = configuration.dimensions as Record<string, number> | undefined
+  const parts: string[] = []
+  if (dimensions) {
+    for (const [key, label] of Object.entries(DIMENSION_LABELS_ADMIN)) {
+      const v = dimensions[key]
+      if (typeof v === 'number' && !Number.isNaN(v)) parts.push(`${label} ${v}`)
+    }
+  }
+  return parts.length > 0 ? parts.join(' × ') : null
+}
 
 // ── Alerte expiration (banner) ─────────────────────────────────────────────────
 
@@ -144,6 +184,7 @@ function DevisDetailPanel({
   const transformer        = useTransformerDevis()
   const updateStatut       = useUpdateStatutDevis()
   const { hasPermission }  = usePermissions()
+  const [ressourcesOuvert, setRessourcesOuvert] = useState(false)
 
   const statut         = devis.statut as string
   const approuve       = devis.approuve_par_client as boolean
@@ -151,6 +192,9 @@ function DevisDetailPanel({
   const pdfUrl         = devis.pdf_url as string | null
   const lignes         = devis.lignes as DevisLigne[]
   const client         = devis.client as DevisApi['client']
+  // §41.E — détail des ressources (matériaux/MO/équipements), figé au calcul (§21) ;
+  // absent des devis multi-lignes ou entièrement manuels (§46 rétrocompatibilité).
+  const ressourcesSnapshot = devis.ressources_snapshot as DevisApi['ressources_snapshot']
   const joursRestants  = devis.jours_restants as number | null
   const canAdmin       = hasPermission('COMMERCIAL', 'VALIDATE')
   const canSendApproval = hasPermission('COMMERCIAL', 'UPDATE')
@@ -193,8 +237,9 @@ function DevisDetailPanel({
             </div>
           </div>
           <div className="text-right">
-            <p className="text-xs text-gray-400">Total TTC</p>
-            <p className="text-lg font-bold text-[#C62828]">{formatXAF(devis.montant_ttc_xaf as number)}</p>
+            {/* §17-19/§41.G — le devis est un montant brut, sans TVA */}
+            <p className="text-xs text-gray-400">Montant brut</p>
+            <p className="text-lg font-bold text-[#C62828]">{formatXAF(devis.total_ht_xaf as number)}</p>
           </div>
         </div>
 
@@ -252,23 +297,66 @@ function DevisDetailPanel({
                 </tr>
               </thead>
               <tbody>
-                {lignes.map((l, i) => (
+                {lignes.map((l, i) => {
+                  const configDetail = formatConfigDetail(l.configuration ?? undefined)
+                  return (
                   <tr key={l.id ?? i} className="border-t border-gray-50">
-                    <td className="px-3 py-2">{l.designation}</td>
+                    <td className="px-3 py-2">
+                      {l.designation}
+                      {configDetail && <p className="mt-0.5 text-[10px] text-gray-400">C. {configDetail}{l.formule_utilisee ? ` · ${l.formule_utilisee}` : ''}</p>}
+                    </td>
                     <td className="px-3 py-2 text-right text-gray-500">{l.quantite} {l.unite ?? 'u.'}</td>
                     <td className="px-3 py-2 text-right text-gray-500">{formatXAF(l.prix_unitaire_ht_xaf)}</td>
                     <td className="px-3 py-2 text-right font-medium">{formatXAF(l.quantite * l.prix_unitaire_ht_xaf)}</td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
+          {/* §17-19/§41.G — le devis est un montant brut, sans TVA */}
           <div className="mt-2 space-y-0.5 text-xs text-gray-500 text-right pr-3">
-            <p>Total HT : <span className="font-semibold text-[#212121]">{formatXAF(devis.total_ht_xaf as number)}</span></p>
-            <p>TVA {(TVA * 100).toFixed(2)}% : {formatXAF(devis.tva_xaf as number)}</p>
-            <p className="text-sm font-bold text-[#C62828]">TTC : {formatXAF(devis.montant_ttc_xaf as number)}</p>
+            <p className="text-sm font-bold text-[#C62828]">Montant brut du devis : {formatXAF(devis.total_ht_xaf as number)}</p>
           </div>
         </div>
+
+        {/* D. Ressources — détail matériaux/main-d'œuvre/équipements figé au calcul */}
+        {ressourcesSnapshot && ressourcesSnapshot.lignes.length > 0 && (
+          <div className="border border-gray-100 rounded-xl p-3">
+            <button type="button" onClick={() => setRessourcesOuvert((v) => !v)}
+              className="flex items-center justify-between w-full text-left">
+              <p className="text-xs font-semibold text-gray-500 uppercase">D. Ressources (détail technique)</p>
+              <span className="text-xs font-medium text-[#C62828]">{ressourcesOuvert ? 'Masquer' : 'Voir le détail'}</span>
+            </button>
+            {ressourcesOuvert && (
+              <div className="mt-2.5 space-y-2">
+                {(['materiau', 'main_oeuvre', 'equipement'] as const).map((type) => {
+                  const items = ressourcesSnapshot.lignes.filter((r) => r.type === type)
+                  if (items.length === 0) return null
+                  return (
+                    <div key={type}>
+                      <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1">{RESSOURCE_LABELS[type]}</p>
+                      <div className="space-y-1">
+                        {items.map((r) => (
+                          <div key={r.ressourceId} className="flex items-center justify-between text-xs bg-gray-50 rounded-lg px-2.5 py-1.5">
+                            <span className="text-gray-700">{r.designation}</span>
+                            <span className="text-gray-500">{r.quantiteCalculee} {r.unite}</span>
+                            <span className="font-semibold text-gray-900">{formatXAF(r.totalXaf)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+                <div className="text-[11px] space-y-0.5 text-right text-gray-500 pt-1">
+                  <p>Matériaux : {formatXAF(ressourcesSnapshot.totalMateriauxXaf)}</p>
+                  <p>Main-d'œuvre : {formatXAF(ressourcesSnapshot.totalMainOeuvreXaf)}</p>
+                  <p>Équipements : {formatXAF(ressourcesSnapshot.totalEquipementsXaf)}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* PDF */}
         {pdfUrl && (
@@ -310,6 +398,26 @@ function DevisDetailPanel({
                   {envoyerApprobation.isPending ? 'Génération du lien…' : 'Envoyer lien d\'approbation au client'}
                 </p>
                 <p className="text-xs text-blue-500">Lien valable 30 jours · copié automatiquement</p>
+              </div>
+            </button>
+          )}
+
+          {/* §41.H — Valider : validation interne (superviseur), distincte de
+              l'approbation client (§42, lien public token). Nécessaire pour
+              convertir en commande MÊME quand le client a déjà approuvé
+              ailleurs (téléphone/comptoir) sans repasser par le lien. */}
+          {canAdmin && statut === 'envoye' && (
+            <button
+              onClick={() => updateStatut.mutate({ id: devis.id as string, statut: 'accepte' })}
+              disabled={updateStatut.isPending}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border-2 border-emerald-200 bg-emerald-50 hover:bg-emerald-100 transition-colors text-left disabled:opacity-50"
+            >
+              <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0" />
+              <div>
+                <p className="text-sm font-semibold text-emerald-700">
+                  {updateStatut.isPending ? 'Validation…' : 'Valider ce devis'}
+                </p>
+                <p className="text-xs text-emerald-600">Validation interne — n'accorde pas automatiquement l'approbation client (CMD01).</p>
               </div>
             </button>
           )}
@@ -397,7 +505,6 @@ function DevisDetailPanel({
 // ── Form multi-étapes (création + édition) ─────────────────────────────────────
 
 const STEPS = ['Client', 'Lignes', 'Conditions', 'Aperçu']
-const CAT_LABELS: Record<Categorie, string> = { materiaux: 'Matériaux', 'main-oeuvre': 'Main-d\'œuvre', equipement: 'Équipement' }
 
 interface FormState {
   clientId: string; clientNom: string; clientTel: string; clientEmail: string
@@ -456,6 +563,15 @@ function DevisFormPanel({
   const { data: condData } = useConditionsPaiement()
   const conditionsList = condData?.data ?? []
   const { data: produitsCatalogue = [] } = useProduitsShop()
+  // Modèles du catalogue produits finis (Phase 1) actifs, toutes familles — sert
+  // uniquement à choisir quel modèle configurer (Phase 2, calcul automatique).
+  const { data: modelesData } = useModeles({ actif: true })
+  const modelesActifs = modelesData?.data ?? []
+  // §41.B — navigation groupée Famille → Modèle dans le sélecteur (au lieu
+  // d'une liste plate), sans repartir en cascade sur une 2e requête filtrée :
+  // une seule liste de modèles déjà chargée, regroupée client-side par famille.
+  const { data: famillesData } = useFamilles({ actif: true })
+  const famillesActives = famillesData?.data ?? []
 
   const [step,    setStep]    = useState(0)
   const [created, setCreated] = useState<{ reference: string; pdf_url: string | null; montantTTC: number } | null>(null)
@@ -463,14 +579,33 @@ function DevisFormPanel({
   // Initialiser le formulaire depuis un devis existant si édition
   const [form, setForm] = useState<FormState>(() => {
     if (!editingDevis) return DEFAULT_FORM
+    // §41 — restaure la traçabilité du calcul (configuration/formule/ajustement) déjà
+    // persistée par ligne ; le détail des ressources (§41.E), lui, n'est conservé qu'au
+    // niveau du devis (ressources_snapshot) pour le cas single-ligne-calculée (§21).
+    const lignesAvecCalcul = (editingDevis.lignes as DevisLigne[]).filter((l) => l.quantite_calculee != null)
+    const ressourcesSnapshotExistant = lignesAvecCalcul.length === 1 ? editingDevis.ressources_snapshot : null
     const lignesExist = (editingDevis.lignes as DevisLigne[]).map((l) => ({
       id:          l.id,
       produitId:   l.produit_id ?? '',
+      // modele_id n'est pas persisté sur la ligne (seul le résultat du calcul l'est) —
+      // déduit ici du signal disponible : une ligne déjà calculée vient forcément du
+      // Catalogue, sinon on part du principe Quincaillerie par défaut.
+      sourceLigne: (l.quantite_calculee != null ? 'catalogue' : 'quincaillerie') as 'quincaillerie' | 'catalogue',
       designation: l.designation,
       categorie:   (l.categorie === 'main_oeuvre' ? 'main-oeuvre' : l.categorie) as Categorie,
       quantite:    l.quantite,
       prixUnitaire:l.prix_unitaire_ht_xaf,
       unite:       l.unite ?? 'unité',
+      configuration:      l.configuration ?? undefined,
+      formuleUtilisee:    l.formule_utilisee ?? undefined,
+      quantiteCalculee:   l.quantite_calculee ?? undefined,
+      coutCalculeXaf:     l.cout_calcule_xaf ?? undefined,
+      ajusteManuellement: l.ajuste_manuellement ?? false,
+      motifAjustement:    l.motif_ajustement ?? undefined,
+      ressourcesDetail:     l.quantite_calculee != null ? ressourcesSnapshotExistant?.lignes : undefined,
+      totalMateriauxXaf:    l.quantite_calculee != null ? ressourcesSnapshotExistant?.totalMateriauxXaf : undefined,
+      totalMainOeuvreXaf:   l.quantite_calculee != null ? ressourcesSnapshotExistant?.totalMainOeuvreXaf : undefined,
+      totalEquipementsXaf:  l.quantite_calculee != null ? ressourcesSnapshotExistant?.totalEquipementsXaf : undefined,
     }))
     const cli = editingDevis.client as DevisApi['client']
     return {
@@ -489,6 +624,13 @@ function DevisFormPanel({
 
   // Configurateur (§40) — modal ouverte pour la ligne en cours de configuration
   const [configuringLineId, setConfiguringLineId] = useState<string | null>(null)
+  // §41.E — lignes dont le détail des ressources (matériaux/MO/équipements) est déplié
+  const [ressourcesOuvertes, setRessourcesOuvertes] = useState<Set<string>>(new Set())
+  const toggleRessources = (id: string) => setRessourcesOuvertes((s) => {
+    const next = new Set(s)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
 
   const updateLine = (id: string, field: keyof LocalLigne, value: string | number | Categorie) =>
     setForm((f) => ({
@@ -521,6 +663,10 @@ function DevisFormPanel({
         coutCalculeXaf:      proposition.totalHtXaf,
         ajusteManuellement:  false,
         motifAjustement:     undefined,
+        ressourcesDetail:     proposition.lignes,
+        totalMateriauxXaf:    proposition.totalMateriauxXaf,
+        totalMainOeuvreXaf:   proposition.totalMainOeuvreXaf,
+        totalEquipementsXaf:  proposition.totalEquipementsXaf,
       }),
     }))
     toast.success('Calcul appliqué à la ligne')
@@ -545,13 +691,62 @@ function DevisFormPanel({
           designation:  produit.nom,
           categorie:    categorieFromProduit(produit),
           unite:        produit.unite || l.unite || 'unité',
-          prixUnitaire: produit.prix_public ? Math.round(produit.prix_public / (1 + TVA)) : l.prixUnitaire,
+          prixUnitaire: produit.prix_public ? Math.round(produit.prix_public / (1 + TVA_BOUTIQUE)) : l.prixUnitaire,
         }
       }),
     }))
   }
 
-  const { totalHT, tva, totalTTC } = calcTotals(form.lignes)
+  /** Sélection d'un modèle du catalogue produits finis (mode "Catalogue") —
+      auto-remplit désignation et unité, comme applyProduitToLine côté Quincaillerie. */
+  const applyModeleToLine = (lineId: string, modeleId: string) => {
+    const modele = modelesActifs.find((m) => m.id === modeleId)
+    setForm((f) => ({
+      ...f,
+      lignes: f.lignes.map((l) => {
+        if (l.id !== lineId) return l
+        if (!modele) return { ...l, modeleId: '' }
+        return {
+          ...l,
+          modeleId:    modele.id,
+          designation: modele.designation,
+          unite:       modele.unite_facturation || l.unite || 'unité',
+        }
+      }),
+    }))
+  }
+
+  /** Bascule Quincaillerie (stock)/Catalogue (produits finis) pour une ligne —
+      les deux modes sont mutuellement exclusifs : changer de mode repart d'une
+      ligne propre (pas de produit_id de stock qui traîne sur une ligne Catalogue,
+      pas de calcul automatique périmé qui traîne sur une ligne Quincaillerie). */
+  const setSourceLigne = (lineId: string, source: 'quincaillerie' | 'catalogue') =>
+    setForm((f) => ({
+      ...f,
+      lignes: f.lignes.map((l) => {
+        if (l.id !== lineId || (l.sourceLigne ?? 'quincaillerie') === source) return l
+        return {
+          ...l,
+          sourceLigne:  source,
+          produitId:    '',
+          modeleId:     '',
+          designation:  '',
+          configuration: undefined,
+          formuleUtilisee: undefined,
+          ficheTechniqueId: undefined,
+          quantiteCalculee: undefined,
+          coutCalculeXaf: undefined,
+          ajusteManuellement: false,
+          motifAjustement: undefined,
+          ressourcesDetail: undefined,
+          totalMateriauxXaf: undefined,
+          totalMainOeuvreXaf: undefined,
+          totalEquipementsXaf: undefined,
+        }
+      }),
+    }))
+
+  const { totalHT } = calcTotals(form.lignes)
 
   // §18 — un ajustement manuel après calcul automatique doit être motivé
   const ajustementsSansMotif = form.lignes.some((l) => l.ajusteManuellement && !l.motifAjustement?.trim())
@@ -580,6 +775,12 @@ function DevisFormPanel({
     // Un devis multi-lignes garde sa traçabilité complète au niveau de chaque ligne
     // (configuration/formule_utilisee/quantite_calculee/cout_calcule_xaf ci-dessous).
     const snapshotUnique = lignesCalculees.length === 1 ? lignesCalculees[0] : null
+    const ressourcesSnapshot = snapshotUnique?.ressourcesDetail ? {
+      lignes:              snapshotUnique.ressourcesDetail,
+      totalMateriauxXaf:   snapshotUnique.totalMateriauxXaf ?? 0,
+      totalMainOeuvreXaf:  snapshotUnique.totalMainOeuvreXaf ?? 0,
+      totalEquipementsXaf: snapshotUnique.totalEquipementsXaf ?? 0,
+    } : undefined
 
     const payload: CreateDevisPayload = {
       client_id:           form.clientId || undefined,
@@ -595,6 +796,7 @@ function DevisFormPanel({
       source_demande:      form.sourceDemande || undefined,
       fiche_technique_id:  snapshotUnique?.ficheTechniqueId,
       config_snapshot:     snapshotUnique?.configuration,
+      ressources_snapshot: ressourcesSnapshot,
       lignes: lignesRetenues.map((l, i) => ({
         produit_id:           l.produitId || undefined,
         designation:          l.designation,
@@ -725,54 +927,110 @@ function DevisFormPanel({
                 </div>
               )}
 
-              {/* ── Step 1 — Lignes ── */}
+              {/* ── Step 1 — Lignes (§41 : sections A. Produit / B. Configuration / C. Calcul / D. Ressources / E. Ajustement manuel) ── */}
               {step === 1 && (
                 <div className="space-y-3">
-                  {form.lignes.map((ligne) => (
-                    <div key={ligne.id} className="border border-gray-100 bg-gray-50 rounded-xl p-3 space-y-2">
-                      <div className="flex gap-2 items-end">
-                        <div className="flex-1">
-                          <label className="block text-[10px] text-gray-400 mb-0.5">Produit catalogue</label>
+                  {form.lignes.map((ligne, ligneIndex) => {
+                    const configDetail = formatConfigDetail(ligne.configuration)
+                    const ressourcesOuvert = ressourcesOuvertes.has(ligne.id)
+                    return (
+                    <div key={ligne.id} className="border border-gray-200 bg-white rounded-xl p-3 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Ligne {ligneIndex + 1}</span>
+                        {form.lignes.length > 1 && (
+                          <button onClick={() => setForm((f) => ({ ...f, lignes: f.lignes.filter((l) => l.id !== ligne.id) }))}
+                            className="p-1 rounded-lg text-red-400 hover:bg-red-50 transition-colors">
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* A. Produit */}
+                      <div className="space-y-1.5">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">A. Produit</p>
+
+                        {/* Bascule Quincaillerie (stock) / Catalogue (produits finis) — deux
+                            sources mutuellement exclusives (§40), pour ne proposer que la
+                            bonne liste et éviter de mélanger un produit_id de stock avec un
+                            calcul automatique catalogue sur la même ligne. */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <button type="button" onClick={() => setSourceLigne(ligne.id, 'quincaillerie')}
+                            className="py-2 rounded-lg border-2 text-xs font-semibold transition-all"
+                            style={{
+                              borderColor:     (ligne.sourceLigne ?? 'quincaillerie') === 'quincaillerie' ? '#C62828' : '#e5e7eb',
+                              backgroundColor: (ligne.sourceLigne ?? 'quincaillerie') === 'quincaillerie' ? '#FFEBEE' : 'transparent',
+                              color:           (ligne.sourceLigne ?? 'quincaillerie') === 'quincaillerie' ? '#C62828' : '#6b7280',
+                            }}>
+                            Quincaillerie
+                          </button>
+                          <button type="button" onClick={() => setSourceLigne(ligne.id, 'catalogue')}
+                            className="py-2 rounded-lg border-2 text-xs font-semibold transition-all"
+                            style={{
+                              borderColor:     ligne.sourceLigne === 'catalogue' ? '#C62828' : '#e5e7eb',
+                              backgroundColor: ligne.sourceLigne === 'catalogue' ? '#FFEBEE' : 'transparent',
+                              color:           ligne.sourceLigne === 'catalogue' ? '#C62828' : '#6b7280',
+                            }}>
+                            Catalogue
+                          </button>
+                        </div>
+
+                        {(ligne.sourceLigne ?? 'quincaillerie') === 'quincaillerie' ? (
                           <select
                             value={ligne.produitId ?? ''}
                             onChange={(e) => applyProduitToLine(ligne.id, e.target.value)}
                             className="w-full px-2.5 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]"
                           >
-                            <option value="">Saisie libre / aucun produit</option>
+                            <option value="">— Choisir un article en stock —</option>
                             {produitsCatalogue.map((p) => (
                               <option key={p.id} value={p.id}>
                                 {p.ref ? `${p.ref} - ` : ''}{p.nom} - {p.unite || 'unité'} - stock {p.stock_actuel}
                               </option>
                             ))}
                           </select>
-                        </div>
-                        {ligne.produitId && (
-                          <button type="button" onClick={() => setConfiguringLineId(ligne.id)}
-                            title="Calcul automatique (dimensions → fiche technique)"
-                            className="flex items-center gap-1 px-2.5 py-2 text-xs font-medium rounded-lg border transition-colors"
-                            style={{ borderColor: '#C62828', color: '#C62828' }}>
-                            <Settings2 className="h-3.5 w-3.5" /> Configurer
-                          </button>
+                        ) : (
+                          <div className="flex gap-2 items-end">
+                            <select
+                              value={ligne.modeleId ?? ''}
+                              onChange={(e) => applyModeleToLine(ligne.id, e.target.value)}
+                              className="flex-1 px-2.5 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                            >
+                              <option value="">— Choisir un modèle du catalogue —</option>
+                              {famillesActives.map((famille) => {
+                                const modelesFamille = modelesActifs.filter((m) => m.famille_id === famille.id)
+                                if (modelesFamille.length === 0) return null
+                                return (
+                                  <optgroup key={famille.id} label={famille.nom}>
+                                    {modelesFamille.map((m) => (
+                                      <option key={m.id} value={m.id}>{m.reference} — {m.designation}</option>
+                                    ))}
+                                  </optgroup>
+                                )
+                              })}
+                              {/* Modèles dont la famille n'est pas (ou plus) active — évite de les faire
+                                  disparaître silencieusement du sélecteur si déjà choisis sur cette ligne. */}
+                              {(() => {
+                                const famillesActivesIds = new Set(famillesActives.map((f) => f.id))
+                                const modelesOrphelins = modelesActifs.filter((m) => !famillesActivesIds.has(m.famille_id))
+                                if (modelesOrphelins.length === 0) return null
+                                return (
+                                  <optgroup label="Autres">
+                                    {modelesOrphelins.map((m) => (
+                                      <option key={m.id} value={m.id}>{m.reference} — {m.designation}</option>
+                                    ))}
+                                  </optgroup>
+                                )
+                              })()}
+                            </select>
+                            {ligne.modeleId && (
+                              <button type="button" onClick={() => setConfiguringLineId(ligne.id)}
+                                title="Calcul automatique (dimensions → fiche technique)"
+                                className="flex items-center gap-1 px-2.5 py-2 text-xs font-medium rounded-lg border transition-colors shrink-0"
+                                style={{ borderColor: '#C62828', color: '#C62828' }}>
+                                <Settings2 className="h-3.5 w-3.5" /> Configurer
+                              </button>
+                            )}
+                          </div>
                         )}
-                      </div>
-                      {ligne.quantiteCalculee !== undefined && (
-                        <div className={`flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-lg ${ligne.ajusteManuellement ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
-                          <Check className="h-3 w-3 shrink-0" />
-                          {ligne.ajusteManuellement
-                            ? `Calculé automatiquement (${ligne.quantiteCalculee} ${ligne.unite}) puis ajusté manuellement`
-                            : `Calculé automatiquement — ${ligne.formuleUtilisee}`}
-                        </div>
-                      )}
-                      {ligne.ajusteManuellement && (
-                        <input value={ligne.motifAjustement ?? ''}
-                          onChange={(e) => setForm((f) => ({
-                            ...f,
-                            lignes: f.lignes.map((l) => l.id === ligne.id ? { ...l, motifAjustement: e.target.value } : l),
-                          }))}
-                          placeholder="Motif de l'ajustement (obligatoire) *"
-                          className="w-full px-2.5 py-2 text-xs border border-amber-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-amber-400" />
-                      )}
-                      <div className="flex gap-2">
                         <input value={ligne.designation}
                           onChange={(e) => setForm((f) => ({
                             ...f,
@@ -781,54 +1039,172 @@ function DevisFormPanel({
                               : l),
                           }))}
                           placeholder="Désignation *"
-                          className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
-                        {form.lignes.length > 1 && (
-                          <button onClick={() => setForm((f) => ({ ...f, lignes: f.lignes.filter((l) => l.id !== ligne.id) }))}
-                            className="p-2 rounded-lg text-red-400 hover:bg-red-50 transition-colors">
-                            <X className="h-3.5 w-3.5" />
-                          </button>
+                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+                      </div>
+
+                      {/* B. Configuration — la Quantité/Prix ne restent éditables ici que pour une
+                          ligne SANS calcul automatique ; dès qu'un calcul existe, ces valeurs
+                          deviennent la "valeur retenue" et se pilotent depuis E, pas ici (évite
+                          d'avoir deux champs éditant le même état visibles en même temps). */}
+                      <div className="space-y-1.5 border-t border-gray-100 pt-2.5">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">B. Configuration</p>
+                        {configDetail && (
+                          <p className="text-xs text-gray-600 bg-gray-50 rounded-lg px-2.5 py-1.5">{configDetail}</p>
+                        )}
+                        <div className="grid grid-cols-2 gap-2">
+                          {ligne.quantiteCalculee === undefined && (
+                            <div>
+                              <label className="block text-[10px] text-gray-400 mb-0.5">Quantité</label>
+                              <input type="number" min="0.01" step="0.01" value={ligne.quantite}
+                                onChange={(e) => updateLine(ligne.id, 'quantite', Number(e.target.value))}
+                                className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+                            </div>
+                          )}
+                          <div className={ligne.quantiteCalculee === undefined ? '' : 'col-span-2'}>
+                            <label className="block text-[10px] text-gray-400 mb-0.5">Unité</label>
+                            <select value={ligne.unite} onChange={(e) => updateLine(ligne.id, 'unite', e.target.value)}
+                              className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]">
+                              {uniteOptions(ligne.unite).map((u) => <option key={u} value={u}>{u}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                        {/* Ligne entièrement manuelle (§46, pas de calcul automatique) : le prix
+                            se saisit directement ici, E (Ajustement manuel) ne s'applique pas —
+                            il n'y a pas de "valeur calculée" à comparer. */}
+                        {ligne.quantiteCalculee === undefined && (
+                          <div>
+                            <label className="block text-[10px] text-gray-400 mb-0.5">Prix unitaire HT (XAF)</label>
+                            <input type="number" min="0" value={ligne.prixUnitaire}
+                              onChange={(e) => updateLine(ligne.id, 'prixUnitaire', Number(e.target.value))}
+                              className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+                          </div>
+                        )}
+                        {/* Ligne calculée : le sous-total apparaît déjà en E ("Valeur retenue") */}
+                        {ligne.quantiteCalculee === undefined && ligne.designation && ligne.prixUnitaire > 0 && (
+                          <p className="text-xs text-gray-500 text-right">
+                            Sous-total : <span className="font-semibold">{formatXAF(ligne.quantite * ligne.prixUnitaire)}</span>
+                          </p>
                         )}
                       </div>
-                      <div className="grid grid-cols-4 gap-2">
-                        <select value={ligne.categorie} onChange={(e) => updateLine(ligne.id, 'categorie', e.target.value as Categorie)}
-                          className="col-span-2 px-2.5 py-2 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]">
-                          {Object.entries(CAT_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                        </select>
-                        <div>
-                          <label className="block text-[10px] text-gray-400 mb-0.5">Quantité</label>
-                          <input type="number" min="0.01" step="0.01" value={ligne.quantite}
-                            onChange={(e) => updateLine(ligne.id, 'quantite', Number(e.target.value))}
-                            className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+
+                      {/* C. Calcul — résultat du moteur (§13), lecture seule. La valeur qui sera
+                          effectivement facturée (potentiellement ajustée) vit en E, pas ici. */}
+                      {ligne.quantiteCalculee !== undefined && (
+                        <div className="space-y-1.5 border-t border-gray-100 pt-2.5">
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">C. Calcul</p>
+                          <div className="grid grid-cols-2 gap-2 text-xs bg-gray-50 rounded-lg px-2.5 py-2">
+                            <div>
+                              <p className="text-[10px] text-gray-400">Quantité facturable</p>
+                              <p className="font-semibold text-gray-800">{ligne.quantiteCalculee} {ligne.unite}</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] text-gray-400">Coût calculé (HT)</p>
+                              <p className="font-semibold text-gray-800">{formatXAF(ligne.coutCalculeXaf ?? 0)}</p>
+                            </div>
+                          </div>
+                          {ligne.formuleUtilisee && (
+                            <p className="text-[11px] text-gray-500 font-mono">{ligne.formuleUtilisee}</p>
+                          )}
                         </div>
-                        <div>
-                          <label className="block text-[10px] text-gray-400 mb-0.5">Unité</label>
-                          <input value={ligne.unite} onChange={(e) => updateLine(ligne.id, 'unite', e.target.value)}
-                            placeholder="unité"
-                            className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+                      )}
+
+                      {/* D. Ressources */}
+                      {ligne.ressourcesDetail && ligne.ressourcesDetail.length > 0 && (
+                        <div className="space-y-1.5 border-t border-gray-100 pt-2.5">
+                          <button type="button" onClick={() => toggleRessources(ligne.id)}
+                            className="flex items-center justify-between w-full text-left">
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">D. Ressources</p>
+                            <span className="text-[10px] font-medium text-[#C62828]">{ressourcesOuvert ? 'Masquer' : 'Voir le détail'}</span>
+                          </button>
+                          {ressourcesOuvert && (
+                            <div className="space-y-2">
+                              {(['materiau', 'main_oeuvre', 'equipement'] as const).map((type) => {
+                                const items = ligne.ressourcesDetail!.filter((r) => r.type === type)
+                                if (items.length === 0) return null
+                                return (
+                                  <div key={type}>
+                                    <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1">{RESSOURCE_LABELS[type]}</p>
+                                    <div className="space-y-1">
+                                      {items.map((r) => (
+                                        <div key={r.ressourceId} className="flex items-center justify-between text-xs bg-gray-50 rounded-lg px-2.5 py-1.5">
+                                          <span className="text-gray-700">{r.designation}</span>
+                                          <span className="text-gray-500">{r.quantiteCalculee} {r.unite}</span>
+                                          <span className="font-semibold text-gray-900">{formatXAF(r.totalXaf)}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                              <div className="text-[11px] space-y-0.5 text-right text-gray-500">
+                                <p>Matériaux : {formatXAF(ligne.totalMateriauxXaf ?? 0)}</p>
+                                <p>Main-d'œuvre : {formatXAF(ligne.totalMainOeuvreXaf ?? 0)}</p>
+                                <p>Équipements : {formatXAF(ligne.totalEquipementsXaf ?? 0)}</p>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                        <div className="col-span-4">
-                          <label className="block text-[10px] text-gray-400 mb-0.5">Prix unitaire HT (XAF)</label>
-                          <input type="number" min="0" value={ligne.prixUnitaire}
-                            onChange={(e) => updateLine(ligne.id, 'prixUnitaire', Number(e.target.value))}
-                            className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+                      )}
+
+                      {/* E. Ajustement manuel (§18/§41.F) — ne s'affiche que si un calcul
+                          automatique existe : sans "valeur calculée", il n'y a rien à ajuster. */}
+                      {ligne.quantiteCalculee !== undefined && (
+                        <div className="space-y-1.5 border-t border-gray-100 pt-2.5">
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">E. Ajustement manuel</p>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="bg-gray-50 rounded-lg px-2.5 py-2">
+                              <p className="text-[10px] text-gray-400">Valeur calculée</p>
+                              <p className="font-semibold text-gray-700">{ligne.quantiteCalculee} {ligne.unite}</p>
+                              <p className="text-gray-500">{formatXAF(ligne.coutCalculeXaf ?? 0)}</p>
+                            </div>
+                            <div className={`rounded-lg px-2.5 py-2 ${ligne.ajusteManuellement ? 'bg-amber-50' : 'bg-green-50'}`}>
+                              <p className={`text-[10px] ${ligne.ajusteManuellement ? 'text-amber-600' : 'text-green-600'}`}>Valeur retenue</p>
+                              <p className={`font-semibold ${ligne.ajusteManuellement ? 'text-amber-700' : 'text-green-700'}`}>{ligne.quantite} {ligne.unite}</p>
+                              <p className={ligne.ajusteManuellement ? 'text-amber-600' : 'text-green-600'}>{formatXAF(ligne.quantite * ligne.prixUnitaire)}</p>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[10px] text-gray-400 mb-0.5">Quantité retenue</label>
+                              <input type="number" min="0.01" step="0.01" value={ligne.quantite}
+                                onChange={(e) => updateLine(ligne.id, 'quantite', Number(e.target.value))}
+                                className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-gray-400 mb-0.5">Prix unitaire retenu HT (XAF)</label>
+                              <input type="number" min="0" value={ligne.prixUnitaire}
+                                onChange={(e) => updateLine(ligne.id, 'prixUnitaire', Number(e.target.value))}
+                                className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+                            </div>
+                          </div>
+                          {ligne.ajusteManuellement && (
+                            <>
+                              <div className="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-lg bg-amber-50 text-amber-700">
+                                <AlertTriangle className="h-3 w-3 shrink-0" />
+                                Valeur retenue différente de la valeur calculée — motif obligatoire
+                              </div>
+                              <input value={ligne.motifAjustement ?? ''}
+                                onChange={(e) => setForm((f) => ({
+                                  ...f,
+                                  lignes: f.lignes.map((l) => l.id === ligne.id ? { ...l, motifAjustement: e.target.value } : l),
+                                }))}
+                                placeholder="Motif de l'ajustement (obligatoire) *"
+                                className="w-full px-2.5 py-2 text-xs border border-amber-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-amber-400" />
+                            </>
+                          )}
                         </div>
-                      </div>
-                      {ligne.designation && ligne.prixUnitaire > 0 && (
-                        <p className="text-xs text-gray-500 text-right">
-                          Sous-total : <span className="font-semibold">{formatXAF(ligne.quantite * ligne.prixUnitaire)}</span>
-                        </p>
                       )}
                     </div>
-                  ))}
+                    )
+                  })}
                   <button onClick={() => setForm((f) => ({ ...f, lignes: [...f.lignes, newLine()] }))}
                     className="flex items-center gap-1.5 text-xs font-medium text-[#C62828] hover:underline transition-colors">
                     <Plus className="h-3.5 w-3.5" /> Ajouter une ligne
                   </button>
                   {totalHT > 0 && (
-                    <div className="bg-gray-50 rounded-lg px-3 py-2 text-xs space-y-0.5 text-right">
-                      <p>Total HT : <span className="font-semibold">{formatXAF(totalHT)}</span></p>
-                      <p>TVA 19.25% : {formatXAF(tva)}</p>
-                      <p className="text-sm font-bold text-[#C62828]">TTC : {formatXAF(totalTTC)}</p>
+                    <div className="bg-gray-50 rounded-lg px-3 py-2 text-xs text-right">
+                      {/* §17-19/§41.G — le devis est un montant brut, sans TVA */}
+                      <p className="text-sm font-bold text-[#C62828]">Montant brut : {formatXAF(totalHT)}</p>
                     </div>
                   )}
                 </div>
@@ -883,9 +1259,8 @@ function DevisFormPanel({
                     <div className="flex justify-between"><span className="text-gray-500">Acompte</span><span>{form.acompte}%</span></div>
                     <div className="flex justify-between"><span className="text-gray-500">Articles</span><span>{form.lignes.filter((l) => l.designation && l.prixUnitaire > 0).length}</span></div>
                     <div className="h-px bg-gray-200" />
-                    <div className="flex justify-between"><span className="text-gray-500">Total HT</span><span className="font-semibold">{formatXAF(totalHT)}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-500">TVA 19.25%</span><span>{formatXAF(tva)}</span></div>
-                    <div className="flex justify-between text-base"><span className="font-bold">Total TTC</span><span className="font-black" style={{ color: '#C62828' }}>{formatXAF(totalTTC)}</span></div>
+                    {/* §17-19/§41.G — le devis est un montant brut, sans TVA */}
+                    <div className="flex justify-between text-base"><span className="font-bold">Montant brut du devis</span><span className="font-black" style={{ color: '#C62828' }}>{formatXAF(totalHT)}</span></div>
                   </div>
                 </div>
               )}
@@ -913,13 +1288,13 @@ function DevisFormPanel({
     </SlideOver>
     {configuringLineId && (() => {
       const ligneEnCours = form.lignes.find((l) => l.id === configuringLineId)
-      const produitEnCours = produitsCatalogue.find((p) => p.id === ligneEnCours?.produitId)
-      if (!produitEnCours) return null
+      const modeleEnCours = modelesActifs.find((m) => m.id === ligneEnCours?.modeleId)
+      if (!modeleEnCours) return null
       return (
         <Configurateur
           isOpen={true}
           onClose={() => setConfiguringLineId(null)}
-          produit={produitEnCours}
+          modele={modeleEnCours}
           onApply={(proposition) => applyConfigurateur(configuringLineId, proposition)}
         />
       )

@@ -29,7 +29,7 @@ export interface CreateClientPayload {
   statut?: 'actif' | 'inactif' | 'bloque'; score_fiabilite?: number
 }
 
-interface ClientsResponse { data: Client[]; total: number }
+interface ClientsResponse { data: Client[]; total: number; page?: number; per_page?: number; total_pages?: number }
 
 export function useClient(id: string) {
   return useQuery({
@@ -40,11 +40,16 @@ export function useClient(id: string) {
   })
 }
 
-export function useClients(params?: { search?: string; statut?: string; enabled?: boolean }) {
+export function useClients(params?: {
+  search?: string; statut?: string; page?: number; perPage?: number; enabled?: boolean
+}) {
   return useQuery({
-    queryKey:  ['clients', { search: params?.search, statut: params?.statut }],
+    queryKey:  ['clients', { search: params?.search, statut: params?.statut, page: params?.page, perPage: params?.perPage }],
     queryFn:   () => apiClient.get<ClientsResponse>(
-      `/api/clients${queryString({ search: params?.search, statut: params?.statut })}`,
+      `/api/clients${queryString({
+        search: params?.search, statut: params?.statut,
+        page: params?.page, per_page: params?.perPage,
+      })}`,
     ),
     staleTime: 60_000,
     enabled:   params?.enabled !== false,
@@ -105,6 +110,20 @@ export function useUpdateClientStatut() {
       void qc.invalidateQueries({ queryKey: ['clients'] })
       const labels: Record<Client['statut'], string> = { actif: 'Actif', inactif: 'Inactif', bloque: 'Bloqué' }
       toast.success(`Statut → ${labels[variables.statut]}`)
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+// DELETE /api/clients/:id — réservé admin côté serveur, bloque avec 422/ACTIVE_ORDERS
+// si le client a des commandes actives (cf. apps/api/src/routes/commerce.ts).
+export function useDeleteClient() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => apiClient.delete<void>(`/api/clients/${id}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['clients'] })
+      toast.success('Client supprimé')
     },
     onError: (err: Error) => toast.error(err.message),
   })

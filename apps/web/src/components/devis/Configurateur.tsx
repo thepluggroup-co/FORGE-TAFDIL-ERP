@@ -10,9 +10,12 @@
  * cet endpoint n'était appelé par aucune interface. Ce composant est la
  * première UI à l'utiliser.
  *
- * Si le produit n'a pas de fiche technique active, l'API répond
- * FICHE_TECHNIQUE_INTROUVABLE (422) — ce n'est pas une erreur réseau, c'est
- * une invitation explicite à basculer en saisie manuelle (§46, rétrocompatibilité).
+ * §34 — GET /catalogue/modeles/:id/configuration dit AVANT la saisie si une
+ * fiche technique active existe et, si oui, lesquels des champs de dimension
+ * sont pertinents pour son mode de calcul (ex. mode "lineaire" → seule la
+ * longueur compte). Si aucune fiche technique n'existe, on l'affiche tout de
+ * suite plutôt que de laisser saisir des dimensions pour rien — invitation
+ * explicite à basculer en saisie manuelle de la ligne (§46, rétrocompatibilité).
  */
 import { useState } from 'react'
 import { motion } from 'framer-motion'
@@ -20,34 +23,32 @@ import { Calculator, Loader2, AlertTriangle, Check, X } from 'lucide-react'
 import { Modal, Button } from '@forge/ui'
 import { formatXAF } from '@/lib/utils'
 import { useCalculerDevis, type PropositionDevis, type DimensionsInput } from '@/hooks/useDevis'
-import type { ProduitShopErp } from '@/hooks/useProduitsShop'
+import { useModeleConfiguration, type Modele } from '@/hooks/useCatalogue'
 
 interface ConfigurateurProps {
   isOpen: boolean
   onClose: () => void
-  produit: ProduitShopErp
+  modele: Modele
   onApply: (proposition: PropositionDevis) => void
 }
 
-const DIMENSION_FIELDS: Array<{ key: keyof DimensionsInput; label: string; unite: string }> = [
-  { key: 'largeur',   label: 'Largeur',   unite: 'm' },
-  { key: 'hauteur',   label: 'Hauteur',   unite: 'm' },
-  { key: 'longueur',  label: 'Longueur',  unite: 'm' },
-  { key: 'epaisseur', label: 'Épaisseur', unite: 'm' },
-  { key: 'diametre',  label: 'Diamètre',  unite: 'm' },
-  { key: 'poids',     label: 'Poids',     unite: 'kg' },
-]
-
-const RESSOURCE_LABELS: Record<string, string> = {
+export const RESSOURCE_LABELS: Record<string, string> = {
   materiau:     'Matériaux',
   main_oeuvre:  "Main-d'œuvre",
   equipement:   'Équipements',
 }
 
-export function Configurateur({ isOpen, onClose, produit, onApply }: ConfigurateurProps) {
+export function Configurateur({ isOpen, onClose, modele, onApply }: ConfigurateurProps) {
   const [dimensions, setDimensions] = useState<DimensionsInput>({})
   const [quantite,   setQuantite]   = useState(1)
   const [detailOuvert, setDetailOuvert] = useState(false)
+
+  const configuration = useModeleConfiguration(isOpen ? modele.id : null)
+  const champsDimensions = configuration.data?.champs_dimensions ?? []
+  // Tant que la config n'a pas encore répondu, on ne sait pas encore si une
+  // fiche technique existe — on ne bloque pas le rendu pour autant, on montre
+  // juste les champs par défaut (comportement précédent) le temps du chargement.
+  const ficheTechniqueDisponible = configuration.isLoading || (configuration.data?.fiche_technique_disponible ?? true)
 
   const calculer = useCalculerDevis()
   const proposition = calculer.data
@@ -55,7 +56,7 @@ export function Configurateur({ isOpen, onClose, produit, onApply }: Configurate
   function handleCalculer() {
     setDetailOuvert(false)
     calculer.mutate({
-      produitId: produit.id,
+      modeleId: modele.id,
       quantite,
       dimensions: Object.fromEntries(
         Object.entries(dimensions).filter(([, v]) => v !== undefined && v !== null && !Number.isNaN(v)),
@@ -70,58 +71,74 @@ export function Configurateur({ isOpen, onClose, produit, onApply }: Configurate
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`Configurer — ${produit.nom}`} size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} title={`Configurer — ${modele.designation}`} size="lg">
       <div className="space-y-4">
         <p className="text-xs text-gray-500">
           Saisissez les dimensions et la quantité, puis lancez le calcul automatique à partir
-          de la fiche technique active du modèle <span className="font-mono">{produit.ref}</span>.
+          de la fiche technique active du modèle <span className="font-mono">{modele.reference}</span>.
         </p>
 
-        {/* ── Dimensions ── */}
-        <div>
-          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Dimensions</label>
-          <div className="grid grid-cols-3 gap-2">
-            {DIMENSION_FIELDS.map(({ key, label, unite }) => (
-              <div key={key}>
-                <label className="block text-[10px] text-gray-400 mb-0.5">{label} ({unite})</label>
-                <input
-                  type="number" min="0" step="0.01"
-                  value={dimensions[key] ?? ''}
-                  onChange={(e) => setDimensions((d) => ({
-                    ...d, [key]: e.target.value === '' ? undefined : Number(e.target.value),
-                  }))}
-                  className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* ── Quantité ── */}
-        <div>
-          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Quantité (nombre de pièces)</label>
-          <input
-            type="number" min="1" step="1" value={quantite}
-            onChange={(e) => setQuantite(Number(e.target.value))}
-            className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-          />
-        </div>
-
-        <Button onClick={handleCalculer} disabled={calculer.isPending} className="w-full">
-          {calculer.isPending
-            ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Calcul en cours…</>
-            : <><Calculator className="h-3.5 w-3.5" /> Calculer</>}
-        </Button>
-
-        {/* ── Erreur (ex. fiche technique introuvable → §46 saisie manuelle) ── */}
-        {calculer.isError && (
+        {!ficheTechniqueDisponible ? (
+          /* ── Aucune fiche technique active : pas la peine de saisir des
+             dimensions pour rien (§46 — saisie manuelle de la ligne) ── */
           <div className="flex items-start gap-2.5 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-lg">
             <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
             <div className="text-xs text-amber-700">
               <p className="font-semibold">Calcul automatique indisponible</p>
-              <p>{calculer.error?.message ?? 'Erreur inconnue'} — utilisez la saisie manuelle de la ligne.</p>
+              <p>Aucune fiche technique active pour ce modèle — utilisez la saisie manuelle de la ligne.</p>
             </div>
           </div>
+        ) : (
+          <>
+            {/* ── Dimensions (uniquement les champs pertinents pour ce mode de calcul, §34) ── */}
+            {champsDimensions.length > 0 && (
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Dimensions</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {champsDimensions.map(({ cle, label, unite }) => (
+                    <div key={cle}>
+                      <label className="block text-[10px] text-gray-400 mb-0.5">{label} ({unite})</label>
+                      <input
+                        type="number" min="0" step="0.01"
+                        value={dimensions[cle] ?? ''}
+                        onChange={(e) => setDimensions((d) => ({
+                          ...d, [cle]: e.target.value === '' ? undefined : Number(e.target.value),
+                        }))}
+                        className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Quantité ── */}
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Quantité (nombre de pièces)</label>
+              <input
+                type="number" min="1" step="1" value={quantite}
+                onChange={(e) => setQuantite(Number(e.target.value))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+              />
+            </div>
+
+            <Button onClick={handleCalculer} disabled={calculer.isPending} className="w-full">
+              {calculer.isPending
+                ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Calcul en cours…</>
+                : <><Calculator className="h-3.5 w-3.5" /> Calculer</>}
+            </Button>
+
+            {/* ── Erreur (chemin de repli si le calcul échoue quand même, ex. ressources manquantes) ── */}
+            {calculer.isError && (
+              <div className="flex items-start gap-2.5 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-lg">
+                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="text-xs text-amber-700">
+                  <p className="font-semibold">Calcul automatique indisponible</p>
+                  <p>{calculer.error?.message ?? 'Erreur inconnue'} — utilisez la saisie manuelle de la ligne.</p>
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {/* ── Résultat ── */}
@@ -132,7 +149,7 @@ export function Configurateur({ isOpen, onClose, produit, onApply }: Configurate
               <div>
                 <p className="text-[10px] text-gray-400 uppercase">Quantité facturable</p>
                 <p className="text-lg font-bold text-gray-900">
-                  {proposition.quantiteFacturable} {produit.unite || ''}
+                  {proposition.quantiteFacturable} {modele.unite_facturation || ''}
                 </p>
               </div>
               <div className="text-right">
