@@ -108,6 +108,7 @@ vi.mock('../services/rbacService', () => ({
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
 import { checkPermission, writeAuditLog } from '../services/rbacService'
+import { notifyWorkflow } from '../services/workflow-notifications.service'
 
 /** Autorise la requête suivante — à appeler juste avant chaque app.request() protégé. */
 function allow(roleName = 'SUPER_ADMIN') {
@@ -588,5 +589,202 @@ describe('PUT /api/shop-erp/produits/:id/prix', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as { data: { prix_public: number } }
     expect(body.data.prix_public).toBe(7500)
+  })
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Catalogue Hybride — Phase 2 : produits finis STANDARD vendus en ligne
+// ══════════════════════════════════════════════════════════════════════════════
+
+const MID = '22222222-2222-4222-8222-222222222222'
+
+/** Ligne modeles_shop + modèle + famille, telle que renvoyée par SELECT_MODELE_VITRINE. */
+function rowModele(opts: {
+  typeGamme?: 'catalogue' | 'configuration' | 'sur_mesure' | null
+  typeGammeFamille?: 'catalogue' | 'configuration' | 'sur_mesure'
+  visible?: boolean; prix?: number; min?: number; actif?: boolean
+} = {}) {
+  return {
+    modele_id: MID, prix_public: opts.prix ?? 350000, visible_shop: opts.visible ?? true,
+    description_longue: 'Portail battant acier', images: [], tags: [],
+    delai_fabrication_jours: 10, min_commande: opts.min ?? 1,
+    modeles: {
+      id: MID, reference: 'P001', designation: 'Portail P001', description: null,
+      unite_facturation: 'unite', type_gamme: opts.typeGamme === undefined ? 'catalogue' : opts.typeGamme,
+      actif: opts.actif ?? true,
+      familles: { nom: 'Portail', type_gamme: opts.typeGammeFamille ?? 'configuration' },
+    },
+  }
+}
+
+const COMMANDE_MODELE = {
+  client_nom:       'Awa Test',
+  client_telephone: '690123456',
+  client_adresse:   'Kotto, Douala',
+  lignes: [{ modele_id: MID, designation: 'Portail P001', quantite: 1, prix_unitaire: 350000 }],
+  mode_paiement:    'mtn_momo',
+}
+
+describe('GET /api/shop/catalogue — produits finis STANDARD', () => {
+  it('liste un modèle STANDARD visible, sur commande, avant les articles de stock', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [], error: null }) as never)          // produits_shop (vide → pas de lecture des promotions)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({                                              // modeles_shop
+      data: [rowModele(), rowModele({ typeGamme: 'configuration' })], error: null,
+    }) as never)
+
+    const res = await app.request('/api/shop/catalogue')
+    expect(res.status).toBe(200)
+    const body = await res.json() as { data: Array<Record<string, unknown>>; total: number }
+    // le modèle configurable n'est PAS vendu au panier
+    expect(body.total).toBe(1)
+    expect(body.data[0]).toMatchObject({
+      id: MID, type_article: 'modele', commercial_mode: 'STANDARD', nom: 'Portail P001',
+      prix_public: 350000, disponibilite: 'sur_commande', stock_actuel: null, categorie: 'Portail',
+    })
+  })
+
+  it('résout le détail d un modèle quand l id n est pas un article de stock', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: { code: 'PGRST116' } }) as never) // produits_shop
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [rowModele()], error: null }) as never)       // modeles_shop
+
+    const res = await app.request(`/api/shop/catalogue/${MID}`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as { data: { type_article: string; ref: string } }
+    expect(body.data).toMatchObject({ type_article: 'modele', ref: 'P001' })
+  })
+})
+
+describe('POST /api/shop/commandes — produit fini STANDARD (CAS 1 pilote)', () => {
+  it('CAS 1 — Portail P001 à 350 000 FCFA × 1 : commande directe, prix serveur, ligne ERP liée au modèle', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [rowModele()], error: null }) as never)  // modeles_shop (pas de contrôle de stock)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({                                                 // conditions_paiement
+      data: { id: 'cp1', acompte_pct: 100, delai_solde_jours: 0 }, error: null,
+    }) as never)
+    const insertShop = mkChain({ data: { id: 'cs1', ref: 'WEB-2026-ABCDEF' }, error: null })
+    vi.mocked(supabase.from).mockReturnValueOnce(insertShop as never)                                      // commandes_shop
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: { id: 'erp-1' }, error: null }) as never) // commandes
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never)            // liaison commandes_shop
+    const insertLignes = mkChain({ data: [{ id: 'l1' }], error: null })
+    vi.mocked(supabase.from).mockReturnValueOnce(insertLignes as never)                                    // commandes_lignes
+
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS,
+      body: JSON.stringify({ ...COMMANDE_MODELE, lignes: [{ ...COMMANDE_MODELE.lignes[0], prix_unitaire: 1 }] }),
+    })
+
+    expect(res.status).toBe(201)
+    const body = await res.json() as { montant_ttc: number }
+    // 350 000 HT + TVA 19,25 % (67 375) ; pas de ville → livraison sur devis (0)
+    expect(body.montant_ttc).toBe(417375)
+
+    const shopPayload = (insertShop.insert as ReturnType<typeof vi.fn>).mock.calls[0][0] as { lignes: Array<Record<string, unknown>> }
+    expect(shopPayload.lignes[0]).toMatchObject({ modele_id: MID, product_id: null, prix_unitaire: 350000, type_article: 'modele' })
+
+    const lignesErp = (insertLignes.insert as ReturnType<typeof vi.fn>).mock.calls[0][0] as Array<Record<string, unknown>>
+    expect(lignesErp[0]).toMatchObject({ commande_id: 'erp-1', produit_id: null, modele_id: MID, prix_unitaire_ht_xaf: 350000, unite: 'unite' })
+
+    expect(notifyWorkflow).toHaveBeenCalledWith(expect.objectContaining({ event: 'production.commande_standard_a_fabriquer' }))
+    expect(notifyWorkflow).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'stock.bon_sortie_a_preparer' }))
+  })
+
+  it('refuse un modèle CONFIGURABLE au panier (422 MODE_NON_STANDARD)', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [rowModele({ typeGamme: null })], error: null }) as never) // hérite de la famille configurable
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(COMMANDE_MODELE),
+    })
+    expect(res.status).toBe(422)
+    expect((await res.json() as { code: string }).code).toBe('MODE_NON_STANDARD')
+  })
+
+  it('refuse un modèle STANDARD retiré de la vitrine (422 PRODUIT_NON_EN_VENTE)', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [rowModele({ visible: false })], error: null }) as never)
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(COMMANDE_MODELE),
+    })
+    expect(res.status).toBe(422)
+    expect((await res.json() as { code: string }).code).toBe('PRODUIT_NON_EN_VENTE')
+  })
+
+  it('refuse un modèle inactif (422 MODE_NON_STANDARD)', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [rowModele({ actif: false })], error: null }) as never)
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(COMMANDE_MODELE),
+    })
+    expect(res.status).toBe(422)
+  })
+
+  it('refuse une ligne qui vise à la fois un produit et un modèle (400)', async () => {
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS,
+      body: JSON.stringify({ ...COMMANDE_MODELE, lignes: [{ ...COMMANDE_MODELE.lignes[0], product_id: PID }] }),
+    })
+    expect(res.status).toBe(400)
+  })
+})
+
+describe('Vitrine ERP des produits finis — /api/shop-erp/modeles', () => {
+  const HEADERS = { ...authHeaders('admin'), 'Content-Type': 'application/json' }
+
+  it('GET ne liste que les modèles STANDARD', async () => {
+    allow()
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: [
+        { id: MID, reference: 'P001', designation: 'Portail P001', unite_facturation: 'unite', type_gamme: 'catalogue', actif: true, familles: { nom: 'Portail', type_gamme: 'configuration' }, modeles_shop: null },
+        { id: 'm3', reference: 'P003', designation: 'Portail P003', unite_facturation: 'unite', type_gamme: null, actif: true, familles: { nom: 'Portail', type_gamme: 'configuration' }, modeles_shop: null },
+      ],
+      error: null,
+    }) as never)
+
+    const res = await app.request('/api/shop-erp/modeles', { headers: HEADERS })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { data: Array<{ reference: string }> }
+    expect(body.data.map((m) => m.reference)).toEqual(['P001'])
+  })
+
+  it('PUT refuse de mettre en vitrine un modèle non STANDARD (422)', async () => {
+    allow()
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: { id: MID, designation: 'Portail P003', type_gamme: null, actif: true, familles: { nom: 'Portail', type_gamme: 'configuration' }, modeles_shop: null },
+      error: null,
+    }) as never)
+    const res = await app.request(`/api/shop-erp/modeles/${MID}/vitrine`, {
+      method: 'PUT', headers: HEADERS, body: JSON.stringify({ visible_shop: true, prix_public: 500000 }),
+    })
+    expect(res.status).toBe(422)
+    expect((await res.json() as { code: string }).code).toBe('MODE_NON_STANDARD')
+  })
+
+  it('PUT refuse une mise en vente sans prix (422 PRIX_REQUIS)', async () => {
+    allow()
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: { id: MID, designation: 'Portail P001', type_gamme: 'catalogue', actif: true, familles: { nom: 'Portail', type_gamme: 'configuration' }, modeles_shop: null },
+      error: null,
+    }) as never)
+    const res = await app.request(`/api/shop-erp/modeles/${MID}/vitrine`, {
+      method: 'PUT', headers: HEADERS, body: JSON.stringify({ visible_shop: true }),
+    })
+    expect(res.status).toBe(422)
+    expect((await res.json() as { code: string }).code).toBe('PRIX_REQUIS')
+  })
+
+  it('PUT met en vente P001 à 350 000 et trace le changement de prix', async () => {
+    allow()
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: { id: MID, designation: 'Portail P001', type_gamme: 'catalogue', actif: true, familles: { nom: 'Portail', type_gamme: 'configuration' }, modeles_shop: [{ prix_public: 300000, visible_shop: false }] },
+      error: null,
+    }) as never)
+    const upsert = mkChain({ data: { modele_id: MID, visible_shop: true, prix_public: 350000 }, error: null })
+    vi.mocked(supabase.from).mockReturnValueOnce(upsert as never)
+
+    const res = await app.request(`/api/shop-erp/modeles/${MID}/vitrine`, {
+      method: 'PUT', headers: HEADERS, body: JSON.stringify({ visible_shop: true, prix_public: 350000 }),
+    })
+    expect(res.status).toBe(200)
+    expect((upsert.upsert as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual({ modele_id: MID, visible_shop: true, prix_public: 350000 })
+    expect(writeAuditLog).toHaveBeenCalledWith(expect.objectContaining({
+      actionType: 'PRIX_VITRINE_MODIFIE',
+      payloadBefore: { prix_public: 300000 },
+      payloadAfter:  { prix_public: 350000 },
+    }))
   })
 })

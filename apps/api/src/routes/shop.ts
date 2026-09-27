@@ -3,7 +3,7 @@ import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { randomUUID, randomBytes } from 'crypto'
 import { supabaseAdmin } from '@forge/db'
-import { FRAIS_LIVRAISON, fraisLivraisonWeb } from '@forge/shared'
+import { FRAIS_LIVRAISON, fraisLivraisonWeb, CommercialMode, resoudreModeCommercial, type TypeGamme } from '@forge/shared'
 import { notifyCommandeSms } from '../services/sms.service'
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
@@ -162,6 +162,7 @@ function enrichirProduitPromo(row: any, p: any, promo: PromoActive | undefined) 
   const promoPrice = prixPromo(row.prix_public, promo)
   return {
     id:                    row.product_id,
+    type_article:          'produit' as const,
     ref:                   p.ref,
     nom:                   p.designation,
     description:           p.description,
@@ -195,8 +196,14 @@ async function creerBonSortieShop(args: {
   clientNom: string
   clientTelephone: string
   montantTtc: number
-  lignes: Array<{ product_id: string; designation: string; quantite: number }>
+  lignes: Array<{ product_id: string | null; designation: string; quantite: number }>
 }) {
+  // Seuls les articles de stock sortent du magasin ; un modèle fabriqué sur
+  // commande passe par la production. Aucune ligne de stock → pas de bon.
+  const lignesStock = args.lignes.filter((l): l is typeof l & { product_id: string } => Boolean(l.product_id))
+  if (lignesStock.length === 0) return null
+  args = { ...args, lignes: lignesStock }
+
   let existingQuery = db
     .from('bons_sortie')
     .select('id, commande_id')
@@ -275,16 +282,29 @@ async function creerBonSortieShop(args: {
 
 // ── Tarification serveur des commandes shop ───────────────────────────────────
 // Le prix envoyé par le navigateur n'est JAMAIS une source de vérité pour une
-// commande anonyme : on repart de produits_shop.prix_public (+ promotion active,
-// même règle que l'affichage du catalogue). Seul le personnel authentifié
-// (vente en boutique) peut fixer un prix, et tout écart au prix de référence
-// est tracé dans rbac_audit_logs.
+// commande anonyme : on repart du prix public de la vitrine — produits_shop
+// (+ promotion active, même règle que l'affichage du catalogue) pour un article
+// de stock, modeles_shop pour un produit fini STANDARD. Seul le personnel
+// authentifié (vente en boutique) peut fixer un prix, et tout écart au prix de
+// référence est tracé dans rbac_audit_logs.
 
-type LigneDemandee = { product_id: string; designation: string; quantite: number; prix_unitaire: number }
-type LigneTarifee  = LigneDemandee
+type LigneDemandee = { product_id?: string; modele_id?: string; designation: string; quantite: number; prix_unitaire: number }
+
+type LigneTarifee = {
+  product_id:    string | null
+  modele_id:     string | null
+  designation:   string
+  quantite:      number
+  prix_unitaire: number
+  unite:         string | null
+}
+
+type EcartPrix =
+  | { product_id: string; prix_reference: number | null; prix_saisi: number }
+  | { modele_id: string;  prix_reference: number | null; prix_saisi: number }
 
 type ResultatTarification =
-  | { ok: true; lignes: LigneTarifee[]; ecartsPrix: Array<{ product_id: string; prix_reference: number | null; prix_saisi: number }> }
+  | { ok: true; lignes: LigneTarifee[]; ecartsPrix: EcartPrix[] }
   | { ok: false; status: 422; error: string; code: string; details?: Record<string, unknown> }
 
 interface ProduitShopTarifRow {
@@ -294,71 +314,229 @@ interface ProduitShopTarifRow {
   min_commande: number | null
 }
 
+/** Colonnes de modeles_shop + modèle + famille (pour le mode commercial effectif). */
+const SELECT_MODELE_VITRINE = `
+  modele_id, prix_public, visible_shop, description_longue, images, tags,
+  delai_fabrication_jours, min_commande,
+  modeles!inner (
+    id, reference, designation, description, unite_facturation, type_gamme, actif,
+    familles ( nom, type_gamme )
+  )
+`
+
+interface ModeleVitrineRow {
+  modele_id:               string
+  prix_public:             number | null
+  visible_shop:            boolean
+  description_longue:      string | null
+  images:                  unknown
+  tags:                    unknown
+  delai_fabrication_jours: number | null
+  min_commande:            number | null
+  modeles: {
+    id: string; reference: string; designation: string; description: string | null
+    unite_facturation: string | null; type_gamme: TypeGamme | null; actif: boolean
+    familles: { nom: string; type_gamme: TypeGamme } | null
+  }
+}
+
+/** Vendable en ligne : modèle actif dont le mode commercial effectif est STANDARD. */
+function modeleVendable(row: ModeleVitrineRow): boolean {
+  return row.modeles.actif
+    && resoudreModeCommercial(row.modeles, row.modeles.familles) === CommercialMode.STANDARD
+}
+
+/** Règles communes de vente en ligne anonyme : visible, prix public, minimum de commande. */
+function verifierVitrine(
+  vitrine: { visible: boolean; prixPublic: number; minCommande: number | null },
+  quantite: number,
+  designation: string,
+  cle: Record<string, string>,
+): Extract<ResultatTarification, { ok: false }> | null {
+  if (!vitrine.visible) {
+    return { ok: false, status: 422, code: 'PRODUIT_NON_EN_VENTE', error: `« ${designation} » n'est pas en vente en ligne`, details: cle }
+  }
+  if (vitrine.prixPublic <= 0) {
+    return { ok: false, status: 422, code: 'PRIX_INDISPONIBLE', error: `« ${designation} » n'a pas de prix public`, details: cle }
+  }
+  const minimum = Number(vitrine.minCommande ?? 1)
+  if (quantite < minimum) {
+    return {
+      ok: false, status: 422, code: 'QUANTITE_MINIMALE',
+      error: `Quantité minimale pour « ${designation} » : ${minimum}`,
+      details: { ...cle, minimum, demande: quantite },
+    }
+  }
+  return null
+}
+
 async function tarifierLignesShop(
   lignes: LigneDemandee[],
   produits: Map<string, { designation: string; prix_unitaire_xaf: number | null }>,
   venteParPersonnel: boolean,
 ): Promise<ResultatTarification> {
-  const ids = [...new Set(lignes.map((l) => l.product_id))]
-  const { data, error } = await db
-    .from('produits_shop')
-    .select('product_id, prix_public, visible_shop, min_commande')
-    .in('product_id', ids)
+  const idsProduits = [...new Set(lignes.flatMap((l) => l.product_id ? [l.product_id] : []))]
+  const idsModeles  = [...new Set(lignes.flatMap((l) => l.modele_id ? [l.modele_id] : []))]
 
-  if (error) {
-    console.error('[shop] tarification produits_shop:', error.message)
-    return { ok: false, status: 422, error: 'Tarification indisponible, réessayez', code: 'TARIFICATION_INDISPONIBLE' }
+  let vitrineProduits = new Map<string, ProduitShopTarifRow>()
+  let promos          = new Map<string, PromoActive>()
+  if (idsProduits.length > 0) {
+    const { data, error } = await db
+      .from('produits_shop')
+      .select('product_id, prix_public, visible_shop, min_commande')
+      .in('product_id', idsProduits)
+
+    if (error) {
+      console.error('[shop] tarification produits_shop:', error.message)
+      return { ok: false, status: 422, error: 'Tarification indisponible, réessayez', code: 'TARIFICATION_INDISPONIBLE' }
+    }
+    vitrineProduits = new Map(((data ?? []) as ProduitShopTarifRow[]).map((r) => [r.product_id, r]))
+    if (!venteParPersonnel) promos = await promotionsActives(idsProduits)
   }
 
-  const vitrine = new Map(((data ?? []) as ProduitShopTarifRow[]).map((r) => [r.product_id, r]))
-  const promos  = venteParPersonnel ? new Map<string, PromoActive>() : await promotionsActives(ids)
+  let vitrineModeles = new Map<string, ModeleVitrineRow>()
+  if (idsModeles.length > 0) {
+    const { data, error } = await db
+      .from('modeles_shop')
+      .select(SELECT_MODELE_VITRINE)
+      .in('modele_id', idsModeles)
+
+    if (error) {
+      console.error('[shop] tarification modeles_shop:', error.message)
+      return { ok: false, status: 422, error: 'Tarification indisponible, réessayez', code: 'TARIFICATION_INDISPONIBLE' }
+    }
+    vitrineModeles = new Map(((data ?? []) as unknown as ModeleVitrineRow[]).map((r) => [r.modele_id, r]))
+  }
 
   const tarifees: LigneTarifee[] = []
-  const ecartsPrix: Array<{ product_id: string; prix_reference: number | null; prix_saisi: number }> = []
+  const ecartsPrix: EcartPrix[] = []
 
   for (const ligne of lignes) {
-    const produit     = produits.get(ligne.product_id)
+    // ── Produit fini STANDARD (modèle) ─────────────────────────────────────
+    if (ligne.modele_id) {
+      const modeleId    = ligne.modele_id
+      const row         = vitrineModeles.get(modeleId)
+      const designation = row?.modeles.designation ?? ligne.designation
+      const prixPublic  = Math.round(Number(row?.prix_public ?? 0))
+
+      // Même pour le personnel : un modèle configurable ou sur devis ne se vend
+      // jamais au panier, il passe par le configurateur ou par un devis.
+      if (!row || !modeleVendable(row)) {
+        return {
+          ok: false, status: 422, code: 'MODE_NON_STANDARD',
+          error: `« ${designation} » n'est pas un produit standard vendable au panier`,
+          details: { modele_id: modeleId },
+        }
+      }
+
+      if (venteParPersonnel) {
+        const reference = prixPublic > 0 ? prixPublic : null
+        if (reference === null || Math.round(ligne.prix_unitaire) !== reference) {
+          ecartsPrix.push({ modele_id: modeleId, prix_reference: reference, prix_saisi: ligne.prix_unitaire })
+        }
+        tarifees.push({
+          product_id: null, modele_id: modeleId, designation,
+          quantite: ligne.quantite, prix_unitaire: ligne.prix_unitaire, unite: row.modeles.unite_facturation,
+        })
+        continue
+      }
+
+      const refus = verifierVitrine(
+        { visible: row.visible_shop, prixPublic, minCommande: row.min_commande },
+        ligne.quantite, designation, { modele_id: modeleId },
+      )
+      if (refus) return refus
+      tarifees.push({
+        product_id: null, modele_id: modeleId, designation,
+        quantite: ligne.quantite, prix_unitaire: prixPublic, unite: row.modeles.unite_facturation,
+      })
+      continue
+    }
+
+    // ── Article de stock (produit) ─────────────────────────────────────────
+    const productId   = ligne.product_id as string
+    const produit     = produits.get(productId)
     const designation = produit?.designation ?? ligne.designation
-    const row         = vitrine.get(ligne.product_id)
+    const row         = vitrineProduits.get(productId)
     const prixPublic  = Math.round(Number(row?.prix_public ?? 0))
 
     if (venteParPersonnel) {
       const reference = prixPublic > 0 ? prixPublic : (produit?.prix_unitaire_xaf ?? null)
       if (reference === null || Math.round(ligne.prix_unitaire) !== Math.round(reference)) {
-        ecartsPrix.push({ product_id: ligne.product_id, prix_reference: reference, prix_saisi: ligne.prix_unitaire })
+        ecartsPrix.push({ product_id: productId, prix_reference: reference, prix_saisi: ligne.prix_unitaire })
       }
-      tarifees.push({ ...ligne, designation })
+      tarifees.push({
+        product_id: productId, modele_id: null, designation,
+        quantite: ligne.quantite, prix_unitaire: ligne.prix_unitaire, unite: null,
+      })
       continue
     }
 
-    if (!row || !row.visible_shop) {
-      return {
-        ok: false, status: 422, code: 'PRODUIT_NON_EN_VENTE',
-        error: `« ${designation} » n'est pas en vente en ligne`,
-        details: { product_id: ligne.product_id },
-      }
-    }
-    if (prixPublic <= 0) {
-      return {
-        ok: false, status: 422, code: 'PRIX_INDISPONIBLE',
-        error: `« ${designation} » n'a pas de prix public`,
-        details: { product_id: ligne.product_id },
-      }
-    }
-    const minimum = Number(row.min_commande ?? 1)
-    if (ligne.quantite < minimum) {
-      return {
-        ok: false, status: 422, code: 'QUANTITE_MINIMALE',
-        error: `Quantité minimale pour « ${designation} » : ${minimum}`,
-        details: { product_id: ligne.product_id, minimum, demande: ligne.quantite },
-      }
-    }
+    const refus = verifierVitrine(
+      { visible: Boolean(row?.visible_shop), prixPublic, minCommande: row?.min_commande ?? null },
+      ligne.quantite, designation, { product_id: productId },
+    )
+    if (refus) return refus
 
-    const prix = prixPromo(prixPublic, promos.get(ligne.product_id)) ?? prixPublic
-    tarifees.push({ product_id: ligne.product_id, designation, quantite: ligne.quantite, prix_unitaire: prix })
+    const prix = prixPromo(prixPublic, promos.get(productId)) ?? prixPublic
+    tarifees.push({
+      product_id: productId, modele_id: null, designation,
+      quantite: ligne.quantite, prix_unitaire: prix, unite: null,
+    })
   }
 
   return { ok: true, lignes: tarifees, ecartsPrix }
+}
+
+/** Article de catalogue public pour un modèle STANDARD (même forme qu'un produit + type_article). */
+function enrichirModeleVitrine(row: ModeleVitrineRow) {
+  const m = row.modeles
+  return {
+    id:                      row.modele_id,
+    type_article:            'modele' as const,
+    commercial_mode:         CommercialMode.STANDARD,
+    ref:                     m.reference,
+    nom:                     m.designation,
+    description:             m.description,
+    categorie:               m.familles?.nom ?? 'Produits finis',
+    unite:                   m.unite_facturation ?? 'unite',
+    stock_actuel:            null,            // fabriqué sur commande : pas de plafond de stock
+    seuil_alerte:            0,
+    prix_public:             Math.round(Number(row.prix_public ?? 0)),
+    prix_barre_xaf:          null,
+    description_longue:      row.description_longue,
+    images:                  Array.isArray(row.images) ? row.images : [],
+    tags:                    Array.isArray(row.tags) ? row.tags : [],
+    delai_fabrication_jours: row.delai_fabrication_jours,
+    min_commande:            row.min_commande ?? 1,
+    disponibilite:           'sur_commande' as const,
+    promotion:               null,
+  }
+}
+
+/**
+ * Modèles STANDARD visibles en ligne, prêts pour le catalogue public.
+ * Jamais bloquant : en cas d'erreur, le catalogue des articles de stock reste servi.
+ */
+async function chargerModelesVitrine(filtres: { id?: string; q?: string; categorie?: string } = {}) {
+  try {
+    let query = db.from('modeles_shop').select(SELECT_MODELE_VITRINE).eq('visible_shop', true)
+    if (filtres.id) query = query.eq('modele_id', filtres.id)
+    if (filtres.q)  query = query.ilike('modeles.designation', `%${filtres.q}%`)
+
+    const { data, error } = await query
+    if (error) {
+      console.warn('[shop/modeles] lecture ignoree:', error.message)
+      return []
+    }
+    return ((Array.isArray(data) ? data : []) as unknown as ModeleVitrineRow[])
+      .filter((row) => row.modeles && modeleVendable(row) && Number(row.prix_public ?? 0) > 0)
+      .filter((row) => !filtres.categorie || row.modeles.familles?.nom === filtres.categorie)
+      .map(enrichirModeleVitrine)
+  } catch (e) {
+    console.warn('[shop/modeles] indisponible:', e instanceof Error ? e.message : e)
+    return []
+  }
 }
 
 /**
@@ -388,11 +566,17 @@ async function identifierVendeur(authHeader: string | undefined): Promise<
 
 // ── Schémas Zod ────────────────────────────────────────────────────────────────
 
+// Une ligne vise SOIT un article de stock (product_id), SOIT un produit fini
+// STANDARD (modele_id, Catalogue Hybride Phase 2). prix_unitaire n'est retenu
+// que pour le personnel authentifié — voir tarifierLignesShop.
 const ligneCommandeSchema = z.object({
-  product_id:      z.string().uuid(),
+  product_id:      z.string().uuid().optional(),
+  modele_id:       z.string().uuid().optional(),
   designation:     z.string().min(1),
   quantite:        z.number().positive(),
   prix_unitaire:   z.number().min(0),
+}).refine((l) => Boolean(l.product_id) !== Boolean(l.modele_id), {
+  message: 'Chaque ligne doit viser exactement un product_id ou un modele_id',
 })
 
 const commandeShopSchema = z.object({
@@ -474,8 +658,12 @@ shopRouter.get('/catalogue', async (c) => {
     return enrichirProduitPromo(row, p, promos.get(row.product_id))
   })
 
+  // Produits finis STANDARD en tête (Catalogue Hybride Phase 2), puis articles de stock.
+  const modeles = await chargerModelesVitrine({ q, categorie })
+  const articles = [...modeles, ...catalogue]
+
   c.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=30')
-  return c.json({ data: catalogue, total: catalogue.length })
+  return c.json({ data: articles, total: articles.length })
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -505,6 +693,9 @@ shopRouter.get('/catalogue/:id', async (c) => {
     .single()
 
   if (error || !data) {
+    // L'identifiant peut être celui d'un produit fini STANDARD (modèle).
+    const [modele] = await chargerModelesVitrine({ id })
+    if (modele) return c.json({ data: modele })
     return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
   }
 
@@ -530,7 +721,11 @@ shopRouter.get('/categories', async (c) => {
     return c.json({ error: 'Erreur catégories', code: 'DB_ERROR' }, 500)
   }
 
-  const categories = [...new Set((data ?? []).map((r: any) => r.produits.categorie))].sort()
+  const modeles    = await chargerModelesVitrine()
+  const categories = [...new Set([
+    ...(data ?? []).map((r: any) => r.produits.categorie),
+    ...modeles.map((m) => m.categorie),
+  ])].sort()
 
   c.header('Cache-Control', 'public, max-age=300')
   return c.json({ data: categories })
@@ -572,6 +767,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   // 1. Vérifier disponibilité stock pour chaque ligne
   const produitsLus = new Map<string, { designation: string; prix_unitaire_xaf: number | null }>()
   for (const ligne of body.lignes) {
+    if (!ligne.product_id) continue // produit fini sur commande : pas de contrôle de stock
     const { data: produit } = await db
       .from('produits')
       .select('id, designation, stock_actuel, unite, prix_unitaire_xaf')
@@ -664,6 +860,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   // 6. Lignes JSONB
   const lignesJson = lignes.map((l) => ({
     product_id:     l.product_id,
+    ...(l.modele_id ? { modele_id: l.modele_id, type_article: 'modele' } : {}),
     designation:    l.designation,
     quantite:       l.quantite,
     prix_unitaire:  l.prix_unitaire,
@@ -759,6 +956,8 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
       const lignesErp = lignes.map((l, i) => ({
         commande_id:          erpCommande.id,
         produit_id:           l.product_id,
+        ...(l.modele_id ? { modele_id: l.modele_id } : {}),
+        ...(l.unite ? { unite: l.unite } : {}),
         designation:          l.designation,
         quantite:             l.quantite,
         prix_unitaire_ht_xaf: l.prix_unitaire,
@@ -766,6 +965,21 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
         ordre:                i,
       }))
       await db.from('commandes_lignes').insert(lignesErp)
+
+      // Produits finis STANDARD : fabriqués sur commande → l'atelier doit lancer la production.
+      const lignesAFabriquer = lignes.filter((l) => l.modele_id)
+      if (lignesAFabriquer.length > 0) {
+        await notifyWorkflow({
+          event:   'production.commande_standard_a_fabriquer',
+          module:  'production',
+          severite:'warning',
+          titre:   'Produit standard a fabriquer',
+          message: `Commande shop ${ref} : ${lignesAFabriquer.map((l) => `${l.quantite} × ${l.designation}`).join(', ')}.`,
+          ref,
+          url:     '/production',
+          data:    { commande_id: erpCommande.id, modeles: lignesAFabriquer.map((l) => ({ modele_id: l.modele_id, quantite: l.quantite })) },
+        })
+      }
       await ensureFactureForCommande({
         commandeId: erpCommande.id,
         statut:    'brouillon',
@@ -821,16 +1035,18 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
           montantTtc:      montant_ttc,
           lignes:          lignes,
         })
-        await notifyWorkflow({
-          event:   'stock.bon_sortie_a_preparer',
-          module:  'stock',
-          severite:'warning',
-          titre:   'Bon de sortie a preparer',
-          message: `Commande shop ${ref} : verifier les articles et preparer la sortie stock.`,
-          ref,
-          url:     '/stocks/bons-sortie',
-          data:    { commande_id: null, bon_id: (bonSortie as { id?: string }).id },
-        })
+        if (bonSortie) {
+          await notifyWorkflow({
+            event:   'stock.bon_sortie_a_preparer',
+            module:  'stock',
+            severite:'warning',
+            titre:   'Bon de sortie a preparer',
+            message: `Commande shop ${ref} : verifier les articles et preparer la sortie stock.`,
+            ref,
+            url:     '/stocks/bons-sortie',
+            data:    { commande_id: null, bon_id: (bonSortie as { id?: string }).id },
+          })
+        }
       } catch (e) {
         console.error('[shop] auto bon sortie fallback sans ERP:', e)
       }
@@ -1552,6 +1768,126 @@ shopErpRouter.put('/produits/:id/vitrine',
 
     return c.json({ data })
   }
+)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Vitrine des produits finis STANDARD (Catalogue Hybride Phase 2)
+// GET  /api/shop-erp/modeles              — modèles STANDARD actifs + leur vitrine
+// PUT  /api/shop-erp/modeles/:id/vitrine  — visibilité, prix public, délai, minimum
+// ══════════════════════════════════════════════════════════════════════════════
+
+interface ModeleErpRow {
+  id: string; reference: string; designation: string; unite_facturation: string | null
+  type_gamme: TypeGamme | null; actif: boolean
+  familles: { nom: string; type_gamme: TypeGamme } | null
+  modeles_shop: Record<string, unknown> | Array<Record<string, unknown>> | null
+}
+
+shopErpRouter.get('/modeles', requirePermission('COMMERCIAL', 'READ'), async (c) => {
+  const { data, error } = await db
+    .from('modeles')
+    .select('id, reference, designation, unite_facturation, type_gamme, actif, familles(nom, type_gamme), modeles_shop(*)')
+    .eq('actif', true)
+    .order('designation')
+
+  if (error) {
+    console.error('[shop-erp] modeles:', error)
+    return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: error.message }, 500)
+  }
+
+  const modeles = ((data ?? []) as unknown as ModeleErpRow[])
+    .filter((m) => resoudreModeCommercial(m, m.familles) === CommercialMode.STANDARD)
+    .map((m) => {
+      const vitrine = Array.isArray(m.modeles_shop) ? (m.modeles_shop[0] ?? null) : m.modeles_shop
+      return {
+        id:                m.id,
+        reference:         m.reference,
+        designation:       m.designation,
+        famille:           m.familles?.nom ?? null,
+        unite_facturation: m.unite_facturation,
+        commercial_mode:   CommercialMode.STANDARD,
+        vitrine,
+      }
+    })
+
+  return c.json({ data: modeles, total: modeles.length })
+})
+
+const vitrineModeleSchema = z.object({
+  visible_shop:            z.boolean().optional(),
+  prix_public:             z.number().int().min(0).optional(),
+  description_longue:      z.string().max(5000).nullable().optional(),
+  images:                  z.array(z.string().url()).max(12).optional(),
+  tags:                    z.array(z.string().max(50)).max(20).optional(),
+  delai_fabrication_jours: z.number().int().min(0).nullable().optional(),
+  min_commande:            z.number().int().min(1).optional(),
+})
+
+shopErpRouter.put(
+  '/modeles/:id/vitrine',
+  requirePermission('COMMERCIAL', 'UPDATE'),
+  zValidator('json', vitrineModeleSchema),
+  async (c) => {
+    const id   = c.req.param('id')
+    const body = c.req.valid('json')
+    const user = c.get('user')
+
+    const { data: modele, error: modeleError } = await db
+      .from('modeles')
+      .select('id, designation, type_gamme, actif, familles(nom, type_gamme), modeles_shop(prix_public, visible_shop)')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (modeleError) {
+      console.error('[shop-erp] vitrine modele lookup:', modeleError)
+      return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: modeleError.message }, 500)
+    }
+    if (!modele) return c.json({ error: 'Modèle introuvable', code: 'NOT_FOUND' }, 404)
+
+    type VitrineActuelle = { prix_public: number; visible_shop: boolean }
+    const m = modele as unknown as Omit<ModeleErpRow, 'modeles_shop'> & { modeles_shop: VitrineActuelle | VitrineActuelle[] | null }
+    if (resoudreModeCommercial(m, m.familles) !== CommercialMode.STANDARD) {
+      return c.json({
+        error: 'Seul un modèle STANDARD peut être vendu au panier (configurable → configurateur, sur devis → demande de devis)',
+        code:  'MODE_NON_STANDARD',
+      }, 422)
+    }
+
+    const actuel: VitrineActuelle | null = Array.isArray(m.modeles_shop) ? (m.modeles_shop[0] ?? null) : m.modeles_shop
+    const prixFinal    = body.prix_public ?? actuel?.prix_public ?? 0
+    const visibleFinal = body.visible_shop ?? actuel?.visible_shop ?? false
+    if (visibleFinal && prixFinal <= 0) {
+      return c.json({ error: 'Un prix public est requis pour mettre le modèle en vente', code: 'PRIX_REQUIS' }, 422)
+    }
+
+    const { data, error } = await db
+      .from('modeles_shop')
+      .upsert({ modele_id: id, ...body }, { onConflict: 'modele_id' })
+      .select()
+      .single()
+
+    if (error || !data) {
+      console.error('[shop-erp] vitrine modele upsert:', error)
+      return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: error?.message }, 500)
+    }
+
+    // §42 — toute modification de prix de vente est tracée
+    if (body.prix_public !== undefined && body.prix_public !== (actuel?.prix_public ?? null)) {
+      writeAuditLog({
+        userId:        user?.id,
+        actionType:    'PRIX_VITRINE_MODIFIE',
+        module:        'COMMERCIAL',
+        resourceType:  'modeles_shop',
+        resourceId:    id,
+        payloadBefore: { prix_public: actuel?.prix_public ?? null },
+        payloadAfter:  { prix_public: body.prix_public },
+        ipAddress:     c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip'),
+        userAgent:     c.req.header('user-agent'),
+      })
+    }
+
+    return c.json({ data })
+  },
 )
 
 shopErpRouter.post('/produits/:id/images', requirePermission('COMMERCIAL', 'UPDATE'), async (c) => {

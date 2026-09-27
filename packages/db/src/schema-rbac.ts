@@ -47,6 +47,8 @@ export const AUDIT_ACTIONS = [
   // Vente shop/boutique où le personnel a fixé un prix différent du prix de
   // référence (le client anonyme, lui, ne peut jamais fixer de prix).
   'VENTE_PRIX_FORCE',
+  // Modification du prix public d'un produit fini en vitrine (Catalogue Hybride Phase 2).
+  'PRIX_VITRINE_MODIFIE',
 ] as const
 
 export type AuditActionType = typeof AUDIT_ACTIONS[number]

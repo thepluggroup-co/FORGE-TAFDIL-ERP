@@ -449,6 +449,9 @@ export const commandesLignesPg = pgTable('commandes_lignes', {
   id:                id(),
   commandeId:        uuid('commande_id').notNull().references(() => commandesPg.id),
   produitId:         uuid('produit_id').references(() => produitsPg.id),
+  // Catalogue Hybride Phase 2 : produit fini vendu (modèle STANDARD). Exclusif
+  // avec produitId en pratique ; les deux sont nuls pour une ligne issue d'un devis libre.
+  modeleId:          uuid('modele_id').references(() => modelesPg.id),
   designation:       text('designation').notNull(),
   unite:             text('unite').notNull().default('unité'),
   quantite:          real('quantite').notNull(),
@@ -1237,6 +1240,23 @@ export const modeleSpecificationsPg = pgTable('modele_specifications', {
   unite:     text('unite'),
   ordre:     integer('ordre').notNull().default(0),
 })
+
+// Vitrine web d'un modèle STANDARD (Catalogue Hybride Phase 2, décision D1) —
+// calquée sur produits_shop, qui reste la vitrine des articles de stock.
+export const modelesShopPg = pgTable('modeles_shop', {
+  modeleId:              uuid('modele_id').primaryKey().references(() => modelesPg.id),
+  visibleShop:           boolean('visible_shop').notNull().default(false),
+  prixPublic:            integer('prix_public').notNull().default(0),
+  descriptionLongue:     text('description_longue'),
+  images:                jsonb('images').notNull().default([]),
+  tags:                  jsonb('tags').notNull().default([]),
+  delaiFabricationJours: integer('delai_fabrication_jours'),
+  minCommande:           integer('min_commande').notNull().default(1),
+  createdAt:             ts('created_at'),
+  updatedAt:             ts('updated_at'),
+})
+
+export type ModeleShopPg = typeof modelesShopPg.$inferSelect
 
 export type ModeleSpecificationPg       = typeof modeleSpecificationsPg.$inferSelect
 export type NouvelleModeleSpecificationPg = typeof modeleSpecificationsPg.$inferInsert
