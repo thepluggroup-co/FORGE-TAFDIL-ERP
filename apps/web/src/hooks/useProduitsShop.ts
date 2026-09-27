@@ -106,3 +106,48 @@ export function useUploadImagesProduit() {
     onError: (err: Error) => toast.error(err.message),
   })
 }
+
+// ── Produits finis STANDARD (Catalogue Hybride Phase 2) ────────────────────────
+
+export interface VitrineModele {
+  visible_shop:            boolean
+  prix_public:             number
+  description_longue:      string | null
+  delai_fabrication_jours: number | null
+  min_commande:            number
+}
+
+export interface ModeleShopErp {
+  id:                string
+  reference:         string
+  designation:       string
+  famille:           string | null
+  unite_facturation: string | null
+  commercial_mode:   'STANDARD'
+  vitrine:           VitrineModele | null
+}
+
+export type VitrineModelePayload = Partial<VitrineModele>
+
+export function useModelesShop() {
+  return useQuery({
+    queryKey: ['modeles-shop-erp'],
+    queryFn:  () =>
+      apiClient.get<{ data: ModeleShopErp[]; total: number }>('/api/shop-erp/modeles')
+        .then((r) => r.data),
+    staleTime: 30_000,
+  })
+}
+
+export function useUpdateVitrineModele() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: VitrineModelePayload }) =>
+      apiClient.put(`/api/shop-erp/modeles/${id}/vitrine`, payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['modeles-shop-erp'] })
+      toast.success('Vitrine du produit fini mise a jour')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
