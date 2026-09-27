@@ -21,19 +21,26 @@ import type {
 import { useStocks } from '@/hooks/useStocks'
 import { formatXAF } from '@/lib/utils'
 import { uniteOptions } from '@/lib/constants'
+import {
+  LIBELLES_MODE_COMMERCIAL, modeCommercialDepuisTypeGamme, libelleNiveauFamille, PROFONDEUR_MAX_FAMILLES,
+} from '@forge/shared'
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
+// Libellés issus du mode commercial (Standard / Configurable / Sur devis) :
+// la valeur stockée reste type_gamme, la correspondance vit dans @forge/shared.
+const libelleGamme = (t: TypeGamme) => LIBELLES_MODE_COMMERCIAL[modeCommercialDepuisTypeGamme(t)].libelle
+
 const TYPE_GAMME_LABELS: Record<TypeGamme, string> = {
-  catalogue:     'Catalogue',
-  sur_mesure:    'Sur mesure',
-  configuration: 'Configuration',
+  catalogue:     libelleGamme('catalogue'),
+  configuration: libelleGamme('configuration'),
+  sur_mesure:    libelleGamme('sur_mesure'),
 }
 
 const TYPE_GAMME_MAP: StatusMap = {
-  catalogue:     { label: 'Catalogue',     color: '#1d4ed8', bgColor: '#dbeafe' },
-  sur_mesure:    { label: 'Sur mesure',    color: '#6d28d9', bgColor: '#ede9fe' },
-  configuration: { label: 'Configuration', color: '#15803d', bgColor: '#dcfce7' },
+  catalogue:     { label: TYPE_GAMME_LABELS.catalogue,     color: '#1d4ed8', bgColor: '#dbeafe' },
+  configuration: { label: TYPE_GAMME_LABELS.configuration, color: '#15803d', bgColor: '#dcfce7' },
+  sur_mesure:    { label: TYPE_GAMME_LABELS.sur_mesure,    color: '#6d28d9', bgColor: '#ede9fe' },
 }
 
 const DEFAULT_FAMILLE_FORM: CreateFamillePayload = { nom: '', type_gamme: 'catalogue', parent_id: null }
@@ -130,13 +137,16 @@ function FamilleNodeRow({
           {node.nom}
         </span>
 
+        <span className="shrink-0 text-[10px] uppercase tracking-wide text-gray-400">{libelleNiveauFamille(depth + 1)}</span>
         <StatusBadge status={node.type_gamme} map={TYPE_GAMME_MAP} />
         {!node.actif && <span title="Inactive"><Ban className="h-3 w-3 text-gray-400" /></span>}
 
         <div className="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => onAddChild(node)} title="Ajouter une sous-famille" className="p-1 rounded hover:bg-gray-200 text-gray-500">
-            <Plus className="h-3 w-3" />
-          </button>
+          {depth + 1 < PROFONDEUR_MAX_FAMILLES && (
+            <button onClick={() => onAddChild(node)} title={`Ajouter : ${libelleNiveauFamille(depth + 2)}`} className="p-1 rounded hover:bg-gray-200 text-gray-500">
+              <Plus className="h-3 w-3" />
+            </button>
+          )}
           <button onClick={() => onEdit(node)} title="Modifier" className="p-1 rounded hover:bg-gray-200 text-gray-500">
             <Pencil className="h-3 w-3" />
           </button>

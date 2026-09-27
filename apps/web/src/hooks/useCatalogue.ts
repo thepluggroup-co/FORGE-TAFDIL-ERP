@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { apiClient } from '@/lib/api-client'
+import type { TypeGamme, CommercialMode } from '@forge/shared'
 
 function queryString(params?: Record<string, string | number | boolean | undefined>) {
   const qs = new URLSearchParams()
@@ -11,13 +12,14 @@ function queryString(params?: Record<string, string | number | boolean | undefin
   return value ? `?${value}` : ''
 }
 
-export type TypeGamme = 'catalogue' | 'sur_mesure' | 'configuration'
+export type { TypeGamme, CommercialMode }
 
 export interface Famille {
   id: string
   nom: string
   parent_id: string | null
   type_gamme: TypeGamme
+  commercial_mode?: CommercialMode
   ordre: number
   actif: boolean
   created_at?: string
@@ -42,6 +44,7 @@ export interface Modele {
   unite_facturation_id: string | null
   type_gamme: TypeGamme | null
   type_gamme_effectif?: TypeGamme
+  commercial_mode_effectif?: CommercialMode | null
   actif: boolean
 }
 
