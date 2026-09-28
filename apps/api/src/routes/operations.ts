@@ -1065,12 +1065,17 @@ const campagneStatutSchema = z.object({
   conversions_count:   z.number().int().min(0).optional(),
 })
 
+// Une promotion vise SOIT un article de stock (product_id), SOIT un produit
+// fini STANDARD (modele_id, Catalogue Hybride Phase 2).
 const campagneProduitSchema = z.object({
-  product_id:      z.string().uuid(),
+  product_id:      z.string().uuid().optional(),
+  modele_id:       z.string().uuid().optional(),
   remise_type:     z.enum(['pct', 'forfait']).default('pct'),
   remise_valeur:   z.number().min(0).default(0),
   prix_promo_xaf:  z.number().min(0).nullable().optional(),
   priorite:        z.number().int().min(0).default(0),
+}).refine((p) => Boolean(p.product_id) !== Boolean(p.modele_id), {
+  message: 'Indiquer exactement un product_id ou un modele_id',
 })
 
 router.get('/marketing/campagnes', requirePermission('COMMERCIAL', 'READ'), async (c) => {
@@ -1122,19 +1127,29 @@ router.get('/marketing/campagnes/:id/produits', requirePermission('COMMERCIAL', 
       id,
       campagne_id,
       product_id,
+      modele_id,
       remise_type,
       remise_valeur,
       prix_promo_xaf,
       priorite,
       created_at,
-      produits!inner(ref, designation, categorie, unite)
+      produits(ref, designation, categorie, unite),
+      modeles(reference, designation, unite_facturation)
     `)
     .eq('campagne_id', id)
     .order('priorite', { ascending: false })
     .order('created_at', { ascending: false })
 
   if (error) return c.json({ error: error.message }, 500)
-  return c.json({ data: data ?? [], total: data?.length ?? 0 })
+
+  // `article` : vue unifiée (article de stock ou produit fini) pour l'affichage.
+  const lignes = ((data ?? []) as Array<Record<string, any>>).map((l) => ({
+    ...l,
+    article: l.modele_id
+      ? { type: 'modele', id: l.modele_id, ref: l.modeles?.reference ?? '', designation: l.modeles?.designation ?? '' }
+      : { type: 'produit', id: l.product_id, ref: l.produits?.ref ?? '', designation: l.produits?.designation ?? '' },
+  }))
+  return c.json({ data: lignes, total: lignes.length })
 })
 
 router.post('/marketing/campagnes/:id/produits', requirePermission('COMMERCIAL', 'CREATE'), zValidator('json', campagneProduitSchema), async (c) => {
@@ -1153,13 +1168,13 @@ router.post('/marketing/campagnes/:id/produits', requirePermission('COMMERCIAL',
     .from('campagnes_produits')
     .upsert({
       campagne_id:     id,
-      product_id:      body.product_id,
+      ...(body.modele_id ? { modele_id: body.modele_id } : { product_id: body.product_id }),
       remise_type:     body.remise_type,
       remise_valeur:   body.remise_valeur,
       prix_promo_xaf:  body.prix_promo_xaf ?? null,
       priorite:        body.priorite,
       updated_at:      new Date().toISOString(),
-    }, { onConflict: 'campagne_id,product_id' })
+    }, { onConflict: body.modele_id ? 'campagne_id,modele_id' : 'campagne_id,product_id' })
     .select()
     .single()
 
@@ -1168,12 +1183,16 @@ router.post('/marketing/campagnes/:id/produits', requirePermission('COMMERCIAL',
 })
 
 router.delete('/marketing/campagnes/:campagneId/produits/:productId', requirePermission('COMMERCIAL', 'DELETE'), async (c) => {
+  // productId : identifiant de l'article lié — article de stock OU produit fini.
   const { campagneId, productId } = c.req.param()
+  if (!z.string().uuid().safeParse(productId).success) {
+    return c.json({ error: 'Identifiant d\'article invalide', code: 'VALIDATION_ERROR' }, 400)
+  }
   const { error } = await db
     .from('campagnes_produits')
     .delete()
     .eq('campagne_id', campagneId)
-    .eq('product_id', productId)
+    .or(`product_id.eq.${productId},modele_id.eq.${productId}`)
 
   if (error) return c.json({ error: error.message }, 400)
   return c.json({ success: true })

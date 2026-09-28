@@ -48,7 +48,7 @@ vi.mock('@forge/db/supabase', () => {
     rpc:           vi.fn().mockResolvedValue({ data: null, error: null }),
     channel:       vi.fn(() => ({ send: vi.fn().mockResolvedValue('ok') })),
     removeChannel: vi.fn(),
-    storage: { from: vi.fn().mockReturnValue({
+    storage: { createBucket: vi.fn().mockResolvedValue({ data: null, error: null }), from: vi.fn().mockReturnValue({
       list:            vi.fn().mockResolvedValue({ data: [], error: null }),
       upload:          vi.fn().mockResolvedValue({ error: null }),
       download:        vi.fn().mockResolvedValue({ data: null, error: { message: 'not found' } }),
@@ -657,6 +657,7 @@ describe('GET /api/shop/catalogue — produits finis STANDARD', () => {
 describe('POST /api/shop/commandes — produit fini STANDARD (CAS 1 pilote)', () => {
   it('CAS 1 — Portail P001 à 350 000 FCFA × 1 : commande directe, prix serveur, ligne ERP liée au modèle', async () => {
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [rowModele()], error: null }) as never)  // modeles_shop (pas de contrôle de stock)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [], error: null }) as never)             // campagnes_produits (aucune promotion)
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({                                                 // conditions_paiement
       data: { id: 'cp1', acompte_pct: 100, delai_solde_jours: 0 }, error: null,
     }) as never)
@@ -786,5 +787,114 @@ describe('Vitrine ERP des produits finis — /api/shop-erp/modeles', () => {
       payloadBefore: { prix_public: 300000 },
       payloadAfter:  { prix_public: 350000 },
     }))
+  })
+})
+
+// ── Promotions et images des produits finis ─────────────────────────────────
+
+const PROMO_MODELE_10PCT = {
+  campagne_id: 'camp-1', modele_id: MID, remise_type: 'pct', remise_valeur: 10,
+  prix_promo_xaf: null, priorite: 1, campagnes_marketing: { nom: 'Fête des portails', date_fin: '2099-12-31' },
+}
+
+describe('Promotions sur les produits finis STANDARD', () => {
+  it('le catalogue affiche le prix remisé et le prix barré', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [], error: null }) as never)                  // produits_shop
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [rowModele()], error: null }) as never)       // modeles_shop
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [PROMO_MODELE_10PCT], error: null }) as never) // campagnes_produits
+
+    const res = await app.request('/api/shop/catalogue')
+    const body = await res.json() as { data: Array<Record<string, unknown>> }
+    expect(body.data[0]).toMatchObject({
+      prix_public: 315000, prix_barre_xaf: 350000,
+      promotion: expect.objectContaining({ nom: 'Fête des portails', prix_promo_xaf: 315000 }),
+    })
+  })
+
+  it('la commande applique la même promotion côté serveur', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [rowModele()], error: null }) as never)       // modeles_shop
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [PROMO_MODELE_10PCT], error: null }) as never) // campagnes_produits
+    const insertShop = mockConditionEtInsert()
+
+    const res = await app.request('/api/shop/commandes', {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(COMMANDE_MODELE),
+    })
+    expect(res.status).toBe(201)
+    const payload = (insertShop.insert as ReturnType<typeof vi.fn>).mock.calls[0][0] as { lignes: Array<{ prix_unitaire: number }> }
+    expect(payload.lignes[0].prix_unitaire).toBe(315000)
+  })
+})
+
+describe('Campagnes : promotion ciblant un produit fini', () => {
+  const HEADERS = { ...authHeaders('admin'), 'Content-Type': 'application/json' }
+  const CAMPAGNE_ID = '33333333-3333-4333-8333-333333333333'
+
+  it('POST accepte un modele_id et arbitre les doublons sur (campagne, modèle)', async () => {
+    allow()
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: { id: CAMPAGNE_ID }, error: null }) as never)
+    const upsert = mkChain({ data: { id: 'cp1', modele_id: MID }, error: null })
+    vi.mocked(supabase.from).mockReturnValueOnce(upsert as never)
+
+    const res = await app.request(`/api/marketing/campagnes/${CAMPAGNE_ID}/produits`, {
+      method: 'POST', headers: HEADERS, body: JSON.stringify({ modele_id: MID, remise_type: 'pct', remise_valeur: 10 }),
+    })
+    expect(res.status).toBe(201)
+    const [ligne, options] = (upsert.upsert as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(ligne).toMatchObject({ campagne_id: CAMPAGNE_ID, modele_id: MID })
+    expect(ligne).not.toHaveProperty('product_id')
+    expect(options).toEqual({ onConflict: 'campagne_id,modele_id' })
+  })
+
+  it('POST refuse une ligne sans cible ou avec deux cibles (400)', async () => {
+    allow()
+    const res = await app.request(`/api/marketing/campagnes/${CAMPAGNE_ID}/produits`, {
+      method: 'POST', headers: HEADERS, body: JSON.stringify({ modele_id: MID, product_id: PID, remise_valeur: 5 }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('DELETE refuse un identifiant d’article non UUID (400)', async () => {
+    allow()
+    const res = await app.request(`/api/marketing/campagnes/${CAMPAGNE_ID}/produits/x),id.neq.0`, {
+      method: 'DELETE', headers: HEADERS,
+    })
+    expect(res.status).toBe(400)
+  })
+})
+
+describe('POST /api/shop-erp/modeles/:id/images', () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...new Array(24).fill(0)])
+
+  it('enregistre les vraies images et refuse un fichier déguisé en .jpg', async () => {
+    allow()
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: { id: MID, modeles_shop: { images: ['https://old/1.png'] } }, error: null }) as never)
+    const save = mkChain({ data: null, error: null })
+    vi.mocked(supabase.from).mockReturnValueOnce(save as never)
+
+    const form = new FormData()
+    form.append('images', new File([PNG], 'portail.png', { type: 'image/png' }))
+    form.append('images', new File(['<?php echo 1; ?> pas une image'], 'piege.jpg', { type: 'image/jpeg' }))
+
+    const res = await app.request(`/api/shop-erp/modeles/${MID}/images`, {
+      method: 'POST', headers: { Authorization: authHeaders('admin').Authorization }, body: form,
+    })
+
+    expect(res.status).toBe(201)
+    const body = await res.json() as { data: { urls: string[]; images: string[]; errors: Array<{ file: string }> } }
+    expect(body.data.urls).toHaveLength(1)
+    expect(body.data.errors.map((e) => e.file)).toEqual(['piege.jpg'])
+    expect(body.data.images).toHaveLength(2)
+    expect((save.upsert as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ modele_id: MID, images: body.data.images })
+  })
+
+  it('retourne 404 pour un modèle inconnu', async () => {
+    allow()
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
+    const form = new FormData()
+    form.append('images', new File([PNG], 'portail.png', { type: 'image/png' }))
+    const res = await app.request(`/api/shop-erp/modeles/${MID}/images`, {
+      method: 'POST', headers: { Authorization: authHeaders('admin').Authorization }, body: form,
+    })
+    expect(res.status).toBe(404)
   })
 })

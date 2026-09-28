@@ -1,13 +1,14 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { randomUUID, randomBytes } from 'crypto'
+import { randomBytes } from 'crypto'
 import { supabaseAdmin } from '@forge/db'
 import { FRAIS_LIVRAISON, fraisLivraisonWeb, CommercialMode, resoudreModeCommercial, type TypeGamme } from '@forge/shared'
 import { notifyCommandeSms } from '../services/sms.service'
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 import { ensureClient } from '../services/client-sync.service'
+import { televerserImages } from '../services/image-upload.service'
 import { ensureFactureForCommande, solderCreditsForCommande, syncCreditForCommande } from '../services/finance-core.service'
 import { requirePermission } from '../middleware/permission.middleware'
 import { verifierBearer } from '../middleware/auth'
@@ -86,7 +87,7 @@ function samePhone(a?: string | null, b?: string | null) {
 type PromoActive = {
   campagne_id: string
   campagne_nom: string
-  product_id: string
+  article_id: string   // product_id ou modele_id selon la cible de la campagne
   remise_type: 'pct' | 'forfait'
   remise_valeur: number
   prix_promo_xaf: number | null
@@ -109,8 +110,10 @@ function prixPromo(base: number | null | undefined, promo: PromoActive | undefin
   return next > 0 && next < prixBase ? next : null
 }
 
-async function promotionsActives(productIds: string[]) {
-  if (productIds.length === 0) return new Map<string, PromoActive>()
+// Promotions actives par article : `colonne` = product_id (article de stock)
+// ou modele_id (produit fini STANDARD, Catalogue Hybride Phase 2).
+async function promotionsActives(ids: string[], colonne: 'product_id' | 'modele_id' = 'product_id') {
+  if (ids.length === 0) return new Map<string, PromoActive>()
   const today = new Date().toISOString().slice(0, 10)
 
   try {
@@ -118,14 +121,14 @@ async function promotionsActives(productIds: string[]) {
       .from('campagnes_produits')
       .select(`
         campagne_id,
-        product_id,
+        ${colonne},
         remise_type,
         remise_valeur,
         prix_promo_xaf,
         priorite,
         campagnes_marketing!inner(nom, statut, date_debut, date_fin)
       `)
-      .in('product_id', productIds)
+      .in(colonne, ids)
       .eq('campagnes_marketing.statut', 'active')
       .lte('campagnes_marketing.date_debut', today)
       .gte('campagnes_marketing.date_fin', today)
@@ -139,11 +142,11 @@ async function promotionsActives(productIds: string[]) {
 
     const map = new Map<string, PromoActive>()
     for (const row of (data ?? []) as Array<Record<string, any>>) {
-      if (map.has(row.product_id)) continue
-      map.set(row.product_id, {
+      if (map.has(row[colonne])) continue
+      map.set(row[colonne], {
         campagne_id: row.campagne_id,
         campagne_nom: row.campagnes_marketing?.nom ?? 'Promotion',
-        product_id: row.product_id,
+        article_id: row[colonne],
         remise_type: row.remise_type === 'forfait' ? 'forfait' : 'pct',
         remise_valeur: Number(row.remise_valeur ?? 0),
         prix_promo_xaf: row.prix_promo_xaf === null || row.prix_promo_xaf === undefined ? null : Number(row.prix_promo_xaf),
@@ -395,6 +398,7 @@ async function tarifierLignesShop(
   }
 
   let vitrineModeles = new Map<string, ModeleVitrineRow>()
+  let promosModeles  = new Map<string, PromoActive>()
   if (idsModeles.length > 0) {
     const { data, error } = await db
       .from('modeles_shop')
@@ -406,6 +410,7 @@ async function tarifierLignesShop(
       return { ok: false, status: 422, error: 'Tarification indisponible, réessayez', code: 'TARIFICATION_INDISPONIBLE' }
     }
     vitrineModeles = new Map(((data ?? []) as unknown as ModeleVitrineRow[]).map((r) => [r.modele_id, r]))
+    if (!venteParPersonnel) promosModeles = await promotionsActives(idsModeles, 'modele_id')
   }
 
   const tarifees: LigneTarifee[] = []
@@ -448,7 +453,7 @@ async function tarifierLignesShop(
       if (refus) return refus
       tarifees.push({
         product_id: null, modele_id: modeleId, designation,
-        quantite: ligne.quantite, prix_unitaire: prixPublic, unite: row.modeles.unite_facturation,
+        quantite: ligne.quantite, prix_unitaire: prixPromo(prixPublic, promosModeles.get(modeleId)) ?? prixPublic, unite: row.modeles.unite_facturation,
       })
       continue
     }
@@ -489,8 +494,10 @@ async function tarifierLignesShop(
 }
 
 /** Article de catalogue public pour un modèle STANDARD (même forme qu'un produit + type_article). */
-function enrichirModeleVitrine(row: ModeleVitrineRow) {
+function enrichirModeleVitrine(row: ModeleVitrineRow, promo?: PromoActive) {
   const m = row.modeles
+  const prixPublic = Math.round(Number(row.prix_public ?? 0))
+  const prixRemise = prixPromo(prixPublic, promo)
   return {
     id:                      row.modele_id,
     type_article:            'modele' as const,
@@ -502,15 +509,23 @@ function enrichirModeleVitrine(row: ModeleVitrineRow) {
     unite:                   m.unite_facturation ?? 'unite',
     stock_actuel:            null,            // fabriqué sur commande : pas de plafond de stock
     seuil_alerte:            0,
-    prix_public:             Math.round(Number(row.prix_public ?? 0)),
-    prix_barre_xaf:          null,
+    prix_public:             prixRemise ?? prixPublic,
+    prix_barre_xaf:          prixRemise ? prixPublic : null,
     description_longue:      row.description_longue,
     images:                  Array.isArray(row.images) ? row.images : [],
     tags:                    Array.isArray(row.tags) ? row.tags : [],
     delai_fabrication_jours: row.delai_fabrication_jours,
     min_commande:            row.min_commande ?? 1,
     disponibilite:           'sur_commande' as const,
-    promotion:               null,
+    promotion:               prixRemise && promo ? {
+      campagne_id:       promo.campagne_id,
+      nom:               promo.campagne_nom,
+      remise_type:       promo.remise_type,
+      remise_valeur:     promo.remise_valeur,
+      prix_original_xaf: prixPublic,
+      prix_promo_xaf:    prixRemise,
+      date_fin:          promo.date_fin,
+    } : null,
   }
 }
 
@@ -529,10 +544,11 @@ async function chargerModelesVitrine(filtres: { id?: string; q?: string; categor
       console.warn('[shop/modeles] lecture ignoree:', error.message)
       return []
     }
-    return ((Array.isArray(data) ? data : []) as unknown as ModeleVitrineRow[])
+    const rows = ((Array.isArray(data) ? data : []) as unknown as ModeleVitrineRow[])
       .filter((row) => row.modeles && modeleVendable(row) && Number(row.prix_public ?? 0) > 0)
       .filter((row) => !filtres.categorie || row.modeles.familles?.nom === filtres.categorie)
-      .map(enrichirModeleVitrine)
+    const promos = await promotionsActives(rows.map((r) => r.modele_id), 'modele_id')
+    return rows.map((row) => enrichirModeleVitrine(row, promos.get(row.modele_id)))
   } catch (e) {
     console.warn('[shop/modeles] indisponible:', e instanceof Error ? e.message : e)
     return []
@@ -1501,26 +1517,9 @@ async function syncProduitsShopManquants(): Promise<void> {
   await db.from('produits_shop').insert(manquants)
 }
 
-function extFromFile(file: File): string {
-  const byName = file.name.split('.').pop()?.toLowerCase()
-  if (byName && /^[a-z0-9]{2,5}$/.test(byName)) return byName
-  const byType = file.type.split('/').pop()?.toLowerCase()
-  return byType && /^[a-z0-9]{2,5}$/.test(byType) ? byType : 'jpg'
-}
-
-const IMAGE_EXT_CONTENT_TYPE: Record<string, string> = {
-  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
-  webp: 'image/webp', heic: 'image/heic', heif: 'image/heif', bmp: 'image/bmp',
-}
-
-// Certains navigateurs/OS (iPhone HEIC, copies Windows) envoient un File.type
-// vide — on retombe alors sur l'extension avant de rejeter le fichier.
-function resolveImageContentType(file: File): string | null {
-  if (file.type.startsWith('image/')) return file.type
-  if (file.type) return null
-  const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-  return IMAGE_EXT_CONTENT_TYPE[ext] ?? null
-}
+// Images des vitrines (produits et produits finis) : type vérifié par signature,
+// voir services/image-upload.service.ts.
+const BUCKET_IMAGES_SHOP = 'produits-shop'
 
 // ══════════════════════════════════════════════════════════════════════════════
 // GET /api/shop-erp/analytics
@@ -1890,6 +1889,50 @@ shopErpRouter.put(
   },
 )
 
+// POST /api/shop-erp/modeles/:id/images — ajoute des images à la vitrine d'un
+// produit fini (champ multipart « images »). Contrairement aux articles de
+// stock, les URL sont enregistrées directement dans modeles_shop.images ; le
+// retrait d'une image passe par PUT /modeles/:id/vitrine { images }.
+shopErpRouter.post('/modeles/:id/images', requirePermission('COMMERCIAL', 'UPDATE'), async (c) => {
+  const id = c.req.param('id')
+  const form = await c.req.formData()
+  const files = form.getAll('images').filter((item) => item instanceof File) as unknown as File[]
+  if (files.length === 0) return c.json({ error: 'Aucune image fournie', code: 'NO_FILE' }, 400)
+
+  const { data: modele, error: modeleError } = await db
+    .from('modeles')
+    .select('id, modeles_shop(images)')
+    .eq('id', id)
+    .maybeSingle()
+
+  if (modeleError) {
+    console.error('[shop-erp] images modele lookup:', modeleError)
+    return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: modeleError.message }, 500)
+  }
+  if (!modele) return c.json({ error: 'Modèle introuvable', code: 'NOT_FOUND' }, 404)
+
+  const vitrine = (modele as { modeles_shop: { images: unknown } | Array<{ images: unknown }> | null }).modeles_shop
+  const actuelles = ((Array.isArray(vitrine) ? vitrine[0]?.images : vitrine?.images) ?? []) as string[]
+  const place = Math.max(0, 12 - actuelles.length)
+  if (place === 0) return c.json({ error: 'Maximum 12 images par produit', code: 'TOO_MANY_IMAGES' }, 422)
+
+  const { urls, errors } = await televerserImages(db, BUCKET_IMAGES_SHOP, `modeles/${id}`, files.slice(0, place))
+  if (urls.length === 0) {
+    return c.json({ error: 'Aucune image n\'a pu etre televersee', code: 'ALL_FAILED', errors }, 400)
+  }
+
+  const images = [...actuelles, ...urls]
+  const { error: saveError } = await db
+    .from('modeles_shop')
+    .upsert({ modele_id: id, images }, { onConflict: 'modele_id' })
+  if (saveError) {
+    console.error('[shop-erp] images modele save:', saveError)
+    return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: saveError.message }, 500)
+  }
+
+  return c.json({ data: { urls, images, errors } }, 201)
+})
+
 shopErpRouter.post('/produits/:id/images', requirePermission('COMMERCIAL', 'UPDATE'), async (c) => {
   const id = c.req.param('id')
   const form = await c.req.formData()
@@ -1911,40 +1954,7 @@ shopErpRouter.post('/produits/:id/images', requirePermission('COMMERCIAL', 'UPDA
   }
   if (!produit) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
 
-  const bucket = 'produits-shop'
-  await db.storage.createBucket(bucket, { public: true }).catch(() => {})
-
-  const urls: string[] = []
-  const errors: Array<{ file: string; error: string }> = []
-
-  for (const file of files.slice(0, 12)) {
-    const contentType = resolveImageContentType(file)
-    if (!contentType) {
-      errors.push({ file: file.name, error: 'Seuls les fichiers image sont acceptes' })
-      continue
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      errors.push({ file: file.name, error: 'Image trop lourde, maximum 5 Mo' })
-      continue
-    }
-
-    const ext = extFromFile(file)
-    const path = `${id}/${Date.now()}-${randomUUID()}.${ext}`
-    const buffer = Buffer.from(await file.arrayBuffer())
-    const { error } = await db.storage.from(bucket).upload(path, buffer, {
-      contentType,
-      upsert: false,
-    })
-
-    if (error) {
-      console.error('[shop-erp] upload image produit:', error)
-      errors.push({ file: file.name, error: error.message })
-      continue
-    }
-
-    const { data } = db.storage.from(bucket).getPublicUrl(path)
-    urls.push(data.publicUrl)
-  }
+  const { urls, errors } = await televerserImages(db, BUCKET_IMAGES_SHOP, id, files)
 
   if (urls.length === 0) {
     return c.json({ error: 'Aucune image n\'a pu etre televersee', code: 'ALL_FAILED', errors }, 400)
