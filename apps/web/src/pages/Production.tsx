@@ -2,6 +2,9 @@ import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import { Wrench, Gauge, AlertTriangle, Clock, Plus, Play, CheckCircle2, Package, ListChecks } from 'lucide-react'
 import { FabricationOFPanel } from '@/components/production/FabricationOF'
+import { ControleCouts } from '@/components/production/ControleCouts'
+import { useIndicateursProduction } from '@/hooks/useControleCouts'
+import { usePermissions } from '@/hooks/useRbac'
 import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatDate } from '@/lib/utils'
@@ -97,8 +100,11 @@ export default function Production() {
   const { data: equipements = [] } = useEquipements()
   const { data: techniciens = [] } = useTechniciens()
   const updateJobStatut = useUpdateJobStatut()
+  const { data: indicateurs } = useIndicateursProduction()
+  const { hasPermission } = usePermissions()
+  const voitCouts = hasPermission('COMMERCIAL', 'CONFIGURE')
 
-  const jobs = (data?.data ?? []) as JobRecord[]
+  const jobs =(data?.data ?? []) as JobRecord[]
   const stocks = stocksData?.data ?? []
   const formValid =
     form.produit.trim() !== '' &&
@@ -195,10 +201,32 @@ export default function Production() {
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard title="Jobs en cours" value={enCours} icon={<Wrench className="h-5 w-5" />} color="#C62828" trend="up" trendValue="+1 vs hier" delay={0} />
-        <KpiCard title="Machines actives" value="3/5" icon={<Gauge className="h-5 w-5" />} color="#1d4ed8" trend="neutral" trendValue="2 en maintenance" delay={0.07} />
-        <KpiCard title="Rendement" value="82" unit="%" icon={<Gauge className="h-5 w-5" />} color="#15803d" trend="up" trendValue="+3 % vs sem. dernière" delay={0.14} />
-        <KpiCard title="Anomalies actives" value={2} icon={<AlertTriangle className="h-5 w-5" />} color="#dc2626" trend="down" trendValue="-1 résolue" delay={0.21} />
+        {/* Indicateurs calculés côté serveur (GET /production/indicateurs) — plus aucune valeur en dur */}
+        <KpiCard
+          title="OF en cours" value={indicateurs?.of_en_cours ?? enCours}
+          icon={<Wrench className="h-5 w-5" />} color="#C62828" delay={0}
+          trend="neutral" trendValue={indicateurs ? `${indicateurs.of_a_lancer} à lancer · ${indicateurs.of_en_retard} en retard` : undefined}
+        />
+        <KpiCard
+          title="Machines actives" value={indicateurs ? `${indicateurs.machines.operationnelles}/${indicateurs.machines.total}` : '—'}
+          icon={<Gauge className="h-5 w-5" />} color="#1d4ed8" delay={0.07}
+          trend="neutral"
+          trendValue={indicateurs ? `${indicateurs.machines.en_maintenance} en maintenance · ${indicateurs.machines.en_panne} en panne` : undefined}
+        />
+        <KpiCard
+          title="Rendement (30 j)" value={indicateurs?.rendement_30j_pct ?? '—'} unit={indicateurs?.rendement_30j_pct != null ? '%' : undefined}
+          icon={<Gauge className="h-5 w-5" />} color="#15803d" delay={0.14}
+          trend={indicateurs?.rendement_30j_pct == null ? 'neutral' : indicateurs.rendement_30j_pct >= 100 ? 'up' : 'down'}
+          trendValue={indicateurs
+            ? (indicateurs.etapes_mesurees_30j > 0 ? `temps prévu ÷ réel sur ${indicateurs.etapes_mesurees_30j} étape(s)` : 'aucune étape terminée sur 30 jours')
+            : undefined}
+        />
+        <KpiCard
+          title="Anomalies actives" value={indicateurs?.anomalies.total ?? '—'}
+          icon={<AlertTriangle className="h-5 w-5" />} color="#dc2626" delay={0.21}
+          trend={indicateurs && indicateurs.anomalies.total > 0 ? 'down' : 'neutral'}
+          trendValue={indicateurs ? `${indicateurs.anomalies.of_en_retard} OF en retard · ${indicateurs.anomalies.machines_en_panne} machine(s) en panne` : undefined}
+        />
       </div>
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
@@ -210,6 +238,9 @@ export default function Production() {
         </div>
         <DataTable<JobRecord> columns={columns} data={jobs} keyField="id" loading={isLoading} />
       </div>
+
+      {/* Phase 8 — coûts et marges : réservé aux droits des règles de marge */}
+      {voitCouts && <ControleCouts />}
 
       <SlideOver isOpen={slideOpen} onClose={() => setSlideOpen(false)} title="Nouveau job de production" width="md">
         <div className="space-y-4">
@@ -405,6 +436,7 @@ export default function Production() {
           jobId={jobFabrication.id}
           titre={`${jobFabrication.numero} · ${jobFabrication.produit_designation}`}
           aCommande={!!jobFabrication.commande_id}
+          voitCouts={voitCouts}
           onClose={() => setJobFabrication(null)}
         />
       )}

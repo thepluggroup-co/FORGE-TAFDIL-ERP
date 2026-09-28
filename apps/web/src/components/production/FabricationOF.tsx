@@ -14,6 +14,8 @@ import {
 } from '@/hooks/useFabricationOF'
 import { useTechniciens } from '@/hooks/useEquipements'
 import { useModeles } from '@/hooks/useCatalogue'
+import { useCoutsOF } from '@/hooks/useControleCouts'
+import { CoutsOFTableau } from './ControleCouts'
 
 const inputCls = 'w-full rounded-lg border border-gray-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]'
 const OF_CLOS = ['delivered', 'cancelled']
@@ -222,8 +224,11 @@ function AjoutConsommation({ jobId }: { jobId: string }) {
 
 // ── Panneau ───────────────────────────────────────────────────────────────────
 
-export function FabricationOFPanel({ jobId, titre, aCommande, onClose }: { jobId: string; titre: string; aCommande: boolean; onClose: () => void }) {
+export function FabricationOFPanel({ jobId, titre, aCommande, voitCouts = false, onClose }: {
+  jobId: string; titre: string; aCommande: boolean; voitCouts?: boolean; onClose: () => void
+}) {
   const { data, isLoading } = useFabricationOF(jobId)
+  const { data: couts } = useCoutsOF(jobId, voitCouts)
   const ouvert = !!data && !OF_CLOS.includes(data.job.statut)
   const operationsOuvertes = ouvert && data?.job.statut === 'in_production'
   const sansGamme = !!data && data.operations.length === 0 && data.consommations.length === 0
@@ -286,6 +291,14 @@ export function FabricationOFPanel({ jobId, titre, aCommande, onClose }: { jobId
                 </tbody>
               </table>
               {ouvert && <AjoutConsommation jobId={jobId} />}
+            </section>
+          )}
+
+          {/* Phase 8 — coût prévu / réel, droits des règles de marge uniquement */}
+          {voitCouts && couts && !sansGamme && (
+            <section className="space-y-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400">Coût de fabrication — prévu / réel</h3>
+              <CoutsOFTableau couts={couts} />
             </section>
           )}
         </div>

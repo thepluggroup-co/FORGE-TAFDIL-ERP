@@ -218,6 +218,22 @@ L'ordre de fabrication **copie** la gamme et les matières de la fiche technique
 
 Le lancement d'un OF n'inscrit plus 25 % d'avancement fictif.
 
-## 11. Ce qui vient ensuite
+## 11. Contrôle des coûts (Phase 8)
 
-- **Phase 8 (contrôle des coûts)** : coût réel de l'OF (temps réels × taux figés, matières réelles × coût de référence) comparé au coût prévu et au prix vendu ; marge réelle par commande.
+Aucune nouvelle table : tout est calculé (`@forge/shared/controle-couts`, pur) à partir des valeurs figées au lancement des OF (Phase 7) et au devis.
+
+**Coût d'un OF**, par poste (main-d'œuvre, machines, matières, consommables) :
+- **prévu** = temps prévus × taux horaires figés, et quantités prévues × coûts de référence figés ;
+- **réel** = temps réellement passés et quantités réellement consommées, valorisés **aux mêmes taux figés**. L'écart mesure donc la fabrication (temps, pertes matière), pas une variation de tarif ;
+- tant que l'OF n'est pas fini, le réel est une **estimation à terminaison** : une étape non terminée compte pour le plus grand de son temps déjà passé et de son temps prévu, et une consommation non saisie compte pour sa quantité prévue. L'écran l'indique (« Réel (estimé) ») ;
+- un **taux horaire inconnu n'est jamais compté pour 0** : l'étape est exclue des deux côtés et signalée.
+
+**Marge d'une commande** = prix vendu HT − (coût réel de fabrication de ses OF + coûts hors atelier prévus au devis : sous-traitance, options, frais indirects, transport, installation). La marge prévue est celle du devis. Si le devis n'a pas d'estimation de coût figée (devis manuel), seuls les coûts de fabrication sont comptés, et c'est signalé.
+
+**Où** : Production → carte « Contrôle des coûts » (commandes ayant des OF sur 30 jours, 90 jours ou 12 mois ; les moins rentables d'abord ; totaux et commandes déficitaires) et section « Coût de fabrication » du panneau « Étapes ». **Droits** : ceux des règles de marge (`COMMERCIAL` / `CONFIGURE`). Sans ces droits, rien n'est affiché et l'API répond 403.
+
+**Indicateurs de l'écran Production** (`GET /production/indicateurs`), désormais tous calculés :
+- OF en cours (avec le nombre à lancer et en retard) ;
+- machines actives = machines de production opérationnelles sur les machines en service (référentiel `equipements`, hors cédées et hors service), avec le nombre en maintenance et en panne ;
+- rendement sur 30 jours = temps prévu ÷ temps réel des étapes terminées (100 % = conforme au prévu). Il affiche « — » tant qu'aucune étape n'est mesurée ;
+- anomalies = OF en retard + machines en panne.
