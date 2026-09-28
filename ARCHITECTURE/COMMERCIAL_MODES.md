@@ -176,8 +176,31 @@ Opération 30 — Peinture  : poste Peintre,                        0,3 h/m² + 
 
 **Cas connu** (`gamme.test.ts`) : main-d'œuvre 65 700 FCFA et machines 39 120 FCFA sur 13,2 m².
 
-## 9. Ce qui vient ensuite
+## 9. Demandes de devis (Phase 6)
 
-- **Phase 6 (devis)** : demande de devis structurée (dimensions, matériau, localisation, délai, plans et photos, avec un envoi de fichiers vérifié par signature), qualification, conversion.
+On **enrichit** `demandes_devis_web`, déjà reliée aux devis ERP : il n'existe pas de second système de devis. Le devis reste celui du module Devis.
+
+**Workflow** (`@forge/shared/demande-devis`, appliqué par l'API et par l'ERP) :
+
+```
+nouvelle → en_qualification ⇄ infos_requises
+         → en_chiffrage → devis_envoye → acceptee → convertie
+(refusee / expiree possibles en cours de route ; états terminaux sans sortie)
+```
+
+- Chaque changement de statut est inscrit dans `demandes_devis_historique` avec son auteur, sa date et son motif. Le motif est obligatoire pour un refus ou une demande d'informations.
+- **Synchronisation depuis le devis** : quand le devis lié est envoyé, accepté, refusé, expiré ou transformé en commande, la demande suit automatiquement. Une demande convertie n'est jamais rouverte. La synchronisation ne fait jamais échouer l'opération sur le devis.
+- Les valeurs historiques (`vue`, `en_cours`, `traitee`) restent acceptées et sont lues comme `en_qualification` ou `en_chiffrage`.
+
+**Côté site** : le formulaire envoie aussi la quantité, les dimensions, le matériau, le lieu et le délai souhaité, ainsi que jusqu'à 5 fichiers (PDF ou images, 10 Mo au maximum chacun). La route Next relaie la requête à l'API, qui est seule à écrire en base. Le type de chaque fichier est vérifié par sa **signature** : un fichier renommé en `.pdf` est refusé. Les fichiers sont rangés dans un bucket **privé** (`demandes-devis`) et ne se consultent dans l'ERP que par des liens signés valables 1 h. Le client reçoit un numéro `DEM-XXXXX`. Aucun devis vide n'est plus créé automatiquement.
+
+**Côté ERP** (Boutique → Demandes devis) :
+- filtre par statut ;
+- fiche de la demande : pièces jointes, historique, **qualification** (famille, modèle, quantités, notes internes), actions limitées aux transitions permises ;
+- **création du devis** : le devis est créé en brouillon avec le besoin qualifié repris dans ses notes, **sans TVA** (V3 §19 ; l'ancienne version ajoutait 19,25 %), et la demande passe « en chiffrage ».
+
+Une demande issue du configurateur est créée directement « en chiffrage » (source `configurateur`) lorsque son devis a été pré-rempli.
+
+## 10. Ce qui vient ensuite
+
 - **Phase 7 (production)** : l'ordre de fabrication reprend la gamme (étapes, équipements, temps prévus), et on saisit la consommation réelle.
-- **Écran Production** : la liste des techniciens est encore codée en dur ; elle devrait venir des employés (RH).

@@ -1,11 +1,10 @@
 import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Store, ShoppingBag, Eye, EyeOff, FileText,
-  TrendingUp, Package, Clock, BarChart2,
-  CheckCircle, XCircle, Edit2, Image, Upload, Trash2,
-  ExternalLink, Factory,
+  TrendingUp, Package, BarChart2,
+  Edit2, Image, Upload, Trash2,
+  Factory,
 } from 'lucide-react'
 import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
@@ -16,8 +15,8 @@ import { useProduitsShop, useToggleVisibilite, useUpdateVitrineProduit, useUploa
 import type { ProduitShopErp } from '@/hooks/useProduitsShop'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
 import type { CommandeShop } from '@/hooks/useCommandesShop'
-import { useDevisWeb, useCreerDevisErp, useChangerStatutDevisWeb } from '@/hooks/useDevisWeb'
-import { useConditionsPaiement } from '@/hooks/useDevis'
+import { useDevisWeb } from '@/hooks/useDevisWeb'
+import { DemandesDevis } from '@/components/boutique/DemandesDevis'
 import type { DevisWeb } from '@/hooks/useDevisWeb'
 import { useShopAnalytics } from '@/hooks/useShopAnalytics'
 
@@ -312,190 +311,23 @@ function CommandeShopDetail({ commande, onClose }: { commande: CommandeShop; onC
   )
 }
 
-// ── SlideOver traitement devis ─────────────────────────────────────────────────
-
-function TraiterDevisSlideOver({
-  devis,
-  onClose,
-  onSuccess,
-}: {
-  devis:     DevisWeb
-  onClose:   () => void
-  onSuccess: (erpNumero: string) => void
-}) {
-  const creerDevis = useCreerDevisErp()
-  const { data: conditionsData } = useConditionsPaiement()
-
-  const today30 = new Date(Date.now() + 30 * 86_400_000).toISOString().split('T')[0]
-  const [montantHt,    setMontantHt]    = useState<string>('')
-  const [dateValidite, setDateValidite] = useState<string>(today30)
-  const [condCode,     setCondCode]     = useState<string>('P100')
-  const [notes,        setNotes]        = useState<string>('')
-
-  const TVA     = 0.1925
-  const ht      = parseFloat(montantHt) || 0
-  const tva     = Math.round(ht * TVA)
-  const ttc     = ht + tva
-
-  const handleSubmit = () => {
-    creerDevis.mutate(
-      {
-        id:                       devis.id,
-        montant_ht:               ht || undefined,
-        date_validite:            dateValidite || undefined,
-        condition_paiement_code:  condCode || undefined,
-        notes_commerciales:       notes.trim() || undefined,
-      },
-      {
-        onSuccess: (res) => {
-          onSuccess(res.data.numero)
-          onClose()
-        },
-      },
-    )
-  }
-
-  return (
-    <SlideOver isOpen={true} onClose={onClose} title={`Traiter la demande — ${devis.nom}`} width="lg">
-      <div className="space-y-6">
-
-        {/* ── Récapitulatif demande ───────────────────────────── */}
-        <section className="rounded-xl border border-gray-100 bg-gray-50 p-4 space-y-3">
-          <h3 className="text-xs font-semibold uppercase text-gray-400 tracking-wide">Demande client</h3>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <p className="text-xs text-gray-400">Contact</p>
-              <p className="font-semibold text-[#212121]">{devis.nom}</p>
-              <p className="text-gray-500">{devis.telephone}</p>
-              {devis.email && <p className="text-gray-400 text-xs">{devis.email}</p>}
-            </div>
-            {devis.type_projet && (
-              <div>
-                <p className="text-xs text-gray-400">Type de projet</p>
-                <span className="inline-block text-xs font-medium bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full mt-0.5">
-                  {devis.type_projet}
-                </span>
-              </div>
-            )}
-          </div>
-          <div>
-            <p className="text-xs text-gray-400 mb-1">Description</p>
-            <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{devis.description}</p>
-          </div>
-          {(devis as DevisWeb & { fichier_joint?: string }).fichier_joint && (
-            <a
-              href={(devis as DevisWeb & { fichier_joint?: string }).fichier_joint}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-[#C62828] underline"
-            >
-              <ExternalLink className="h-3.5 w-3.5" /> Voir le fichier joint
-            </a>
-          )}
-          <p className="text-xs text-gray-400">Reçue le {formatDate(devis.created_at.split('T')[0])}</p>
-        </section>
-
-        {/* ── Formulaire devis ────────────────────────────────── */}
-        <section className="space-y-4">
-          <h3 className="text-xs font-semibold uppercase text-gray-400 tracking-wide">Paramètres du devis ERP</h3>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold text-gray-600">Montant estimé HT (FCFA)</label>
-              <input
-                type="number"
-                min="0"
-                placeholder="0"
-                value={montantHt}
-                onChange={(e) => setMontantHt(e.target.value)}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-              />
-              {ht > 0 && (
-                <p className="mt-1 text-xs text-gray-400">
-                  TVA 19.25% : {formatXAF(tva)} · TTC : <span className="font-semibold text-[#212121]">{formatXAF(ttc)}</span>
-                </p>
-              )}
-            </div>
-
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold text-gray-600">Date de validité</label>
-              <input
-                type="date"
-                value={dateValidite}
-                min={new Date().toISOString().split('T')[0]}
-                onChange={(e) => setDateValidite(e.target.value)}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold text-gray-600">Condition de paiement proposée</label>
-            <select
-              value={condCode}
-              onChange={(e) => setCondCode(e.target.value)}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-            >
-              {(conditionsData?.data ?? []).map((c) => (
-                <option key={c.code} value={c.code}>{c.code} — {c.libelle}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold text-gray-600">Notes commerciales</label>
-            <textarea
-              rows={3}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Observations internes, conditions particulières…"
-              className="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-            />
-          </div>
-        </section>
-
-        {/* ── Actions ─────────────────────────────────────────── */}
-        <div className="flex gap-2 pt-2 border-t border-gray-100">
-          <Button variant="ghost" onClick={onClose} className="flex-1">Annuler</Button>
-          <Button
-            className="flex-1"
-            disabled={creerDevis.isPending}
-            onClick={handleSubmit}
-          >
-            <FileText className="h-4 w-4" />
-            {creerDevis.isPending ? 'Création…' : 'Créer le devis ERP'}
-          </Button>
-        </div>
-
-      </div>
-    </SlideOver>
-  )
-}
-
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function Boutique() {
-  const navigate = useNavigate()
   const [tab, setTab]                     = useState<Tab>('catalogue')
   const [editProduit, setEditProduit]     = useState<ProduitShopErp | null>(null)
   const [selectedCommande, setSelectedCommande] = useState<CommandeShop | null>(null)
-  const [selectedDevis, setSelectedDevis] = useState<DevisWeb | null>(null)
-  const [filtreType, setFiltreType]       = useState<string>('')
 
   const { data: analytics }                   = useShopAnalytics()
   const { data: produits, isLoading: pLoad }  = useProduitsShop()
   const { data: shopData, isLoading: cLoad }  = useCommandesShop()
   const { data: devisData, isLoading: dLoad } = useDevisWeb()
   const toggleVis          = useToggleVisibilite()
-  const changerStatutDevis = useChangerStatutDevisWeb()
 
   const kpis      = analytics?.kpis
   const produitsList = produits ?? []
   const commandes = shopData?.data ?? []
   const devisList = devisData ?? []
-  const devisFiltres = filtreType
-    ? devisList.filter((d: DevisWeb) => d.type_projet === filtreType)
-    : devisList
 
   // ── Colonnes produits ──────────────────────────────────────────────────────
 
@@ -566,69 +398,6 @@ export default function Boutique() {
     { id: 'statut_cmd', header: 'Commande', accessor: 'statut_commande', render: (v) => <StatusBadge status={v as string} /> },
     { id: 'statut_pay', header: 'Paiement', accessor: 'statut_paiement', render: (v) => <StatusBadge status={v as string} /> },
     { id: 'date', header: 'Date', accessor: 'created_at', render: (v) => <span className="text-xs text-gray-400">{formatDate((v as string).split('T')[0])}</span> },
-  ]
-
-  // ── Colonnes devis ─────────────────────────────────────────────────────────
-
-  const STATUT_DEVIS_MAP: Record<string, { label: string; color: string; bg: string }> = {
-    nouvelle: { label: 'Nouvelle',  color: '#C62828', bg: '#fee2e2' },
-    en_cours: { label: 'En cours',  color: '#d97706', bg: '#fef3c7' },
-    traitee:  { label: 'Traitée',   color: '#15803d', bg: '#dcfce7' },
-    refusee:  { label: 'Refusée',   color: '#6b7280', bg: '#f3f4f6' },
-  }
-
-  const devisCols: Column<DevisWeb>[] = [
-    { id: 'nom', header: 'Contact', accessor: 'nom', render: (v, row) => (
-      <div>
-        <div className="text-sm font-semibold">{v as string}</div>
-        <div className="text-xs text-gray-400">{row.telephone}</div>
-      </div>
-    )},
-    { id: 'type_projet', header: 'Type de projet', accessor: 'type_projet', render: (v) =>
-      v
-        ? <span className="inline-block max-w-[180px] truncate text-xs font-medium bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full" title={v as string}>{v as string}</span>
-        : <span className="text-xs text-gray-300 italic">—</span>
-    },
-    { id: 'description', header: 'Demande', accessor: 'description', render: (v) => <span className="text-sm text-gray-600 line-clamp-2">{v as string}</span> },
-    { id: 'statut', header: 'Statut', accessor: 'statut', render: (v) => {
-      const s = STATUT_DEVIS_MAP[v as string] ?? { label: v as string, color: '#6b7280', bg: '#f3f4f6' }
-      return <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ color: s.color, backgroundColor: s.bg }}>{s.label}</span>
-    }},
-    { id: 'date', header: 'Date', accessor: 'created_at', render: (v) => <span className="text-xs text-gray-400">{formatDate((v as string).split('T')[0])}</span> },
-    {
-      id: 'traitement', header: 'Actions', accessor: 'id', sortable: false,
-      render: (v, row) => (
-        <div className="flex flex-wrap gap-1.5">
-          {(row.erp_devis_id || row.statut === 'traitee') ? (
-            <span className="flex items-center gap-1 text-xs text-[#15803d] font-medium">
-              <CheckCircle className="h-3.5 w-3.5" /> Devis ERP créé
-            </span>
-          ) : (
-            <>
-              {(row.statut === 'nouvelle' || row.statut === 'en_cours') && (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setSelectedDevis(row)}
-                >
-                  <Clock className="h-3 w-3" /> Traiter
-                </Button>
-              )}
-              {row.statut !== 'refusee' && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={changerStatutDevis.isPending}
-                  onClick={() => changerStatutDevis.mutate({ id: v as string, statut: 'refusee' })}
-                >
-                  <XCircle className="h-3 w-3" /> Refuser
-                </Button>
-              )}
-            </>
-          )}
-        </div>
-      ),
-    },
   ]
 
   const TABS = [
@@ -726,39 +495,7 @@ export default function Boutique() {
               />
             )}
 
-            {tab === 'devis' && (
-              <>
-                <div className="flex items-center gap-3 border-b border-gray-100 px-4 py-3">
-                  <select
-                    value={filtreType}
-                    onChange={(e) => setFiltreType(e.target.value)}
-                    className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 outline-none focus:border-[#C62828] focus:ring-1 focus:ring-[#C62828]"
-                  >
-                    <option value="">Tous les types de projet</option>
-                    {TYPES_PROJET_LABELS.map((t) => (
-                      <option key={t} value={t}>{t}</option>
-                    ))}
-                  </select>
-                  {filtreType && (
-                    <button
-                      onClick={() => setFiltreType('')}
-                      className="text-xs text-[#C62828] underline"
-                    >
-                      Effacer
-                    </button>
-                  )}
-                  <span className="ml-auto text-xs text-gray-400">
-                    {devisFiltres.length} demande{devisFiltres.length !== 1 ? 's' : ''}
-                  </span>
-                </div>
-                <DataTable<DevisWeb>
-                  columns={devisCols}
-                  data={devisFiltres}
-                  keyField="id"
-                  loading={dLoad}
-                />
-              </>
-            )}
+            {tab === 'devis' && <DemandesDevis typesProjet={TYPES_PROJET_LABELS} />}
           </motion.div>
         </AnimatePresence>
       </div>
@@ -777,20 +514,6 @@ export default function Boutique() {
         />
       )}
 
-      {selectedDevis && (
-        <TraiterDevisSlideOver
-          devis={selectedDevis}
-          onClose={() => setSelectedDevis(null)}
-          onSuccess={(erpNumero) => {
-            toast.success(`Devis ERP ${erpNumero} créé`, {
-              action: {
-                label: 'Voir le devis',
-                onClick: () => navigate('/devis'),
-              },
-            })
-          }}
-        />
-      )}
     </motion.div>
   )
 }
