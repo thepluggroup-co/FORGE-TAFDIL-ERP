@@ -392,8 +392,12 @@ router.post('/production/jobs', requirePermission('PRODUCTION', 'CREATE'), zVali
   const year      = new Date().getFullYear()
   const numero    = `JOB-${year}-${String((count ?? 0) + 1).padStart(3, '0')}`
 
+  // machine_id (déprécié, D5) n'est jamais écrit : la colonne n'existe pas en
+  // production et faisait retomber l'insertion sur la charge utile minimale,
+  // perdant silencieusement commande, produit, quantité et prix.
+  const { machine_id: _machineIdDeprecie, ...champsJob } = body
   const insertPayload = {
-    ...body,
+    ...champsJob,
     type_job: typeJob,
     numero,
     statut: 'confirmed',
@@ -424,7 +428,11 @@ router.post('/production/jobs', requirePermission('PRODUCTION', 'CREATE'), zVali
     .insert(insertPayload)
     .select().single()
 
+  // Replis historiques pour une base incomplète : ils PERDENT des données (lien
+  // commande, produit…), donc ils sont journalisés au lieu d'être silencieux.
+  // Après la migration 20261008, ils ne devraient plus jamais servir.
   if (isSchemaCacheColumnError(error)) {
+    console.warn('[production] insertion OF : colonne manquante, repli sans catégorie —', error?.message)
     const retry = await db
       .from('jobs_production')
       .insert(insertWithoutCategoriePayload)
@@ -434,6 +442,7 @@ router.post('/production/jobs', requirePermission('PRODUCTION', 'CREATE'), zVali
   }
 
   if (isSchemaCacheColumnError(error)) {
+    console.error('[production] insertion OF : repli MINIMAL, commande/produit/quantité/prix perdus — appliquer 20261008 —', error?.message)
     const retry = await db
       .from('jobs_production')
       .insert(insertMinimalPayload)

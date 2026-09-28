@@ -236,6 +236,24 @@ describe('POST /api/production/jobs', () => {
     expect(inconnu.status).toBe(404)
   })
 
+  it('n’écrit jamais machine_id (colonne absente en prod) : l’OF garde commande, équipement et produit', async () => {
+    const CMD = '99999999-9999-4999-8999-999999999999'
+    allow('COMMERCIAL')
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: { id: 'eq-1', designation: 'CNC-1', statut: 'disponible' }, error: null }) as never) // equipements (via ancienne_machine_id)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)                                          // count jobs
+    const insert = mkChain({ data: { id: 'j1', numero: 'JOB-2026-001' }, error: null })
+    vi.mocked(supabase.from).mockReturnValueOnce(insert as never)
+
+    const res = await app.request('/api/production/jobs', {
+      method: 'POST', headers: new Headers(authHeaders('operateur')),
+      body: JSON.stringify({ produit_designation: 'Portail', machine_id: 'm1', commande_id: CMD, quantite_prevue: 2 }),
+    })
+    expect(res.status).toBe(201)
+    const payload = (insert.insert as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<string, unknown>
+    expect(payload).not.toHaveProperty('machine_id')
+    expect(payload).toMatchObject({ commande_id: CMD, equipement_id: 'eq-1', machine_nom: 'CNC-1', quantite_prevue: 2 })
+  })
+
   it('cree un job avec plusieurs ressources malgre categorie absente du schema cache', async () => {
     allow('COMMERCIAL')
     const countChain = mkChain({ data: null, count: 2, error: null })

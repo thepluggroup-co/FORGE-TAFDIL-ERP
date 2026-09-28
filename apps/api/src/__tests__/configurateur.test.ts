@@ -439,3 +439,30 @@ describe('Phase 5 — gamme opératoire et taux horaires', () => {
     expect(res.status).toBe(409)
   })
 })
+
+// ── Réparation : régénération des OF d'une commande (migration 20261008) ───────
+
+describe('POST /api/commandes/:id/production/regenerer', () => {
+  const CMD = 'cmd-1'
+
+  it('refuse une commande qui n’est ni en production ni prête (422)', async () => {
+    allow()
+    installerDb({ commandes: { data: { id: CMD, numero: 'CMD-20261001-0001', statut: 'confirmed' } } })
+    const res = await app.request(`/api/commandes/${CMD}/production/regenerer`, { method: 'POST', headers: ERP_HEADERS() })
+    expect(res.status).toBe(422)
+    expect(payload('jobs_production', 'insert')).toBeUndefined()
+  })
+
+  it('crée les OF manquants, liés à la commande et numérotés OF-<commande>-NN', async () => {
+    allow()
+    installerDb({
+      commandes:        { data: { id: CMD, numero: 'CMD-20261001-0001', statut: 'in_production', devis_id: null } },
+      jobs_production:  { data: [], count: 0 },
+      commandes_lignes: { data: [{ produit_id: null, designation: 'Portail P001', unite: 'unite', quantite: 1, prix_unitaire_ht_xaf: 350000, ordre: 0 }] },
+    })
+    const res = await app.request(`/api/commandes/${CMD}/production/regenerer`, { method: 'POST', headers: ERP_HEADERS() })
+    expect(res.status).toBe(200)
+    const jobs = payload('jobs_production', 'insert') as unknown as Array<Record<string, unknown>>
+    expect(jobs[0]).toMatchObject({ commande_id: CMD, numero: 'OF-CMD-20261001-0001-01', quantite_prevue: 1, prix_unitaire_xaf: 350000 })
+  })
+})

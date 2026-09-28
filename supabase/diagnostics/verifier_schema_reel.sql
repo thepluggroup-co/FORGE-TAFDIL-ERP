@@ -217,7 +217,7 @@ WITH attendu (table_nom, colonne, origine) AS (
 
   -- ── Production, équipements, RH ───────────────────────────────────────────
   ('jobs_production', 'id', 'schéma historique'), ('jobs_production', 'numero', 'schéma historique'),
-  ('jobs_production', 'commande_id', '20260524_core_tables_complete'), ('jobs_production', 'produit_designation', 'schéma historique'),
+  ('jobs_production', 'commande_id', '20260524_core_tables_complete → réparée par 20261008'), ('jobs_production', 'produit_designation', 'schéma historique'),
   ('jobs_production', 'machine_nom', 'schéma historique'), ('jobs_production', 'technicien_nom', 'schéma historique'),
   ('jobs_production', 'statut', 'schéma historique'), ('jobs_production', 'avancement_pct', 'schéma historique'),
   ('jobs_production', 'date_debut', 'schéma historique'), ('jobs_production', 'date_fin_prevue', 'schéma historique'),
@@ -227,6 +227,17 @@ WITH attendu (table_nom, colonne, origine) AS (
   ('jobs_production', 'prix_unitaire_xaf', '20260925_phase4_production'), ('jobs_production', 'ressources_besoin', '20260925_phase4_production'),
   ('jobs_production', 'technicien_id', '20261007 (ajoutée si absente)'),
   ('jobs_production', 'equipement_id', '20261007_catalogue_hybride_phase5_gamme_equipements'),
+  -- colonnes écrites par l'API, garanties par la réparation 20261008 (commande_id manquait en prod)
+  ('jobs_production', 'produit_ref', '20261008_reparation_jobs_production'),
+  ('jobs_production', 'categorie', '20261008_reparation_jobs_production'),
+  ('jobs_production', 'prix_public_xaf', '20261008_reparation_jobs_production'),
+  ('jobs_production', 'publier_shop', '20261008_reparation_jobs_production'),
+  ('jobs_production', 'description_produit', '20261008_reparation_jobs_production'),
+  ('jobs_production', 'quantite_produite', '20261008_reparation_jobs_production'),
+  ('jobs_production', 'created_by', '20261008_reparation_jobs_production'),
+  ('jobs_production', 'sync_status', '20261008_reparation_jobs_production'),
+  ('jobs_production', 'created_at', '20261008_reparation_jobs_production'),
+  ('jobs_production', 'updated_at', '20261008_reparation_jobs_production'),
 
   ('equipements', 'id', '20260530_equipements'), ('equipements', 'code', '20260530_equipements'),
   ('equipements', 'designation', '20260530_equipements'), ('equipements', 'categorie', '20260530_equipements'),

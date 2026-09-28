@@ -2104,6 +2104,32 @@ router.get('/commandes/:id/production', requirePermission('COMMERCIAL', 'READ'),
   }
 })
 
+/**
+ * POST /commandes/:id/production/regenerer — crée les OF d'une commande en
+ * production qui n'en a pas (cas des commandes passées « en production » quand
+ * jobs_production.commande_id manquait, cf. migration 20261008). Idempotent :
+ * creerJobsProductionCommande ne crée rien si des OF existent déjà.
+ */
+router.post('/commandes/:id/production/regenerer', requirePermission('PRODUCTION', 'CREATE'), async (c) => {
+  const { id } = c.req.param()
+  const user = c.get('user')
+
+  const { data: commande } = await db.from('commandes').select('id, numero, statut').eq('id', id).maybeSingle()
+  if (!commande) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
+
+  const cmd = commande as { id: string; numero: string; statut: string }
+  if (!['in_production', 'pret'].includes(cmd.statut)) {
+    return c.json({ error: 'Seule une commande en production ou prête peut avoir ses OF régénérés', code: 'STATUT_INCOMPATIBLE' }, 422)
+  }
+
+  const { count: avant } = await db.from('jobs_production').select('id', { count: 'exact', head: true }).eq('commande_id', id)
+  const ok = await creerJobsProductionCommande(id, cmd.numero, user.id)
+  if (!ok) return c.json({ error: 'Création des OF impossible (commande sans ligne valide ou base incomplète)', code: 'OF_NON_CREES' }, 422)
+
+  const { count: apres } = await db.from('jobs_production').select('id', { count: 'exact', head: true }).eq('commande_id', id)
+  return c.json({ commande_id: id, of_existants: avant ?? 0, of_crees: Math.max(0, (apres ?? 0) - (avant ?? 0)) })
+})
+
 router.get('/commandes/:id/timeline', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { id } = c.req.param()
 
