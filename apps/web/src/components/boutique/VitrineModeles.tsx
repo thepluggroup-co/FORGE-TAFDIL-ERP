@@ -1,8 +1,8 @@
-import React, { useState } from 'react'
-import { Factory } from 'lucide-react'
+import React, { useRef, useState } from 'react'
+import { Factory, ImagePlus, X } from 'lucide-react'
 import { Button, EmptyState } from '@forge/ui'
 import {
-  useModelesShop, useUpdateVitrineModele,
+  useModelesShop, useUpdateVitrineModele, useUploadImagesModele,
   type ModeleShopErp, type VitrineModelePayload,
 } from '@/hooks/useProduitsShop'
 import { formatXAF } from '@/lib/utils'
@@ -15,10 +15,21 @@ import { formatXAF } from '@/lib/utils'
  * serveur refuse une mise en vente sans prix et trace chaque changement de prix.
  */
 export function VitrineModeles() {
-  const { data: modeles = [], isLoading } = useModelesShop()
+  const { data: modeles = [], isLoading, error } = useModelesShop()
 
   if (isLoading) {
     return <p className="p-6 text-sm text-gray-500">Chargement des produits finis…</p>
+  }
+
+  // Ne jamais afficher « aucun produit » quand l'API a échoué : c'est typiquement
+  // le cas d'une API déployée sans les routes /shop-erp/modeles (version antérieure).
+  if (error) {
+    return (
+      <div className="rounded-xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
+        Impossible de charger les produits finis : {(error as Error).message}.
+        Vérifiez que l'API déployée contient la vitrine des produits finis (Catalogue Hybride Phase 2).
+      </div>
+    )
   }
 
   if (modeles.length === 0) {
@@ -37,6 +48,7 @@ export function VitrineModeles() {
         <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
           <tr>
             <th className="px-4 py-3">Modèle</th>
+            <th className="px-4 py-3">Images</th>
             <th className="px-4 py-3">Famille</th>
             <th className="px-4 py-3">Prix public HT (FCFA)</th>
             <th className="px-4 py-3">Délai (jours)</th>
@@ -80,6 +92,9 @@ function LigneModele({ modele }: { modele: ModeleShopErp }) {
         <p className="font-semibold text-[#212121]">{modele.designation}</p>
         <p className="text-xs text-gray-400">{modele.reference} · {modele.unite_facturation ?? 'unite'}</p>
       </td>
+      <td className="px-4 py-3">
+        <ImagesModele modeleId={modele.id} images={v?.images ?? []} />
+      </td>
       <td className="px-4 py-3 text-gray-600">{modele.famille ?? '—'}</td>
       <td className="px-4 py-3">
         <input
@@ -115,5 +130,49 @@ function LigneModele({ modele }: { modele: ModeleShopErp }) {
         </Button>
       </td>
     </tr>
+  )
+}
+
+/** Miniatures + ajout (vérifié côté serveur par signature de fichier) et retrait d'images. */
+function ImagesModele({ modeleId, images }: { modeleId: string; images: string[] }) {
+  const upload = useUploadImagesModele()
+  const update = useUpdateVitrineModele()
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const retirer = (url: string) => {
+    update.mutate({ id: modeleId, payload: { images: images.filter((i) => i !== url) } })
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {images.map((url) => (
+        <div key={url} className="group relative h-10 w-10 overflow-hidden rounded-md border border-gray-100">
+          <img src={url} alt="" className="h-full w-full object-cover" />
+          <button
+            type="button" onClick={() => retirer(url)} title="Retirer l'image"
+            className="absolute right-0 top-0 hidden rounded-bl bg-black/60 p-0.5 text-white group-hover:block"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      ))}
+      {images.length < 12 && (
+        <button
+          type="button" onClick={() => inputRef.current?.click()} disabled={upload.isPending}
+          title="Ajouter des images (JPG, PNG, WEBP, HEIC — 5 Mo max)"
+          className="flex h-10 w-10 items-center justify-center rounded-md border border-dashed border-gray-300 text-gray-400 hover:border-[#C62828] hover:text-[#C62828] disabled:opacity-40"
+        >
+          <ImagePlus className="h-4 w-4" />
+        </button>
+      )}
+      <input
+        ref={inputRef} type="file" accept="image/*" multiple className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? [])
+          if (files.length > 0) upload.mutate({ id: modeleId, files })
+          e.target.value = ''
+        }}
+      />
+    </div>
   )
 }

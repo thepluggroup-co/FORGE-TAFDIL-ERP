@@ -6,7 +6,7 @@ import type { Column } from '@forge/ui'
 import { formatXAF, formatNombre, formatDate } from '@/lib/utils'
 import { useAjouterProduitCampagne, useCampagneProduits, useCampagnes, useCreateCampagne, useRetirerProduitCampagne } from '@/hooks/useOperations'
 import type { Campagne, CampagneProduit } from '@/hooks/useOperations'
-import { useProduitsShop } from '@/hooks/useProduitsShop'
+import { useProduitsShop, useModelesShop } from '@/hooks/useProduitsShop'
 import type { ProduitShopErp } from '@/hooks/useProduitsShop'
 
 type CampagneRecord = Campagne & Record<string, unknown>
@@ -103,28 +103,39 @@ function CampagneProduitsPanel({
   produits: ProduitShopErp[]
   onClose: () => void
 }) {
+  // Clé de sélection : « p:<id> » = article de stock, « m:<id> » = produit fini STANDARD.
   const [productId, setProductId] = useState('')
   const [remiseType, setRemiseType] = useState<'pct' | 'forfait'>('pct')
   const [remiseValeur, setRemiseValeur] = useState(10)
   const [prixPromo, setPrixPromo] = useState('')
   const { data, isLoading } = useCampagneProduits(campagne?.id)
+  const { data: modeles = [] } = useModelesShop()
   const ajouter = useAjouterProduitCampagne()
   const retirer = useRetirerProduitCampagne()
 
   const lignes = (data?.data ?? []) as CampagneProduit[]
-  const produitsVisibles = produits.filter((p) => p.visible_shop && Number(p.prix_public ?? 0) > 0)
-  const selectedProduct = produitsVisibles.find((p) => p.id === productId)
-  const preview = prixPromoPreview(selectedProduct?.prix_public, {
+  const articles = [
+    ...modeles
+      .filter((m) => m.vitrine?.visible_shop && Number(m.vitrine?.prix_public ?? 0) > 0)
+      .map((m) => ({ cle: `m:${m.id}`, type: 'modele' as const, id: m.id, ref: m.reference, nom: `${m.designation} (produit fini)`, prix: Number(m.vitrine?.prix_public ?? 0) })),
+    ...produits
+      .filter((p) => p.visible_shop && Number(p.prix_public ?? 0) > 0)
+      .map((p) => ({ cle: `p:${p.id}`, type: 'produit' as const, id: p.id, ref: p.ref, nom: p.nom, prix: Number(p.prix_public ?? 0) })),
+  ]
+  const selectedArticle = articles.find((a) => a.cle === productId)
+  const prixBaseArticle = (id: string | null | undefined) =>
+    Number(articles.find((a) => a.id === id)?.prix ?? produits.find((p) => p.id === id)?.prix_public ?? 0)
+  const preview = prixPromoPreview(selectedArticle?.prix, {
     remise_type: remiseType,
     remise_valeur: remiseValeur,
     prix_promo_xaf: prixPromo ? Number(prixPromo) : null,
   })
 
   const handleAdd = () => {
-    if (!campagne || !productId) return
+    if (!campagne || !selectedArticle) return
     ajouter.mutate({
       campagneId: campagne.id,
-      product_id: productId,
+      ...(selectedArticle.type === 'modele' ? { modele_id: selectedArticle.id } : { product_id: selectedArticle.id }),
       remise_type: remiseType,
       remise_valeur: remiseValeur,
       prix_promo_xaf: prixPromo ? Number(prixPromo) : null,
@@ -155,8 +166,8 @@ function CampagneProduitsPanel({
               <select value={productId} onChange={(e) => setProductId(e.target.value)}
                 className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]">
                 <option value="">Selectionner un produit visible...</option>
-                {produitsVisibles.map((p) => (
-                  <option key={p.id} value={p.id}>{p.ref} - {p.nom} - {formatXAF(Number(p.prix_public ?? 0))}</option>
+                {articles.map((a) => (
+                  <option key={a.cle} value={a.cle}>{a.ref} - {a.nom} - {formatXAF(a.prix)}</option>
                 ))}
               </select>
             </div>
@@ -182,7 +193,7 @@ function CampagneProduitsPanel({
               <div className="text-xs text-gray-500">
                 Apercu : <span className="font-bold text-[#C62828]">{preview ? formatXAF(preview) : '-'}</span>
               </div>
-              <Button size="sm" disabled={!productId || ajouter.isPending} onClick={handleAdd}>
+              <Button size="sm" disabled={!selectedArticle || ajouter.isPending} onClick={handleAdd}>
                 <Plus className="h-3.5 w-3.5" /> Ajouter
               </Button>
             </div>
@@ -196,22 +207,26 @@ function CampagneProduitsPanel({
               <div className="rounded-lg border border-dashed border-gray-200 p-5 text-center text-sm text-gray-400">Aucun produit lie a cette campagne.</div>
             ) : (
               lignes.map((ligne) => {
-                const produitShop = produits.find((p) => p.id === ligne.product_id)
-                const base = Number(produitShop?.prix_public ?? 0)
+                const articleId = ligne.modele_id ?? ligne.product_id
+                const base = prixBaseArticle(articleId)
                 const next = prixPromoPreview(base, ligne)
+                const designation = ligne.article?.designation ?? ligne.modeles?.designation ?? ligne.produits?.designation ?? articleId
+                const ref = ligne.article?.ref ?? ligne.modeles?.reference ?? ligne.produits?.ref
                 return (
                   <div key={ligne.id} className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 p-3">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-bold text-gray-800">{ligne.produits?.designation ?? ligne.product_id}</div>
+                        <div className="truncate text-sm font-bold text-gray-800">
+                          {designation}{ligne.modele_id ? <span className="ml-2 text-[10px] font-semibold uppercase text-indigo-600">Produit fini</span> : null}
+                        </div>
                         <div className="mt-0.5 text-xs text-gray-500">
-                        {ligne.produits?.ref} - {base > 0 ? formatXAF(base) : 'Prix non defini'} {'->'} <span className="font-bold text-[#C62828]">{next ? formatXAF(next) : 'Sans remise'}</span>
+                        {ref} - {base > 0 ? formatXAF(base) : 'Prix non defini'} {'->'} <span className="font-bold text-[#C62828]">{next ? formatXAF(next) : 'Sans remise'}</span>
                       </div>
                     </div>
                     <button
                       className="flex h-9 w-9 items-center justify-center rounded-lg text-red-600 hover:bg-red-50"
                       title="Retirer"
                       disabled={retirer.isPending}
-                      onClick={() => retirer.mutate({ campagneId: campagne.id, productId: ligne.product_id })}
+                      onClick={() => articleId && retirer.mutate({ campagneId: campagne.id, productId: articleId })}
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>

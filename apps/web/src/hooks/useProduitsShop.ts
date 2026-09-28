@@ -115,6 +115,7 @@ export interface VitrineModele {
   description_longue:      string | null
   delai_fabrication_jours: number | null
   min_commande:            number
+  images?:                 string[]
 }
 
 export interface ModeleShopErp {
@@ -147,6 +148,26 @@ export function useUpdateVitrineModele() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['modeles-shop-erp'] })
       toast.success('Vitrine du produit fini mise a jour')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+/** Ajoute des images à la vitrine d'un produit fini (enregistrées côté serveur). */
+export function useUploadImagesModele() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, files }: { id: string; files: File[] }) => {
+      const form = new FormData()
+      files.forEach((file) => form.append('images', file))
+      return apiClient.postForm<{ data: { urls: string[]; images: string[]; errors: Array<{ file: string; error: string }> } }>(
+        `/api/shop-erp/modeles/${id}/images`, form,
+      )
+    },
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ['modeles-shop-erp'] })
+      const refusees = res.data.errors.length
+      toast.success(`${res.data.urls.length} image(s) ajoutee(s)${refusees ? ` — ${refusees} refusee(s)` : ''}`)
     },
     onError: (err: Error) => toast.error(err.message),
   })
