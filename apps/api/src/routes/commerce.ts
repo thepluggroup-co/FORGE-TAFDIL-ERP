@@ -22,6 +22,7 @@ import { resolveCommandeContext, chargerJobsProductionCommande } from '../servic
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 import { proposerDevis, devisCalculateSchema } from '../services/devis-calculation.service'
 import { synchroniserDemandeDepuisDevis } from '../services/demande-devis.service'
+import { chargerGammeDansOF, ficheDepuisCommande } from '../services/production-of.service'
 import type { TypeCommande } from '../services/credit-eligibility.service'
 import type { HonoVariables } from '../types'
 
@@ -568,10 +569,23 @@ async function creerJobsProductionCommande(
 
   if (jobs.length === 0) return false
 
-  const { error } = await db.from('jobs_production').insert(jobs)
+  const { data: crees, error } = await db.from('jobs_production').insert(jobs).select('id')
   if (error) {
     console.error('[commerce] creerJobsProductionCommande - insert jobs:', error.message)
     return false
+  }
+
+  // Phase 7 — l'OF reprend la gamme de la fiche figée au devis (étapes, temps
+  // prévus, matières). Même règle que ressources_besoin : un seul OF, sinon la
+  // gamme se charge depuis l'écran Production. Un échec n'annule pas l'OF.
+  const jobCree = Array.isArray(crees) && crees.length === 1 ? (crees[0] as { id: string }) : null
+  if (jobCree) {
+    const source = await ficheDepuisCommande(commandeId).catch(() => null)
+    if (source) {
+      const chargement = await chargerGammeDansOF(jobCree.id, source.ficheTechniqueId, source.quantiteFacturable)
+        .catch((e: Error) => ({ ok: false as const, code: 'ERREUR_DB' as const, message: e.message }))
+      if (!chargement.ok) console.error(`[commerce] gamme non chargée pour ${jobs[0].numero} :`, chargement.message)
+    }
   }
 
   return true
