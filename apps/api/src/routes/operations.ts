@@ -13,8 +13,9 @@ import { chargerJobsProductionCommande } from '../services/commande-workflow.ser
 import { chargerGammeDansOF, ficheDepuisCommande } from '../services/production-of.service'
 import {
   STATUTS_OPERATION_OF, transitionsOperationOF, transitionOperationAutorisee,
-  avancementDepuisOperations, resumerFabrication,
+  avancementDepuisOperations, resumerFabrication, rendementAtelier,
 } from '@forge/shared'
+import { coutsDesOF, controleDesCommandes } from '../services/controle-couts.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
@@ -734,6 +735,123 @@ router.post('/production/jobs/:id/consommations',
     return c.json({ data }, 201)
   },
 )
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INDICATEURS ATELIER ET CONTRÔLE DES COÛTS (Catalogue Hybride Phase 8)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** Codes PostgREST / Postgres d'une table absente (migration pas encore appliquée). */
+const TABLE_ABSENTE = new Set(['42P01', 'PGRST205'])
+const CATEGORIES_MACHINES = ['machine_production', 'machine_legere']
+const STATUTS_MACHINE_OPERATIONNELLE = ['disponible', 'en_service', 'remplacement_prevu']
+
+/**
+ * Indicateurs de l'écran Production, tous calculés (plus aucune valeur en dur) :
+ * OF en cours / en retard, machines opérationnelles, rendement sur 30 jours,
+ * anomalies (OF en retard + machines en panne). Aucune donnée de coût.
+ */
+router.get('/production/indicateurs', requirePermission('PRODUCTION', 'READ'), async (c) => {
+  const aujourdHui = new Date().toISOString().slice(0, 10)
+  const il30Jours = new Date(Date.now() - 30 * 86_400_000).toISOString()
+
+  const [jobs, machines, etapes] = await Promise.all([
+    db.from('jobs_production').select('statut, date_fin_prevue').in('statut', ['confirmed', 'in_production', 'pret']),
+    db.from('equipements').select('statut').in('categorie', CATEGORIES_MACHINES).not('statut', 'in', '(cede,hors_service)'),
+    db.from('of_operations').select('temps_prevu_h, temps_reel_h').eq('statut', 'terminee').gte('fin_le', il30Jours),
+  ])
+  if (jobs.error) return c.json({ error: jobs.error.message, code: 'DB_ERROR' }, 500)
+  if (machines.error) return c.json({ error: machines.error.message, code: 'DB_ERROR' }, 500)
+  const etapesDisponibles = !etapes.error
+  if (etapes.error && !TABLE_ABSENTE.has(String((etapes.error as { code?: string }).code))) {
+    return c.json({ error: etapes.error.message, code: 'DB_ERROR' }, 500)
+  }
+
+  const ofs = (jobs.data ?? []) as Array<{ statut: string; date_fin_prevue: string | null }>
+  const parc = (machines.data ?? []) as Array<{ statut: string }>
+  const enRetard = ofs.filter((j) => j.date_fin_prevue && j.date_fin_prevue < aujourdHui && j.statut !== 'pret').length
+  const enPanne = parc.filter((m) => m.statut === 'en_panne').length
+  const lignes = etapesDisponibles ? (etapes.data ?? []) as Array<{ temps_prevu_h: number | null; temps_reel_h: number | null }> : []
+
+  return c.json({
+    data: {
+      of_en_cours:  ofs.filter((j) => j.statut === 'in_production').length,
+      of_a_lancer:  ofs.filter((j) => j.statut === 'confirmed').length,
+      of_en_retard: enRetard,
+      machines: {
+        operationnelles: parc.filter((m) => STATUTS_MACHINE_OPERATIONNELLE.includes(m.statut)).length,
+        total:           parc.length,
+        en_panne:        enPanne,
+        en_maintenance:  parc.filter((m) => m.statut === 'maintenance').length,
+      },
+      rendement_30j_pct:    rendementAtelier(lignes),
+      etapes_mesurees_30j:  lignes.filter((e) => Number(e.temps_reel_h) > 0).length,
+      anomalies: { total: enRetard + enPanne, of_en_retard: enRetard, machines_en_panne: enPanne },
+    },
+  })
+})
+
+// Coûts et marges : mêmes droits que les règles de marge (données internes, §27).
+
+/** Coût prévu / réel d'un OF, par poste (main-d'œuvre, machines, matières, consommables). */
+router.get('/production/jobs/:id/couts', requirePermission('COMMERCIAL', 'CONFIGURE'), async (c) => {
+  const { id } = c.req.param()
+  const { data: job } = await db.from('jobs_production').select('id').eq('id', id).maybeSingle()
+  if (!job) return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
+  try {
+    const couts = await coutsDesOF([id])
+    return c.json({ data: couts.get(id) })
+  } catch (e) {
+    return c.json({ error: (e as Error).message, code: 'DB_ERROR' }, 500)
+  }
+})
+
+/** Marge prévue / réelle d'une commande. */
+router.get('/production/couts/commandes/:commandeId', requirePermission('COMMERCIAL', 'CONFIGURE'), async (c) => {
+  const { commandeId } = c.req.param()
+  try {
+    const [ligne] = await controleDesCommandes([commandeId])
+    if (!ligne) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
+    return c.json({ data: ligne })
+  } catch (e) {
+    return c.json({ error: (e as Error).message, code: 'DB_ERROR' }, 500)
+  }
+})
+
+/**
+ * Synthèse du contrôle des coûts : les commandes ayant des OF sur la période
+ * (90 jours par défaut, 365 maximum), avec marge prévue, réelle et écart.
+ */
+router.get('/production/couts/synthese', requirePermission('COMMERCIAL', 'CONFIGURE'), async (c) => {
+  const jours = Math.min(365, Math.max(1, parseInt(c.req.query('jours') ?? '90') || 90))
+  const depuis = new Date(Date.now() - jours * 86_400_000).toISOString()
+
+  const { data: jobs, error } = await db
+    .from('jobs_production').select('commande_id')
+    .not('commande_id', 'is', null).neq('statut', 'cancelled').gte('created_at', depuis)
+    .order('created_at', { ascending: false }).limit(500)
+  if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 500)
+
+  const commandeIds = [...new Set(((jobs ?? []) as Array<{ commande_id: string }>).map((j) => j.commande_id))].slice(0, 100)
+  try {
+    const lignes = await controleDesCommandes(commandeIds)
+    const totaux = lignes.reduce((t, l) => ({
+      prix_vente_ht_xaf:     t.prix_vente_ht_xaf + l.marge.prixVenteHtXaf,
+      cout_revient_reel_xaf: t.cout_revient_reel_xaf + l.marge.coutRevientReelXaf,
+      marge_reelle_xaf:      t.marge_reelle_xaf + l.marge.margeReelleXaf,
+    }), { prix_vente_ht_xaf: 0, cout_revient_reel_xaf: 0, marge_reelle_xaf: 0 })
+    return c.json({
+      data: lignes.sort((a, b) => a.marge.margeReelleXaf - b.marge.margeReelleXaf),   // les moins rentables d'abord
+      totaux: {
+        ...totaux,
+        taux_marge_reelle_pct: totaux.prix_vente_ht_xaf > 0 ? Math.round((totaux.marge_reelle_xaf / totaux.prix_vente_ht_xaf) * 1000) / 10 : null,
+        commandes_deficitaires: lignes.filter((l) => l.marge.margeReelleXaf < 0).length,
+      },
+      periode_jours: jours,
+    })
+  } catch (e) {
+    return c.json({ error: (e as Error).message, code: 'DB_ERROR' }, 500)
+  }
+})
 
 /**
  * PATCH /production/jobs/:id/statut
