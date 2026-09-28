@@ -8,18 +8,18 @@ import { uniteOptions } from '@/lib/constants'
 import { useJobs, useCreateJob, useUpdateJobStatut } from '@/hooks/useOperations'
 import type { Job } from '@/hooks/useOperations'
 import { useStocks } from '@/hooks/useStocks'
-import { useEquipements, STATUTS_EQUIPEMENT_INDISPONIBLE } from '@/hooks/useEquipements'
+import { useEquipements, useTechniciens, STATUTS_EQUIPEMENT_INDISPONIBLE } from '@/hooks/useEquipements'
 
 type JobRecord = Job & Record<string, unknown>
 
 // Machines : référentiel unique `equipements` (décision D5) — plus de liste codée en dur.
-const TECHNICIENS = ['Mvondo Serge', 'Biya Christine', 'Atangana Félix', 'Nkolo Pierre']
+// Techniciens : employés RH actifs (GET /api/production/techniciens) — plus de liste codée en dur.
 
 interface JobForm {
   typeJob: 'commande' | 'stock'
   produitId: string
   ref: string
-  produit: string; machines: string[]; techniciens: string[]   // machines = ids d'équipements
+  produit: string; machines: string[]; techniciens: string[]   // ids d'équipements / ids d'employés
   categorie: string; unite: string
   quantitePrevue: string
   prixUnitaire: string
@@ -93,6 +93,7 @@ export default function Production() {
   const { data: stocksData } = useStocks()
   const createJob = useCreateJob()
   const { data: equipements = [] } = useEquipements()
+  const { data: techniciens = [] } = useTechniciens()
   const updateJobStatut = useUpdateJobStatut()
 
   const jobs = (data?.data ?? []) as JobRecord[]
@@ -157,7 +158,9 @@ export default function Production() {
         // D5 : l'équipement principal (1er choisi) est lié à l'OF ; tous restent lisibles dans machine_nom
         equipement_id: form.machines[0] || undefined,
         machine_nom: form.machines.map((id) => equipements.find((e) => e.id === id)?.designation ?? id).join(', '),
-        technicien_nom: form.techniciens.join(', '),
+        // Le 1er technicien choisi est lié à l'OF (employé RH) ; tous restent lisibles dans technicien_nom
+        technicien_id: form.techniciens[0] || undefined,
+        technicien_nom: form.techniciens.map((id) => techniciens.find((t) => t.id === id)?.nom ?? id).join(', '),
         date_debut: form.debut,
         date_fin_prevue: form.finPrevue,
       },
@@ -350,12 +353,15 @@ export default function Production() {
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Techniciens *</label>
             <select
               multiple
-              size={Math.min(4, TECHNICIENS.length)}
+              size={Math.min(4, Math.max(1, techniciens.length))}
               value={form.techniciens}
               onChange={(e) => setForm((f) => ({ ...f, techniciens: Array.from(e.target.selectedOptions, (option) => option.value).filter(Boolean) }))}
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
             >
-              {TECHNICIENS.map((t) => <option key={t} value={t}>{t}</option>)}
+              {techniciens.length === 0 && <option value="" disabled>Aucun employé actif — ajoutez-les dans RH</option>}
+              {techniciens.map((t) => (
+                <option key={t.id} value={t.id}>{t.nom}{t.poste ? ` — ${t.poste}` : ''}{t.statut === 'essai' ? ' (essai)' : ''}</option>
+              ))}
             </select>
           </div>
           <div className="grid grid-cols-2 gap-3">

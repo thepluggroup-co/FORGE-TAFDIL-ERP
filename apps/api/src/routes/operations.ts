@@ -236,7 +236,7 @@ const jobSchema = z.object({
   machine_id:          z.string().optional(),     // DÉPRÉCIÉ (D5) : résolu vers equipement_id
   equipement_id:       z.string().uuid().optional(),
   machine_nom:         z.string().optional(),
-  technicien_id:       z.string().optional(),
+  technicien_id:       z.string().uuid().optional(),   // employé (RH) — technicien principal de l'OF
   technicien_nom:      z.string().optional(),
   date_debut:          z.string().optional(),
   date_fin_prevue:     z.string().optional(),
@@ -264,6 +264,19 @@ const jobAvancementSchema = z.object({
 function isSchemaCacheColumnError(error?: { message?: string; code?: string } | null) {
   return Boolean(error?.code === 'PGRST204' || error?.message?.includes('schema cache'))
 }
+
+// ── Techniciens affectables à un OF = employés actifs (RH) ─────────────────
+// Route dédiée à la production : seulement l'identité et le poste, jamais les
+// données RH sensibles (salaire, CIN, CNPS) de GET /rh/employes, qui exige HR:READ.
+router.get('/production/techniciens', requirePermission('PRODUCTION', 'READ'), async (c) => {
+  const { data, error } = await db
+    .from('employes')
+    .select('id, nom, poste, departement, statut')
+    .in('statut', ['actif', 'essai'])
+    .order('nom')
+  if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 500)
+  return c.json({ data: data ?? [] })
+})
 
 router.get('/production/jobs', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { statut, commande_id, search } = c.req.query()
@@ -323,6 +336,18 @@ router.post('/production/jobs', requirePermission('PRODUCTION', 'CREATE'), zVali
     if (!body.quantite_prevue || body.quantite_prevue <= 0) {
       return c.json({ error: 'Quantite prevue requise pour une production stock', code: 'QUANTITE_REQUIRED' }, 422)
     }
+  }
+
+  // ── Technicien = employé RH existant et en activité ───────────────────────
+  if (body.technicien_id) {
+    const { data: employe } = await db
+      .from('employes').select('id, nom, statut').eq('id', body.technicien_id).maybeSingle()
+    const e = employe as { id: string; nom: string; statut: string } | null
+    if (!e) return c.json({ error: 'Technicien introuvable parmi les employés', code: 'TECHNICIEN_INTROUVABLE' }, 404)
+    if (e.statut !== 'actif' && e.statut !== 'essai') {
+      return c.json({ error: `${e.nom} n'est pas en activité (${e.statut}) — affectation impossible`, code: 'TECHNICIEN_INDISPONIBLE' }, 422)
+    }
+    body.technicien_nom = body.technicien_nom ?? e.nom
   }
 
   // ── Bloquer si l'équipement est en panne, en maintenance ou hors service ──
