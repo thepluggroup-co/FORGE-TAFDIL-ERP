@@ -414,10 +414,13 @@ const updateFicheTechniqueSchema = createFicheTechniqueSchema.partial()
 
 const createRessourceSchema = z.object({
   type:                        TypeRessourceSchema,
-  // uniquement pour type = materiau — relie la ressource à un vrai article du
-  // stock (produits). main_oeuvre/equipement restent en désignation libre
-  // (pas de rattachement à la table equipements dans cette première version).
+  // uniquement pour type = materiau ou consommable — relie la ressource à un
+  // vrai article du stock (produits). main_oeuvre/equipement restent en
+  // désignation libre (pas de rattachement à la table equipements ici).
   ressource_produit_id:        z.string().uuid().optional(),
+  // Phase 4 (§18) — uniquement pour type = sous_traitance
+  ressource_fournisseur_id:    z.string().uuid().optional(),
+  delai_jours:                 z.number().int().min(0).optional(),
   designation:                 z.string().min(1).max(200),
   unite:                       z.string().min(1).max(30),
   quantite_par_unite:          z.number().positive(),
@@ -426,8 +429,11 @@ const createRessourceSchema = z.object({
   ordre:                       z.number().int().min(0).default(0),
   actif:                       z.boolean().default(true),
 }).refine(
-  (data) => data.type === 'materiau' || data.ressource_produit_id === undefined,
-  { message: 'ressource_produit_id est réservé au type "materiau"', path: ['ressource_produit_id'] },
+  (data) => data.type === 'materiau' || data.type === 'consommable' || data.ressource_produit_id === undefined,
+  { message: 'ressource_produit_id est réservé aux types "materiau" et "consommable"', path: ['ressource_produit_id'] },
+).refine(
+  (data) => data.type === 'sous_traitance' || (data.ressource_fournisseur_id === undefined && data.delai_jours === undefined),
+  { message: 'sous-traitant et délai sont réservés au type "sous_traitance"', path: ['ressource_fournisseur_id'] },
 )
 
 const updateRessourceSchema = z.object({
@@ -437,6 +443,9 @@ const updateRessourceSchema = z.object({
   quantite_par_unite:          z.number().positive().optional(),
   cout_unitaire_reference_xaf: z.number().min(0).optional(),
   temps_reference_h:           z.number().min(0).nullable().optional(),
+  // sous_traitance uniquement : la contrainte DB ressource_coherente refuse ailleurs
+  ressource_fournisseur_id:    z.string().uuid().nullable().optional(),
+  delai_jours:                 z.number().int().min(0).nullable().optional(),
   ordre:                       z.number().int().min(0).optional(),
   actif:                       z.boolean().optional(),
   // `type` volontairement absent : le changer remettrait en cause la cohérence
@@ -677,6 +686,8 @@ const valeurParametreSchema = z.object({
   libelle:                 z.string().min(1).max(100),
   cout_supplementaire_xaf: z.number().min(0).default(0),
   validation_requise:      z.boolean().default(false),
+  categorie_cout:          z.enum(['option', 'transport', 'installation']).default('option'),
+  cout_par_commande:       z.boolean().default(false),
 })
 
 const parametreSchema = z.object({
@@ -690,6 +701,8 @@ const parametreSchema = z.object({
   pas:             z.number().positive().nullable().optional(),
   role_calcul:     z.enum(['largeur', 'hauteur', 'longueur', 'epaisseur', 'diametre', 'poids']).nullable().optional(),
   cout_si_oui_xaf: z.number().min(0).default(0),
+  categorie_cout:  z.enum(['option', 'transport', 'installation']).default('option'),
+  cout_par_commande: z.boolean().default(false),
   valeurs:         z.array(valeurParametreSchema).max(50).default([]),
 }).superRefine((p, ctx) => {
   if (p.min != null && p.max != null && p.min > p.max) {
@@ -753,6 +766,8 @@ router.put(
           pas: p.type === 'nombre' ? (p.pas ?? null) : null,
           role_calcul: p.type === 'nombre' ? (p.role_calcul ?? null) : null,
           cout_si_oui_xaf: p.type === 'booleen' ? p.cout_si_oui_xaf : 0,
+          categorie_cout: p.type === 'booleen' ? p.categorie_cout : 'option',
+          cout_par_commande: p.type === 'booleen' ? p.cout_par_commande : false,
           ordre,
         })
         .select('id')
@@ -884,6 +899,112 @@ router.get('/configurations', requirePermission('COMMERCIAL', 'READ'), async (c)
   const { data, count, error } = await query.order('created_at', { ascending: false }).range(from, to)
   if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 500)
   return c.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage, total_pages: Math.ceil((count ?? 0) / perPage) })
+})
+
+
+// ── Frais indirects paramétrables (Phase 4, §19) ────────────────────────────
+// Saisis par l'utilisateur, jamais codés en dur. Les règles applicables se
+// CUMULENT (contrairement à la marge). Toute modification est tracée.
+
+const fraisIndirectsBaseSchema = z.object({
+  libelle:     z.string().trim().min(1).max(100),
+  centre_cout: z.string().trim().max(50).nullable().optional(),
+  mode:        z.enum(['pourcentage', 'fixe_par_unite', 'fixe_par_commande']),
+  valeur:      z.number().min(0),
+  base:        z.enum(['cout_direct', 'main_oeuvre', 'materiaux']).nullable().optional(),
+  portee:      z.enum(['global', 'famille', 'modele']),
+  famille_id:  z.string().uuid().nullable().optional(),
+  modele_id:   z.string().uuid().nullable().optional(),
+  date_debut:  z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  date_fin:    z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  notes:       z.string().max(500).nullable().optional(),
+})
+
+type FraisIndirectsSaisie = z.infer<typeof fraisIndirectsBaseSchema>
+
+/** Erreur de cohérence métier, ou null si la règle est valide. */
+function verifierFraisIndirects(r: FraisIndirectsSaisie): string | null {
+  if (r.mode === 'pourcentage' && !r.base) return 'Un frais en pourcentage doit préciser son assiette (base)'
+  if (r.mode === 'pourcentage' && r.valeur > 200) return 'Un pourcentage de frais indirects ne peut pas dépasser 200 %'
+  if (r.portee === 'global' && (r.famille_id || r.modele_id)) return 'Une règle globale ne vise ni famille ni modèle'
+  if (r.portee === 'famille' && (!r.famille_id || r.modele_id)) return 'Une règle de famille doit viser une famille (et aucun modèle)'
+  if (r.portee === 'modele' && (!r.modele_id || r.famille_id)) return 'Une règle de modèle doit viser un modèle (et aucune famille)'
+  if (r.date_debut && r.date_fin && r.date_debut > r.date_fin) return 'La date de début doit précéder la date de fin'
+  return null
+}
+
+function ligneFraisIndirects(r: FraisIndirectsSaisie) {
+  return {
+    libelle: r.libelle, centre_cout: r.centre_cout ?? null, mode: r.mode, valeur: r.valeur,
+    base: r.mode === 'pourcentage' ? r.base : null,
+    portee: r.portee, famille_id: r.famille_id ?? null, modele_id: r.modele_id ?? null,
+    date_debut: r.date_debut ?? null, date_fin: r.date_fin ?? null, notes: r.notes ?? null,
+  }
+}
+
+router.get('/frais-indirects', requirePermission('COMMERCIAL', 'CONFIGURE'), async (c) => {
+  const { data, error } = await db
+    .from('frais_indirects')
+    .select('*, familles(nom), modeles(reference, designation)')
+    .order('actif', { ascending: false })
+    .order('created_at', { ascending: false })
+  if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 500)
+  return c.json({ data: data ?? [] })
+})
+
+router.post('/frais-indirects', requirePermission('COMMERCIAL', 'CONFIGURE'), zValidator('json', fraisIndirectsBaseSchema), async (c) => {
+  const body = c.req.valid('json')
+  const user = c.get('user')
+  const erreur = verifierFraisIndirects(body)
+  if (erreur) return c.json({ error: erreur, code: 'VALIDATION_ERROR' }, 422)
+
+  const { data, error } = await db
+    .from('frais_indirects')
+    .insert({ ...ligneFraisIndirects(body), actif: true, created_by: user?.id ?? null })
+    .select()
+    .single()
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+
+  writeAuditLog({
+    userId: user?.id, actionType: 'FRAIS_INDIRECTS_MODIFIES', module: 'COMMERCIAL',
+    resourceType: 'frais_indirects', resourceId: (data as { id: string }).id,
+    payloadBefore: null, payloadAfter: ligneFraisIndirects(body),
+  })
+  return c.json(data, 201)
+})
+
+router.put('/frais-indirects/:id', requirePermission('COMMERCIAL', 'CONFIGURE'), zValidator('json', fraisIndirectsBaseSchema), async (c) => {
+  const { id } = c.req.param()
+  const body = c.req.valid('json')
+  const user = c.get('user')
+  const erreur = verifierFraisIndirects(body)
+  if (erreur) return c.json({ error: erreur, code: 'VALIDATION_ERROR' }, 422)
+
+  const { data: avant } = await db.from('frais_indirects').select('*').eq('id', id).maybeSingle()
+  if (!avant) return c.json({ error: 'Frais indirect introuvable', code: 'NOT_FOUND' }, 404)
+
+  const { data, error } = await db.from('frais_indirects').update(ligneFraisIndirects(body)).eq('id', id).select().single()
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+
+  writeAuditLog({
+    userId: user?.id, actionType: 'FRAIS_INDIRECTS_MODIFIES', module: 'COMMERCIAL',
+    resourceType: 'frais_indirects', resourceId: id, payloadBefore: avant, payloadAfter: ligneFraisIndirects(body),
+  })
+  return c.json(data)
+})
+
+/** Désactivation (jamais de suppression : les estimations passées restent explicables). */
+router.delete('/frais-indirects/:id', requirePermission('COMMERCIAL', 'CONFIGURE'), async (c) => {
+  const { id } = c.req.param()
+  const user = c.get('user')
+  const { data, error } = await db.from('frais_indirects').update({ actif: false }).eq('id', id).select('id, libelle, valeur').maybeSingle()
+  if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 500)
+  if (!data) return c.json({ error: 'Frais indirect introuvable', code: 'NOT_FOUND' }, 404)
+  writeAuditLog({
+    userId: user?.id, actionType: 'FRAIS_INDIRECTS_MODIFIES', module: 'COMMERCIAL',
+    resourceType: 'frais_indirects', resourceId: id, payloadBefore: { ...data, actif: true }, payloadAfter: { actif: false },
+  })
+  return c.body(null, 204)
 })
 
 export { router as catalogueRouter }

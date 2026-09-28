@@ -36,7 +36,9 @@ export const DimensionsSchema = z.object({
 }).partial()
 export type Dimensions = z.infer<typeof DimensionsSchema>
 
-export const TypeRessourceSchema = z.enum(['materiau', 'main_oeuvre', 'equipement'])
+// Catalogue Hybride Phase 4 (§17/§18) : consommables séparés des matières,
+// sous-traitance (opération confiée à un fournisseur, avec délai).
+export const TypeRessourceSchema = z.enum(['materiau', 'consommable', 'main_oeuvre', 'equipement', 'sous_traitance'])
 export type TypeRessource = z.infer<typeof TypeRessourceSchema>
 
 /** Une ligne de fiche_technique_ressources, telle que chargée depuis la DB. */
@@ -48,6 +50,8 @@ export interface RessourceTechnique {
   quantiteParUnite: number          // ex : 4 (kg d'acier) par unité de quantité facturable
   coutUnitaireReferenceXaf: number
   tempsReferenceH?: number | null
+  /** sous_traitance : délai du sous-traitant, en jours. */
+  delaiJours?: number | null
 }
 
 export interface DevisCalculInput {
@@ -67,6 +71,7 @@ export interface RessourceCalculee {
   coutUnitaireXaf: number
   totalXaf: number
   tempsCalculeH?: number
+  delaiJours?: number
 }
 
 export interface PropositionDevis {
@@ -79,6 +84,10 @@ export interface PropositionDevis {
   totalMateriauxXaf: number
   totalMainOeuvreXaf: number
   totalEquipementsXaf: number
+  totalConsommablesXaf: number
+  totalSousTraitanceXaf: number
+  /** Plus long délai de sous-traitance de la fiche (jours), ou null. */
+  delaiSousTraitanceJours: number | null
   totalHtXaf: number   // §19 : devis brut, HT, sans TVA ni remise
 }
 
@@ -248,6 +257,7 @@ export function calculerRessources(
     if (r.tempsReferenceH != null) {
       ligne.tempsCalculeH = arrondirQuantite(r.tempsReferenceH * quantiteFacturable)
     }
+    if (r.delaiJours != null) ligne.delaiJours = r.delaiJours
     return ligne
   })
 }
@@ -270,9 +280,13 @@ export function calculerDevisBrut(
 
   const lignes = calculerRessources(etape1.quantiteFacturable, ressourcesDisponibles)
 
-  const totalMateriauxXaf   = arrondirXaf(lignes.filter((l) => l.type === 'materiau').reduce((s, l) => s + l.totalXaf, 0))
-  const totalMainOeuvreXaf  = arrondirXaf(lignes.filter((l) => l.type === 'main_oeuvre').reduce((s, l) => s + l.totalXaf, 0))
-  const totalEquipementsXaf = arrondirXaf(lignes.filter((l) => l.type === 'equipement').reduce((s, l) => s + l.totalXaf, 0))
+  const totalPour = (type: TypeRessource) => arrondirXaf(lignes.filter((l) => l.type === type).reduce((s, l) => s + l.totalXaf, 0))
+  const totalMateriauxXaf     = totalPour('materiau')
+  const totalConsommablesXaf  = totalPour('consommable')
+  const totalMainOeuvreXaf    = totalPour('main_oeuvre')
+  const totalEquipementsXaf   = totalPour('equipement')
+  const totalSousTraitanceXaf = totalPour('sous_traitance')
+  const delais = lignes.filter((l) => l.type === 'sous_traitance' && l.delaiJours != null).map((l) => l.delaiJours as number)
 
   return {
     ok: true,
@@ -286,8 +300,11 @@ export function calculerDevisBrut(
       totalMateriauxXaf,
       totalMainOeuvreXaf,
       totalEquipementsXaf,
-      // §19 : total HT brut du travail, sans TVA ni remise (appliquées plus tard, à la facture)
-      totalHtXaf: arrondirXaf(totalMateriauxXaf + totalMainOeuvreXaf + totalEquipementsXaf),
+      totalConsommablesXaf,
+      totalSousTraitanceXaf,
+      delaiSousTraitanceJours: delais.length > 0 ? Math.max(...delais) : null,
+      // §19 : total HT brut du travail (coût direct), sans TVA ni remise (appliquées plus tard, à la facture)
+      totalHtXaf: arrondirXaf(totalMateriauxXaf + totalConsommablesXaf + totalMainOeuvreXaf + totalEquipementsXaf + totalSousTraitanceXaf),
     },
   }
 }

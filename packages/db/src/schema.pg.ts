@@ -48,7 +48,7 @@ export const imputationPayeurEnum   = pgEnum('imputation_payeur_enum',  ['entrep
 export const statutPreparationEnum  = pgEnum('statut_preparation_enum', ['a_preparer', 'en_cours', 'pret'])
 export const remiseTypeEnum         = pgEnum('remise_type_enum',        ['pct', 'forfait'])
 export const caisseSessionStatutEnum = pgEnum('caisse_session_statut', ['ouverte', 'fermee'])
-export const ressourceTypeEnum      = pgEnum('ressource_type',      ['materiau', 'main_oeuvre', 'equipement'])
+export const ressourceTypeEnum      = pgEnum('ressource_type',      ['materiau', 'consommable', 'main_oeuvre', 'equipement', 'sous_traitance'])
 export const ficheTechniqueStatutEnum = pgEnum('fiche_technique_statut', ['brouillon', 'active', 'archivee'])
 export const modeCalculDevisEnum    = pgEnum('mode_calcul_devis',   ['quantitatif', 'surface', 'lineaire', 'volume', 'poids', 'forfait', 'qualitatif'])
 export const ticketVenteStatutEnum   = pgEnum('ticket_vente_statut',   ['paye', 'annule', 'rembourse'])
@@ -211,6 +211,9 @@ export const ficheTechniqueRessourcesPg = pgTable('fiche_technique_ressources', 
   quantiteParUnite:       real('quantite_par_unite').notNull(), // ex : 4 kg d'acier par m²
   coutUnitaireReferenceXaf: real('cout_unitaire_reference_xaf').notNull().default(0),
   tempsReferenceH:        real('temps_reference_h'),
+  // Phase 4 — sous_traitance : sous-traitant (fournisseurs, FK posée en SQL si la table existe) et délai
+  ressourceFournisseurId: uuid('ressource_fournisseur_id'),
+  delaiJours:             integer('delai_jours'),
   ordre:                  integer('ordre').notNull().default(0),
   actif:                  boolean('actif').notNull().default(true),
   createdAt:              ts('created_at'),

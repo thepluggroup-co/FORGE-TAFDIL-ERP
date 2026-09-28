@@ -35,6 +35,9 @@ export type TypeParametre = 'nombre' | 'choix' | 'booleen'
 /** Dimension du moteur de calcul alimentée par un paramètre numérique. */
 export type RoleCalcul = 'largeur' | 'hauteur' | 'longueur' | 'epaisseur' | 'diametre' | 'poids'
 
+/** Nature d'un coût porté par un paramètre de configuration (Catalogue Hybride Phase 4). */
+export type CategorieCout = 'option' | 'transport' | 'installation'
+
 export interface ValeurParametre {
   code: string
   libelle: string
@@ -42,6 +45,10 @@ export interface ValeurParametre {
   coutSupplementaireXaf: number
   /** Ce choix exige une validation humaine (ex. couleur « autre »). */
   validationRequise: boolean
+  /** Nature du coût : option produit (défaut), transport ou installation (Phase 4). */
+  categorieCout?: CategorieCout
+  /** true : coût forfaitaire par commande ; false (défaut) : coût par unité commandée. */
+  coutParCommande?: boolean
 }
 
 export interface ParametreConfiguration {
@@ -60,6 +67,9 @@ export interface ParametreConfiguration {
   valeurs?: ValeurParametre[]
   /** booleen : coût de revient ajouté par unité si l'option est cochée. */
   coutSiOuiXaf?: number | null
+  /** booleen : nature et assiette du coût si coché (Phase 4). */
+  categorieCout?: CategorieCout
+  coutParCommande?: boolean
 }
 
 export type StatutConfiguration = 'valide' | 'invalide' | 'a_valider' | 'hors_limites'
@@ -70,7 +80,14 @@ export type CodeErreurConfiguration =
 export interface ErreurConfiguration { parametre: string; code: CodeErreurConfiguration; message: string }
 export interface DepassementLimite { parametre: string; valeur: number; min: number | null; max: number | null; unite: string | null }
 export interface ValidationRequise { parametre: string; raison: string }
-export interface Supplement { parametre: string; libelle: string; coutUnitaireXaf: number }
+export interface Supplement {
+  parametre: string
+  libelle: string
+  coutUnitaireXaf: number
+  categorie: CategorieCout
+  /** Coût forfaitaire compté une seule fois, quelle que soit la quantité. */
+  parCommande: boolean
+}
 
 export interface ResultatValidation {
   statut: StatutConfiguration
@@ -159,7 +176,10 @@ export function validerConfiguration(
       }
       valeurs[p.code] = code
       if (choix.coutSupplementaireXaf > 0) {
-        supplements.push({ parametre: p.code, libelle: `${p.libelle} : ${choix.libelle}`, coutUnitaireXaf: choix.coutSupplementaireXaf })
+        supplements.push({
+          parametre: p.code, libelle: `${p.libelle} : ${choix.libelle}`, coutUnitaireXaf: choix.coutSupplementaireXaf,
+          categorie: choix.categorieCout ?? 'option', parCommande: choix.coutParCommande ?? false,
+        })
       }
       if (choix.validationRequise) {
         validationsRequises.push({ parametre: p.code, raison: `« ${p.libelle} : ${choix.libelle} » nécessite une validation technique.` })
@@ -174,7 +194,10 @@ export function validerConfiguration(
     }
     valeurs[p.code] = brut
     if (brut && (p.coutSiOuiXaf ?? 0) > 0) {
-      supplements.push({ parametre: p.code, libelle: p.libelle, coutUnitaireXaf: p.coutSiOuiXaf ?? 0 })
+      supplements.push({
+        parametre: p.code, libelle: p.libelle, coutUnitaireXaf: p.coutSiOuiXaf ?? 0,
+        categorie: p.categorieCout ?? 'option', parCommande: p.coutParCommande ?? false,
+      })
     }
   }
 
@@ -187,7 +210,7 @@ export function validerConfiguration(
   return { statut, erreurs, horsLimites, validationsRequises, valeurs, dimensions, supplements, quantite }
 }
 
-// ── Estimation : coût de revient puis prix de vente (§13) ───────────────
+// ── Estimation indisponible : jamais de prix inventé ─────────────────────
 
 export type RaisonEstimationIndisponible =
   | 'CONFIGURATION_INVALIDE'
@@ -196,11 +219,101 @@ export type RaisonEstimationIndisponible =
   | 'CALCUL_IMPOSSIBLE'
   | 'MARGE_NON_DEFINIE'
 
+// ── Frais indirects paramétrables (§19, Phase 4) ─────────────────────────
+// Jamais codés en dur : chaque règle est saisie dans l'ERP (taux ou montant,
+// assiette, centre de coût, période, portée). Contrairement à la marge, les
+// règles applicables S'ADDITIONNENT (ex. atelier 12 % de la main-d'œuvre +
+// administration 5 % du coût direct).
+
+export type ModeFraisIndirects = 'pourcentage' | 'fixe_par_unite' | 'fixe_par_commande'
+
+/** Assiette d'un frais en pourcentage. */
+export type BaseFraisIndirects = 'cout_direct' | 'main_oeuvre' | 'materiaux'
+
+export interface RegleFraisIndirects {
+  id: string
+  libelle: string
+  centreCout?: string | null
+  mode: ModeFraisIndirects
+  valeur: number
+  base?: BaseFraisIndirects | null
+  portee: 'global' | 'famille' | 'modele'
+  familleId?: string | null
+  modeleId?: string | null
+  dateDebut?: string | null   // AAAA-MM-JJ inclus
+  dateFin?: string | null     // AAAA-MM-JJ inclus
+  actif: boolean
+}
+
+export interface LigneFraisIndirects {
+  regleId: string
+  libelle: string
+  centreCout: string | null
+  mode: ModeFraisIndirects
+  base: BaseFraisIndirects | null
+  valeur: number
+  montantXaf: number
+}
+
+/**
+ * Règles de frais indirects qui s'appliquent à un modèle à une date donnée :
+ * actives, dans leur période, et de portée globale, de la famille (ou d'une
+ * famille ascendante) ou du modèle lui-même. Elles se cumulent.
+ */
+export function selectionnerFraisIndirects(
+  regles: RegleFraisIndirects[],
+  modeleId: string,
+  famillesAscendantes: string[],
+  dateIso: string,
+): RegleFraisIndirects[] {
+  const familles = new Set(famillesAscendantes)
+  return regles.filter((r) =>
+    r.actif
+    && (!r.dateDebut || r.dateDebut <= dateIso)
+    && (!r.dateFin || r.dateFin >= dateIso)
+    && (r.portee === 'global'
+      || (r.portee === 'famille' && !!r.familleId && familles.has(r.familleId))
+      || (r.portee === 'modele' && r.modeleId === modeleId)))
+}
+
+/** Montant de chaque frais indirect, arrondi à l'entier XAF, dans l'ordre des règles. */
+export function calculerFraisIndirects(
+  regles: RegleFraisIndirects[],
+  bases: Record<BaseFraisIndirects, number>,
+  quantite: number,
+): LigneFraisIndirects[] {
+  return regles.map((r) => {
+    const montantXaf =
+      r.mode === 'pourcentage'      ? arrondirXaf((bases[r.base ?? 'cout_direct'] * r.valeur) / 100)
+      : r.mode === 'fixe_par_unite' ? arrondirXaf(r.valeur * quantite)
+      : arrondirXaf(r.valeur)
+    return {
+      regleId: r.id, libelle: r.libelle, centreCout: r.centreCout ?? null,
+      mode: r.mode, base: r.mode === 'pourcentage' ? (r.base ?? 'cout_direct') : null,
+      valeur: r.valeur, montantXaf,
+    }
+  })
+}
+
+// ── Estimation : coût de revient complet puis prix de vente (§13) ────────
+
 export interface EstimationInterne {
+  // Coût direct de fabrication (fiche technique)
   coutMateriauxXaf: number
+  coutConsommablesXaf: number
   coutMainOeuvreXaf: number
   coutEquipementsXaf: number
+  coutSousTraitanceXaf: number
+  /** Options produit choisies (catégorie « option »). */
   coutOptionsXaf: number
+  // Hors fabrication
+  fraisIndirectsXaf: number
+  coutTransportXaf: number
+  coutInstallationXaf: number
+  /**
+   * COÛT DE REVIENT = matières + consommables + main-d'œuvre + équipements
+   * + sous-traitance + options + frais indirects + transport + installation
+   */
   coutRevientXaf: number
   tauxMargePct: number
   margeXaf: number
@@ -208,7 +321,9 @@ export interface EstimationInterne {
   prixVenteHtXaf: number
   quantiteFacturable: number
   formuleUtilisee: string
+  delaiSousTraitanceJours: number | null
   lignesRessources: RessourceCalculee[]
+  lignesFraisIndirects: LigneFraisIndirects[]
   supplements: Supplement[]
 }
 
@@ -216,10 +331,21 @@ export type ResultatEstimation =
   | { disponible: true; estimation: EstimationInterne }
   | { disponible: false; raison: RaisonEstimationIndisponible; message: string; coutRevientXaf?: number }
 
+/** Coût total d'une catégorie de suppléments : par unité × quantité, ou une fois par commande. */
+function totalSupplements(supplements: Supplement[], categorie: CategorieCout, quantite: number): number {
+  return arrondirXaf(supplements
+    .filter((s) => s.categorie === categorie)
+    .reduce((total, s) => total + s.coutUnitaireXaf * (s.parCommande ? 1 : quantite), 0))
+}
+
 /**
  * Estime le prix de vente d'une configuration VALIDE ou À VALIDER.
  *
- * - coût de revient = moteur existant (fiche technique active) + options × quantité
+ * - coût direct = fiche technique active (matières, consommables, main-d'œuvre,
+ *   équipements, sous-traitance) + options
+ * - frais indirects = règles applicables, sur leur assiette (le coût direct ne
+ *   comprend ni transport ni installation)
+ * - coût de revient = coût direct + frais indirects + transport + installation
  * - prix unitaire HT = arrondi(coût de revient unitaire × (1 + marge / 100))
  * - prix de vente HT = prix unitaire × quantité (cohérent avec une ligne de devis)
  */
@@ -229,6 +355,8 @@ export function estimerConfiguration(args: {
   modeCalcul: ModeCalcul | null
   ressources: RessourceTechnique[]
   tauxMargePct: number | null
+  /** Règles déjà filtrées par selectionnerFraisIndirects (Phase 4). */
+  fraisIndirects?: RegleFraisIndirects[]
 }): ResultatEstimation {
   const { validation } = args
   if (validation.statut === 'invalide') {
@@ -255,8 +383,20 @@ export function estimerConfiguration(args: {
   }
 
   const p = brut.proposition
-  const coutOptionsXaf = arrondirXaf(validation.supplements.reduce((s, x) => s + x.coutUnitaireXaf, 0) * validation.quantite)
-  const coutRevientXaf = arrondirXaf(p.totalHtXaf + coutOptionsXaf)
+  const q = validation.quantite
+  const coutOptionsXaf      = totalSupplements(validation.supplements, 'option', q)
+  const coutTransportXaf    = totalSupplements(validation.supplements, 'transport', q)
+  const coutInstallationXaf = totalSupplements(validation.supplements, 'installation', q)
+  const coutDirectXaf       = arrondirXaf(p.totalHtXaf + coutOptionsXaf)
+
+  const lignesFraisIndirects = calculerFraisIndirects(args.fraisIndirects ?? [], {
+    cout_direct: coutDirectXaf,
+    main_oeuvre: p.totalMainOeuvreXaf,
+    materiaux:   p.totalMateriauxXaf + p.totalConsommablesXaf,
+  }, q)
+  const fraisIndirectsXaf = arrondirXaf(lignesFraisIndirects.reduce((s, l) => s + l.montantXaf, 0))
+
+  const coutRevientXaf = arrondirXaf(coutDirectXaf + fraisIndirectsXaf + coutTransportXaf + coutInstallationXaf)
 
   if (args.tauxMargePct === null || !Number.isFinite(args.tauxMargePct)) {
     return {
@@ -265,25 +405,32 @@ export function estimerConfiguration(args: {
     }
   }
 
-  const prixUnitaireHtXaf = arrondirXaf((coutRevientXaf / validation.quantite) * (1 + args.tauxMargePct / 100))
-  const prixVenteHtXaf = prixUnitaireHtXaf * validation.quantite
+  const prixUnitaireHtXaf = arrondirXaf((coutRevientXaf / q) * (1 + args.tauxMargePct / 100))
+  const prixVenteHtXaf = prixUnitaireHtXaf * q
 
   return {
     disponible: true,
     estimation: {
-      coutMateriauxXaf:   p.totalMateriauxXaf,
-      coutMainOeuvreXaf:  p.totalMainOeuvreXaf,
-      coutEquipementsXaf: p.totalEquipementsXaf,
+      coutMateriauxXaf:     p.totalMateriauxXaf,
+      coutConsommablesXaf:  p.totalConsommablesXaf,
+      coutMainOeuvreXaf:    p.totalMainOeuvreXaf,
+      coutEquipementsXaf:   p.totalEquipementsXaf,
+      coutSousTraitanceXaf: p.totalSousTraitanceXaf,
       coutOptionsXaf,
+      fraisIndirectsXaf,
+      coutTransportXaf,
+      coutInstallationXaf,
       coutRevientXaf,
-      tauxMargePct:       args.tauxMargePct,
-      margeXaf:           prixVenteHtXaf - coutRevientXaf,
+      tauxMargePct:         args.tauxMargePct,
+      margeXaf:             prixVenteHtXaf - coutRevientXaf,
       prixUnitaireHtXaf,
       prixVenteHtXaf,
-      quantiteFacturable: p.quantiteFacturable,
-      formuleUtilisee:    p.formuleUtilisee,
-      lignesRessources:   p.lignes,
-      supplements:        validation.supplements,
+      quantiteFacturable:   p.quantiteFacturable,
+      formuleUtilisee:      p.formuleUtilisee,
+      delaiSousTraitanceJours: p.delaiSousTraitanceJours,
+      lignesRessources:     p.lignes,
+      lignesFraisIndirects,
+      supplements:          validation.supplements,
     },
   }
 }

@@ -51,6 +51,8 @@ export const AUDIT_ACTIONS = [
   'PRIX_VITRINE_MODIFIE',
   // Catalogue Hybride Phase 3 : taux de marge (D4) et configurations client.
   'MARGE_MODIFIEE', 'CONFIGURATION_CREEE',
+  // Catalogue Hybride Phase 4 : frais indirects paramétrables.
+  'FRAIS_INDIRECTS_MODIFIES',
 ] as const
 
 export type AuditActionType = typeof AUDIT_ACTIONS[number]

@@ -11,6 +11,7 @@ import {
   ModeCalculSchema,
   DimensionsSchema,
   type RessourceTechnique,
+  type TypeRessource,
   type ModeCalcul,
   type ResultatDevis,
 } from '@forge/shared'
@@ -40,12 +41,13 @@ interface FicheTechniqueRow {
 
 interface FicheTechniqueRessourceRow {
   id: string
-  type: 'materiau' | 'main_oeuvre' | 'equipement'
+  type: TypeRessource
   designation: string
   unite: string
   quantite_par_unite: number
   cout_unitaire_reference_xaf: number
   temps_reference_h: number | null
+  delai_jours?: number | null
   actif: boolean
 }
 
@@ -91,7 +93,7 @@ export async function chargerFicheTechniqueActive(modeleId: string): Promise<Cha
 
   const { data: ressourcesData, error: ressourcesError } = await db
     .from('fiche_technique_ressources')
-    .select('id, type, designation, unite, quantite_par_unite, cout_unitaire_reference_xaf, temps_reference_h, actif')
+    .select('id, type, designation, unite, quantite_par_unite, cout_unitaire_reference_xaf, temps_reference_h, delai_jours, actif')
     .eq('fiche_technique_id', f.id)
     .eq('actif', true)
     .order('ordre', { ascending: true })
@@ -106,6 +108,7 @@ export async function chargerFicheTechniqueActive(modeleId: string): Promise<Cha
     quantiteParUnite: r.quantite_par_unite,
     coutUnitaireReferenceXaf: r.cout_unitaire_reference_xaf,
     tempsReferenceH: r.temps_reference_h,
+    delaiJours: r.delai_jours ?? null,
   }))
 
   return { ok: true, ficheTechniqueId: f.id, modeCalcul: ModeCalculSchema.parse(f.mode_calcul), ressources }

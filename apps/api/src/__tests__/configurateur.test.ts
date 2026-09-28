@@ -298,3 +298,76 @@ describe('Configurateur — vue interne ERP', () => {
     expect(res.status).toBe(400)
   })
 })
+
+// ── Phase 4 : coût de revient complet ──────────────────────────────────────────
+
+describe('Phase 4 — frais indirects et nouveaux types de ressources', () => {
+  it('l’estimation interne inclut les frais indirects applicables (et le prix public en tient compte)', async () => {
+    allow()
+    dbP003({
+      frais_indirects: { data: [
+        { id: 'f1', libelle: 'Frais atelier', centre_cout: 'ATELIER', mode: 'pourcentage', valeur: 12, base: 'main_oeuvre',
+          portee: 'global', famille_id: null, modele_id: null, date_debut: null, date_fin: null, actif: true },
+        { id: 'f2', libelle: 'Réservé à un autre modèle', centre_cout: null, mode: 'fixe_par_commande', valeur: 99999, base: null,
+          portee: 'modele', famille_id: null, modele_id: 'autre', date_debut: null, date_fin: null, actif: true },
+      ] },
+    })
+    const res = await app.request(`/api/catalogue/modeles/${MID}/estimer`, { method: 'POST', headers: ERP_HEADERS(), body: JSON.stringify(CAS_2) })
+    const { data } = await res.json() as { data: { estimation: { estimation: Record<string, unknown> } } }
+    // CAS 2 : 770 600 + 12 % de 49 500 (5 940) = 776 540
+    expect(data.estimation.estimation).toMatchObject({ fraisIndirectsXaf: 5940, coutRevientXaf: 776540 })
+    expect((data.estimation.estimation.lignesFraisIndirects as unknown[])).toHaveLength(1)
+  })
+
+  it('POST /catalogue/frais-indirects enregistre une règle et trace la modification', async () => {
+    allow()
+    dbP003({ frais_indirects: { data: { id: 'fi-1' } } })
+    const res = await app.request('/api/catalogue/frais-indirects', {
+      method: 'POST', headers: ERP_HEADERS(),
+      body: JSON.stringify({ libelle: 'Frais atelier', centre_cout: 'ATELIER', mode: 'pourcentage', valeur: 12, base: 'main_oeuvre', portee: 'global' }),
+    })
+    expect(res.status).toBe(201)
+    expect(payload('frais_indirects', 'insert')).toMatchObject({ mode: 'pourcentage', valeur: 12, base: 'main_oeuvre', actif: true })
+    expect(writeAuditLog).toHaveBeenCalledWith(expect.objectContaining({ actionType: 'FRAIS_INDIRECTS_MODIFIES' }))
+  })
+
+  it('refuse un pourcentage sans assiette ou une cible incohérente (422)', async () => {
+    for (const body of [
+      { libelle: 'x', mode: 'pourcentage', valeur: 10, portee: 'global' },
+      { libelle: 'x', mode: 'fixe_par_unite', valeur: 1000, portee: 'famille' },
+      { libelle: 'x', mode: 'fixe_par_unite', valeur: 1000, portee: 'global', date_debut: '2026-12-31', date_fin: '2026-01-01' },
+    ]) {
+      allow()
+      dbP003()
+      const res = await app.request('/api/catalogue/frais-indirects', { method: 'POST', headers: ERP_HEADERS(), body: JSON.stringify(body) })
+      expect(res.status).toBe(422)
+    }
+  })
+
+  it('fiche technique : accepte un consommable lié au stock et une sous-traitance avec délai', async () => {
+    allow()
+    dbP003({ fiche_technique_ressources: { data: { id: 'r-new' } } })
+    const conso = await app.request('/api/catalogue/fiche-technique/ft-1/ressources', {
+      method: 'POST', headers: ERP_HEADERS(),
+      body: JSON.stringify({ type: 'consommable', ressource_produit_id: '55555555-5555-4555-8555-555555555555', designation: 'Électrodes', unite: 'kg', quantite_par_unite: 0.1, cout_unitaire_reference_xaf: 3000 }),
+    })
+    expect(conso.status).toBe(201)
+
+    allow()
+    const st = await app.request('/api/catalogue/fiche-technique/ft-1/ressources', {
+      method: 'POST', headers: ERP_HEADERS(),
+      body: JSON.stringify({ type: 'sous_traitance', designation: 'Galvanisation', unite: 'm²', quantite_par_unite: 1, cout_unitaire_reference_xaf: 2000, delai_jours: 5 }),
+    })
+    expect(st.status).toBe(201)
+  })
+
+  it('fiche technique : refuse un délai de sous-traitance sur une matière (400)', async () => {
+    allow()
+    dbP003()
+    const res = await app.request('/api/catalogue/fiche-technique/ft-1/ressources', {
+      method: 'POST', headers: ERP_HEADERS(),
+      body: JSON.stringify({ type: 'materiau', designation: 'Acier', unite: 'kg', quantite_par_unite: 20, delai_jours: 5 }),
+    })
+    expect(res.status).toBe(400)
+  })
+})
