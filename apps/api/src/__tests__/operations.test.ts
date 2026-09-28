@@ -158,11 +158,11 @@ describe('POST /api/production/jobs', () => {
     expect(res.status).toBe(400)
   })
 
-  it('retourne 422 MACHINE_PANNE si machine en panne', async () => {
+  it('retourne 422 MACHINE_PANNE si la machine (recopiée dans equipements, D5) est en panne', async () => {
     allow('COMMERCIAL')
-    // fetch machine → statut panne
+    // ancien machine_id → équipement recopié (ancienne_machine_id) → statut en_panne
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
-      data: { nom: 'CNC-1', statut: 'panne' }, error: null,
+      data: { id: 'eq-1', designation: 'CNC-1', statut: 'en_panne' }, error: null,
     }) as never)
     const res = await app.request('/api/production/jobs', {
       method: 'POST', headers: new Headers(authHeaders('operateur')),
@@ -171,6 +171,38 @@ describe('POST /api/production/jobs', () => {
     expect(res.status).toBe(422)
     const body = await res.json() as { code: string }
     expect(body.code).toBe('MACHINE_PANNE')
+  })
+
+  it('repli sur la table machines tant que la migration Phase 5 n’est pas passée', async () => {
+    allow('COMMERCIAL')
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never)                            // equipements : rien
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: { nom: 'CNC-1', statut: 'maintenance' }, error: null }) as never) // machines
+    const res = await app.request('/api/production/jobs', {
+      method: 'POST', headers: new Headers(authHeaders('operateur')),
+      body: JSON.stringify({ produit_designation: 'Portail', machine_id: 'm1' }),
+    })
+    expect(res.status).toBe(422)
+    expect((await res.json() as { code: string }).code).toBe('MACHINE_MAINTENANCE')
+  })
+
+  it('refuse un équipement hors service (422) ou inconnu (404)', async () => {
+    const EQ = '66666666-6666-4666-8666-666666666666'
+    allow('COMMERCIAL')
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: { id: EQ, designation: 'Plieuse', statut: 'hors_service' }, error: null }) as never)
+    const hs = await app.request('/api/production/jobs', {
+      method: 'POST', headers: new Headers(authHeaders('operateur')),
+      body: JSON.stringify({ produit_designation: 'Portail', equipement_id: EQ }),
+    })
+    expect(hs.status).toBe(422)
+    expect((await hs.json() as { code: string }).code).toBe('EQUIPEMENT_HORS_SERVICE')
+
+    allow('COMMERCIAL')
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
+    const inconnu = await app.request('/api/production/jobs', {
+      method: 'POST', headers: new Headers(authHeaders('operateur')),
+      body: JSON.stringify({ produit_designation: 'Portail', equipement_id: EQ }),
+    })
+    expect(inconnu.status).toBe(404)
   })
 
   it('cree un job avec plusieurs ressources malgre categorie absente du schema cache', async () => {

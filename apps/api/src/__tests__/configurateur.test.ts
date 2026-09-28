@@ -371,3 +371,71 @@ describe('Phase 4 — frais indirects et nouveaux types de ressources', () => {
     expect(res.status).toBe(400)
   })
 })
+
+// ── Phase 5 : gamme opératoire et taux horaires ────────────────────────────────
+
+const OPERATION_SOUDAGE = {
+  id: 'op-20', numero: 20, libelle: 'Soudage', temps_unitaire_h: 1, temps_fixe_h: 0.5,
+  postes_travail: { code: 'SOUD', libelle: 'Soudeur', cout_horaire_xaf: 2500 },
+  equipements: { code: 'EQ-MIG', designation: 'Poste MIG', cout_horaire_xaf: 1500 },
+}
+
+describe('Phase 5 — gamme opératoire et taux horaires', () => {
+  it('la gamme s’ajoute à la fiche technique dans le coût de revient (vue interne)', async () => {
+    allow()
+    dbP003({ gamme_operations: { data: [OPERATION_SOUDAGE] } })
+    const res = await app.request(`/api/catalogue/modeles/${MID}/estimer`, { method: 'POST', headers: ERP_HEADERS(), body: JSON.stringify(CAS_2) })
+    const { data } = await res.json() as { data: { estimation: { estimation: Record<string, number> } } }
+    // gamme : (1 h × 13,2 m² + 0,5 h) = 13,7 h → soudeur 34 250 + MIG 20 550 ; CAS 2 sans gamme = 770 600
+    expect(data.estimation.estimation.coutRevientXaf).toBe(770600 + 34250 + 20550)
+  })
+
+  it('taux horaire manquant : pas de prix, message générique au client, détail dans l’ERP', async () => {
+    const sansTaux = { ...OPERATION_SOUDAGE, equipements: { ...OPERATION_SOUDAGE.equipements, cout_horaire_xaf: null } }
+
+    dbP003({ gamme_operations: { data: [sansTaux] } })
+    const pub = await app.request(`/api/shop/configurateur/${MID}/estimer`, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(CAS_2) })
+    const texte = await pub.text()
+    expect(JSON.parse(texte).data.estimation).toMatchObject({ disponible: false, raison: 'CALCUL_IMPOSSIBLE' })
+    expect(texte).not.toMatch(/Poste MIG|horaire/)
+
+    allow()
+    dbP003({ gamme_operations: { data: [sansTaux] } })
+    const erp = await app.request(`/api/catalogue/modeles/${MID}/estimer`, { method: 'POST', headers: ERP_HEADERS(), body: JSON.stringify(CAS_2) })
+    const { data } = await erp.json() as { data: { erreur_fiche: string } }
+    expect(data.erreur_fiche).toContain('op 20 (équipement Poste MIG)')
+  })
+
+  it('POST /catalogue/postes-travail normalise le code et trace le taux', async () => {
+    allow()
+    dbP003({ postes_travail: { data: { id: 'pt-1' } } })
+    const res = await app.request('/api/catalogue/postes-travail', {
+      method: 'POST', headers: ERP_HEADERS(), body: JSON.stringify({ code: 'soud', libelle: 'Soudeur', cout_horaire_xaf: 2500 }),
+    })
+    expect(res.status).toBe(201)
+    expect(payload('postes_travail', 'insert')).toMatchObject({ code: 'SOUD', cout_horaire_xaf: 2500 })
+    expect(writeAuditLog).toHaveBeenCalledWith(expect.objectContaining({ actionType: 'TAUX_HORAIRE_MODIFIE' }))
+  })
+
+  it('POST /fiche-technique/:id/operations refuse une opération sans ressource ou sans temps (422)', async () => {
+    for (const body of [
+      { numero: 10, libelle: 'Découpe', temps_unitaire_h: 0.2 },
+      { numero: 10, libelle: 'Découpe', poste_id: '77777777-7777-4777-8777-777777777777' },
+    ]) {
+      allow()
+      dbP003()
+      const res = await app.request('/api/catalogue/fiche-technique/ft-1/operations', { method: 'POST', headers: ERP_HEADERS(), body: JSON.stringify(body) })
+      expect(res.status).toBe(422)
+    }
+  })
+
+  it('POST /fiche-technique/:id/operations : numéro déjà utilisé → 409', async () => {
+    allow()
+    dbP003({ gamme_operations: { data: null, error: { code: '23505', message: 'duplicate key' } } })
+    const res = await app.request('/api/catalogue/fiche-technique/ft-1/operations', {
+      method: 'POST', headers: ERP_HEADERS(),
+      body: JSON.stringify({ numero: 10, libelle: 'Découpe', poste_id: '77777777-7777-4777-8777-777777777777', temps_unitaire_h: 0.2 }),
+    })
+    expect(res.status).toBe(409)
+  })
+})
