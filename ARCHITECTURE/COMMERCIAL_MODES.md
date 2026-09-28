@@ -146,7 +146,38 @@ PRIX DE VENTE   = coût de revient × (1 + marge)          — arrondi XAF à l'
 - le PDF de devis n'affiche pas encore les groupes « Consommables » et « Sous-traitance », car le fichier est en cours de refonte en parallèle (voir ci-dessous) ;
 - le référentiel de taux horaires par poste ou machine sera fait avec la gamme opératoire (Phase 5).
 
-## 8. Ce qui vient ensuite
+Le PDF de devis affiche aussi les groupes « Consommables » et « Sous-traitance ».
 
-- **Phase 5 (BOM + routing)** : opérations ordonnées (10 Découpe, 20 Assemblage…), postes et machines avec leur taux horaire, référentiel unique `machines` / `equipements` (décision D5 à trancher).
-- **PDF de devis** : à étendre aux nouveaux types quand la refonte en cours de `pdf.service.ts` sera commitée.
+## 8. Gamme opératoire et référentiel machines (Phase 5)
+
+**Décision D5** : `equipements` est le **référentiel unique** des machines et équipements.
+- La migration `20261007` recopie chaque ligne de `machines` dans `equipements` : code `MAC-…`, statuts traduits, origine gardée dans `ancienne_machine_id`. Elle rattache les ordres de fabrication via `jobs_production.equipement_id`.
+- `machines` et `jobs_production.machine_id` sont **conservés** : ils sont dépréciés, mais rien n'est supprimé.
+- L'écran Production propose les équipements réels au lieu d'une liste codée en dur. À la création d'un ordre de fabrication, le serveur refuse un équipement en panne, en maintenance ou hors service. Un ancien `machine_id` est résolu automatiquement.
+
+**Gamme (§21)** : elle est rattachée à la fiche technique et donc versionnée avec elle.
+
+```text
+Opération 10 — Découpe   : poste Découpeur + équipement Plasma, 0,2 h/m² + 0,5 h de préparation
+Opération 20 — Soudage   : poste Soudeur   + équipement MIG,    1,5 h/m²
+Opération 30 — Peinture  : poste Peintre,                        0,3 h/m² + 1 h de préparation
+```
+
+- **Temps** = temps unitaire × quantité facturable + temps de préparation (compté une seule fois par commande).
+- **Main-d'œuvre** = temps × coût horaire du **poste de travail** (`postes_travail`).
+- **Machine** = temps × coût horaire de l'**équipement** (`equipements.cout_horaire_xaf`).
+- Ces lignes **s'ajoutent** aux ressources de la fiche : ne saisissez pas deux fois la même main-d'œuvre (en ressource et en gamme).
+- **Un coût horaire manquant bloque le prix automatique**, au lieu de compter l'opération à 0. Le client lit un message générique ; l'ERP (zone de test) affiche la cause exacte.
+- Tout changement de coût horaire est tracé (`TAUX_HORAIRE_MODIFIE`).
+
+**Où saisir** :
+- Catalogue → fiche technique → « Gamme opératoire » (et « Postes & taux horaires ») ;
+- Équipements → fiche → « Coût horaire (gamme) ».
+
+**Cas connu** (`gamme.test.ts`) : main-d'œuvre 65 700 FCFA et machines 39 120 FCFA sur 13,2 m².
+
+## 9. Ce qui vient ensuite
+
+- **Phase 6 (devis)** : demande de devis structurée (dimensions, matériau, localisation, délai, plans et photos, avec un envoi de fichiers vérifié par signature), qualification, conversion.
+- **Phase 7 (production)** : l'ordre de fabrication reprend la gamme (étapes, équipements, temps prévus), et on saisit la consommation réelle.
+- **Écran Production** : la liste des techniciens est encore codée en dur ; elle devrait venir des employés (RH).
