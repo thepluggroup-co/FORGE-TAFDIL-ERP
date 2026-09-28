@@ -358,3 +358,125 @@ export function useDeleteRessource() {
     onError: (err: Error) => toast.error(err.message),
   })
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Configurateur — vue interne (Catalogue Hybride Phase 3)
+// ══════════════════════════════════════════════════════════════════════════════
+
+export type TypeParametre = 'nombre' | 'choix' | 'booleen'
+export type RoleCalcul = 'largeur' | 'hauteur' | 'longueur' | 'epaisseur' | 'diametre' | 'poids'
+
+/** Paramètre tel qu'envoyé à PUT /catalogue/modeles/:id/parametres (snake_case). */
+export interface ParametrePayload {
+  code: string
+  libelle: string
+  type: TypeParametre
+  obligatoire: boolean
+  unite?: 'mm' | 'cm' | 'm' | null
+  min?: number | null
+  max?: number | null
+  pas?: number | null
+  role_calcul?: RoleCalcul | null
+  cout_si_oui_xaf: number
+  valeurs: Array<{ code: string; libelle: string; cout_supplementaire_xaf: number; validation_requise: boolean }>
+}
+
+/** Paramètre tel que renvoyé par GET (format du moteur @forge/shared, camelCase). */
+export interface ParametreConfiguration {
+  code: string
+  libelle: string
+  type: TypeParametre
+  obligatoire: boolean
+  unite?: 'mm' | 'cm' | 'm' | null
+  min?: number | null
+  max?: number | null
+  pas?: number | null
+  roleCalcul?: RoleCalcul | null
+  coutSiOuiXaf?: number | null
+  valeurs?: Array<{ code: string; libelle: string; coutSupplementaireXaf: number; validationRequise: boolean }>
+}
+
+export function useParametresModele(modeleId: string | null) {
+  return useQuery({
+    queryKey: ['catalogue', 'modeles', modeleId, 'parametres'],
+    queryFn:  () => apiClient.get<{ data: ParametreConfiguration[]; commercial_mode: CommercialMode | null }>(`/api/catalogue/modeles/${modeleId}/parametres`),
+    enabled:  Boolean(modeleId),
+  })
+}
+
+export function useEnregistrerParametres() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ modeleId, parametres }: { modeleId: string; parametres: ParametrePayload[] }) =>
+      apiClient.put<{ data: ParametreConfiguration[] }>(`/api/catalogue/modeles/${modeleId}/parametres`, { parametres }),
+    onSuccess: (_, vars) => {
+      void qc.invalidateQueries({ queryKey: ['catalogue', 'modeles', vars.modeleId, 'parametres'] })
+      toast.success('Configurateur enregistré')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export interface EstimationInterne {
+  validation: {
+    statut: 'valide' | 'invalide' | 'a_valider' | 'hors_limites'
+    erreurs: Array<{ parametre: string; message: string }>
+    horsLimites: Array<{ parametre: string; valeur: number; min: number | null; max: number | null }>
+    validationsRequises: Array<{ parametre: string; raison: string }>
+  }
+  estimation:
+    | { disponible: true; estimation: {
+        coutMateriauxXaf: number; coutMainOeuvreXaf: number; coutEquipementsXaf: number; coutOptionsXaf: number
+        coutRevientXaf: number; tauxMargePct: number; margeXaf: number; prixUnitaireHtXaf: number; prixVenteHtXaf: number
+        quantiteFacturable: number; formuleUtilisee: string
+      } }
+    | { disponible: false; raison: string; message: string; coutRevientXaf?: number }
+  taux_marge_pct: number | null
+}
+
+export function useEstimerInterne() {
+  return useMutation({
+    mutationFn: ({ modeleId, valeurs, quantite }: { modeleId: string; valeurs: Record<string, unknown>; quantite: number }) =>
+      apiClient.post<{ data: EstimationInterne }>(`/api/catalogue/modeles/${modeleId}/estimer`, { valeurs, quantite }).then((r) => r.data),
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export interface RegleMarge {
+  id: string
+  portee: 'global' | 'famille' | 'modele'
+  famille_id: string | null
+  modele_id: string | null
+  taux_pct: number
+  actif: boolean
+  notes: string | null
+  created_at: string
+  familles?: { nom: string } | null
+  modeles?: { reference: string; designation: string } | null
+}
+
+export function useReglesMarge() {
+  return useQuery({
+    queryKey: ['catalogue', 'regles-marge'],
+    queryFn:  () => apiClient.get<{ data: RegleMarge[] }>('/api/catalogue/regles-marge').then((r) => r.data),
+  })
+}
+
+export function useCreerRegleMarge() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: { portee: RegleMarge['portee']; famille_id?: string | null; modele_id?: string | null; taux_pct: number; notes?: string }) =>
+      apiClient.post<RegleMarge>('/api/catalogue/regles-marge', payload),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['catalogue', 'regles-marge'] }); toast.success('Taux de marge enregistré') },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useDesactiverRegleMarge() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => apiClient.delete(`/api/catalogue/regles-marge/${id}`),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['catalogue', 'regles-marge'] }); toast.success('Règle désactivée') },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}

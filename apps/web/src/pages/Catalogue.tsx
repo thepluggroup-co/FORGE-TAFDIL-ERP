@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   Plus, ChevronRight, ChevronDown, FolderTree, Pencil, Trash2, Layers, Ban, CheckCircle2,
-  FileCog, Search, ShieldCheck, Archive,
+  FileCog, Search, ShieldCheck, Archive, SlidersHorizontal, Percent,
 } from 'lucide-react'
 import { PageHeader, Button, SlideOver, Modal, StatusBadge, EmptyState, DataTable } from '@forge/ui'
 import type { Column, StatusMap } from '@forge/ui'
@@ -21,6 +21,8 @@ import type {
 import { useStocks } from '@/hooks/useStocks'
 import { formatXAF } from '@/lib/utils'
 import { uniteOptions } from '@/lib/constants'
+import { ParametresConfigurationModal } from '@/components/catalogue/ParametresConfiguration'
+import { ReglesMargeModal } from '@/components/catalogue/ReglesMarge'
 import {
   LIBELLES_MODE_COMMERCIAL, modeCommercialDepuisTypeGamme, libelleNiveauFamille, PROFONDEUR_MAX_FAMILLES,
 } from '@forge/shared'
@@ -230,6 +232,11 @@ export default function Catalogue() {
   const { data: modelesData, isLoading: modelesLoading } = useModeles({ famille_id: selectedId ?? undefined, enabled: !!selectedId })
   const modeles = modelesData?.data ?? []
 
+  // ── Configurateur d'un modèle CONFIGURABLE et taux de marge (Catalogue Hybride Phase 3) ──
+  const [configModeleId, setConfigModeleId] = useState<string | null>(null)
+  const configModele = modeles.find((m) => m.id === configModeleId) ?? null
+  const [margesOuvertes, setMargesOuvertes] = useState(false)
+
   const createModele = useCreateModele()
   const updateModele  = useUpdateModele()
 
@@ -391,6 +398,12 @@ export default function Catalogue() {
             className="p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 hover:text-[#C62828] transition-colors">
             <FileCog className="h-3.5 w-3.5" />
           </button>
+          {row.commercial_mode_effectif === 'CONFIGURABLE' && (
+            <button onClick={() => setConfigModeleId(row.id)} title="Configurateur client (champs, limites, options)"
+              className="p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 hover:text-[#C62828] transition-colors">
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button onClick={() => openEditModele(row)} title="Modifier"
             className="p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 hover:text-[#C62828] transition-colors">
             <Pencil className="h-3.5 w-3.5" />
@@ -407,9 +420,14 @@ export default function Catalogue() {
         subtitle="Familles, modèles et spécifications techniques"
         breadcrumbs={[{ label: 'FORGE', href: '/' }, { label: 'Catalogue' }]}
         actions={
-          <Button size="sm" onClick={() => openNewFamille()}>
-            <Plus className="h-3.5 w-3.5" /> Nouvelle famille
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setMargesOuvertes(true)}>
+              <Percent className="h-3.5 w-3.5" /> Taux de marge
+            </Button>
+            <Button size="sm" onClick={() => openNewFamille()}>
+              <Plus className="h-3.5 w-3.5" /> Nouvelle famille
+            </Button>
+          </div>
         }
       />
 
@@ -951,6 +969,9 @@ export default function Catalogue() {
           )}
         </div>
       </Modal>
+      {/* ── Configurateur (Phase 3) et taux de marge (D4) ── */}
+      <ParametresConfigurationModal modele={configModele} onClose={() => setConfigModeleId(null)} />
+      <ReglesMargeModal isOpen={margesOuvertes} onClose={() => setMargesOuvertes(false)} familles={familles} modeles={modeles} />
     </motion.div>
   )
 }

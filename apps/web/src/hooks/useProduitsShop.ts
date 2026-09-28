@@ -124,7 +124,7 @@ export interface ModeleShopErp {
   designation:       string
   famille:           string | null
   unite_facturation: string | null
-  commercial_mode:   'STANDARD'
+  commercial_mode:   'STANDARD' | 'CONFIGURABLE'
   vitrine:           VitrineModele | null
 }
 

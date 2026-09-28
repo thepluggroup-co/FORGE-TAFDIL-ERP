@@ -75,6 +75,8 @@ function LigneModele({ modele }: { modele: ModeleShopErp }) {
 
   const prixNombre = Number(prix)
   const prixValide = prix !== '' && Number.isInteger(prixNombre) && prixNombre >= 0
+  // CONFIGURABLE : prix calculé par le configurateur (coût × marge), pas de prix public.
+  const configurable = modele.commercial_mode === 'CONFIGURABLE'
 
   const enregistrer = () => {
     const payload: VitrineModelePayload = {
@@ -82,7 +84,7 @@ function LigneModele({ modele }: { modele: ModeleShopErp }) {
       min_commande:            Math.max(1, Number(min) || 1),
       delai_fabrication_jours: delai === '' ? null : Math.max(0, Number(delai) || 0),
     }
-    if (prixValide) payload.prix_public = prixNombre
+    if (prixValide && !configurable) payload.prix_public = prixNombre
     update.mutate({ id: modele.id, payload })
   }
 
@@ -90,19 +92,25 @@ function LigneModele({ modele }: { modele: ModeleShopErp }) {
     <tr className="border-t border-gray-100">
       <td className="px-4 py-3">
         <p className="font-semibold text-[#212121]">{modele.designation}</p>
-        <p className="text-xs text-gray-400">{modele.reference} · {modele.unite_facturation ?? 'unite'}</p>
+        <p className="text-xs text-gray-400">{modele.reference} · {modele.unite_facturation ?? 'unite'}{configurable ? ' · configurable' : ''}</p>
       </td>
       <td className="px-4 py-3">
         <ImagesModele modeleId={modele.id} images={v?.images ?? []} />
       </td>
       <td className="px-4 py-3 text-gray-600">{modele.famille ?? '—'}</td>
       <td className="px-4 py-3">
-        <input
-          type="number" min={0} step={1} value={prix} onChange={(e) => setPrix(e.target.value)}
-          className="w-32 rounded-lg border border-gray-200 px-2 py-1 text-right"
-          aria-label={`Prix public de ${modele.designation}`}
-        />
-        {v?.prix_public ? <p className="mt-1 text-[11px] text-gray-400">Actuel : {formatXAF(v.prix_public)}</p> : null}
+        {configurable ? (
+          <p className="text-[11px] text-gray-500">Prix calculé par le configurateur<br />(Catalogue → Configurateur, Taux de marge)</p>
+        ) : (
+          <>
+            <input
+              type="number" min={0} step={1} value={prix} onChange={(e) => setPrix(e.target.value)}
+              className="w-32 rounded-lg border border-gray-200 px-2 py-1 text-right"
+              aria-label={`Prix public de ${modele.designation}`}
+            />
+            {v?.prix_public ? <p className="mt-1 text-[11px] text-gray-400">Actuel : {formatXAF(v.prix_public)}</p> : null}
+          </>
+        )}
       </td>
       <td className="px-4 py-3">
         <input
@@ -125,7 +133,7 @@ function LigneModele({ modele }: { modele: ModeleShopErp }) {
         </label>
       </td>
       <td className="px-4 py-3 text-right">
-        <Button size="sm" onClick={enregistrer} loading={update.isPending} disabled={visible && !prixValide}>
+        <Button size="sm" onClick={enregistrer} loading={update.isPending} disabled={visible && !configurable && !prixValide}>
           Enregistrer
         </Button>
       </td>
