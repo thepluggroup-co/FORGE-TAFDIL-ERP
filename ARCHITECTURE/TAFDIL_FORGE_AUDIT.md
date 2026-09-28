@@ -302,7 +302,7 @@ Protocole à chaque migration (§38-39) : `SELECT count(*)` avant/après sur cha
 | 2 — Standard | ✅ | vitrine `modeles_shop`, produits finis STANDARD au panier (fabriqués sur commande), onglet ERP « Produits finis », CAS 1 pilote testé, migration `20261002_catalogue_hybride_phase2_modeles_shop.sql` |
 | 3 — Configurable (P003) | ⏳ | attend validation de la Phase 2 |
 
-**Tests** : sur ce poste, la suite complète sature la mémoire avec le parallélisme par défaut (`heap out of memory`). Il faut la lancer avec `npx vitest run --maxWorkers=2`.
+**Tests** : sur ce poste, la suite complète sature la mémoire avec le parallélisme par défaut (`heap out of memory`). Il faut la lancer avec `npx vitest run --maxWorkers=2 --minWorkers=1`.
 
 **Reste ouvert après la Phase 0 bis** : la lecture publique de `commandes_shop` (`commandes_shop_select_public`) est encore en place, car la page de suivi du shop et l'ERP web (hooks + Realtime) lisent la table directement. Il faut d'abord faire passer ces lectures par le serveur, puis retirer la politique.
 
