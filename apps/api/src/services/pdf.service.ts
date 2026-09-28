@@ -1,6 +1,7 @@
 import PDFDocument from 'pdfkit'
 import { join } from 'node:path'
 import { supabaseAdmin } from '@forge/db'
+import type { TypeRessource } from '@forge/shared'
 
 const db = supabaseAdmin!
 
@@ -74,7 +75,7 @@ export interface PdfLigne {
 }
 
 export interface PdfRessourceLigne {
-  type:             'materiau' | 'main_oeuvre' | 'equipement'
+  type:             TypeRessource   // Phase 4 : + consommable, sous_traitance
   designation:      string
   quantiteCalculee: number
   unite:            string
@@ -671,7 +672,7 @@ function formatConfigForPdf(configuration?: Record<string, unknown> | null): str
 }
 
 const RESSOURCE_LABELS_PDF: Record<PdfRessourceLigne['type'], string> = {
-  materiau: 'Matériaux', main_oeuvre: "Main-d'œuvre", equipement: 'Équipements',
+  materiau: 'Matériaux', consommable: 'Consommables', main_oeuvre: "Main-d'œuvre", equipement: 'Équipements', sous_traitance: 'Sous-traitance',
 }
 
 const DEVIS_HEADER_H = 124
@@ -854,7 +855,7 @@ function drawDevisRessourcesDetail(doc: InstanceType<typeof PDFDocument>, y: num
   y += 16
   y = drawDevisRessourcesTableHeader(doc, y)
 
-  for (const type of ['materiau', 'main_oeuvre', 'equipement'] as const) {
+  for (const type of ['materiau', 'consommable', 'main_oeuvre', 'equipement', 'sous_traitance'] as const) {
     const items = snapshot.lignes.filter((r) => r.type === type)
     if (items.length === 0) continue
     y = drawDevisRessourcesGroupRow(doc, RESSOURCE_LABELS_PDF[type], y)
