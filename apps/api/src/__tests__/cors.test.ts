@@ -21,4 +21,14 @@ describe('CORS', () => {
 
     expect(res.headers.get('access-control-allow-origin')).toBe('https://forge-tafdil.vercel.app')
   })
+
+  it('allows the Capacitor mobile/desktop app origin', async () => {
+    const res = await app.request('/health', {
+      headers: {
+        Origin: 'https://localhost',
+      },
+    })
+
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://localhost')
+  })
 })

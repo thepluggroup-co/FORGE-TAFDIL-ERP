@@ -41,6 +41,12 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:3002',
   'https://forge-tafdil.vercel.app',
   'https://forge-tafdil-erp-web.vercel.app',
+  // Apps mobile/desktop Capacitor : WebView chargée depuis ce pseudo-origin
+  // fixe (androidScheme:'https' dans capacitor.config.ts), jamais un vrai
+  // nom de domaine — donc pas couvert par le fallback localhost ci-dessous,
+  // qui est désactivé en production.
+  'https://localhost',
+  'capacitor://localhost',
 ]
 
 const EXTRA_ALLOWED_ORIGINS = [
