@@ -53,8 +53,8 @@ const CATEGORY_FALLBACKS = ['Aluminium', 'Ferronnerie', 'Construction metallique
 const BRAND_FALLBACKS = ['ALUMCO', 'BOSCH', 'WURTH', 'HILTI', 'SOUDAL']
 const PAGE_SIZE = 12
 
-function formatXAF(value: number | null | undefined) {
-  if (!value) return 'Prix sur devis'
+function formatXAF(value: number | null | undefined, configurable = false) {
+  if (!value) return configurable ? 'Prix sur configuration' : 'Prix sur devis'
   return new Intl.NumberFormat('fr-CM', { maximumFractionDigits: 0 }).format(value) + ' FCFA'
 }
 
@@ -222,7 +222,7 @@ export function CatalogueClient({ initialProduits, initialSearch = '', initialCa
   }
 
   const handleAddToCart = (produit: Produit) => {
-    void addItem({ id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images?.[0] ?? null, type_article: produit.type_article }, 1)
+    void addItem({ id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images?.[0] ?? null, type_article: produit.type_article, commercial_mode: produit.commercial_mode }, 1)
   }
 
   return (
@@ -521,7 +521,7 @@ function CatalogueProductCard({ produit, index, viewMode, onAdd }: { produit: Pr
         <Link href={`/catalogue/${produit.id}`} className="mt-1 block min-h-10 text-sm font-black leading-tight text-forge-dark hover:text-forge-red">{produit.nom}</Link>
         {hasPromo && <p className="mt-3 text-xs font-bold text-gray-400 line-through">{formatXAF(produit.prix_barre_xaf)}</p>}
         <p className={`${hasPromo ? 'mt-0.5' : 'mt-3'} text-lg font-black text-forge-red`}>
-          {formatXAF(produit.prix_public)}
+          {formatXAF(produit.prix_public, produit.commercial_mode === 'CONFIGURABLE')}
           {produit.prix_public ? <span className="text-xs font-semibold text-gray-500"> / {produit.unite}</span> : null}
         </p>
         {produit.promotion && <p className="mt-1 text-[10px] font-black uppercase text-forge-red">{produit.promotion.nom}</p>}

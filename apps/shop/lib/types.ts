@@ -3,7 +3,7 @@ export type Disponibilite = 'disponible' | 'stock_faible' | 'indisponible' | 'su
 export interface Produit {
   /** 'modele' = produit fini STANDARD fabriqué sur commande ; absent/'produit' = article de stock */
   type_article?: 'produit' | 'modele'
-  commercial_mode?: 'STANDARD'
+  commercial_mode?: 'STANDARD' | 'CONFIGURABLE'
   id: string
   ref: string
   nom: string

@@ -46,8 +46,8 @@ const tabItems = [
   { key: 'livraison', label: 'Livraison & Retours', icon: Truck },
 ] as const
 
-function formatXAF(value: number | null | undefined) {
-  if (!value) return 'Prix sur devis'
+function formatXAF(value: number | null | undefined, configurable = false) {
+  if (!value) return configurable ? 'Prix sur configuration' : 'Prix sur devis'
   return new Intl.NumberFormat('fr-CM', { maximumFractionDigits: 0 }).format(value) + ' FCFA'
 }
 
@@ -87,7 +87,7 @@ export function ProductDetailClient({ produit, similaires }: Props) {
 
   const handleAddToCart = () => {
     void addItem(
-      { id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null, type_article: produit.type_article },
+      { id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null, type_article: produit.type_article, commercial_mode: produit.commercial_mode },
       qty,
     )
   }
@@ -170,7 +170,7 @@ export function ProductDetailClient({ produit, similaires }: Props) {
 
           <div className="mt-7">
             <p className="text-3xl font-black text-forge-red">
-              {formatXAF(produit.prix_public)}
+              {formatXAF(produit.prix_public, produit.commercial_mode === 'CONFIGURABLE')}
               {produit.prix_public ? <span className="ml-2 text-sm font-semibold text-gray-500">/ {produit.unite}</span> : null}
             </p>
             {oldPrice && (
@@ -200,7 +200,7 @@ export function ProductDetailClient({ produit, similaires }: Props) {
 
           <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_48px]">
             <button onClick={handleAddToCart} disabled={indisponible} className="inline-flex h-12 items-center justify-center gap-2 rounded-md bg-forge-red px-5 text-sm font-black text-white shadow-sm hover:bg-forge-red-dark disabled:cursor-not-allowed disabled:opacity-40">
-              <ShoppingCart size={17} /> Ajouter au panier
+              <ShoppingCart size={17} /> {produit.commercial_mode === 'CONFIGURABLE' ? 'Personnaliser ce produit' : 'Ajouter au panier'}
             </button>
             <button className="flex h-12 items-center justify-center rounded-md border border-gray-200 text-forge-steel hover:border-forge-red hover:text-forge-red" aria-label="Ajouter aux favoris">
               <Heart size={18} />
@@ -402,7 +402,7 @@ function SimilarProductCard({ produit, index }: { produit: Produit; index: numbe
         <p className={`mt-1 text-xs font-semibold ${unavailable ? 'text-gray-500' : 'text-green-700'}`}>{unavailable ? 'Sur commande' : 'En stock'}</p>
       </div>
       <button
-        onClick={() => void addItem({ id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null, type_article: produit.type_article }, 1)}
+        onClick={() => void addItem({ id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null, type_article: produit.type_article, commercial_mode: produit.commercial_mode }, 1)}
         disabled={unavailable}
         className="mx-4 mb-4 flex h-9 w-[calc(100%-2rem)] items-center justify-center rounded-md border border-gray-200 text-forge-steel hover:border-forge-red hover:text-forge-red disabled:cursor-not-allowed disabled:opacity-40"
         aria-label="Ajouter au panier"

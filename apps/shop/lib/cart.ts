@@ -53,6 +53,8 @@ interface AddPayload {
   prix: number | null
   image: string | null
   type_article?: TypeArticle
+  /** CONFIGURABLE : jamais ajouté au panier, redirigé vers le configurateur (prix calculé côté serveur). */
+  commercial_mode?: 'STANDARD' | 'CONFIGURABLE'
 }
 
 interface CartStore {
@@ -106,6 +108,10 @@ export const useCartStore = create<CartStore>()(
       closeDrawer: () => set({ isOpen: false }),
 
       addItem: async (payload, quantite = 1) => {
+        if (payload.commercial_mode === 'CONFIGURABLE') {
+          window.location.href = `/configurateur/${encodeURIComponent(payload.id)}`
+          return
+        }
         const apiUrl = ''
         let stockActuel: number | null = payload.type_article === 'modele' ? null : 9999
         let seuilAlerte = 0
