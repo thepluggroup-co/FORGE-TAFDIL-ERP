@@ -259,6 +259,18 @@ WITH attendu (table_nom, colonne, origine) AS (
   ('demandes_devis_historique', 'nouveau_statut', '20261009_catalogue_hybride_phase6_demandes_devis'),
   ('demandes_devis_historique', 'par', '20261009_catalogue_hybride_phase6_demandes_devis'),
 
+  -- Phase 7 : l'OF reprend la gamme
+  ('jobs_production', 'fiche_technique_id', '20261010_catalogue_hybride_phase7_production'),
+  ('jobs_production', 'quantite_facturable', '20261010_catalogue_hybride_phase7_production'),
+  ('jobs_production', 'gamme_chargee_le', '20261010_catalogue_hybride_phase7_production'),
+  ('of_operations', 'temps_prevu_h', '20261010_catalogue_hybride_phase7_production'),
+  ('of_operations', 'temps_reel_h', '20261010_catalogue_hybride_phase7_production'),
+  ('of_operations', 'cout_horaire_poste_xaf', '20261010_catalogue_hybride_phase7_production'),
+  ('of_operations', 'technicien_id', '20261010_catalogue_hybride_phase7_production'),
+  ('of_consommations', 'quantite_prevue', '20261010_catalogue_hybride_phase7_production'),
+  ('of_consommations', 'quantite_reelle', '20261010_catalogue_hybride_phase7_production'),
+  ('of_consommations', 'quantite_sortie_stock', '20261010_catalogue_hybride_phase7_production'),
+
   ('equipements', 'id', '20260530_equipements'), ('equipements', 'code', '20260530_equipements'),
   ('equipements', 'designation', '20260530_equipements'), ('equipements', 'categorie', '20260530_equipements'),
   ('equipements', 'statut', '20260530_equipements'), ('equipements', 'numero_serie', '20260530_equipements'),

@@ -201,6 +201,23 @@ nouvelle → en_qualification ⇄ infos_requises
 
 Une demande issue du configurateur est créée directement « en chiffrage » (source `configurateur`) lorsque son devis a été pré-rempli.
 
-## 10. Ce qui vient ensuite
+## 10. Fabrication d'un OF (Phase 7)
 
-- **Phase 7 (production)** : l'ordre de fabrication reprend la gamme (étapes, équipements, temps prévus), et on saisit la consommation réelle.
+L'ordre de fabrication **copie** la gamme et les matières de la fiche technique **figée au devis** (`devis.fiche_technique_id`), même si une nouvelle version est devenue active depuis :
+
+- **`of_operations`** : une ligne par étape (10 Découpe, 20 Soudage…) avec le poste, l'équipement et le temps prévu (temps unitaire × quantité facturable + temps fixe). Les taux horaires du moment y sont figés.
+- **`of_consommations`** : les matières et consommables prévus (quantité par unité × quantité facturable), avec leur coût de référence figé.
+- Modifier ensuite la gamme ou un taux horaire ne change pas un OF déjà planifié. Le contrôle des coûts (Phase 8) compare le prévu et le réel sur ces valeurs.
+
+**Chargement** : automatique quand la commande n'a qu'une ligne et que son devis porte une fiche technique (devis du configurateur ou du moteur de calcul). Sinon, depuis Production → « Étapes » : à partir du devis, ou d'un modèle (fiche active) et d'une quantité facturable. Une gamme déjà chargée n'est jamais rechargée.
+
+**Suivi** (Production → « Étapes ») :
+- chaque étape passe de « à faire » à « en cours » puis « terminée » (ou « sautée »). Démarrer une étape suppose l'OF lancé, et la terminer exige le temps réellement passé. On y affecte un technicien (employé RH en activité) ;
+- l'avancement de l'OF est calculé à partir des étapes terminées, **pondéré par les temps prévus** ; les étapes sautées sont exclues. Le passage à « Prêt » reste une décision explicite, car il déclenche l'entrée en stock et la facture ;
+- **consommation réelle** par matière, avec écart au prévu. Avec « sortir du stock », seul l'écart avec ce qui a déjà été déstocké est mouvementé (sortie, ou retour si l'on a surestimé) : ressaisir ne déstocke jamais deux fois. Une consommation imprévue s'ajoute avec un prévu de 0.
+
+Le lancement d'un OF n'inscrit plus 25 % d'avancement fictif.
+
+## 11. Ce qui vient ensuite
+
+- **Phase 8 (contrôle des coûts)** : coût réel de l'OF (temps réels × taux figés, matières réelles × coût de référence) comparé au coût prévu et au prix vendu ; marge réelle par commande.

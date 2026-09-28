@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Wrench, Gauge, AlertTriangle, Clock, Plus, Play, CheckCircle2, Package } from 'lucide-react'
+import { Wrench, Gauge, AlertTriangle, Clock, Plus, Play, CheckCircle2, Package, ListChecks } from 'lucide-react'
+import { FabricationOFPanel } from '@/components/production/FabricationOF'
 import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatDate } from '@/lib/utils'
@@ -88,6 +89,7 @@ const BASE_COLUMNS: Column<JobRecord>[] = [
 export default function Production() {
   const [slideOpen, setSlideOpen] = useState(false)
   const [form, setForm] = useState<JobForm>(DEFAULT_FORM)
+  const [jobFabrication, setJobFabrication] = useState<JobRecord | null>(null)
 
   const { data, isLoading } = useJobs()
   const { data: stocksData } = useStocks()
@@ -122,8 +124,12 @@ export default function Production() {
       accessor: 'id',
       render: (_, row) => (
         <div className="flex items-center justify-end gap-2">
+          <Button size="sm" variant="ghost" onClick={() => setJobFabrication(row)}>
+            <ListChecks className="h-3.5 w-3.5" /> Étapes
+          </Button>
           {row.statut === 'confirmed' ? (
-            <Button size="sm" variant="ghost" onClick={() => updateJobStatut.mutate({ id: row.id, statut: 'in_production', avancement_pct: 25 })}>
+            // Avancement : calculé depuis les étapes terminées (Phase 7), plus de 25 % fictifs au lancement
+            <Button size="sm" variant="ghost" onClick={() => updateJobStatut.mutate({ id: row.id, statut: 'in_production' })}>
               <Play className="h-3.5 w-3.5" /> Lancer
             </Button>
           ) : null}
@@ -393,6 +399,15 @@ export default function Production() {
           </div>
         </div>
       </SlideOver>
+
+      {jobFabrication && (
+        <FabricationOFPanel
+          jobId={jobFabrication.id}
+          titre={`${jobFabrication.numero} · ${jobFabrication.produit_designation}`}
+          aCommande={!!jobFabrication.commande_id}
+          onClose={() => setJobFabrication(null)}
+        />
+      )}
     </motion.div>
   )
 }
