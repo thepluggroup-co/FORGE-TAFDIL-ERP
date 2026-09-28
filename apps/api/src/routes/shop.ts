@@ -8,7 +8,9 @@ import { notifyCommandeSms } from '../services/sms.service'
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 import { ensureClient } from '../services/client-sync.service'
-import { televerserImages } from '../services/image-upload.service'
+import { televerserImages, televerserDocumentsPrives, NOMBRE_MAX_DOCUMENTS } from '../services/image-upload.service'
+import { changerStatutDemande } from '../services/demande-devis.service'
+import { STATUTS_DEMANDE, transitionsDemande, normaliserStatutDemande } from '@forge/shared'
 import { ensureFactureForCommande, solderCreditsForCommande, syncCreditForCommande } from '../services/finance-core.service'
 import { requirePermission } from '../middleware/permission.middleware'
 import { verifierBearer } from '../middleware/auth'
@@ -627,14 +629,23 @@ const resendSmsSchema = z.object({
   telephone: z.string().min(8).max(20),
 })
 
+// Demande de devis structurée (Catalogue Hybride Phase 6, §22). Champs texte
+// facultatifs : le client décrit son besoin, la qualification le précisera.
 const devisWebSchema = z.object({
-  nom:          z.string().min(2).max(200),
-  telephone:    z.string().min(8).max(20),
-  email:        z.string().email().optional(),
-  description:  z.string().min(10).max(2000),
-  type_projet:  z.string().max(100).optional(),
-  produit_ref:  z.string().max(50).optional(),
+  nom:            z.string().trim().min(2).max(200),
+  telephone:      z.string().trim().min(8).max(20),
+  email:          z.string().email().optional(),
+  description:    z.string().trim().min(10).max(2000),
+  type_projet:    z.string().max(300).optional(),
+  produit_ref:    z.string().max(50).optional(),
+  quantite:       z.coerce.number().positive().max(100000).optional(),
+  dimensions:     z.string().trim().max(300).optional(),
+  materiau:       z.string().trim().max(100).optional(),
+  localisation:   z.string().trim().max(200).optional(),
+  delai_souhaite: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date attendue AAAA-MM-JJ').optional(),
 })
+
+const BUCKET_DEMANDES_DEVIS = 'demandes-devis'   // PRIVÉ : liens signés uniquement
 
 // ── Router ─────────────────────────────────────────────────────────────────────
 
@@ -1306,92 +1317,106 @@ shopRouter.post('/commandes/:ref/sms/renvoyer', zValidator('json', resendSmsSche
 // Soumettre une demande de devis web
 // ══════════════════════════════════════════════════════════════════════════════
 
-shopRouter.post('/devis', zValidator('json', devisWebSchema), async (c) => {
-  const body = c.req.valid('json')
+// Phase 6 : accepte un envoi multipart (champs + fichiers « documents », les
+// plans et photos que le formulaire proposait déjà mais ne transmettait pas)
+// ou du JSON (anciens clients). Ne crée plus de devis vide automatiquement :
+// le devis naît à la qualification (POST /shop-erp/devis/:id/creer-erp).
+shopRouter.post('/devis', async (c) => {
+  const estMultipart = (c.req.header('content-type') ?? '').includes('multipart/form-data')
+  let brut: Record<string, unknown>
+  let fichiers: File[] = []
+  try {
+    if (estMultipart) {
+      const form = await c.req.formData()
+      fichiers = form.getAll('documents').filter((f) => f instanceof File && f.size > 0) as unknown as File[]
+      brut = Object.fromEntries([...form.entries()].filter(([, v]) => typeof v === 'string' && v !== ''))
+    } else {
+      brut = await c.req.json()
+    }
+  } catch {
+    return c.json({ error: 'Requête illisible', code: 'VALIDATION_ERROR' }, 400)
+  }
+
+  const parse = devisWebSchema.safeParse(brut)
+  if (!parse.success) {
+    return c.json({ error: 'Données invalides', code: 'VALIDATION_ERROR', details: parse.error.flatten() }, 400)
+  }
+  const body = parse.data
+  if (fichiers.length > NOMBRE_MAX_DOCUMENTS) {
+    return c.json({ error: `${NOMBRE_MAX_DOCUMENTS} fichiers maximum`, code: 'TROP_DE_FICHIERS' }, 422)
+  }
+
+  const clientId = await ensureClient({
+    nom: body.nom, telephone: body.telephone, email: body.email ?? null, adresse: null, ville: null, type: 'particulier',
+  })
 
   const { data, error } = await db
     .from('demandes_devis_web')
     .insert({
-      nom:          body.nom,
-      telephone:    body.telephone,
-      email:        body.email ?? null,
-      description:  body.description,
-      type_projet:  body.type_projet ?? null,
-      produit_ref:  body.produit_ref ?? null,
-      statut:       'nouvelle',
+      nom:            body.nom,
+      telephone:      body.telephone,
+      email:          body.email ?? null,
+      description:    body.description,
+      type_projet:    body.type_projet ?? null,
+      produit_ref:    body.produit_ref ?? null,
+      quantite:       body.quantite ?? null,
+      dimensions:     body.dimensions ?? null,
+      materiau:       body.materiau ?? null,
+      localisation:   body.localisation ?? null,
+      delai_souhaite: body.delai_souhaite ?? null,
+      client_id:      clientId,
+      source:         'web',
+      statut:         'nouvelle',
     })
-    .select('id, created_at')
+    .select('id, numero, created_at')
     .single()
 
   if (error || !data) {
     console.error('[shop] insert demandes_devis_web:', error)
     return c.json({ error: 'Erreur enregistrement devis', code: 'DB_ERROR' }, 500)
   }
+  const demande = data as { id: string; numero: string | null; created_at: string }
 
-  // Créer automatiquement un devis ERP brouillon
-  const numero   = await genererNumeroDevis()
-  const today    = new Date().toISOString().split('T')[0]
-  const validite = new Date(Date.now() + 30 * 86_400_000).toISOString().split('T')[0]
-  const notes    = [
-    `[SOURCE WEB] ${body.description}`,
-    body.type_projet  ? `Type de projet : ${body.type_projet}`    : null,
-    `Téléphone : ${body.telephone}`,
-    body.email        ? `Email : ${body.email}`                   : null,
-    body.produit_ref  ? `Réf. produit : ${body.produit_ref}`      : null,
-  ].filter(Boolean).join('\n')
-
-  const { data: condP100 } = await db
-    .from('conditions_paiement')
-    .select('id')
-    .eq('code', 'P100')
-    .single()
-
-  const clientId = await ensureClient({
-    nom:       body.nom,
-    telephone: body.telephone,
-    email:     body.email ?? null,
-    adresse:   null,
-    ville:     null,
-    type:      'particulier',
+  await db.from('demandes_devis_historique').insert({
+    demande_id: demande.id, ancien_statut: null, nouveau_statut: 'nouvelle', commentaire: 'Demande reçue depuis le site', par: null,
   })
 
-  const { data: erpDevis, error: errDevis } = await db
-    .from('devis')
-    .insert({
-      numero,
-      client_id:             clientId,
-      client_nom:            body.nom,
-      statut:                'brouillon',
-      date_emission:         today,
-      date_validite:         validite,
-      validite_jours:        30,
-      condition_paiement_id: condP100?.id ?? null,
-      notes,
-      total_ht_xaf:        0,
-      tva_xaf:             0,
-      total_ttc_xaf:       0,
-      sync_status:         'synced',
-    })
-    .select('id, numero')
-    .single()
-
-  if (!errDevis && erpDevis) {
-    await db
-      .from('demandes_devis_web')
-      .update({ statut: 'en_cours', erp_devis_id: erpDevis.id })
-      .eq('id', data.id)
-  } else {
-    console.error('[shop] auto-create devis ERP:', errDevis)
+  // Pièces jointes : type vérifié par signature, stockage privé
+  let refusees: Array<{ file: string; error: string }> = []
+  let acceptees = 0
+  if (fichiers.length > 0) {
+    const { documents, errors } = await televerserDocumentsPrives(db, BUCKET_DEMANDES_DEVIS, demande.id, fichiers)
+    refusees = errors
+    if (documents.length > 0) {
+      const { error: errDocs } = await db.from('demandes_devis_documents').insert(documents.map((d) => ({
+        demande_id: demande.id, nom_fichier: d.nomFichier, type_mime: d.typeMime,
+        taille_octets: d.tailleOctets, storage_path: d.storagePath,
+      })))
+      if (errDocs) console.error('[shop] documents demande devis:', errDocs.message)
+      else acceptees = documents.length
+    }
   }
 
-  // Notifier l'ERP
   await db.channel('commandes_web_nouvelles').send({
     type:    'broadcast',
     event:   'nouvelle_demande_devis',
-    payload: { id: data.id, nom: body.nom, telephone: body.telephone, erp_devis_id: erpDevis?.id ?? null },
+    payload: { id: demande.id, numero: demande.numero, nom: body.nom, telephone: body.telephone },
+  }).catch(() => {})
+  await notifyWorkflow({
+    event:    'boutique.demande_devis_recue',
+    module:   'boutique',
+    severite: 'info',
+    titre:    `Demande de devis ${demande.numero ?? ''}`.trim(),
+    message:  `${body.nom} : ${body.description.slice(0, 120)}${acceptees ? ` (${acceptees} pièce(s) jointe(s))` : ''}`,
+    ref:      demande.numero ?? demande.id,
+    url:      '/boutique',
+    data:     { demande_id: demande.id },
   })
 
-  return c.json({ id: data.id, statut: 'nouvelle', created_at: data.created_at }, 201)
+  return c.json({
+    id: demande.id, numero: demande.numero, statut: 'nouvelle', created_at: demande.created_at,
+    documents: { acceptes: acceptees, refuses: refusees },
+  }, 201)
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1985,9 +2010,9 @@ shopErpRouter.get('/devis-web', requirePermission('COMMERCIAL', 'READ'), async (
 
   let query = db
     .from('demandes_devis_web')
-    .select('*')
+    .select('*, demandes_devis_documents(count)')
     .order('created_at', { ascending: false })
-    .limit(50)
+    .limit(100)
 
   if (statut) {
     query = query.eq('statut', statut)
@@ -1997,31 +2022,105 @@ shopErpRouter.get('/devis-web', requirePermission('COMMERCIAL', 'READ'), async (
 
   if (error) return c.json({ error: 'Erreur DB', code: 'DB_ERROR' }, 500)
 
-  return c.json({ data: data ?? [], total: (data ?? []).length })
+  // Nombre de pièces jointes aplati pour la liste (le détail donne les fichiers).
+  const demandes = ((data ?? []) as Array<Record<string, unknown> & { demandes_devis_documents?: Array<{ count: number }> }>)
+    .map(({ demandes_devis_documents: docs, ...d }) => ({ ...d, nb_documents: docs?.[0]?.count ?? 0 }))
+
+  return c.json({ data: demandes, total: demandes.length })
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
-// POST /api/shop-erp/devis/:id/creer-erp
-// Créer un devis ERP à partir d'une demande web
+// Demandes de devis — détail, qualification, statut (Catalogue Hybride Phase 6)
 // ══════════════════════════════════════════════════════════════════════════════
 
-shopErpRouter.patch('/devis-web/:id/statut',
+/** Détail : champs, pièces jointes (liens signés 1 h, bucket privé), historique. */
+shopErpRouter.get('/devis-web/:id', requirePermission('COMMERCIAL', 'READ'), async (c) => {
+  const id = c.req.param('id')
+  const { data: demande, error } = await db
+    .from('demandes_devis_web')
+    .select('*, familles(nom), modeles(reference, designation)')
+    .eq('id', id)
+    .maybeSingle()
+  if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 500)
+  if (!demande) return c.json({ error: 'Demande introuvable', code: 'NOT_FOUND' }, 404)
+
+  const [{ data: docs }, { data: historique }] = await Promise.all([
+    db.from('demandes_devis_documents').select('id, nom_fichier, type_mime, taille_octets, storage_path, created_at').eq('demande_id', id).order('created_at'),
+    db.from('demandes_devis_historique').select('ancien_statut, nouveau_statut, commentaire, par, created_at').eq('demande_id', id).order('created_at'),
+  ])
+
+  const documents = await Promise.all(((docs ?? []) as Array<{ id: string; nom_fichier: string; type_mime: string; taille_octets: number; storage_path: string; created_at: string }>)
+    .map(async ({ storage_path, ...d }) => {
+      const { data: lien } = await db.storage.from(BUCKET_DEMANDES_DEVIS).createSignedUrl(storage_path, 3600)
+      return { ...d, url: lien?.signedUrl ?? null }
+    }))
+
+  return c.json({
+    data: {
+      ...(demande as Record<string, unknown>),
+      documents,
+      historique: historique ?? [],
+      transitions_possibles: transitionsDemande((demande as { statut: string }).statut),
+    },
+  })
+})
+
+const qualificationSchema = z.object({
+  famille_id:     z.string().uuid().nullable().optional(),
+  modele_id:      z.string().uuid().nullable().optional(),
+  quantite:       z.number().positive().nullable().optional(),
+  dimensions:     z.string().max(300).nullable().optional(),
+  materiau:       z.string().max(100).nullable().optional(),
+  localisation:   z.string().max(200).nullable().optional(),
+  delai_souhaite: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  notes_internes: z.string().max(3000).nullable().optional(),
+})
+
+/** Qualification : précise le besoin (famille, modèle, quantités…) ; passe « nouvelle » → « en qualification ». */
+shopErpRouter.patch('/devis-web/:id/qualification',
   requirePermission('COMMERCIAL', 'UPDATE'),
-  zValidator('json', z.object({ statut: z.enum(['nouvelle', 'en_cours', 'traitee', 'refusee']) })),
+  zValidator('json', qualificationSchema),
   async (c) => {
     const id = c.req.param('id')
-    const { statut } = c.req.valid('json')
+    const body = c.req.valid('json')
+    const user = c.get('user')
 
     const { data, error } = await db
       .from('demandes_devis_web')
-      .update({ statut })
+      .update({ ...body, qualifie_par: user?.id ?? null, qualifie_le: new Date().toISOString() })
       .eq('id', id)
-      .select('*')
-      .single()
+      .select('id, statut')
+      .maybeSingle()
+    if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 400)
+    if (!data) return c.json({ error: 'Demande introuvable', code: 'NOT_FOUND' }, 404)
 
-    if (error || !data) return c.json({ error: 'Demande introuvable', code: 'NOT_FOUND' }, 404)
-
+    if (normaliserStatutDemande((data as { statut: string }).statut) === 'nouvelle') {
+      await changerStatutDemande(id, 'en_qualification', { par: user?.id ?? null, commentaire: 'Qualification commencée' })
+    }
     return c.json({ data })
+  },
+)
+
+/** Changement de statut contrôlé par le workflow ; motif obligatoire pour un refus ou une demande d'informations. */
+shopErpRouter.patch('/devis-web/:id/statut',
+  requirePermission('COMMERCIAL', 'UPDATE'),
+  zValidator('json', z.object({
+    statut:      z.enum(STATUTS_DEMANDE),
+    commentaire: z.string().trim().max(1000).optional(),
+  })),
+  async (c) => {
+    const id = c.req.param('id')
+    const { statut, commentaire } = c.req.valid('json')
+    if ((statut === 'refusee' || statut === 'infos_requises') && !commentaire) {
+      return c.json({ error: 'Un motif est requis pour ce statut', code: 'MOTIF_REQUIS' }, 422)
+    }
+
+    const resultat = await changerStatutDemande(id, statut, { par: c.get('user')?.id ?? null, commentaire })
+    if (!resultat.ok) {
+      const status = resultat.code === 'NOT_FOUND' ? 404 : resultat.code === 'TRANSITION_INTERDITE' ? 422 : 500
+      return c.json({ error: resultat.message, code: resultat.code }, status)
+    }
+    return c.json({ data: { id, statut: resultat.nouveau, ancien_statut: resultat.ancien } })
   }
 )
 
@@ -2053,9 +2152,15 @@ shopErpRouter.post('/devis/:id/creer-erp',
       return c.json({ error: 'Devis ERP déjà créé', code: 'ALREADY_EXISTS', devis_id: devisWeb.erp_devis_id }, 409)
     }
 
-    const TVA        = 0.1925
+    const statutActuel = normaliserStatutDemande(devisWeb.statut)
+    if (statutActuel && ['refusee', 'expiree', 'convertie'].includes(statutActuel)) {
+      return c.json({ error: `Demande ${devisWeb.statut} : aucun devis ne peut être créé`, code: 'TRANSITION_INTERDITE' }, 422)
+    }
+
+    // V3 §19 : le devis est une valeur BRUTE, sans TVA (appliquée à la facture),
+    // comme les devis du configurateur — l'ancienne version ajoutait 19,25 % ici.
     const montant_ht = body.montant_ht ?? 0
-    const tva_xaf    = Math.round(montant_ht * TVA)
+    const tva_xaf    = 0
 
     const today      = new Date().toISOString().split('T')[0]
     const dateVal    = body.date_validite ?? new Date(Date.now() + 30 * 86_400_000).toISOString().split('T')[0]
@@ -2069,12 +2174,22 @@ shopErpRouter.post('/devis/:id/creer-erp',
       .eq('code', condCode)
       .single()
 
+    // Le besoin qualifié (Phase 6) est repris dans le devis : rien n'est ressaisi.
+    const besoin = [
+      devisWeb.numero       ? `Demande ${devisWeb.numero}` : null,
+      devisWeb.quantite     ? `Quantité : ${devisWeb.quantite}` : null,
+      devisWeb.dimensions   ? `Dimensions : ${devisWeb.dimensions}` : null,
+      devisWeb.materiau     ? `Matériau : ${devisWeb.materiau}` : null,
+      devisWeb.localisation ? `Localisation : ${devisWeb.localisation}` : null,
+      devisWeb.delai_souhaite ? `Délai souhaité : ${devisWeb.delai_souhaite}` : null,
+    ].filter(Boolean).join('\n')
     const notesParts = [`[SOURCE WEB] ${devisWeb.description}`]
+    if (besoin) notesParts.push(`\n${besoin}`)
     if (body.notes_commerciales?.trim()) notesParts.push(`\n--- Notes commerciales ---\n${body.notes_commerciales.trim()}`)
 
     const numero = await genererNumeroDevis()
 
-    const clientId = await ensureClient({
+    const clientId = devisWeb.client_id ?? await ensureClient({
       nom:       devisWeb.nom,
       telephone: devisWeb.telephone,
       email:     devisWeb.email ?? null,
@@ -2095,6 +2210,7 @@ shopErpRouter.post('/devis/:id/creer-erp',
         validite_jours,
         condition_paiement_id: condRow?.id ?? null,
         notes:                 notesParts.join(''),
+        source_demande:        devisWeb.source ?? 'web',
         total_ht_xaf:        montant_ht,
         tva_xaf,
         total_ttc_xaf:       montant_ht + tva_xaf,
@@ -2110,14 +2226,17 @@ shopErpRouter.post('/devis/:id/creer-erp',
 
     const { error: updateErr } = await db
       .from('demandes_devis_web')
-      .update({ statut: 'traitee', erp_devis_id: erpDevis.id })
+      .update({ erp_devis_id: erpDevis.id, client_id: clientId })
       .eq('id', id)
-      .select('id, statut, erp_devis_id')
-      .single()
 
     if (updateErr) {
       console.error('[shop-erp] update demande_devis_web:', JSON.stringify(updateErr))
     }
+
+    // La demande passe en chiffrage (qualification éventuellement sautée : tracé).
+    await changerStatutDemande(id, 'en_chiffrage', {
+      par: c.get('user')?.id ?? null, horsWorkflow: true, commentaire: `Devis ${erpDevis.numero} créé`,
+    })
 
     return c.json({ data: erpDevis }, 201)
   }

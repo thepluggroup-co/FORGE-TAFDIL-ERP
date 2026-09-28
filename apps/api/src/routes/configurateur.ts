@@ -329,6 +329,8 @@ async function creerDemandeDevisWeb(
   body: z.infer<typeof demandeSchema>,
   devisId: string | null,
 ): Promise<string | null> {
+  // Phase 6 : un devis pré-rempli existe déjà → la demande est directement « en chiffrage ».
+  const statut = devisId ? 'en_chiffrage' : 'nouvelle'
   const { data, error } = await db
     .from('demandes_devis_web')
     .insert({
@@ -338,7 +340,9 @@ async function creerDemandeDevisWeb(
       description:  `${numeroConfiguration} — ${resume}${body.commentaire ? `\n${body.commentaire}` : ''}`,
       type_projet:  modele.designation,
       produit_ref:  modele.reference,
-      statut:       devisId ? 'en_cours' : 'nouvelle',
+      modele_id:    modele.id,
+      source:       'configurateur',
+      statut,
       erp_devis_id: devisId,
     })
     .select('id')
@@ -348,5 +352,11 @@ async function creerDemandeDevisWeb(
     console.error('[configurateur] insert demande devis web:', error)
     return null
   }
-  return (data as { id: string }).id
+  const id = (data as { id: string }).id
+  const { error: errHisto } = await db.from('demandes_devis_historique').insert({
+    demande_id: id, ancien_statut: null, nouveau_statut: statut, par: null,
+    commentaire: devisId ? `Configuration ${numeroConfiguration} : devis pré-rempli créé` : `Configuration ${numeroConfiguration} reçue`,
+  })
+  if (errHisto) console.error('[configurateur] historique demande:', errHisto.message)
+  return id
 }

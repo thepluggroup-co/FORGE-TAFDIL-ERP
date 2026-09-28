@@ -209,7 +209,11 @@ describe('POST /api/shop/configurateur/:modeleId/demande', () => {
     expect(res.status).toBe(201)
     expect((await res.json() as { data: { statut: string } }).data.statut).toBe('hors_limites')
     expect(payload('configurations', 'insert')).toMatchObject({ statut: 'hors_limites', prix_estime_ht_xaf: null })
-    expect(payload('demandes_devis_web', 'insert')).toMatchObject({ produit_ref: 'P003', erp_devis_id: 'devis-1', statut: 'en_cours' })
+    // Phase 6 : devis pré-rempli → demande directement « en chiffrage », tracée
+    expect(payload('demandes_devis_web', 'insert')).toMatchObject({
+      produit_ref: 'P003', erp_devis_id: 'devis-1', statut: 'en_chiffrage', source: 'configurateur', modele_id: MID,
+    })
+    expect(payload('demandes_devis_historique', 'insert')).toMatchObject({ ancien_statut: null, nouveau_statut: 'en_chiffrage' })
     expect(payload('devis', 'insert')).toMatchObject({ total_ht_xaf: 0 })
     expect(payload('devis_lignes', 'insert')).toBeUndefined()
   })

@@ -21,6 +21,7 @@ import { ensureClient } from '../services/client-sync.service'
 import { resolveCommandeContext, chargerJobsProductionCommande } from '../services/commande-workflow.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 import { proposerDevis, devisCalculateSchema } from '../services/devis-calculation.service'
+import { synchroniserDemandeDepuisDevis } from '../services/demande-devis.service'
 import type { TypeCommande } from '../services/credit-eligibility.service'
 import type { HonoVariables } from '../types'
 
@@ -236,6 +237,7 @@ async function checkExpireDevis(devisId: string, dateValidite: string, statut: s
   const today = new Date().toISOString().slice(0, 10)
   if (dateValidite < today && statut !== 'expire') {
     await db.from('devis').update({ statut: 'expire', updated_at: new Date().toISOString() }).eq('id', devisId)
+    await synchroniserDemandeDepuisDevis(devisId, 'expire')
     return 'expire'
   }
   return statut
@@ -936,6 +938,7 @@ router.get('/devis', requirePermission('COMMERCIAL', 'READ'), async (c) => {
     await db.from('devis')
       .update({ statut: 'expire', updated_at: new Date().toISOString() })
       .in('id', ids)
+    for (const devisId of ids) await synchroniserDemandeDepuisDevis(devisId, 'expire')
     // Mettre à jour les objets locaux pour la réponse
     for (const d of data ?? []) {
       if (ids.includes((d as { id: string }).id)) {
@@ -1351,6 +1354,7 @@ router.patch('/devis/:id/statut', requirePermission('COMMERCIAL', 'VALIDATE'), z
     .single()
 
   if (error || !data) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
+  await synchroniserDemandeDepuisDevis(id, statut, c.get('user')?.id ?? null)
   return c.json(mapDevis(data))
 })
 
@@ -1644,6 +1648,7 @@ router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'U
     process.env.DIRECTEUR_WHATSAPP_PHONE ?? '',
     `📋 Devis ${d.numero} envoyé à ${d.client_nom} pour approbation (30j).\nLien : ${approvalUrl}`,
   )
+  await synchroniserDemandeDepuisDevis(id, 'envoye', c.get('user')?.id ?? null)
 
   return c.json({ token, expires_at: expiresAt, approval_url: approvalUrl })
 })
@@ -1714,6 +1719,7 @@ publicDevisRouter.post('/devis/approuver/:token', async (c) => {
     token_approbation:   null,    // invalider le token après usage
     updated_at:          new Date().toISOString(),
   }).eq('id', d.id)
+  await synchroniserDemandeDepuisDevis(d.id, body.decision)
 
   // §39 — audit métier. Route publique non authentifiée : userId omis
   // volontairement (rbac_audit_logs.user_id est nullable pour ce cas précis,
@@ -1997,6 +2003,7 @@ router.post('/devis/:id/transformer-commande', requirePermission('COMMERCIAL', '
     payloadBefore: { devis_numero: d.numero, statut: currentStatut },
     payloadAfter:  { commande_id: cmd.id, commande_numero: cmd.numero, total_ttc_xaf: d.total_ttc_xaf },
   })
+  await synchroniserDemandeDepuisDevis(d.id, 'transforme', user.id)
 
   return c.json({ commande, devis_numero: d.numero, commande_numero: cmd.numero }, 201)
 })
