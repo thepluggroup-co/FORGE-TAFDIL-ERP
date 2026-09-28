@@ -349,6 +349,14 @@ function modeleVendable(row: ModeleVitrineRow): boolean {
     && resoudreModeCommercial(row.modeles, row.modeles.familles) === CommercialMode.STANDARD
 }
 
+/** Affichable au catalogue : STANDARD avec prix (panier) ou CONFIGURABLE (configurateur, prix calculé). */
+function modeleAffichable(row: ModeleVitrineRow): boolean {
+  if (!row.modeles?.actif) return false
+  const mode = resoudreModeCommercial(row.modeles, row.modeles.familles)
+  if (mode === CommercialMode.STANDARD) return Number(row.prix_public ?? 0) > 0
+  return mode === CommercialMode.CONFIGURABLE
+}
+
 /** Règles communes de vente en ligne anonyme : visible, prix public, minimum de commande. */
 function verifierVitrine(
   vitrine: { visible: boolean; prixPublic: number; minCommande: number | null },
@@ -493,15 +501,19 @@ async function tarifierLignesShop(
   return { ok: true, lignes: tarifees, ecartsPrix }
 }
 
-/** Article de catalogue public pour un modèle STANDARD (même forme qu'un produit + type_article). */
+/**
+ * Article de catalogue public pour un modèle (même forme qu'un produit + type_article).
+ * CONFIGURABLE : pas de prix affiché ni de promotion — le prix vient du configurateur.
+ */
 function enrichirModeleVitrine(row: ModeleVitrineRow, promo?: PromoActive) {
   const m = row.modeles
-  const prixPublic = Math.round(Number(row.prix_public ?? 0))
-  const prixRemise = prixPromo(prixPublic, promo)
+  const configurable = resoudreModeCommercial(m, m.familles) === CommercialMode.CONFIGURABLE
+  const prixPublic = configurable ? null : Math.round(Number(row.prix_public ?? 0))
+  const prixRemise = prixPublic === null ? null : prixPromo(prixPublic, promo)
   return {
     id:                      row.modele_id,
     type_article:            'modele' as const,
-    commercial_mode:         CommercialMode.STANDARD,
+    commercial_mode:         configurable ? CommercialMode.CONFIGURABLE : CommercialMode.STANDARD,
     ref:                     m.reference,
     nom:                     m.designation,
     description:             m.description,
@@ -530,7 +542,7 @@ function enrichirModeleVitrine(row: ModeleVitrineRow, promo?: PromoActive) {
 }
 
 /**
- * Modèles STANDARD visibles en ligne, prêts pour le catalogue public.
+ * Modèles visibles en ligne (STANDARD au panier, CONFIGURABLE au configurateur).
  * Jamais bloquant : en cas d'erreur, le catalogue des articles de stock reste servi.
  */
 async function chargerModelesVitrine(filtres: { id?: string; q?: string; categorie?: string } = {}) {
@@ -545,7 +557,7 @@ async function chargerModelesVitrine(filtres: { id?: string; q?: string; categor
       return []
     }
     const rows = ((Array.isArray(data) ? data : []) as unknown as ModeleVitrineRow[])
-      .filter((row) => row.modeles && modeleVendable(row) && Number(row.prix_public ?? 0) > 0)
+      .filter(modeleAffichable)
       .filter((row) => !filtres.categorie || row.modeles.familles?.nom === filtres.categorie)
     const promos = await promotionsActives(rows.map((r) => r.modele_id), 'modele_id')
     return rows.map((row) => enrichirModeleVitrine(row, promos.get(row.modele_id)))
@@ -1484,7 +1496,7 @@ export const shopErpRouter = new Hono<{ Variables: HonoVariables }>()
 
 // ── Helpers locaux ─────────────────────────────────────────────────────────────
 
-async function genererNumeroDevis(): Promise<string> {
+export async function genererNumeroDevis(): Promise<string> {
   const today     = new Date()
   const yyyymmdd  = today.toISOString().slice(0, 10).replace(/-/g, '')
   const startOfDay = `${today.toISOString().slice(0, 10)}T00:00:00.000Z`
@@ -1770,8 +1782,8 @@ shopErpRouter.put('/produits/:id/vitrine',
 )
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Vitrine des produits finis STANDARD (Catalogue Hybride Phase 2)
-// GET  /api/shop-erp/modeles              — modèles STANDARD actifs + leur vitrine
+// Vitrine des produits finis (Catalogue Hybride Phases 2 et 3)
+// GET  /api/shop-erp/modeles              — modèles STANDARD et CONFIGURABLES actifs + leur vitrine
 // PUT  /api/shop-erp/modeles/:id/vitrine  — visibilité, prix public, délai, minimum
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -1795,8 +1807,9 @@ shopErpRouter.get('/modeles', requirePermission('COMMERCIAL', 'READ'), async (c)
   }
 
   const modeles = ((data ?? []) as unknown as ModeleErpRow[])
-    .filter((m) => resoudreModeCommercial(m, m.familles) === CommercialMode.STANDARD)
-    .map((m) => {
+    .map((m) => ({ m, mode: resoudreModeCommercial(m, m.familles) }))
+    .filter(({ mode }) => mode === CommercialMode.STANDARD || mode === CommercialMode.CONFIGURABLE)
+    .map(({ m, mode }) => {
       const vitrine = Array.isArray(m.modeles_shop) ? (m.modeles_shop[0] ?? null) : m.modeles_shop
       return {
         id:                m.id,
@@ -1804,7 +1817,7 @@ shopErpRouter.get('/modeles', requirePermission('COMMERCIAL', 'READ'), async (c)
         designation:       m.designation,
         famille:           m.familles?.nom ?? null,
         unite_facturation: m.unite_facturation,
-        commercial_mode:   CommercialMode.STANDARD,
+        commercial_mode:   mode,
         vitrine,
       }
     })
@@ -1845,17 +1858,21 @@ shopErpRouter.put(
 
     type VitrineActuelle = { prix_public: number; visible_shop: boolean }
     const m = modele as unknown as Omit<ModeleErpRow, 'modeles_shop'> & { modeles_shop: VitrineActuelle | VitrineActuelle[] | null }
-    if (resoudreModeCommercial(m, m.familles) !== CommercialMode.STANDARD) {
+    // STANDARD : vendu au panier, prix public obligatoire pour la mise en ligne.
+    // CONFIGURABLE : présenté au configurateur, prix calculé (pas de prix public).
+    // SUR DEVIS : jamais en vitrine produit — passe par la demande de devis.
+    const mode = resoudreModeCommercial(m, m.familles)
+    if (mode !== CommercialMode.STANDARD && mode !== CommercialMode.CONFIGURABLE) {
       return c.json({
-        error: 'Seul un modèle STANDARD peut être vendu au panier (configurable → configurateur, sur devis → demande de devis)',
-        code:  'MODE_NON_STANDARD',
+        error: 'Un modèle « sur devis » ne se met pas en vitrine : il passe par la demande de devis',
+        code:  'MODE_NON_VITRINE',
       }, 422)
     }
 
     const actuel: VitrineActuelle | null = Array.isArray(m.modeles_shop) ? (m.modeles_shop[0] ?? null) : m.modeles_shop
     const prixFinal    = body.prix_public ?? actuel?.prix_public ?? 0
     const visibleFinal = body.visible_shop ?? actuel?.visible_shop ?? false
-    if (visibleFinal && prixFinal <= 0) {
+    if (mode === CommercialMode.STANDARD && visibleFinal && prixFinal <= 0) {
       return c.json({ error: 'Un prix public est requis pour mettre le modèle en vente', code: 'PRIX_REQUIS' }, 422)
     }
 

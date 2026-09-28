@@ -49,6 +49,8 @@ export const AUDIT_ACTIONS = [
   'VENTE_PRIX_FORCE',
   // Modification du prix public d'un produit fini en vitrine (Catalogue Hybride Phase 2).
   'PRIX_VITRINE_MODIFIE',
+  // Catalogue Hybride Phase 3 : taux de marge (D4) et configurations client.
+  'MARGE_MODIFIEE', 'CONFIGURATION_CREEE',
 ] as const
 
 export type AuditActionType = typeof AUDIT_ACTIONS[number]

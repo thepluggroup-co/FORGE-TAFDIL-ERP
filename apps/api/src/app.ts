@@ -14,6 +14,7 @@ import { rhRouter } from './routes/rh'
 import { aiRouter } from './routes/ai'
 import { rapportsRouter } from './routes/rapports'
 import { shopRouter, shopErpRouter } from './routes/shop'
+import { configurateurRouter } from './routes/configurateur'
 import { paiementsRouter } from './routes/paiements'
 import { authPhonePinRouter } from './routes/auth-phone-pin'
 import { caisseRouter } from './routes/caisse'
@@ -89,6 +90,7 @@ app.use('*', rateLimitMiddleware)
 app.route('/', publicCommandesRouter)
 app.route('/', publicDevisRouter)
 app.route('/api/auth', authPhonePinRouter)
+app.route('/api/shop/configurateur', configurateurRouter)   // avant shopRouter : chemin plus spécifique
 app.route('/api/shop',      shopRouter)
 app.route('/api/paiements', paiementsRouter)
 

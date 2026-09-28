@@ -4,10 +4,12 @@ import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
 import {
   champsDimensionsPourMode, ModeCalculSchema, TypeRessourceSchema, type ModeCalcul,
-  TypeGammeSchema, modeCommercialDepuisTypeGamme, resoudreTypeGamme, verifierPlacementFamille,
+  TypeGammeSchema, modeCommercialDepuisTypeGamme, resoudreTypeGamme, verifierPlacementFamille, CommercialMode,
   type TypeGamme, type ArbreFamilles,
 } from '@forge/shared'
 import { requirePermission } from '../middleware/permission.middleware'
+import { writeAuditLog } from '../services/rbacService'
+import { chargerModele, chargerParametres, evaluerConfiguration } from '../services/configuration.service'
 import type { HonoVariables } from '../types'
 
 // auth middleware already rejects requests when supabaseAdmin is null
@@ -662,5 +664,226 @@ router.delete(
     return c.body(null, 204)
   },
 )
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONFIGURATEUR — vue INTERNE (Catalogue Hybride Phase 3)
+// Coûts d'options, marges et coût de revient : jamais exposés par les routes
+// publiques (routes/configurateur.ts) — uniquement ici, derrière RBAC.
+// ══════════════════════════════════════════════════════════════════════════════
+
+const valeurParametreSchema = z.object({
+  code:                    z.string().regex(/^[a-z0-9][a-z0-9_]{0,39}$/),
+  libelle:                 z.string().min(1).max(100),
+  cout_supplementaire_xaf: z.number().min(0).default(0),
+  validation_requise:      z.boolean().default(false),
+})
+
+const parametreSchema = z.object({
+  code:            z.string().regex(/^[a-z][a-z0-9_]{0,39}$/, 'code : minuscules, chiffres, _ (ex. largeur)'),
+  libelle:         z.string().min(1).max(100),
+  type:            z.enum(['nombre', 'choix', 'booleen']),
+  obligatoire:     z.boolean().default(true),
+  unite:           z.enum(['mm', 'cm', 'm']).nullable().optional(),
+  min:             z.number().nullable().optional(),
+  max:             z.number().nullable().optional(),
+  pas:             z.number().positive().nullable().optional(),
+  role_calcul:     z.enum(['largeur', 'hauteur', 'longueur', 'epaisseur', 'diametre', 'poids']).nullable().optional(),
+  cout_si_oui_xaf: z.number().min(0).default(0),
+  valeurs:         z.array(valeurParametreSchema).max(50).default([]),
+}).superRefine((p, ctx) => {
+  if (p.min != null && p.max != null && p.min > p.max) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${p.code} : min doit être ≤ max`, path: ['min'] })
+  }
+  if (p.type === 'choix' && p.valeurs.length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${p.code} : un paramètre « choix » doit proposer au moins une valeur`, path: ['valeurs'] })
+  }
+  if (p.type !== 'nombre' && p.role_calcul) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${p.code} : seul un paramètre « nombre » peut alimenter une dimension de calcul`, path: ['role_calcul'] })
+  }
+})
+
+const schemaConfigurationBody = z.object({
+  parametres: z.array(parametreSchema).max(40).refine(
+    (ps) => new Set(ps.map((p) => p.code)).size === ps.length,
+    'Chaque paramètre doit avoir un code unique',
+  ),
+})
+
+/** Schéma complet (coûts inclus) d'un modèle — vue ERP. */
+router.get('/modeles/:id/parametres', requirePermission('PRODUCTION', 'READ'), async (c) => {
+  const { id } = c.req.param()
+  const modele = await chargerModele(id)
+  if (!modele) return c.json({ error: 'Modèle introuvable', code: 'NOT_FOUND' }, 404)
+  return c.json({ data: await chargerParametres(id), commercial_mode: modele.commercialMode })
+})
+
+/**
+ * Remplace le schéma de configuration d'un modèle. Les configurations déjà
+ * enregistrées n'en dépendent pas (schema_snapshot figé) : l'historique reste intact.
+ */
+router.put(
+  '/modeles/:id/parametres',
+  requirePermission('PRODUCTION', 'UPDATE'),
+  zValidator('json', schemaConfigurationBody),
+  async (c) => {
+    const { id } = c.req.param()
+    const { parametres } = c.req.valid('json')
+    const user = c.get('user')
+
+    const modele = await chargerModele(id)
+    if (!modele) return c.json({ error: 'Modèle introuvable', code: 'NOT_FOUND' }, 404)
+    if (modele.commercialMode !== CommercialMode.CONFIGURABLE) {
+      return c.json({ error: 'Seul un modèle CONFIGURABLE a un schéma de configuration', code: 'MODE_NON_CONFIGURABLE' }, 422)
+    }
+
+    const avant = await chargerParametres(id)
+
+    const { error: errDelete } = await db.from('modele_parametres').delete().eq('modele_id', id)
+    if (errDelete) return c.json({ error: errDelete.message, code: 'DB_ERROR' }, 500)
+
+    for (const [ordre, p] of parametres.entries()) {
+      const { data: cree, error } = await db
+        .from('modele_parametres')
+        .insert({
+          modele_id: id, code: p.code, libelle: p.libelle, type: p.type, obligatoire: p.obligatoire,
+          unite: p.type === 'nombre' ? (p.unite ?? null) : null,
+          min: p.type === 'nombre' ? (p.min ?? null) : null,
+          max: p.type === 'nombre' ? (p.max ?? null) : null,
+          pas: p.type === 'nombre' ? (p.pas ?? null) : null,
+          role_calcul: p.type === 'nombre' ? (p.role_calcul ?? null) : null,
+          cout_si_oui_xaf: p.type === 'booleen' ? p.cout_si_oui_xaf : 0,
+          ordre,
+        })
+        .select('id')
+        .single()
+      if (error || !cree) return c.json({ error: error?.message ?? 'Insertion impossible', code: 'DB_ERROR' }, 500)
+
+      if (p.type === 'choix' && p.valeurs.length > 0) {
+        const { error: errValeurs } = await db.from('modele_parametre_valeurs').insert(
+          p.valeurs.map((v, i) => ({ parametre_id: (cree as { id: string }).id, ...v, ordre: i })),
+        )
+        if (errValeurs) return c.json({ error: errValeurs.message, code: 'DB_ERROR' }, 500)
+      }
+    }
+
+    // Les coûts d'options influencent les prix : modification tracée.
+    writeAuditLog({
+      userId: user?.id, actionType: 'SETTINGS_CHANGED', module: 'PRODUCTION',
+      resourceType: 'modele_parametres', resourceId: id,
+      payloadBefore: avant, payloadAfter: parametres,
+    })
+
+    return c.json({ data: await chargerParametres(id) })
+  },
+)
+
+/** Estimation INTERNE : même calcul que le site, avec coût de revient, marge et détail des ressources. */
+router.post(
+  '/modeles/:id/estimer',
+  requirePermission('PRODUCTION', 'READ'),
+  zValidator('json', z.object({
+    valeurs:  z.record(z.union([z.string().max(100), z.number(), z.boolean(), z.null()])),
+    quantite: z.number().int().positive().max(1000),
+  })),
+  async (c) => {
+    const { id } = c.req.param()
+    const body = c.req.valid('json')
+    const modele = await chargerModele(id)
+    if (!modele) return c.json({ error: 'Modèle introuvable', code: 'NOT_FOUND' }, 404)
+
+    const { validation, estimation, ficheTechniqueId, tauxMargePct } = await evaluerConfiguration(modele, body.valeurs, body.quantite)
+    return c.json({ data: { validation, estimation, fiche_technique_id: ficheTechniqueId, taux_marge_pct: tauxMargePct } })
+  },
+)
+
+// ── Règles de marge (D4 : taux saisi par l'utilisateur) ─────────────────────
+
+const regleMargeSchema = z.object({
+  portee:     z.enum(['global', 'famille', 'modele']),
+  famille_id: z.string().uuid().nullable().optional(),
+  modele_id:  z.string().uuid().nullable().optional(),
+  taux_pct:   z.number().min(0).max(500),
+  notes:      z.string().max(500).optional(),
+}).refine((r) =>
+  (r.portee === 'global'  && !r.famille_id && !r.modele_id) ||
+  (r.portee === 'famille' && !!r.famille_id && !r.modele_id) ||
+  (r.portee === 'modele'  && !!r.modele_id && !r.famille_id),
+  { message: 'Cible incohérente : global sans cible, famille avec famille_id, modèle avec modele_id' },
+)
+
+router.get('/regles-marge', requirePermission('COMMERCIAL', 'CONFIGURE'), async (c) => {
+  const { data, error } = await db
+    .from('regles_marge')
+    .select('*, familles(nom), modeles(reference, designation)')
+    .order('actif', { ascending: false })
+    .order('created_at', { ascending: false })
+  if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 500)
+  return c.json({ data: data ?? [] })
+})
+
+/** Nouvelle règle : remplace (désactive) la règle active de la même cible — l'historique est conservé. */
+router.post('/regles-marge', requirePermission('COMMERCIAL', 'CONFIGURE'), zValidator('json', regleMargeSchema), async (c) => {
+  const body = c.req.valid('json')
+  const user = c.get('user')
+
+  let actuelle = db.from('regles_marge').select('id, taux_pct').eq('portee', body.portee).eq('actif', true)
+  actuelle = body.portee === 'famille' ? actuelle.eq('famille_id', body.famille_id!)
+    : body.portee === 'modele' ? actuelle.eq('modele_id', body.modele_id!)
+    : actuelle
+  const { data: precedente } = await actuelle.maybeSingle()
+
+  if (precedente) {
+    const { error: errOff } = await db.from('regles_marge').update({ actif: false }).eq('id', (precedente as { id: string }).id)
+    if (errOff) return c.json({ error: errOff.message, code: 'DB_ERROR' }, 500)
+  }
+
+  const { data, error } = await db
+    .from('regles_marge')
+    .insert({
+      portee: body.portee, famille_id: body.famille_id ?? null, modele_id: body.modele_id ?? null,
+      taux_pct: body.taux_pct, notes: body.notes ?? null, actif: true, created_by: user?.id ?? null,
+    })
+    .select()
+    .single()
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+
+  writeAuditLog({
+    userId: user?.id, actionType: 'MARGE_MODIFIEE', module: 'COMMERCIAL',
+    resourceType: 'regles_marge', resourceId: (data as { id: string }).id,
+    payloadBefore: precedente ? { taux_pct: (precedente as { taux_pct: number }).taux_pct } : null,
+    payloadAfter: { portee: body.portee, famille_id: body.famille_id ?? null, modele_id: body.modele_id ?? null, taux_pct: body.taux_pct },
+  })
+
+  return c.json(data, 201)
+})
+
+router.delete('/regles-marge/:id', requirePermission('COMMERCIAL', 'CONFIGURE'), async (c) => {
+  const { id } = c.req.param()
+  const user = c.get('user')
+  const { data, error } = await db.from('regles_marge').update({ actif: false }).eq('id', id).select('id, taux_pct').maybeSingle()
+  if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 500)
+  if (!data) return c.json({ error: 'Règle introuvable', code: 'NOT_FOUND' }, 404)
+  writeAuditLog({
+    userId: user?.id, actionType: 'MARGE_MODIFIEE', module: 'COMMERCIAL',
+    resourceType: 'regles_marge', resourceId: id,
+    payloadBefore: { taux_pct: (data as { taux_pct: number }).taux_pct, actif: true }, payloadAfter: { actif: false },
+  })
+  return c.body(null, 204)
+})
+
+// ── Configurations enregistrées (vue interne) ───────────────────────────────
+
+router.get('/configurations', requirePermission('COMMERCIAL', 'READ'), async (c) => {
+  const { statut } = c.req.query()
+  const { page, perPage, from, to } = pagination(c)
+  let query = db
+    .from('configurations')
+    .select('*, modeles(reference, designation), devis(numero, statut)', { count: 'exact' })
+  if (statut) query = query.eq('statut', statut)
+  const { data, count, error } = await query.order('created_at', { ascending: false }).range(from, to)
+  if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 500)
+  return c.json({ data: data ?? [], total: count ?? 0, page, per_page: perPage, total_pages: Math.ceil((count ?? 0) / perPage) })
+})
 
 export { router as catalogueRouter }

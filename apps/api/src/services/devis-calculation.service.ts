@@ -11,6 +11,7 @@ import {
   ModeCalculSchema,
   DimensionsSchema,
   type RessourceTechnique,
+  type ModeCalcul,
   type ResultatDevis,
 } from '@forge/shared'
 import { z } from 'zod'
@@ -61,26 +62,32 @@ export type ProposerDevisResultat =
  * devis.config_snapshot / devis.ressources_snapshot au moment de la création
  * ou de la validation du devis — jamais avant.
  */
-export async function proposerDevis(input: DevisCalculateRequest): Promise<ProposerDevisResultat> {
+export type ChargementFicheTechnique =
+  | { ok: true; ficheTechniqueId: string; modeCalcul: ModeCalcul; ressources: RessourceTechnique[] }
+  | { ok: false; code: 'ERREUR_DB' | 'FICHE_TECHNIQUE_INTROUVABLE'; message: string }
+
+/**
+ * Fiche technique ACTIVE d'un modèle et ses ressources actives, dans l'ordre.
+ * Partagé par le calcul de devis (§13) et le configurateur (Catalogue Hybride Phase 3).
+ */
+export async function chargerFicheTechniqueActive(modeleId: string): Promise<ChargementFicheTechnique> {
   const { data: fiche, error: ficheError } = await db
     .from('fiche_technique')
     .select('id, modele_id, version, statut, mode_calcul, unite_facturation_id')
-    .eq('modele_id', input.modeleId)
+    .eq('modele_id', modeleId)
     .eq('statut', 'active')
     .maybeSingle()
 
-  if (ficheError) {
-    return { ok: false, erreurs: [{ code: 'ERREUR_DB', message: ficheError.message }] }
-  }
+  if (ficheError) return { ok: false, code: 'ERREUR_DB', message: ficheError.message }
   if (!fiche) {
     return {
       ok: false,
-      erreurs: [{ code: 'FICHE_TECHNIQUE_INTROUVABLE', message: "Aucune fiche technique active pour ce modèle. Créez-en une avant de calculer un devis, ou saisissez la ligne manuellement (§46)." }],
+      code: 'FICHE_TECHNIQUE_INTROUVABLE',
+      message: "Aucune fiche technique active pour ce modèle. Créez-en une avant de calculer un devis, ou saisissez la ligne manuellement (§46).",
     }
   }
 
   const f = fiche as FicheTechniqueRow
-  const modeCalcul = input.modeCalcul ?? ModeCalculSchema.parse(f.mode_calcul)
 
   const { data: ressourcesData, error: ressourcesError } = await db
     .from('fiche_technique_ressources')
@@ -89,9 +96,7 @@ export async function proposerDevis(input: DevisCalculateRequest): Promise<Propo
     .eq('actif', true)
     .order('ordre', { ascending: true })
 
-  if (ressourcesError) {
-    return { ok: false, erreurs: [{ code: 'ERREUR_DB', message: ressourcesError.message }] }
-  }
+  if (ressourcesError) return { ok: false, code: 'ERREUR_DB', message: ressourcesError.message }
 
   const ressources: RessourceTechnique[] = ((ressourcesData ?? []) as FicheTechniqueRessourceRow[]).map((r) => ({
     id: r.id,
@@ -103,6 +108,16 @@ export async function proposerDevis(input: DevisCalculateRequest): Promise<Propo
     tempsReferenceH: r.temps_reference_h,
   }))
 
+  return { ok: true, ficheTechniqueId: f.id, modeCalcul: ModeCalculSchema.parse(f.mode_calcul), ressources }
+}
+
+export async function proposerDevis(input: DevisCalculateRequest): Promise<ProposerDevisResultat> {
+  const fiche = await chargerFicheTechniqueActive(input.modeleId)
+  if (!fiche.ok) return { ok: false, erreurs: [{ code: fiche.code, message: fiche.message }] }
+
+  const { ressources } = fiche
+  const modeCalcul = input.modeCalcul ?? fiche.modeCalcul
+
   const resultat = calculerDevisBrut(
     { modeleId: input.modeleId, modeCalcul, quantite: input.quantite, dimensions: input.dimensions, options: input.options },
     ressources,
@@ -112,5 +127,5 @@ export async function proposerDevis(input: DevisCalculateRequest): Promise<Propo
     return { ok: false, erreurs: resultat.erreurs }
   }
 
-  return { ok: true, resultat, ficheTechniqueId: f.id }
+  return { ok: true, resultat, ficheTechniqueId: fiche.ficheTechniqueId }
 }
