@@ -807,8 +807,8 @@ router.post(
     const modele = await chargerModele(id)
     if (!modele) return c.json({ error: 'Modèle introuvable', code: 'NOT_FOUND' }, 404)
 
-    const { validation, estimation, ficheTechniqueId, tauxMargePct } = await evaluerConfiguration(modele, body.valeurs, body.quantite)
-    return c.json({ data: { validation, estimation, fiche_technique_id: ficheTechniqueId, taux_marge_pct: tauxMargePct } })
+    const { validation, estimation, ficheTechniqueId, tauxMargePct, erreurFiche } = await evaluerConfiguration(modele, body.valeurs, body.quantite)
+    return c.json({ data: { validation, estimation, fiche_technique_id: ficheTechniqueId, taux_marge_pct: tauxMargePct, erreur_fiche: erreurFiche ?? null } })
   },
 )
 
@@ -1004,6 +1004,131 @@ router.delete('/frais-indirects/:id', requirePermission('COMMERCIAL', 'CONFIGURE
     userId: user?.id, actionType: 'FRAIS_INDIRECTS_MODIFIES', module: 'COMMERCIAL',
     resourceType: 'frais_indirects', resourceId: id, payloadBefore: { ...data, actif: true }, payloadAfter: { actif: false },
   })
+  return c.body(null, 204)
+})
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GAMME OPÉRATOIRE ET POSTES DE TRAVAIL (Catalogue Hybride Phase 5, §15/§16/§21)
+// Les coûts horaires entrent dans les prix : lecture PRODUCTION:READ,
+// écriture PRODUCTION:UPDATE, changement de taux tracé (TAUX_HORAIRE_MODIFIE).
+// ══════════════════════════════════════════════════════════════════════════════
+
+const posteTravailSchema = z.object({
+  code:             z.string().trim().toUpperCase().regex(/^[A-Z0-9][A-Z0-9_-]{0,19}$/, 'code : majuscules, chiffres, - ou _ (20 max.)'),
+  libelle:          z.string().trim().min(1).max(100),
+  cout_horaire_xaf: z.number().min(0),
+  actif:            z.boolean().default(true),
+  notes:            z.string().max(500).nullable().optional(),
+})
+
+router.get('/postes-travail', requirePermission('PRODUCTION', 'READ'), async (c) => {
+  const { data, error } = await db.from('postes_travail').select('*').order('actif', { ascending: false }).order('libelle')
+  if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 500)
+  return c.json({ data: data ?? [] })
+})
+
+router.post('/postes-travail', requirePermission('PRODUCTION', 'UPDATE'), zValidator('json', posteTravailSchema), async (c) => {
+  const body = c.req.valid('json')
+  const { data, error } = await db.from('postes_travail').insert(body).select().single()
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+  writeAuditLog({
+    userId: c.get('user')?.id, actionType: 'TAUX_HORAIRE_MODIFIE', module: 'PRODUCTION',
+    resourceType: 'postes_travail', resourceId: (data as { id: string }).id,
+    payloadBefore: null, payloadAfter: { code: body.code, cout_horaire_xaf: body.cout_horaire_xaf },
+  })
+  return c.json(data, 201)
+})
+
+router.put('/postes-travail/:id', requirePermission('PRODUCTION', 'UPDATE'), zValidator('json', posteTravailSchema.partial()), async (c) => {
+  const { id } = c.req.param()
+  const body = c.req.valid('json')
+  const { data: avant } = await db.from('postes_travail').select('cout_horaire_xaf').eq('id', id).maybeSingle()
+  if (!avant) return c.json({ error: 'Poste introuvable', code: 'NOT_FOUND' }, 404)
+
+  const { data, error } = await db.from('postes_travail').update(body).eq('id', id).select().single()
+  if (error) return c.json({ error: error.message, code: error.code }, 400)
+
+  const ancien = Number((avant as { cout_horaire_xaf: number }).cout_horaire_xaf)
+  if (body.cout_horaire_xaf !== undefined && body.cout_horaire_xaf !== ancien) {
+    writeAuditLog({
+      userId: c.get('user')?.id, actionType: 'TAUX_HORAIRE_MODIFIE', module: 'PRODUCTION',
+      resourceType: 'postes_travail', resourceId: id,
+      payloadBefore: { cout_horaire_xaf: ancien }, payloadAfter: { cout_horaire_xaf: body.cout_horaire_xaf },
+    })
+  }
+  return c.json(data)
+})
+
+const operationSchema = z.object({
+  numero:           z.number().int().positive(),
+  libelle:          z.string().trim().min(1).max(100),
+  poste_id:         z.string().uuid().nullable().optional(),
+  equipement_id:    z.string().uuid().nullable().optional(),
+  temps_unitaire_h: z.number().min(0).default(0),
+  temps_fixe_h:     z.number().min(0).default(0),
+  actif:            z.boolean().default(true),
+  notes:            z.string().max(500).nullable().optional(),
+})
+
+/** Règles de cohérence d'une opération complète (création) ou fusionnée (modification). */
+function verifierOperation(o: { poste_id?: string | null; equipement_id?: string | null; temps_unitaire_h?: number; temps_fixe_h?: number }): string | null {
+  if (!o.poste_id && !o.equipement_id) return 'Une opération mobilise au moins un poste de travail ou un équipement'
+  if (!((o.temps_unitaire_h ?? 0) > 0 || (o.temps_fixe_h ?? 0) > 0)) return 'Une opération doit avoir un temps unitaire ou un temps de préparation'
+  return null
+}
+
+router.get('/fiche-technique/:id/operations', requirePermission('PRODUCTION', 'READ'), async (c) => {
+  const { id } = c.req.param()
+  const { data, error } = await db
+    .from('gamme_operations')
+    .select('*, postes_travail(code, libelle, cout_horaire_xaf), equipements(code, designation, cout_horaire_xaf)')
+    .eq('fiche_technique_id', id)
+    .order('numero')
+  if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 500)
+  return c.json({ data: data ?? [] })
+})
+
+router.post('/fiche-technique/:id/operations', requirePermission('PRODUCTION', 'UPDATE'), zValidator('json', operationSchema), async (c) => {
+  const { id } = c.req.param()
+  const body = c.req.valid('json')
+  const erreur = verifierOperation(body)
+  if (erreur) return c.json({ error: erreur, code: 'VALIDATION_ERROR' }, 422)
+
+  const { data, error } = await db
+    .from('gamme_operations')
+    .insert({ ...body, poste_id: body.poste_id ?? null, equipement_id: body.equipement_id ?? null, fiche_technique_id: id })
+    .select()
+    .single()
+  if (error) {
+    if (error.code === '23505') return c.json({ error: `L'opération ${body.numero} existe déjà dans cette gamme`, code: 'NUMERO_DEJA_UTILISE' }, 409)
+    return c.json({ error: error.message, code: error.code }, 400)
+  }
+  return c.json(data, 201)
+})
+
+router.put('/operations/:id', requirePermission('PRODUCTION', 'UPDATE'), zValidator('json', operationSchema.partial()), async (c) => {
+  const { id } = c.req.param()
+  const body = c.req.valid('json')
+  const { data: actuelle } = await db
+    .from('gamme_operations').select('poste_id, equipement_id, temps_unitaire_h, temps_fixe_h').eq('id', id).maybeSingle()
+  if (!actuelle) return c.json({ error: 'Opération introuvable', code: 'NOT_FOUND' }, 404)
+
+  const erreur = verifierOperation({ ...(actuelle as Record<string, unknown>), ...body })
+  if (erreur) return c.json({ error: erreur, code: 'VALIDATION_ERROR' }, 422)
+
+  const { data, error } = await db.from('gamme_operations').update(body).eq('id', id).select().single()
+  if (error) {
+    if (error.code === '23505') return c.json({ error: 'Ce numéro d\'opération existe déjà dans cette gamme', code: 'NUMERO_DEJA_UTILISE' }, 409)
+    return c.json({ error: error.message, code: error.code }, 400)
+  }
+  return c.json(data)
+})
+
+router.delete('/operations/:id', requirePermission('PRODUCTION', 'UPDATE'), async (c) => {
+  const { id } = c.req.param()
+  const { error } = await db.from('gamme_operations').delete().eq('id', id)
+  if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 400)
   return c.body(null, 204)
 })
 

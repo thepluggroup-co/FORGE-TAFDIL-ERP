@@ -233,7 +233,8 @@ const jobSchema = z.object({
   prix_public_xaf:     z.number().min(0).optional(),
   publier_shop:        z.boolean().optional(),
   description_produit: z.string().optional(),
-  machine_id:          z.string().optional(),
+  machine_id:          z.string().optional(),     // DÉPRÉCIÉ (D5) : résolu vers equipement_id
+  equipement_id:       z.string().uuid().optional(),
   machine_nom:         z.string().optional(),
   technicien_id:       z.string().optional(),
   technicien_nom:      z.string().optional(),
@@ -324,27 +325,39 @@ router.post('/production/jobs', requirePermission('PRODUCTION', 'CREATE'), zVali
     }
   }
 
-  // ── Bloquer si la machine est en panne ou en maintenance ─────────────────
-  if (body.machine_id) {
-    const { data: machine } = await db
-      .from('machines')
-      .select('nom, statut')
-      .eq('id', body.machine_id)
-      .single()
+  // ── Bloquer si l'équipement est en panne, en maintenance ou hors service ──
+  // Décision D5 : `equipements` est le référentiel unique. Un ancien machine_id
+  // est résolu vers l'équipement recopié (ancienne_machine_id) ; la table
+  // `machines` n'est plus lue qu'en repli, si la migration Phase 5 n'est pas passée.
+  if (body.equipement_id || body.machine_id) {
+    const requete = db.from('equipements').select('id, designation, statut')
+    const { data: equipement } = body.equipement_id
+      ? await requete.eq('id', body.equipement_id).maybeSingle()
+      : await requete.eq('ancienne_machine_id', body.machine_id!).maybeSingle()
 
-    if (machine) {
-      const m = machine as { nom: string; statut: string }
-      if (m.statut === 'panne') {
-        return c.json({
-          error: `Machine "${m.nom}" est en panne — assignation impossible`,
-          code:  'MACHINE_PANNE',
-        }, 422)
+    if (equipement) {
+      const e = equipement as { id: string; designation: string; statut: string }
+      if (e.statut === 'en_panne') {
+        return c.json({ error: `Équipement "${e.designation}" en panne — assignation impossible`, code: 'MACHINE_PANNE' }, 422)
       }
-      if (m.statut === 'maintenance') {
-        return c.json({
-          error: `Machine "${m.nom}" est en maintenance — assignation impossible`,
-          code:  'MACHINE_MAINTENANCE',
-        }, 422)
+      if (e.statut === 'maintenance') {
+        return c.json({ error: `Équipement "${e.designation}" en maintenance — assignation impossible`, code: 'MACHINE_MAINTENANCE' }, 422)
+      }
+      if (e.statut === 'hors_service' || e.statut === 'cede') {
+        return c.json({ error: `Équipement "${e.designation}" hors service — assignation impossible`, code: 'EQUIPEMENT_HORS_SERVICE' }, 422)
+      }
+      body.equipement_id = e.id
+      body.machine_nom = body.machine_nom ?? e.designation
+    } else if (body.equipement_id) {
+      return c.json({ error: 'Équipement introuvable', code: 'EQUIPEMENT_INTROUVABLE' }, 404)
+    } else {
+      const { data: machine } = await db.from('machines').select('nom, statut').eq('id', body.machine_id!).maybeSingle()
+      const m = machine as { nom: string; statut: string } | null
+      if (m?.statut === 'panne') {
+        return c.json({ error: `Machine "${m.nom}" est en panne — assignation impossible`, code: 'MACHINE_PANNE' }, 422)
+      }
+      if (m?.statut === 'maintenance') {
+        return c.json({ error: `Machine "${m.nom}" est en maintenance — assignation impossible`, code: 'MACHINE_MAINTENANCE' }, 422)
       }
     }
   }

@@ -12,6 +12,9 @@ import {
   DimensionsSchema,
   type RessourceTechnique,
   type TypeRessource,
+  ressourcesDepuisGamme,
+  type OperationGamme,
+  type TauxHoraireManquant,
   type ModeCalcul,
   type ResultatDevis,
 } from '@forge/shared'
@@ -66,7 +69,7 @@ export type ProposerDevisResultat =
  */
 export type ChargementFicheTechnique =
   | { ok: true; ficheTechniqueId: string; modeCalcul: ModeCalcul; ressources: RessourceTechnique[] }
-  | { ok: false; code: 'ERREUR_DB' | 'FICHE_TECHNIQUE_INTROUVABLE'; message: string }
+  | { ok: false; code: 'ERREUR_DB' | 'FICHE_TECHNIQUE_INTROUVABLE' | 'TAUX_HORAIRE_MANQUANT'; message: string }
 
 /**
  * Fiche technique ACTIVE d'un modèle et ses ressources actives, dans l'ordre.
@@ -111,7 +114,61 @@ export async function chargerFicheTechniqueActive(modeleId: string): Promise<Cha
     delaiJours: r.delai_jours ?? null,
   }))
 
-  return { ok: true, ficheTechniqueId: f.id, modeCalcul: ModeCalculSchema.parse(f.mode_calcul), ressources }
+  // Phase 5 — gamme opératoire : main-d'œuvre et machines chiffrées aux taux horaires
+  const gamme = await chargerGammeOperations(f.id)
+  if (!gamme.ok) return gamme
+  if (gamme.tauxManquants.length > 0) {
+    return {
+      ok: false,
+      code: 'TAUX_HORAIRE_MANQUANT',
+      message: `Coût horaire manquant : ${gamme.tauxManquants.map((t) => `op ${t.operation} (${t.ressource})`).join(', ')}. `
+        + 'Renseignez-le (postes de travail / équipements) : aucun prix n\'est calculé avec un taux inconnu.',
+    }
+  }
+
+  return { ok: true, ficheTechniqueId: f.id, modeCalcul: ModeCalculSchema.parse(f.mode_calcul), ressources: [...ressources, ...gamme.ressources] }
+}
+
+interface GammeOperationRow {
+  id: string; numero: number; libelle: string; temps_unitaire_h: number; temps_fixe_h: number
+  postes_travail: { code: string; libelle: string; cout_horaire_xaf: number | null } | null
+  equipements: { code: string; designation: string; cout_horaire_xaf: number | null } | null
+}
+
+/** Codes PostgREST / Postgres d'une table absente (migration Phase 5 pas encore appliquée). */
+const TABLE_ABSENTE = new Set(['42P01', 'PGRST205'])
+
+async function chargerGammeOperations(ficheTechniqueId: string): Promise<
+  | { ok: true; ressources: RessourceTechnique[]; tauxManquants: TauxHoraireManquant[] }
+  | { ok: false; code: 'ERREUR_DB'; message: string }
+> {
+  const { data, error } = await db
+    .from('gamme_operations')
+    .select('id, numero, libelle, temps_unitaire_h, temps_fixe_h, postes_travail(code, libelle, cout_horaire_xaf), equipements(code, designation, cout_horaire_xaf)')
+    .eq('fiche_technique_id', ficheTechniqueId)
+    .eq('actif', true)
+
+  if (error) {
+    // Avant la migration 20261007 : pas de gamme, le calcul reste celui des ressources seules.
+    if (TABLE_ABSENTE.has(String((error as { code?: string }).code))) return { ok: true, ressources: [], tauxManquants: [] }
+    return { ok: false, code: 'ERREUR_DB', message: error.message }
+  }
+
+  const operations: OperationGamme[] = ((Array.isArray(data) ? data : []) as unknown as GammeOperationRow[]).map((o) => ({
+    id: o.id,
+    numero: o.numero,
+    libelle: o.libelle,
+    tempsUnitaireH: Number(o.temps_unitaire_h),
+    tempsFixeH: Number(o.temps_fixe_h),
+    poste: o.postes_travail
+      ? { code: o.postes_travail.code, libelle: o.postes_travail.libelle, coutHoraireXaf: o.postes_travail.cout_horaire_xaf === null ? null : Number(o.postes_travail.cout_horaire_xaf) }
+      : null,
+    equipement: o.equipements
+      ? { code: o.equipements.code, designation: o.equipements.designation, coutHoraireXaf: o.equipements.cout_horaire_xaf === null ? null : Number(o.equipements.cout_horaire_xaf) }
+      : null,
+  }))
+
+  return { ok: true, ...ressourcesDepuisGamme(operations) }
 }
 
 export async function proposerDevis(input: DevisCalculateRequest): Promise<ProposerDevisResultat> {

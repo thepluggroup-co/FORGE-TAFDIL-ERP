@@ -162,6 +162,8 @@ export interface EvaluationConfiguration {
   estimation: ResultatEstimation
   ficheTechniqueId: string | null
   tauxMargePct: number | null
+  /** Cause interne d'une fiche inutilisable (ex. taux horaire manquant) — vue ERP seulement. */
+  erreurFiche?: string
 }
 
 /** Valide puis estime une saisie. Le prix n'est calculé que pour une configuration valide ou à valider. */
@@ -187,14 +189,21 @@ export async function evaluerConfiguration(
     chargerFraisIndirects(modele.id, ascendants),
   ])
 
-  const estimation = estimerConfiguration({
-    modeleId: modele.id,
-    validation,
-    modeCalcul: fiche.ok ? fiche.modeCalcul : null,
-    ressources: fiche.ok ? fiche.ressources : [],
-    tauxMargePct,
-    fraisIndirects,
-  })
+  // Taux horaire manquant (Phase 5) : pas de prix automatique ; le client reçoit
+  // un message générique, le détail reste dans erreurFiche (vue interne).
+  const estimation: ResultatEstimation = !fiche.ok && fiche.code === 'TAUX_HORAIRE_MANQUANT'
+    ? { disponible: false, raison: 'CALCUL_IMPOSSIBLE', message: 'Le prix de ce produit est en cours de mise à jour : il sera établi par nos équipes.' }
+    : estimerConfiguration({
+        modeleId: modele.id,
+        validation,
+        modeCalcul: fiche.ok ? fiche.modeCalcul : null,
+        ressources: fiche.ok ? fiche.ressources : [],
+        tauxMargePct,
+        fraisIndirects,
+      })
 
-  return { parametres, validation, estimation, ficheTechniqueId: fiche.ok ? fiche.ficheTechniqueId : null, tauxMargePct }
+  return {
+    parametres, validation, estimation, ficheTechniqueId: fiche.ok ? fiche.ficheTechniqueId : null, tauxMargePct,
+    erreurFiche: fiche.ok ? undefined : fiche.message,
+  }
 }

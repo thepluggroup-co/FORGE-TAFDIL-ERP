@@ -53,6 +53,8 @@ export const AUDIT_ACTIONS = [
   'MARGE_MODIFIEE', 'CONFIGURATION_CREEE',
   // Catalogue Hybride Phase 4 : frais indirects paramétrables.
   'FRAIS_INDIRECTS_MODIFIES',
+  // Catalogue Hybride Phase 5 : coûts horaires (postes de travail, équipements).
+  'TAUX_HORAIRE_MODIFIE',
 ] as const
 
 export type AuditActionType = typeof AUDIT_ACTIONS[number]

@@ -50,6 +50,8 @@ export interface RessourceTechnique {
   quantiteParUnite: number          // ex : 4 (kg d'acier) par unité de quantité facturable
   coutUnitaireReferenceXaf: number
   tempsReferenceH?: number | null
+  /** Quantité ajoutée une seule fois par commande (ex. temps de préparation d'une opération de gamme, Phase 5). */
+  quantiteFixe?: number | null
   /** sous_traitance : délai du sous-traitant, en jours. */
   delaiJours?: number | null
 }
@@ -243,7 +245,7 @@ export function calculerRessources(
   ressources: RessourceTechnique[],
 ): RessourceCalculee[] {
   return ressources.map((r) => {
-    const quantiteCalculee = arrondirQuantite(r.quantiteParUnite * quantiteFacturable)
+    const quantiteCalculee = arrondirQuantite(r.quantiteParUnite * quantiteFacturable + (r.quantiteFixe ?? 0))
     const totalXaf = arrondirXaf(quantiteCalculee * r.coutUnitaireReferenceXaf)
     const ligne: RessourceCalculee = {
       ressourceId: r.id,

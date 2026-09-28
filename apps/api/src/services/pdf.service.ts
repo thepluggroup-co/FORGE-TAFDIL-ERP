@@ -19,6 +19,9 @@ const CO = {
 
 // Logo TAFDIL — placer le fichier dans apps/api/src/assets/logo-tafdil.jpeg
 const LOGO_PATH = join(process.cwd(), 'src', 'assets', 'logo-tafdil.jpeg')
+// Version fond transparent (PNG, canal alpha) — utilisée pour le gabarit devis
+// (en-tête + filigrane pleine page), copiée depuis apps/web/public/tafdil-logo.png.
+const LOGO_TRANSPARENT_PATH = join(process.cwd(), 'src', 'assets', 'logo-tafdil-transparent.png')
 
 // ── Design tokens ──────────────────────────────────────────────────────────────
 const C = {
@@ -671,27 +674,42 @@ const RESSOURCE_LABELS_PDF: Record<PdfRessourceLigne['type'], string> = {
   materiau: 'Matériaux', main_oeuvre: "Main-d'œuvre", equipement: 'Équipements',
 }
 
+const DEVIS_HEADER_H = 124
+
 function drawDevisHeaderTafdil(doc: InstanceType<typeof PDFDocument>) {
-  const H = 108
+  const H = DEVIS_HEADER_H
   doc.rect(0, 0, PW, H).fill('#FFFFFF')
 
-  // Accent diagonal rouge/noir (coin bas-gauche de l'en-tête, cf. gabarit papier)
-  doc.polygon([0, H], [150, H], [0, H - 52]).fill(C.red)
-  doc.polygon([0, H], [96, H], [0, H - 26]).fill('#1A1A1A')
+  // Bandeau diagonal rouge/noir (coin bas-gauche), inspiré du gabarit papier TAFDIL :
+  // un large biseau rouge avec un fin liseré noir parallèle le long de son arête haute.
+  doc.polygon([0, H - 92], [300, H], [0, H]).fill(C.red)
+  doc.polygon([0, H - 112], [268, H - 22], [300, H], [0, H - 92]).fill('#1A1A1A')
 
   try {
-    doc.image(LOGO_PATH, ML - 6, 12, { width: 62, height: 62 })
+    // Logo fond transparent — chevauche légèrement le bandeau, comme sur le gabarit.
+    doc.image(LOGO_TRANSPARENT_PATH, ML - 4, 10, { width: 70, height: 78 })
   } catch { /* logo optionnel — le reste du gabarit reste correct sans lui */ }
 
-  doc.font('Helvetica-Bold').fontSize(17).fillColor(C.dark)
-    .text(CO.nom, 0, 14, { align: 'center', width: PW })
+  doc.font('Helvetica-Bold').fontSize(18).fillColor(C.dark)
+    .text(CO.nom, 0, 16, { align: 'center', width: PW })
   doc.font('Helvetica').fontSize(7.5).fillColor(C.mid)
-    .text('Etude - Conception - Réalisation - Conseil - Formation - Entretien - Menuiserie Métallique et Alluminium', 60, 37, { align: 'center', width: PW - 120 })
-    .text('Vente de Matériel - et Accessoires', 60, 47, { align: 'center', width: PW - 120 })
+    .text('Etude - Conception - Réalisation - Conseil - Formation - Entretien - Menuiserie Métallique et Alluminium', 72, 41, { align: 'center', width: PW - 144 })
+    .text('Vente de Matériel - et Accessoires', 72, 51, { align: 'center', width: PW - 144 })
   doc.font('Helvetica-Bold').fontSize(8).fillColor(C.dark)
-    .text(`NIU: ${CO.niu}`, 0, 61, { align: 'center', width: PW })
+    .text(`NIU: ${CO.niu}`, 0, 66, { align: 'center', width: PW })
 
   doc.moveTo(0, H).lineTo(PW, H).strokeColor(C.red).lineWidth(2.5).stroke()
+}
+
+/** Logo en grand filigrane, centré, très faible opacité — dessiné en premier sur
+    chaque page (avant tout autre contenu) pour rester derrière le texte/tableaux. */
+function drawDevisWatermark(doc: InstanceType<typeof PDFDocument>) {
+  try {
+    const size = 380
+    doc.opacity(0.05)
+    doc.image(LOGO_TRANSPARENT_PATH, (PW - size) / 2, (842 - size) / 2, { width: size })
+    doc.opacity(1)
+  } catch { /* filigrane optionnel — n'affecte jamais le reste du document */ }
 }
 
 /** Bloc "Douala le ..." / DOIT / NIU / RCCM / BP puis l'encart bleu N° devis + DQE. */
@@ -783,25 +801,64 @@ function drawDevisSummaryRow(doc: InstanceType<typeof PDFDocument>, label: strin
   return y + h
 }
 
-/** §41.D — détail des ressources (matériaux/MO/équipements) des produits catalogue de ce devis. */
-function drawDevisRessourcesDetail(doc: InstanceType<typeof PDFDocument>, y: number, snapshot: PdfRessourcesSnapshot): number {
+// Colonnes du tableau "Détail des ressources" — mêmes marges (ML/W) que le
+// tableau principal (DCOL) pour rester parfaitement centré/aligné avec lui.
+const RCOL = {
+  des: { x: ML,       w: 280 },
+  qte: { x: ML + 280, w: 115 },
+  mt:  { x: ML + 395, w: 120 },
+} as const
+
+function drawDevisRessourcesTableHeader(doc: InstanceType<typeof PDFDocument>, y: number): number {
+  doc.rect(ML, y, W, DEVIS_ROW_H).strokeColor('#000000').lineWidth(0.5).stroke()
+  let x = ML
+  for (const col of Object.values(RCOL)) {
+    doc.moveTo(x, y).lineTo(x, y + DEVIS_ROW_H).strokeColor('#000000').lineWidth(0.5).stroke()
+    x += col.w
+  }
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
+  doc.text('DÉSIGNATION', RCOL.des.x, y + 6, { width: RCOL.des.w, align: 'center' })
+  doc.text('QUANTITÉ',    RCOL.qte.x, y + 6, { width: RCOL.qte.w, align: 'center' })
+  doc.text('MONTANT',     RCOL.mt.x,  y + 6, { width: RCOL.mt.w,  align: 'center' })
+  return y + DEVIS_ROW_H
+}
+
+/** Ligne de groupe pleine largeur (Matériaux / Main-d'œuvre / Équipements) — même
+    grammaire visuelle que les lignes CONSOMMABLE/MAIN D'ŒUVRE du tableau principal. */
+function drawDevisRessourcesGroupRow(doc: InstanceType<typeof PDFDocument>, label: string, y: number): number {
+  doc.rect(ML, y, W, DEVIS_ROW_H).strokeColor('#000000').lineWidth(0.5).stroke()
   doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.dark)
-    .text('DÉTAIL DES RESSOURCES (produits catalogue — calcul automatique)', ML, y)
-  y += 14
+    .text(label, ML, y + 6, { width: W, align: 'center' })
+  return y + DEVIS_ROW_H
+}
+
+function drawDevisRessourcesRow(doc: InstanceType<typeof PDFDocument>, r: PdfRessourceLigne, y: number): number {
+  doc.rect(ML, y, W, DEVIS_ROW_H).strokeColor('#000000').lineWidth(0.5).stroke()
+  let x = ML
+  for (const col of Object.values(RCOL)) {
+    doc.moveTo(x, y).lineTo(x, y + DEVIS_ROW_H).strokeColor('#000000').lineWidth(0.5).stroke()
+    x += col.w
+  }
+  doc.font('Helvetica').fontSize(8.5).fillColor(C.dark)
+  doc.text(r.designation, RCOL.des.x + 6, y + 6, { width: RCOL.des.w - 12, ellipsis: true })
+  doc.text(`${r.quantiteCalculee} ${r.unite}`, RCOL.qte.x, y + 6, { width: RCOL.qte.w, align: 'center' })
+  doc.text(`${montantPdf(r.totalXaf)} XAF`, RCOL.mt.x, y + 6, { width: RCOL.mt.w - 6, align: 'right' })
+  return y + DEVIS_ROW_H
+}
+
+/** §41.D — détail des ressources (matériaux/MO/équipements) des produits catalogue de
+    ce devis, en tableau bordé centré sur les mêmes marges que le tableau principal. */
+function drawDevisRessourcesDetail(doc: InstanceType<typeof PDFDocument>, y: number, snapshot: PdfRessourcesSnapshot): number {
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
+    .text('DÉTAIL DES RESSOURCES (produits catalogue — calcul automatique)', ML, y, { width: W, align: 'center' })
+  y += 16
+  y = drawDevisRessourcesTableHeader(doc, y)
 
   for (const type of ['materiau', 'main_oeuvre', 'equipement'] as const) {
     const items = snapshot.lignes.filter((r) => r.type === type)
     if (items.length === 0) continue
-    doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.muted).text(RESSOURCE_LABELS_PDF[type], ML, y)
-    y += 10
-    doc.font('Helvetica').fontSize(7.5).fillColor(C.dark)
-    for (const r of items) {
-      doc.text(r.designation, ML + 10, y, { width: 260 })
-      doc.text(`${r.quantiteCalculee} ${r.unite}`, ML + 280, y, { width: 100, align: 'right' })
-      doc.text(`${montantPdf(r.totalXaf)} XAF`, ML + 390, y, { width: W - 350, align: 'right' })
-      y += 10
-    }
-    y += 4
+    y = drawDevisRessourcesGroupRow(doc, RESSOURCE_LABELS_PDF[type], y)
+    for (const r of items) y = drawDevisRessourcesRow(doc, r, y)
   }
   return y
 }
@@ -837,13 +894,15 @@ export async function generateDevisPDF(
     doc.on('end',   () => resolve(Buffer.concat(chunks)))
     doc.on('error', reject)
 
+    drawDevisWatermark(doc)
     drawDevisHeaderTafdil(doc)
-    let y = drawDevisInfoBlock(doc, 122, devis, client)
+    let y = drawDevisInfoBlock(doc, DEVIS_HEADER_H + 18, devis, client)
     y = drawDevisTableHeader(doc, y)
 
     for (let i = 0; i < lignes.length; i++) {
       if (y + DEVIS_ROW_H_CONF > DEVIS_PAGE_END) {
         doc.addPage()
+        drawDevisWatermark(doc)
         doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
           .text(`${CO.nom} — DEVIS ${devis.numero} (suite)`, ML, 20, { width: W })
         y = drawDevisTableHeader(doc, 44)
@@ -854,26 +913,26 @@ export async function generateDevisPDF(
     const totalMateriaux  = devis.ressources_snapshot?.totalMateriauxXaf ?? 0
     const totalMainOeuvre = (devis.ressources_snapshot?.totalMainOeuvreXaf ?? 0) + (devis.ressources_snapshot?.totalEquipementsXaf ?? 0)
 
-    if (y + DEVIS_ROW_H * 3 > DEVIS_PAGE_END) { doc.addPage(); y = 40 }
+    if (y + DEVIS_ROW_H * 3 > DEVIS_PAGE_END) { doc.addPage(); drawDevisWatermark(doc); y = 40 }
     y = drawDevisSummaryRow(doc, 'CONSOMMABLE',   totalMateriaux,     y)
     y = drawDevisSummaryRow(doc, "MAIN D'ŒUVRE",  totalMainOeuvre,    y)
     y = drawDevisSummaryRow(doc, 'MONTANT TOTAL', devis.total_ht_xaf, y, true)
     y += 16
 
     if (devis.ressources_snapshot && devis.ressources_snapshot.lignes.length > 0) {
-      if (y + 100 > DEVIS_PAGE_END) { doc.addPage(); y = 40 }
+      if (y + 100 > DEVIS_PAGE_END) { doc.addPage(); drawDevisWatermark(doc); y = 40 }
       y = drawDevisRessourcesDetail(doc, y, devis.ressources_snapshot)
       y += 10
     }
 
-    if (y + 30 > DEVIS_PAGE_END) { doc.addPage(); y = 40 }
+    if (y + 30 > DEVIS_PAGE_END) { doc.addPage(); drawDevisWatermark(doc); y = 40 }
     doc.font('Helvetica').fontSize(9).fillColor(C.dark)
       .text('Arrêté le présent devis à la somme de : ', ML, y, { continued: true })
     doc.font('Helvetica-Bold').fontSize(9).fillColor(C.red)
       .text(`${montantEnLettres(devis.total_ht_xaf).toUpperCase()}.`)
     y += 20
 
-    if (y + 90 > DEVIS_PAGE_END) { doc.addPage(); y = 40 }
+    if (y + 55 > DEVIS_PAGE_END) { doc.addPage(); drawDevisWatermark(doc); y = 40 }
     drawDevisSignatureAndFooter(doc, y)
 
     doc.end()

@@ -850,6 +850,7 @@ export const validationsNiveauPg = pgTable('validations_niveau', {
 // PRODUCTION
 // ══════════════════════════════════════════════════════════════════════════════
 
+// @deprecated Décision D5 : référentiel unique = equipements (lignes recopiées, equipements.ancienne_machine_id).
 export const machinesPg = pgTable('machines', {
   id:                   id(),
   nom:                  text('nom').notNull(),
@@ -874,7 +875,8 @@ export const jobsProductionPg = pgTable('jobs_production', {
   unite:              text('unite'),
   quantitePrevue:     real('quantite_prevue'),
   prixUnitaireXaf:    real('prix_unitaire_xaf'),
-  machineId:          uuid('machine_id').references(() => machinesPg.id),
+  machineId:          uuid('machine_id').references(() => machinesPg.id),  // DÉPRÉCIÉ (D5) : utiliser equipementId
+  equipementId:       uuid('equipement_id').references(() => equipementsPg.id),
   machineNom:         text('machine_nom'),
   technicienId:       uuid('technicien_id').references(() => employesPg.id),
   technicienNom:      text('technicien_nom'),
@@ -1040,6 +1042,9 @@ export const equipementsPg = pgTable('equipements', {
   prochaineRevision:      text('prochaine_revision'),
   intervalleRevisionJ:    integer('intervalle_revision_j').notNull().default(365),
   notes:                  text('notes'),
+  // Phase 5 (D5 : référentiel unique des machines) — coût horaire machine et origine d'une ligne recopiée de `machines`
+  coutHoraireXaf:         real('cout_horaire_xaf'),
+  ancienneMachineId:      uuid('ancienne_machine_id'),
   createdBy:              uuid('created_by').references(() => profilesPg.id),
   createdAt:              ts('created_at'),
   updatedAt:              ts('updated_at'),
@@ -1263,3 +1268,33 @@ export type ModeleShopPg = typeof modelesShopPg.$inferSelect
 
 export type ModeleSpecificationPg       = typeof modeleSpecificationsPg.$inferSelect
 export type NouvelleModeleSpecificationPg = typeof modeleSpecificationsPg.$inferInsert
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Gamme opératoire (Catalogue Hybride Phase 5, §15/§16/§21)
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const postesTravailPg = pgTable('postes_travail', {
+  id:             id(),
+  code:           text('code').notNull().unique(),
+  libelle:        text('libelle').notNull(),
+  coutHoraireXaf: real('cout_horaire_xaf').notNull(),
+  actif:          boolean('actif').notNull().default(true),
+  notes:          text('notes'),
+  createdAt:      ts('created_at'),
+  updatedAt:      ts('updated_at'),
+})
+
+export const gammeOperationsPg = pgTable('gamme_operations', {
+  id:               id(),
+  ficheTechniqueId: uuid('fiche_technique_id').notNull().references(() => ficheTechniquePg.id),
+  numero:           integer('numero').notNull(),
+  libelle:          text('libelle').notNull(),
+  posteId:          uuid('poste_id').references(() => postesTravailPg.id),
+  equipementId:     uuid('equipement_id').references(() => equipementsPg.id),
+  tempsUnitaireH:   real('temps_unitaire_h').notNull().default(0),   // par unité facturable
+  tempsFixeH:       real('temps_fixe_h').notNull().default(0),       // préparation, une fois par commande
+  actif:            boolean('actif').notNull().default(true),
+  notes:            text('notes'),
+  createdAt:        ts('created_at'),
+  updatedAt:        ts('updated_at'),
+})

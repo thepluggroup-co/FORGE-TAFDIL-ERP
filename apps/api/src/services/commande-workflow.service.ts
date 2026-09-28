@@ -969,7 +969,7 @@ export async function chargerJobsProductionCommande(commandeId: string): Promise
       statut, avancement_pct,
       date_debut, date_fin_prevue, date_fin_reelle, notes,
       created_at, updated_at,
-      machines(id, nom, type, statut),
+      equipements(id, code, designation, statut),
       employes(id, nom, poste)
     `)
     .eq('commande_id', commandeId)
