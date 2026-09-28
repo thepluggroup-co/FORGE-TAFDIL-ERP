@@ -78,6 +78,45 @@ Gestion ERP : onglet **Boutique → Produits finis**, qui appelle `GET /api/shop
 
 Pas encore couvert : les promotions sur les produits finis (les campagnes ciblent `produits`) et l'envoi d'images pour un modèle depuis l'ERP (l'API accepte des URL).
 
-## 6. Ce qui vient ensuite
+Les promotions (`campagnes_produits.modele_id`) et les images (`POST /api/shop-erp/modeles/:id/images`, dont le type est vérifié par la signature du fichier) couvrent désormais aussi les produits finis.
 
-- **Phase 3 (CONFIGURABLE)** : produit pilote P003, avec des paramètres bornés ; au-delà des bornes, le produit bascule en `QUOTE`.
+## 6. Parcours CONFIGURABLE (Phase 3, pilote Portail P003)
+
+```text
+Site : Personnaliser → /configurateur/[id] → Calculer (estimation HT, non contractuelle)
+     → Demander validation → configuration CFG-XXXXX figée + devis brouillon (ERP)
+     → hors limites : aucun prix, demande de devis (demandes_devis_web + devis brouillon)
+```
+
+| Statut | Signification | Prix automatique | Suite |
+|---|---|---|---|
+| `valide` | dans les limites | oui (si fiche technique + marge) | devis brouillon au prix estimé |
+| `a_valider` | un choix exige un avis humain (ex. couleur « autre ») | oui, à confirmer | devis brouillon + mention « validation requise » |
+| `hors_limites` | dimension hors de la gamme fabricable | **non** | demande de devis |
+| `invalide` | champ manquant ou erroné | non | rien n'est enregistré (422) |
+
+**Coût ≠ prix (§13, D4)** :
+- coût de revient = fiche technique active (matériaux + main-d'œuvre + équipements) + options × quantité ;
+- prix unitaire HT = arrondi(coût unitaire × (1 + taux)) ;
+- le taux vient de `regles_marge`, avec la priorité modèle > famille la plus proche > global. Sans taux, pas de prix automatique.
+
+**Ce que le client ne voit jamais (§27)** : le coût de revient, la marge, les coûts d'options et les ressources. Les réponses publiques sont testées pour ne contenir aucun de ces termes.
+
+**Figé (§11/§25)** : `configurations` conserve la saisie, le schéma appliqué et le détail interne de l'estimation. Un trigger refuse toute modification ultérieure.
+
+**Unités (§44)** : les dimensions sont saisies en mm, cm ou m selon le paramètre, puis converties explicitement en mètres pour le moteur.
+
+**ERP** :
+- Catalogue → bouton « Configurateur » sur un modèle configurable : champs, limites et coûts d'options, avec une zone de test qui montre coût, marge et prix ;
+- Catalogue → « Taux de marge » ;
+- Boutique → Produits finis : mise en ligne sans prix public.
+
+**API** :
+- publique : `GET /api/shop/configurateur/:id`, `POST …/estimer`, `POST …/demande` ;
+- interne : `GET|PUT /api/catalogue/modeles/:id/parametres`, `POST /api/catalogue/modeles/:id/estimer`, `GET|POST|DELETE /api/catalogue/regles-marge`, `GET /api/catalogue/configurations`.
+
+**Reporté** : le bouton « Ajouter au panier » pour un produit configurable. Une estimation n'est pas contractuelle (§49), elle passe donc d'abord par la validation d'un conseiller.
+
+## 7. Ce qui vient ensuite
+
+- **Phase 4 (cost engine)** : consommables séparés des matières, sous-traitance, frais indirects, transport et installation, en lignes optionnelles qui ne cassent pas les totaux actuels.

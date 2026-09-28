@@ -300,7 +300,9 @@ Protocole à chaque migration (§38-39) : `SELECT count(*)` avant/après sur cha
 | 0 bis — Sécurité shop | ✅ | prix/frais recalculés serveur, auth optionnelle vendeur, audit `VENTE_PRIX_FORCE`, réf web cryptographique, migration `20260930_shop_securite_prix_rls.sql` |
 | 1 — Fondations produits | ✅ | `CommercialMode` ([COMMERCIAL_MODES.md](COMMERCIAL_MODES.md)), hiérarchie 3 niveaux contrôlée, dépréciation documentée, migration `20261001_catalogue_hybride_phase1_hierarchie.sql` (métadonnées seules) |
 | 2 — Standard | ✅ | vitrine `modeles_shop`, produits finis STANDARD au panier (fabriqués sur commande), onglet ERP « Produits finis », CAS 1 pilote testé, migration `20261002_catalogue_hybride_phase2_modeles_shop.sql` |
-| 3 — Configurable (P003) | ⏳ | attend validation de la Phase 2 |
+| 2 bis — Promotions et images des produits finis | ✅ | migration `20261003_promotions_produits_finis.sql`, envoi d'images vérifié par signature |
+| 3 — Configurable (P003) | ✅ | configurateur site + ERP, statuts valide / à valider / hors limites / invalide, coût ≠ prix avec marge saisie (D4), `CFG-XXXXX` figé, CAS 2 et CAS 3 testés ; migrations `20261004_catalogue_hybride_phase3_configurateur.sql` et `20261005_seed_pilote_portail_p003.sql` |
+| 4 — Cost engine | ⏳ | attend validation de la Phase 3 |
 
 **Tests** : sur ce poste, la suite complète sature la mémoire avec le parallélisme par défaut (`heap out of memory`). Il faut la lancer avec `npx vitest run --maxWorkers=2 --minWorkers=1`.
 
