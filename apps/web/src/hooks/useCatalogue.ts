@@ -541,3 +541,81 @@ export function useDesactiverFraisIndirects() {
     onError: (err: Error) => toast.error(err.message),
   })
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Gamme opératoire et postes de travail (Catalogue Hybride Phase 5)
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface PosteTravail {
+  id: string
+  code: string
+  libelle: string
+  cout_horaire_xaf: number
+  actif: boolean
+  notes: string | null
+}
+
+export function usePostesTravail() {
+  return useQuery({
+    queryKey: ['catalogue', 'postes-travail'],
+    queryFn:  () => apiClient.get<{ data: PosteTravail[] }>('/api/catalogue/postes-travail').then((r) => r.data),
+  })
+}
+
+export function useEnregistrerPosteTravail() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, payload }: { id?: string; payload: Partial<Omit<PosteTravail, 'id'>> }) =>
+      id
+        ? apiClient.put<PosteTravail>(`/api/catalogue/postes-travail/${id}`, payload)
+        : apiClient.post<PosteTravail>('/api/catalogue/postes-travail', payload),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['catalogue', 'postes-travail'] }); toast.success('Poste de travail enregistré') },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export interface OperationGamme {
+  id: string
+  fiche_technique_id: string
+  numero: number
+  libelle: string
+  poste_id: string | null
+  equipement_id: string | null
+  temps_unitaire_h: number
+  temps_fixe_h: number
+  actif: boolean
+  postes_travail?: { code: string; libelle: string; cout_horaire_xaf: number | null } | null
+  equipements?: { code: string; designation: string; cout_horaire_xaf: number | null } | null
+}
+
+export type OperationPayload = Pick<OperationGamme, 'numero' | 'libelle' | 'poste_id' | 'equipement_id' | 'temps_unitaire_h' | 'temps_fixe_h'>
+
+export function useGammeOperations(ficheTechniqueId: string | null) {
+  return useQuery({
+    queryKey: ['catalogue', 'fiche-technique', ficheTechniqueId, 'operations'],
+    queryFn:  () => apiClient.get<{ data: OperationGamme[] }>(`/api/catalogue/fiche-technique/${ficheTechniqueId}/operations`).then((r) => r.data),
+    enabled:  Boolean(ficheTechniqueId),
+  })
+}
+
+export function useAjouterOperation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ ficheTechniqueId, payload }: { ficheTechniqueId: string; payload: OperationPayload }) =>
+      apiClient.post<OperationGamme>(`/api/catalogue/fiche-technique/${ficheTechniqueId}/operations`, payload),
+    onSuccess: (_, v) => {
+      void qc.invalidateQueries({ queryKey: ['catalogue', 'fiche-technique', v.ficheTechniqueId, 'operations'] })
+      toast.success('Opération ajoutée')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useSupprimerOperation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id }: { id: string; ficheTechniqueId: string }) => apiClient.delete(`/api/catalogue/operations/${id}`),
+    onSuccess: (_, v) => void qc.invalidateQueries({ queryKey: ['catalogue', 'fiche-technique', v.ficheTechniqueId, 'operations'] }),
+    onError: (err: Error) => toast.error(err.message),
+  })
+}

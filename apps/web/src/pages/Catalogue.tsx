@@ -25,6 +25,7 @@ import { uniteOptions } from '@/lib/constants'
 import { ParametresConfigurationModal } from '@/components/catalogue/ParametresConfiguration'
 import { ReglesMargeModal } from '@/components/catalogue/ReglesMarge'
 import { FraisIndirectsModal } from '@/components/catalogue/FraisIndirects'
+import { GammeOperations } from '@/components/catalogue/GammeOperations'
 import {
   LIBELLES_MODE_COMMERCIAL, modeCommercialDepuisTypeGamme, libelleNiveauFamille, PROFONDEUR_MAX_FAMILLES,
 } from '@forge/shared'
@@ -995,6 +996,9 @@ export default function Catalogue() {
                   </Button>
                 </div>
               </div>
+              {selectedFicheId && (
+                <GammeOperations ficheTechniqueId={selectedFicheId} uniteFacturation={ficheModele?.unite_facturation} />
+              )}
             </>
           )}
         </div>

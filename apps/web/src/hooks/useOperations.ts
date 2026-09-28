@@ -26,6 +26,8 @@ export interface CreateJobPayload {
   produit_id?: string
   produit_ref?: string
   produit_designation: string; machine_nom?: string; technicien_nom?: string
+  /** D5 : équipement principal de l'OF (référentiel unique equipements). */
+  equipement_id?: string
   categorie?: string; unite?: string
   quantite_prevue?: number
   prix_unitaire_xaf?: number

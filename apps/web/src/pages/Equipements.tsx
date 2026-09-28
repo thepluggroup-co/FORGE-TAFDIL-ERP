@@ -29,6 +29,7 @@ interface Equipement {
   revision_depassee?: boolean
   date_remplacement_prevue?: string | null
   valeur_achat_xaf?: number
+  cout_horaire_xaf?: number | null   // Phase 5 : coût horaire machine (gamme opératoire)
   fournisseur?: string | null
   marque?: string | null
   modele?: string | null
@@ -235,6 +236,17 @@ function useUpdateStatutEquipement() {
   })
 }
 
+/** Phase 5 : coût horaire machine utilisé par la gamme opératoire (changement tracé côté serveur). */
+function useUpdateCoutHoraireEquipement() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, cout_horaire_xaf }: { id: string; cout_horaire_xaf: number | null }) =>
+      apiClient.put<Equipement>(`/api/equipements/${id}`, { cout_horaire_xaf }),
+    onSuccess: () => { invalidateEquipements(qc); toast.success('Coût horaire mis à jour') },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
 function useCreateMaintenance() {
   const qc = useQueryClient()
   return useMutation({
@@ -291,6 +303,7 @@ export default function Equipements() {
   const { data: detail } = useEquipementDetail(detailId)
   const createEquipement = useCreateEquipement()
   const updateStatut = useUpdateStatutEquipement()
+  const updateCoutHoraire = useUpdateCoutHoraireEquipement()
   const createMaintenance = useCreateMaintenance()
   const updateMaintenance = useUpdateMaintenanceStatut()
 
@@ -516,6 +529,17 @@ export default function Equipements() {
               <Info label="Emplacement" value={detail.emplacement ?? '-'} />
               <Info label="Fournisseur" value={detail.fournisseur ?? '-'} />
               <Info label="Coût maintenance" value={formatXAF(detail.cout_maintenance_total ?? 0)} />
+              <Info label="Coût horaire (gamme)" value={canEdit ? (
+                <input
+                  key={detail.id} type="number" min={0} step={50} defaultValue={detail.cout_horaire_xaf ?? ''} placeholder="non renseigné"
+                  onBlur={(e) => {
+                    const v = e.target.value === '' ? null : Number(e.target.value)
+                    if (v !== (detail.cout_horaire_xaf ?? null) && (v === null || v >= 0)) updateCoutHoraire.mutate({ id: detail.id, cout_horaire_xaf: v })
+                  }}
+                  className="w-28 rounded border border-gray-200 px-1.5 py-1 text-right text-sm"
+                  title="FCFA par heure d'utilisation — chiffre les opérations de gamme qui utilisent cet équipement"
+                />
+              ) : (detail.cout_horaire_xaf != null ? `${formatXAF(detail.cout_horaire_xaf)}/h` : 'non renseigné')} />
             </div>
 
             {canEdit && (
