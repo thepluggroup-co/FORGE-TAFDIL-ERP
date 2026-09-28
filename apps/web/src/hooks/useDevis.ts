@@ -106,7 +106,7 @@ export interface CalculerDevisInput {
 
 export interface RessourceCalculee {
   ressourceId: string
-  type: 'materiau' | 'main_oeuvre' | 'equipement'
+  type: 'materiau' | 'consommable' | 'main_oeuvre' | 'equipement' | 'sous_traitance'
   designation: string
   unite: string
   quantiteCalculee: number

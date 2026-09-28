@@ -4,6 +4,7 @@ import { Modal, Button } from '@forge/ui'
 import {
   useParametresModele, useEnregistrerParametres, useEstimerInterne,
   type Modele, type ParametreConfiguration, type ParametrePayload, type TypeParametre, type RoleCalcul, type EstimationInterne,
+  type CategorieCout,
 } from '@/hooks/useCatalogue'
 import { formatXAF } from '@/lib/utils'
 
@@ -24,15 +25,17 @@ function versPayload(p: ParametreConfiguration): ParametrePayload {
     code: p.code, libelle: p.libelle, type: p.type, obligatoire: p.obligatoire,
     unite: p.unite ?? null, min: p.min ?? null, max: p.max ?? null, pas: p.pas ?? null,
     role_calcul: p.roleCalcul ?? null, cout_si_oui_xaf: p.coutSiOuiXaf ?? 0,
+    categorie_cout: p.categorieCout ?? 'option', cout_par_commande: p.coutParCommande ?? false,
     valeurs: (p.valeurs ?? []).map((v) => ({
       code: v.code, libelle: v.libelle, cout_supplementaire_xaf: v.coutSupplementaireXaf, validation_requise: v.validationRequise,
+      categorie_cout: v.categorieCout ?? 'option', cout_par_commande: v.coutParCommande ?? false,
     })),
   }
 }
 
 const nouveauParametre = (): ParametrePayload => ({
   code: '', libelle: '', type: 'nombre', obligatoire: true, unite: 'mm', min: null, max: null, pas: null,
-  role_calcul: null, cout_si_oui_xaf: 0, valeurs: [],
+  role_calcul: null, cout_si_oui_xaf: 0, categorie_cout: 'option', cout_par_commande: false, valeurs: [],
 })
 
 const nombreOuNull = (v: string) => (v.trim() === '' ? null : Number(v))
@@ -99,29 +102,39 @@ export function ParametresConfigurationModal({ modele, onClose }: { modele: Mode
                 )}
 
                 {p.type === 'booleen' && (
-                  <label className="flex items-center gap-2 text-xs text-gray-600">
-                    Coût de revient si coché (FCFA / unité)
-                    <input className={`${CHAMP} w-40`} type="number" min={0} value={p.cout_si_oui_xaf} onChange={(e) => maj(i, { cout_si_oui_xaf: Number(e.target.value) || 0 })} />
-                  </label>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
+                    Coût de revient si coché (FCFA)
+                    <input className={`${CHAMP} w-32`} type="number" min={0} value={p.cout_si_oui_xaf} onChange={(e) => maj(i, { cout_si_oui_xaf: Number(e.target.value) || 0 })} />
+                    <NatureCout
+                      categorie={p.categorie_cout} parCommande={p.cout_par_commande}
+                      onChange={(patch) => maj(i, patch)}
+                    />
+                  </div>
                 )}
 
                 {p.type === 'choix' && (
                   <div className="space-y-1.5">
                     {p.valeurs.map((v, k) => (
-                      <div key={k} className="grid grid-cols-12 gap-2">
-                        <input className={`${CHAMP} col-span-3`} placeholder="code" value={v.code}
+                      <div key={k} className="grid grid-cols-12 items-center gap-2">
+                        <input className={`${CHAMP} col-span-2`} placeholder="code" value={v.code}
                           onChange={(e) => majValeur(i, k, { code: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '') })} />
-                        <input className={`${CHAMP} col-span-4`} placeholder="Libellé" value={v.libelle} onChange={(e) => majValeur(i, k, { libelle: e.target.value })} />
+                        <input className={`${CHAMP} col-span-3`} placeholder="Libellé" value={v.libelle} onChange={(e) => majValeur(i, k, { libelle: e.target.value })} />
                         <input className={`${CHAMP} col-span-2`} type="number" min={0} placeholder="coût +" value={v.cout_supplementaire_xaf}
                           onChange={(e) => majValeur(i, k, { cout_supplementaire_xaf: Number(e.target.value) || 0 })} />
-                        <label className="col-span-2 flex items-center gap-1 text-[11px] text-gray-600" title="Ce choix exige une validation technique humaine">
+                        <div className="col-span-3">
+                          <NatureCout
+                            categorie={v.categorie_cout} parCommande={v.cout_par_commande}
+                            onChange={(patch) => majValeur(i, k, patch)}
+                          />
+                        </div>
+                        <label className="col-span-1 flex items-center gap-1 text-[11px] text-gray-600" title="Ce choix exige une validation technique humaine">
                           <input type="checkbox" checked={v.validation_requise} onChange={(e) => majValeur(i, k, { validation_requise: e.target.checked })} /> À valider
                         </label>
                         <button type="button" onClick={() => maj(i, { valeurs: p.valeurs.filter((_, j) => j !== k) })}
                           className="col-span-1 flex items-center justify-center text-red-400 hover:text-red-600"><Trash2 className="h-3 w-3" /></button>
                       </div>
                     ))}
-                    <button type="button" onClick={() => maj(i, { valeurs: [...p.valeurs, { code: '', libelle: '', cout_supplementaire_xaf: 0, validation_requise: false }] })}
+                    <button type="button" onClick={() => maj(i, { valeurs: [...p.valeurs, { code: '', libelle: '', cout_supplementaire_xaf: 0, validation_requise: false, categorie_cout: 'option', cout_par_commande: false }] })}
                       className="text-[11px] font-semibold text-[#C62828]">+ Ajouter un choix</button>
                   </div>
                 )}
@@ -142,6 +155,30 @@ export function ParametresConfigurationModal({ modele, onClose }: { modele: Mode
         </div>
       )}
     </Modal>
+  )
+}
+
+/**
+ * Nature d'un coût d'option (Phase 4) : option produit, transport ou
+ * installation ; par unité commandée ou forfait unique par commande.
+ */
+function NatureCout({ categorie, parCommande, onChange }: {
+  categorie: CategorieCout
+  parCommande: boolean
+  onChange: (patch: { categorie_cout?: CategorieCout; cout_par_commande?: boolean }) => void
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <select className={CHAMP} value={categorie} onChange={(e) => onChange({ categorie_cout: e.target.value as CategorieCout })}
+        title="Nature du coût dans le coût de revient">
+        <option value="option">Option</option>
+        <option value="transport">Transport</option>
+        <option value="installation">Installation</option>
+      </select>
+      <label className="flex shrink-0 items-center gap-1 text-[11px] text-gray-600" title="Coché : compté une seule fois par commande, quelle que soit la quantité">
+        <input type="checkbox" checked={parCommande} onChange={(e) => onChange({ cout_par_commande: e.target.checked })} /> /cde
+      </label>
+    </div>
   )
 }
 
@@ -191,10 +228,21 @@ function TesteurConfiguration({ modeleId, parametres }: { modeleId: string; para
           {resultat.validation.horsLimites.map((h) => <p key={h.parametre} className="text-amber-700">{h.parametre} = {h.valeur} hors plage {h.min ?? '…'} – {h.max ?? '…'} → devis</p>)}
           {resultat.estimation.disponible ? (
             <div className="grid grid-cols-2 gap-x-4 rounded-lg bg-white p-2">
-              <span>Matériaux</span><span className="text-right">{formatXAF(resultat.estimation.estimation.coutMateriauxXaf)}</span>
-              <span>Main-d'œuvre</span><span className="text-right">{formatXAF(resultat.estimation.estimation.coutMainOeuvreXaf)}</span>
-              <span>Équipements</span><span className="text-right">{formatXAF(resultat.estimation.estimation.coutEquipementsXaf)}</span>
-              <span>Options</span><span className="text-right">{formatXAF(resultat.estimation.estimation.coutOptionsXaf)}</span>
+              {([
+                ['Matériaux', resultat.estimation.estimation.coutMateriauxXaf],
+                ['Consommables', resultat.estimation.estimation.coutConsommablesXaf],
+                ["Main-d'œuvre", resultat.estimation.estimation.coutMainOeuvreXaf],
+                ['Équipements', resultat.estimation.estimation.coutEquipementsXaf],
+                ['Sous-traitance', resultat.estimation.estimation.coutSousTraitanceXaf],
+                ['Options', resultat.estimation.estimation.coutOptionsXaf],
+                ...resultat.estimation.estimation.lignesFraisIndirects.map((l) => [`Frais indirects — ${l.libelle}`, l.montantXaf] as const),
+                ['Transport', resultat.estimation.estimation.coutTransportXaf],
+                ['Installation', resultat.estimation.estimation.coutInstallationXaf],
+              ] as const).filter(([, montant]) => montant > 0).map(([libelle, montant]) => (
+                <React.Fragment key={libelle}>
+                  <span>{libelle}</span><span className="text-right">{formatXAF(montant)}</span>
+                </React.Fragment>
+              ))}
               <span className="font-semibold">Coût de revient</span><span className="text-right font-semibold">{formatXAF(resultat.estimation.estimation.coutRevientXaf)}</span>
               <span>Marge ({resultat.estimation.estimation.tauxMargePct} %)</span><span className="text-right">{formatXAF(resultat.estimation.estimation.margeXaf)}</span>
               <span className="font-bold text-[#C62828]">Prix de vente HT</span><span className="text-right font-bold text-[#C62828]">{formatXAF(resultat.estimation.estimation.prixVenteHtXaf)}</span>

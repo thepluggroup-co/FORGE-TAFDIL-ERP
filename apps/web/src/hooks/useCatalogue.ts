@@ -203,7 +203,7 @@ export function useDeleteSpecification() {
 
 export type ModeCalcul = 'quantitatif' | 'surface' | 'lineaire' | 'volume' | 'poids' | 'forfait' | 'qualitatif'
 export type StatutFicheTechnique = 'brouillon' | 'active' | 'archivee'
-export type TypeRessource = 'materiau' | 'main_oeuvre' | 'equipement'
+export type TypeRessource = 'materiau' | 'consommable' | 'main_oeuvre' | 'equipement' | 'sous_traitance'
 
 export interface FicheTechnique {
   id: string
@@ -232,6 +232,8 @@ export interface FicheTechniqueRessource {
   quantite_par_unite: number
   cout_unitaire_reference_xaf: number
   temps_reference_h: number | null
+  ressource_fournisseur_id?: string | null   // sous_traitance (Phase 4)
+  delai_jours?: number | null               // sous_traitance (Phase 4)
   ordre: number
   actif: boolean
   produits?: { designation: string; unite: string; prix_unitaire_xaf: number } | null
@@ -245,6 +247,8 @@ export interface CreateRessourcePayload {
   quantite_par_unite: number
   cout_unitaire_reference_xaf?: number
   temps_reference_h?: number
+  ressource_fournisseur_id?: string          // sous_traitance uniquement
+  delai_jours?: number                       // sous_traitance uniquement
   ordre?: number
   actif?: boolean
 }
@@ -365,6 +369,8 @@ export function useDeleteRessource() {
 
 export type TypeParametre = 'nombre' | 'choix' | 'booleen'
 export type RoleCalcul = 'largeur' | 'hauteur' | 'longueur' | 'epaisseur' | 'diametre' | 'poids'
+/** Nature d'un coût d'option (Phase 4). */
+export type CategorieCout = 'option' | 'transport' | 'installation'
 
 /** Paramètre tel qu'envoyé à PUT /catalogue/modeles/:id/parametres (snake_case). */
 export interface ParametrePayload {
@@ -378,7 +384,9 @@ export interface ParametrePayload {
   pas?: number | null
   role_calcul?: RoleCalcul | null
   cout_si_oui_xaf: number
-  valeurs: Array<{ code: string; libelle: string; cout_supplementaire_xaf: number; validation_requise: boolean }>
+  categorie_cout: CategorieCout
+  cout_par_commande: boolean
+  valeurs: Array<{ code: string; libelle: string; cout_supplementaire_xaf: number; validation_requise: boolean; categorie_cout: CategorieCout; cout_par_commande: boolean }>
 }
 
 /** Paramètre tel que renvoyé par GET (format du moteur @forge/shared, camelCase). */
@@ -393,7 +401,9 @@ export interface ParametreConfiguration {
   pas?: number | null
   roleCalcul?: RoleCalcul | null
   coutSiOuiXaf?: number | null
-  valeurs?: Array<{ code: string; libelle: string; coutSupplementaireXaf: number; validationRequise: boolean }>
+  categorieCout?: CategorieCout
+  coutParCommande?: boolean
+  valeurs?: Array<{ code: string; libelle: string; coutSupplementaireXaf: number; validationRequise: boolean; categorieCout?: CategorieCout; coutParCommande?: boolean }>
 }
 
 export function useParametresModele(modeleId: string | null) {
@@ -426,7 +436,10 @@ export interface EstimationInterne {
   }
   estimation:
     | { disponible: true; estimation: {
-        coutMateriauxXaf: number; coutMainOeuvreXaf: number; coutEquipementsXaf: number; coutOptionsXaf: number
+        coutMateriauxXaf: number; coutConsommablesXaf: number; coutMainOeuvreXaf: number; coutEquipementsXaf: number
+        coutSousTraitanceXaf: number; coutOptionsXaf: number; fraisIndirectsXaf: number; coutTransportXaf: number; coutInstallationXaf: number
+        delaiSousTraitanceJours: number | null
+        lignesFraisIndirects: Array<{ regleId: string; libelle: string; centreCout: string | null; montantXaf: number }>
         coutRevientXaf: number; tauxMargePct: number; margeXaf: number; prixUnitaireHtXaf: number; prixVenteHtXaf: number
         quantiteFacturable: number; formuleUtilisee: string
       } }
@@ -477,6 +490,54 @@ export function useDesactiverRegleMarge() {
   return useMutation({
     mutationFn: (id: string) => apiClient.delete(`/api/catalogue/regles-marge/${id}`),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['catalogue', 'regles-marge'] }); toast.success('Règle désactivée') },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+// ── Frais indirects paramétrables (Phase 4) ──────────────────────────────────
+
+export interface FraisIndirects {
+  id: string
+  libelle: string
+  centre_cout: string | null
+  mode: 'pourcentage' | 'fixe_par_unite' | 'fixe_par_commande'
+  valeur: number
+  base: 'cout_direct' | 'main_oeuvre' | 'materiaux' | null
+  portee: 'global' | 'famille' | 'modele'
+  famille_id: string | null
+  modele_id: string | null
+  date_debut: string | null
+  date_fin: string | null
+  actif: boolean
+  notes: string | null
+  created_at: string
+  familles?: { nom: string } | null
+  modeles?: { reference: string; designation: string } | null
+}
+
+export type FraisIndirectsPayload = Omit<FraisIndirects, 'id' | 'actif' | 'created_at' | 'familles' | 'modeles'>
+
+export function useFraisIndirects() {
+  return useQuery({
+    queryKey: ['catalogue', 'frais-indirects'],
+    queryFn:  () => apiClient.get<{ data: FraisIndirects[] }>('/api/catalogue/frais-indirects').then((r) => r.data),
+  })
+}
+
+export function useCreerFraisIndirects() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: FraisIndirectsPayload) => apiClient.post<FraisIndirects>('/api/catalogue/frais-indirects', payload),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['catalogue', 'frais-indirects'] }); toast.success('Frais indirect enregistré') },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+export function useDesactiverFraisIndirects() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => apiClient.delete(`/api/catalogue/frais-indirects/${id}`),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['catalogue', 'frais-indirects'] }); toast.success('Frais indirect désactivé') },
     onError: (err: Error) => toast.error(err.message),
   })
 }

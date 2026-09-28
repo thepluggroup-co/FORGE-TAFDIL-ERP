@@ -32,10 +32,15 @@ interface ConfigurateurProps {
   onApply: (proposition: PropositionDevis) => void
 }
 
+/** Ordre d'affichage des groupes de ressources (Phase 4 : consommables et sous-traitance). */
+export const RESSOURCE_TYPES_ORDRE = ['materiau', 'consommable', 'main_oeuvre', 'equipement', 'sous_traitance'] as const
+
 export const RESSOURCE_LABELS: Record<string, string> = {
   materiau:     'Matériaux',
   main_oeuvre:  "Main-d'œuvre",
   equipement:   'Équipements',
+  consommable:  'Consommables',
+  sous_traitance: 'Sous-traitance',
 }
 
 export function Configurateur({ isOpen, onClose, modele, onApply }: ConfigurateurProps) {
@@ -166,7 +171,7 @@ export function Configurateur({ isOpen, onClose, modele, onApply }: Configurateu
 
             {detailOuvert && (
               <div className="space-y-2">
-                {(['materiau', 'main_oeuvre', 'equipement'] as const).map((type) => {
+                {RESSOURCE_TYPES_ORDRE.map((type) => {
                   const lignesType = proposition.lignes.filter((l) => l.type === type)
                   if (lignesType.length === 0) return null
                   return (

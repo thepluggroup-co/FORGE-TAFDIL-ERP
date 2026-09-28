@@ -19,10 +19,12 @@ import type {
   ModeCalcul, TypeRessource, CreateRessourcePayload,
 } from '@/hooks/useCatalogue'
 import { useStocks } from '@/hooks/useStocks'
+import { useFournisseurs } from '@/hooks/useFournisseurs'
 import { formatXAF } from '@/lib/utils'
 import { uniteOptions } from '@/lib/constants'
 import { ParametresConfigurationModal } from '@/components/catalogue/ParametresConfiguration'
 import { ReglesMargeModal } from '@/components/catalogue/ReglesMarge'
+import { FraisIndirectsModal } from '@/components/catalogue/FraisIndirects'
 import {
   LIBELLES_MODE_COMMERCIAL, modeCommercialDepuisTypeGamme, libelleNiveauFamille, PROFONDEUR_MAX_FAMILLES,
 } from '@forge/shared'
@@ -61,9 +63,11 @@ const MODE_CALCUL_LABELS: Record<ModeCalcul, string> = {
 }
 
 const TYPE_RESSOURCE_LABELS: Record<TypeRessource, string> = {
-  materiau:    'Matériau',
+  materiau:       'Matériau',
+  consommable:    'Consommable',
   main_oeuvre: "Main-d'œuvre",
-  equipement:  'Équipement',
+  equipement:     'Équipement',
+  sous_traitance: 'Sous-traitance',
 }
 
 const STATUT_FICHE_MAP: StatusMap = {
@@ -236,6 +240,7 @@ export default function Catalogue() {
   const [configModeleId, setConfigModeleId] = useState<string | null>(null)
   const configModele = modeles.find((m) => m.id === configModeleId) ?? null
   const [margesOuvertes, setMargesOuvertes] = useState(false)
+  const [fraisOuverts, setFraisOuverts] = useState(false)   // frais indirects (Phase 4)
 
   const createModele = useCreateModele()
   const updateModele  = useUpdateModele()
@@ -340,6 +345,7 @@ export default function Catalogue() {
   const deleteRessource = useDeleteRessource()
 
   const [ressourceForm, setRessourceForm] = useState<CreateRessourcePayload>(DEFAULT_RESSOURCE_FORM)
+  const { data: fournisseurs = [] } = useFournisseurs()   // sous-traitants (Phase 4)
   const [produitQuery, setProduitQuery]   = useState('')
   const [produitQueryDebounced, setProduitQueryDebounced] = useState('')
   useEffect(() => {
@@ -421,6 +427,9 @@ export default function Catalogue() {
         breadcrumbs={[{ label: 'FORGE', href: '/' }, { label: 'Catalogue' }]}
         actions={
           <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setFraisOuverts(true)}>
+              <Layers className="h-3.5 w-3.5" /> Frais indirects
+            </Button>
             <Button size="sm" variant="secondary" onClick={() => setMargesOuvertes(true)}>
               <Percent className="h-3.5 w-3.5" /> Taux de marge
             </Button>
@@ -828,6 +837,8 @@ export default function Catalogue() {
                           materiau:    { label: 'Matériau',     color: '#1d4ed8', bgColor: '#dbeafe' },
                           main_oeuvre: { label: "Main-d'œuvre", color: '#6d28d9', bgColor: '#ede9fe' },
                           equipement:  { label: 'Équipement',   color: '#c2410c', bgColor: '#ffedd5' },
+                          consommable: { label: 'Consommable',  color: '#0f766e', bgColor: '#ccfbf1' },
+                          sous_traitance: { label: 'Sous-traitance', color: '#a16207', bgColor: '#fef9c3' },
                         }}
                       />
                     </span>
@@ -867,11 +878,11 @@ export default function Catalogue() {
 
                 {/* ── Ajout d'une ressource ── */}
                 <div className="p-3 bg-gray-50 rounded-lg space-y-2">
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-5 gap-1.5">
                     {(Object.keys(TYPE_RESSOURCE_LABELS) as TypeRessource[]).map((t) => (
                       <button
                         key={t}
-                        onClick={() => setRessourceForm((f) => ({ ...f, type: t, ressource_produit_id: undefined }))}
+                        onClick={() => setRessourceForm((f) => ({ ...f, type: t, ressource_produit_id: undefined, ressource_fournisseur_id: undefined, delai_jours: undefined }))}
                         className="py-1.5 rounded-lg border-2 text-xs font-medium transition-all"
                         style={{
                           borderColor: ressourceForm.type === t ? '#C62828' : '#e5e7eb',
@@ -884,7 +895,7 @@ export default function Catalogue() {
                     ))}
                   </div>
 
-                  {ressourceForm.type === 'materiau' && (
+                  {(ressourceForm.type === 'materiau' || ressourceForm.type === 'consommable') && (
                     <div className="relative">
                       <div className="flex items-center gap-1.5 px-2.5 py-2 bg-white border border-gray-200 rounded-lg">
                         <Search className="h-3.5 w-3.5 text-gray-400 shrink-0" />
@@ -950,7 +961,7 @@ export default function Catalogue() {
                       placeholder="Coût unitaire (XAF)"
                       className="px-2.5 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
                     />
-                    {ressourceForm.type !== 'materiau' && (
+                    {(ressourceForm.type === 'main_oeuvre' || ressourceForm.type === 'equipement') && (
                       <input
                         type="number" step="0.01" min="0"
                         value={ressourceForm.temps_reference_h ?? ''}
@@ -959,7 +970,26 @@ export default function Catalogue() {
                         className="px-2.5 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
                       />
                     )}
+                    {ressourceForm.type === 'sous_traitance' && (
+                      <input
+                        type="number" step="1" min="0"
+                        value={ressourceForm.delai_jours ?? ''}
+                        onChange={(e) => setRessourceForm((f) => ({ ...f, delai_jours: e.target.value === '' ? undefined : Number(e.target.value) }))}
+                        placeholder="Délai du sous-traitant (jours)"
+                        className="px-2.5 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                      />
+                    )}
                   </div>
+                  {ressourceForm.type === 'sous_traitance' && (
+                    <select
+                      value={ressourceForm.ressource_fournisseur_id ?? ''}
+                      onChange={(e) => setRessourceForm((f) => ({ ...f, ressource_fournisseur_id: e.target.value || undefined }))}
+                      className="w-full px-2.5 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+                    >
+                      <option value="">Sous-traitant (optionnel)…</option>
+                      {fournisseurs.map((fo) => <option key={fo.id} value={fo.id}>{fo.nom}</option>)}
+                    </select>
+                  )}
                   <Button size="sm" className="w-full" onClick={handleAddRessource} loading={createRessource.isPending}>
                     <Plus className="h-3.5 w-3.5" /> Ajouter la ressource
                   </Button>
@@ -972,6 +1002,7 @@ export default function Catalogue() {
       {/* ── Configurateur (Phase 3) et taux de marge (D4) ── */}
       <ParametresConfigurationModal modele={configModele} onClose={() => setConfigModeleId(null)} />
       <ReglesMargeModal isOpen={margesOuvertes} onClose={() => setMargesOuvertes(false)} familles={familles} modeles={modeles} />
+      <FraisIndirectsModal isOpen={fraisOuverts} onClose={() => setFraisOuverts(false)} familles={familles} modeles={modeles} />
     </motion.div>
   )
 }

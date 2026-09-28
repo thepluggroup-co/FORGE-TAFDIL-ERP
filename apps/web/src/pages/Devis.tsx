@@ -23,7 +23,7 @@ import { usePermissions } from '@/hooks/useRbac'
 import type { Devis as DevisApi, DevisLigne, CreateDevisPayload, PropositionDevis, RessourceCalculee } from '@/hooks/useDevis'
 import type { Client } from '@/hooks/useClients'
 import { DevisPreview } from '@/components/devis/DevisPreview'
-import { Configurateur, RESSOURCE_LABELS } from '@/components/devis/Configurateur'
+import { Configurateur, RESSOURCE_LABELS, RESSOURCE_TYPES_ORDRE } from '@/components/devis/Configurateur'
 import { useProduitsShop, type ProduitShopErp } from '@/hooks/useProduitsShop'
 import { useModeles, useFamilles } from '@/hooks/useCatalogue'
 
@@ -330,7 +330,7 @@ function DevisDetailPanel({
             </button>
             {ressourcesOuvert && (
               <div className="mt-2.5 space-y-2">
-                {(['materiau', 'main_oeuvre', 'equipement'] as const).map((type) => {
+                {RESSOURCE_TYPES_ORDRE.map((type) => {
                   const items = ressourcesSnapshot.lignes.filter((r) => r.type === type)
                   if (items.length === 0) return null
                   return (
@@ -1118,7 +1118,7 @@ function DevisFormPanel({
                           </button>
                           {ressourcesOuvert && (
                             <div className="space-y-2">
-                              {(['materiau', 'main_oeuvre', 'equipement'] as const).map((type) => {
+                              {RESSOURCE_TYPES_ORDRE.map((type) => {
                                 const items = ligne.ressourcesDetail!.filter((r) => r.type === type)
                                 if (items.length === 0) return null
                                 return (
