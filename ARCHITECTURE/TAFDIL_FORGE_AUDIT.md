@@ -302,7 +302,8 @@ Protocole à chaque migration (§38-39) : `SELECT count(*)` avant/après sur cha
 | 2 — Standard | ✅ | vitrine `modeles_shop`, produits finis STANDARD au panier (fabriqués sur commande), onglet ERP « Produits finis », CAS 1 pilote testé, migration `20261002_catalogue_hybride_phase2_modeles_shop.sql` |
 | 2 bis — Promotions et images des produits finis | ✅ | migration `20261003_promotions_produits_finis.sql`, envoi d'images vérifié par signature |
 | 3 — Configurable (P003) | ✅ | configurateur site + ERP, statuts valide / à valider / hors limites / invalide, coût ≠ prix avec marge saisie (D4), `CFG-XXXXX` figé, CAS 2 et CAS 3 testés ; migrations `20261004_catalogue_hybride_phase3_configurateur.sql` et `20261005_seed_pilote_portail_p003.sql` |
-| 4 — Cost engine | ⏳ | attend validation de la Phase 3 |
+| 4 — Cost engine | ✅ | consommables, sous-traitance (délai), transport / installation, frais indirects paramétrables cumulables, marge sur le coût de revient complet ; cas connu testé ; migration `20261006_catalogue_hybride_phase4_cost_engine.sql` |
+| 5 — BOM + routing | ⏳ | attend validation de la Phase 4 ; décision D5 (`machines` / `equipements`) à trancher |
 
 **Tests** : sur ce poste, la suite complète sature la mémoire avec le parallélisme par défaut (`heap out of memory`). Il faut la lancer avec `npx vitest run --maxWorkers=2 --minWorkers=1`.
 

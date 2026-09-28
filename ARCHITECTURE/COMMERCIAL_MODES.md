@@ -117,6 +117,36 @@ Site : Personnaliser → /configurateur/[id] → Calculer (estimation HT, non co
 
 **Reporté** : le bouton « Ajouter au panier » pour un produit configurable. Une estimation n'est pas contractuelle (§49), elle passe donc d'abord par la validation d'un conseiller.
 
-## 7. Ce qui vient ensuite
+## 7. Coût de revient complet (Phase 4)
 
-- **Phase 4 (cost engine)** : consommables séparés des matières, sous-traitance, frais indirects, transport et installation, en lignes optionnelles qui ne cassent pas les totaux actuels.
+```text
+COÛT DIRECT     = matières + consommables + main-d'œuvre + équipements + sous-traitance   (fiche technique)
+                + options                                                                   (configurateur)
+FRAIS INDIRECTS = Σ règles applicables (sur leur assiette)
+COÛT DE REVIENT = coût direct + frais indirects + transport + installation
+PRIX DE VENTE   = coût de revient × (1 + marge)          — arrondi XAF à l'unité, par pièce
+```
+
+| Poste | Où le saisir | Assiette |
+|---|---|---|
+| Matières, main-d'œuvre, équipements | fiche technique | par unité facturable (m², ml…) |
+| **Consommables** (électrodes, disques, gaz…) | fiche technique, type « Consommable », lié au stock | idem |
+| **Sous-traitance** (galvanisation, découpe laser…) | fiche technique, type « Sous-traitance » + sous-traitant + délai | idem ; le délai le plus long est remonté |
+| Options produit | configurateur, nature « Option » | par unité commandée, ou forfait par commande |
+| **Transport**, **installation** | configurateur, nature « Transport » / « Installation » | idem (ex. zone de livraison = forfait par commande) |
+| **Frais indirects** | Catalogue → « Frais indirects » | % du coût direct, de la main-d'œuvre ou des matières + consommables ; ou montant fixe par unité / par commande |
+
+**Frais indirects** : ils ont un centre de coût, une période de validité et une portée (global, famille, modèle). Toutes les règles applicables **s'additionnent**, alors que la marge ne retient qu'un seul taux. Le transport et l'installation n'entrent pas dans l'assiette « coût direct ».
+
+**Rétrocompatibilité** : une fiche technique sans consommable ni sous-traitance, sans frais indirects et dont les options sont de nature « option », donne exactement le même prix qu'en Phase 3 (c'est testé).
+
+**Cas connu** (`cost-engine.test.ts`) : coût de revient 961 948 FCFA, prix de vente 1 202 436 FCFA avec une marge de 25 %.
+
+**Pas encore couvert** :
+- le PDF de devis n'affiche pas encore les groupes « Consommables » et « Sous-traitance », car le fichier est en cours de refonte en parallèle (voir ci-dessous) ;
+- le référentiel de taux horaires par poste ou machine sera fait avec la gamme opératoire (Phase 5).
+
+## 8. Ce qui vient ensuite
+
+- **Phase 5 (BOM + routing)** : opérations ordonnées (10 Découpe, 20 Assemblage…), postes et machines avec leur taux horaire, référentiel unique `machines` / `equipements` (décision D5 à trancher).
+- **PDF de devis** : à étendre aux nouveaux types quand la refonte en cours de `pdf.service.ts` sera commitée.
