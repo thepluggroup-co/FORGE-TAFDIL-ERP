@@ -9,7 +9,7 @@ import {
   AlertTriangle, Package, Truck, MessageCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { useCartStore, computeTotal, isCartStale } from '@/lib/cart'
+import { useCartStore, computeTotal, isCartStale, estIndisponible, quantiteMax } from '@/lib/cart'
 import type { CartItem } from '@/lib/cart'
 import { FRAIS_LIVRAISON } from '@forge/shared'
 
@@ -32,8 +32,8 @@ function fmt(n: number) {
 
 function DrawerItem({ item }: { item: CartItem }) {
   const { updateQuantity, removeItem } = useCartStore()
-  const isUnavailable = item.stock_insuffisant || item.stock_actuel <= 0
-  const isLow = !isUnavailable && item.stock_actuel > 0 && item.stock_actuel <= item.seuil_alerte
+  const isUnavailable = estIndisponible(item)
+  const isLow = !isUnavailable && item.stock_actuel !== null && item.stock_actuel > 0 && item.stock_actuel <= item.seuil_alerte
 
   return (
     <div
@@ -83,7 +83,7 @@ function DrawerItem({ item }: { item: CartItem }) {
             <span className="w-7 text-center text-[11px] font-bold text-forge-dark">{item.quantite}</span>
             <button
               onClick={() => updateQuantity(item.id, item.quantite + 1)}
-              disabled={item.quantite >= item.stock_actuel}
+              disabled={item.quantite >= quantiteMax(item)}
               className="flex h-6 w-6 items-center justify-center text-forge-steel transition hover:bg-gray-50 disabled:opacity-30"
             >
               <Plus size={10} />
@@ -120,7 +120,7 @@ export function CartDrawer() {
   const totals = computeTotal(items)
   const shipping = LIVRAISON_ZONES[zone]
   const grandTotal = shipping ? totals.ttc + shipping : totals.ttc
-  const hasUnavailable = items.some(i => i.stock_insuffisant || i.stock_actuel <= 0)
+  const hasUnavailable = items.some(estIndisponible)
 
   // Vérification stock + détection panier périmé
   useEffect(() => {

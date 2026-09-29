@@ -6,6 +6,27 @@ export const FRAIS_LIVRAISON = {
   autre:           { tarif: 15000, delaiJours: 5 },
 } as const
 
+/**
+ * Zones livrées au tarif forfaitaire depuis le site TAFDIL. Hors de ces zones,
+ * la livraison est « sur devis » (contact commercial) : aucun frais n'est
+ * facturé à la commande web.
+ *
+ * Source unique pour le checkout (apps/shop) ET pour le recalcul serveur
+ * (POST /api/shop/commandes) : le serveur n'accepte jamais les frais envoyés
+ * par le navigateur.
+ */
+const ZONES_LIVRAISON_WEB: Record<string, keyof typeof FRAIS_LIVRAISON> = {
+  douala:  'douala',
+  yaounde: 'yaounde',
+  yaoundé: 'yaounde',
+}
+
+/** Frais de livraison web en XAF pour une ville, ou `null` si la zone est « sur devis ». */
+export function fraisLivraisonWeb(ville: string | null | undefined): number | null {
+  const zone = ZONES_LIVRAISON_WEB[String(ville ?? '').trim().toLowerCase()]
+  return zone ? FRAIS_LIVRAISON[zone].tarif : null
+}
+
 export const APP_NAME = 'FORGE'
 export const COMPANY_NAME = 'TAFDIL'
 export const COMPANY_LOCATION = 'Douala, Cameroun'

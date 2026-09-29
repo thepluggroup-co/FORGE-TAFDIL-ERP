@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
 import { requirePermission } from '../middleware/permission.middleware'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
+import { writeAuditLog } from '../services/rbacService'
 import type { HonoVariables } from '../types'
 
 const db     = supabaseAdmin!
@@ -39,6 +40,8 @@ const equipementSchema = z.object({
   prochaine_revision:     z.string().optional(),
   intervalle_revision_j:  z.number().int().min(1).default(365),
   notes:                  z.string().optional(),
+  // Phase 5 (§16) : coût horaire machine utilisé par la gamme opératoire (null = non renseigné)
+  cout_horaire_xaf:       z.number().min(0).nullable().optional(),
 })
 
 const equipementStatutSchema = z.object({
@@ -258,6 +261,11 @@ router.put('/equipements/:id', requirePermission('PRODUCTION', 'UPDATE'), zValid
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
+  // Phase 5 : le coût horaire entre dans les prix (gamme opératoire) → tracé.
+  const avant = body.cout_horaire_xaf !== undefined
+    ? ((await db.from('equipements').select('cout_horaire_xaf').eq('id', id).maybeSingle()).data as { cout_horaire_xaf: number | null } | null)
+    : null
+
   const { data, error } = await db
     .from('equipements')
     .update({ ...body, updated_at: new Date().toISOString() })
@@ -266,6 +274,14 @@ router.put('/equipements/:id', requirePermission('PRODUCTION', 'UPDATE'), zValid
 
   if (error) return c.json({ error: error.message }, 400)
   if (!data)  return c.json({ error: 'Équipement introuvable', code: 'NOT_FOUND' }, 404)
+
+  if (avant && body.cout_horaire_xaf !== undefined && Number(avant.cout_horaire_xaf ?? -1) !== Number(body.cout_horaire_xaf ?? -1)) {
+    writeAuditLog({
+      userId: c.get('user')?.id, actionType: 'TAUX_HORAIRE_MODIFIE', module: 'PRODUCTION',
+      resourceType: 'equipements', resourceId: id,
+      payloadBefore: { cout_horaire_xaf: avant.cout_horaire_xaf }, payloadAfter: { cout_horaire_xaf: body.cout_horaire_xaf },
+    })
+  }
   await notifyWorkflow({
     event:   'equipements.equipement_modifie',
     module:  'production',

@@ -228,6 +228,7 @@ describe('Test 3 — POST mouvement entree valide → stock_actuel augmente', ()
   })
 
   it('stock_actuel augmente via fallback JS quand RPC absent', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'OPERATEUR' })
     const STOCK_INITIAL = 20
     const QUANTITE      = 15
     const STOCK_FINAL   = STOCK_INITIAL + QUANTITE // 35
@@ -272,6 +273,8 @@ describe('Test 4 — CONCURRENCE : deux sorties simultanées → stock jamais n�
   beforeEach(() => vi.clearAllMocks())
 
   it('une sortie réussit, l\'autre échoue proprement, stock ≥ 0', async () => {
+    // 2 requêtes concurrentes → 2 passages dans requirePermission
+    vi.mocked(checkPermission).mockResolvedValue({ allowed: true, roleName: 'OPERATEUR' })
     const mockRpc = vi.mocked(supabase.rpc)
 
     // Appel 1 → PostgreSQL SELECT FOR UPDATE → succès (stock 10 → 3 après sortie de 7)

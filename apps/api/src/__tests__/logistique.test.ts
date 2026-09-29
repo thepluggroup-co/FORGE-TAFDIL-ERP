@@ -22,6 +22,25 @@ vi.mock('../services/rbacService', () => ({
   invalidatePermissionCache: vi.fn(),
 }))
 
+// PATCH /livraisons/:id/statut appelle désormais verifierCommandeLivrable()
+// (routes/logistique.ts) avant d'autoriser une transition vers en_route/livree —
+// elle-même dépendante de resolveBonSortieLivrableForCommande (bon de sortie
+// prêt) et getFactureActiveByCommande (facture validée). On mocke ces
+// fonctions de service directement plutôt que de rejouer leur cascade de
+// requêtes DB (cf. docs/DETTE-TESTS-2026-09-26.md).
+vi.mock('../services/commande-workflow.service', () => ({
+  resolveBonSortieLivrableForCommande: vi.fn(),
+  synchroniserCommandesWorkflow:       vi.fn().mockResolvedValue(undefined),
+  resolveCommandeContext:              vi.fn().mockResolvedValue(null),
+  ensureWorkflowApresExecutionBon:     vi.fn().mockResolvedValue(undefined),
+  ensureWorkflowApresPreparationBon:   vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('../services/finance-core.service', () => ({
+  getFactureActiveByCommande:  vi.fn(),
+  ensureFactureForCommande:    vi.fn().mockResolvedValue({ facture: null, created: false }),
+  enregistrerPaiementCommande: vi.fn(),
+}))
+
 vi.mock('@forge/db/supabase', () => {
   const safeChain = () => {
     const c: Record<string, unknown> = {}
@@ -52,6 +71,20 @@ vi.mock('@forge/db/supabase', () => {
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
 import { checkPermission } from '../services/rbacService'
+import { resolveBonSortieLivrableForCommande } from '../services/commande-workflow.service'
+import { getFactureActiveByCommande } from '../services/finance-core.service'
+
+/** Fait passer verifierCommandeLivrable() : bon prêt + facture soldée (aucun paiement requis). */
+function mockCommandeLivrable() {
+  vi.mocked(resolveBonSortieLivrableForCommande).mockResolvedValueOnce({
+    context:     { commandeId: CMD_ID, ref: 'CMD-001', commande: { numero: 'CMD-001' } } as never,
+    bonLivrable: { id: 'bs1', numero: 'BS-2026-001', statut: 'pret' } as never,
+    dernierBon:  { id: 'bs1', numero: 'BS-2026-001', statut: 'pret' } as never,
+  })
+  vi.mocked(getFactureActiveByCommande).mockResolvedValueOnce({
+    numero: 'FAC-2026-001', statut: 'valide', total_ttc_xaf: 100_000, montant_paye_xaf: 100_000,
+  } as never)
+}
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -219,6 +252,8 @@ describe('L4 — POST /api/logistique/livraisons : création', () => {
     //   3. livraisons insert (single)
     //   4. livraisons_historique insert (then)
     vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+    // POST /livraisons appelle désormais verifierCommandeLivrable() avant de créer
+    mockCommandeLivrable()
 
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: { id: CMD_ID, numero: 'CMD-001' }, error: null }) as never,
@@ -301,6 +336,7 @@ describe('L5 — PATCH /api/logistique/livraisons/:id/statut : state machine', (
     //   2. livraisons update (single)
     //   3. livraisons_historique insert (then)
     vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+    mockCommandeLivrable()
 
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: { ...LIVRAISON_BASE, statut: 'planifiee' }, error: null }) as never,
@@ -339,7 +375,12 @@ describe('L5 — PATCH /api/logistique/livraisons/:id/statut : state machine', (
     const res = await app.request(`/api/logistique/livraisons/${LIV_ID}/statut`, {
       method:  'PATCH',
       headers: new Headers(authHeaders('admin')),
-      body:    JSON.stringify({ statut: 'planifiee', commentaire: 'Livraison prévue demain' }),
+      // date_depart/date_livraison_prevue désormais requises pour planifier
+      // (garde PLANNING_DATES_REQUIRED, routes/logistique.ts)
+      body:    JSON.stringify({
+        statut: 'planifiee', commentaire: 'Livraison prévue demain',
+        date_depart: '2026-06-20', date_livraison_prevue: '2026-06-21',
+      }),
     })
 
     expect(res.status).toBe(200)
@@ -349,9 +390,18 @@ describe('L5 — PATCH /api/logistique/livraisons/:id/statut : state machine', (
 
   it('en_route → livree : 200', async () => {
     vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
+    mockCommandeLivrable()
 
+    // destination/transporteur/dates non vides désormais requis avant "livree"
+    // (garde DELIVERY_PLANNING_REQUIRED, routes/logistique.ts)
     vi.mocked(supabase.from).mockReturnValueOnce(
-      mkChain({ data: { ...LIVRAISON_BASE, statut: 'en_route' }, error: null }) as never,
+      mkChain({
+        data: {
+          ...LIVRAISON_BASE, statut: 'en_route', transporteur: 'DHL',
+          date_depart: '2026-06-20', date_livraison_prevue: '2026-06-21',
+        },
+        error: null,
+      }) as never,
     )
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: { ...LIVRAISON_BASE, statut: 'livree' }, error: null }) as never,
@@ -363,7 +413,7 @@ describe('L5 — PATCH /api/logistique/livraisons/:id/statut : state machine', (
     const res = await app.request(`/api/logistique/livraisons/${LIV_ID}/statut`, {
       method:  'PATCH',
       headers: new Headers(authHeaders('admin')),
-      body:    JSON.stringify({ statut: 'livree' }),
+      body:    JSON.stringify({ statut: 'livree', date_livraison_reelle: '2026-06-21' }),
     })
 
     expect(res.status).toBe(200)

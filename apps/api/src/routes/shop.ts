@@ -1,14 +1,18 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { randomUUID } from 'crypto'
+import { randomBytes } from 'crypto'
 import { supabaseAdmin } from '@forge/db'
-import { FRAIS_LIVRAISON } from '@forge/shared'
+import { FRAIS_LIVRAISON, fraisLivraisonWeb, CommercialMode, resoudreModeCommercial, type TypeGamme } from '@forge/shared'
 import { notifyCommandeSms } from '../services/sms.service'
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 import { ensureClient } from '../services/client-sync.service'
+import { televerserImages } from '../services/image-upload.service'
 import { ensureFactureForCommande, solderCreditsForCommande, syncCreditForCommande } from '../services/finance-core.service'
+import { requirePermission } from '../middleware/permission.middleware'
+import { verifierBearer } from '../middleware/auth'
+import { checkPermission, writeAuditLog } from '../services/rbacService'
 
 const db = supabaseAdmin!
 import type { HonoVariables } from '../types'
@@ -23,9 +27,15 @@ const smsResendAttempts = new Map<string, number>()
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
+// Sans 0/O/1/I : la référence est dictée au téléphone et recopiée depuis un SMS.
+// 32 symboles → aucun biais modulo sur un octet ; 32^6 ≈ 1 milliard de valeurs.
+// L'unicité reste garantie par la contrainte UNIQUE de commandes_shop.ref
+// (nouvel essai à l'insertion en cas de collision, voir POST /commandes).
+const ALPHABET_REF = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
 function genRef(): string {
   const year = new Date().getFullYear()
-  const seq  = String(Math.floor(Math.random() * 9000) + 1000) // simplifié — voir note ci-dessous
+  const seq  = Array.from(randomBytes(6), (b) => ALPHABET_REF[b % ALPHABET_REF.length]).join('')
   return `WEB-${year}-${seq}`
 }
 
@@ -77,7 +87,7 @@ function samePhone(a?: string | null, b?: string | null) {
 type PromoActive = {
   campagne_id: string
   campagne_nom: string
-  product_id: string
+  article_id: string   // product_id ou modele_id selon la cible de la campagne
   remise_type: 'pct' | 'forfait'
   remise_valeur: number
   prix_promo_xaf: number | null
@@ -100,8 +110,10 @@ function prixPromo(base: number | null | undefined, promo: PromoActive | undefin
   return next > 0 && next < prixBase ? next : null
 }
 
-async function promotionsActives(productIds: string[]) {
-  if (productIds.length === 0) return new Map<string, PromoActive>()
+// Promotions actives par article : `colonne` = product_id (article de stock)
+// ou modele_id (produit fini STANDARD, Catalogue Hybride Phase 2).
+async function promotionsActives(ids: string[], colonne: 'product_id' | 'modele_id' = 'product_id') {
+  if (ids.length === 0) return new Map<string, PromoActive>()
   const today = new Date().toISOString().slice(0, 10)
 
   try {
@@ -109,14 +121,14 @@ async function promotionsActives(productIds: string[]) {
       .from('campagnes_produits')
       .select(`
         campagne_id,
-        product_id,
+        ${colonne},
         remise_type,
         remise_valeur,
         prix_promo_xaf,
         priorite,
         campagnes_marketing!inner(nom, statut, date_debut, date_fin)
       `)
-      .in('product_id', productIds)
+      .in(colonne, ids)
       .eq('campagnes_marketing.statut', 'active')
       .lte('campagnes_marketing.date_debut', today)
       .gte('campagnes_marketing.date_fin', today)
@@ -130,11 +142,11 @@ async function promotionsActives(productIds: string[]) {
 
     const map = new Map<string, PromoActive>()
     for (const row of (data ?? []) as Array<Record<string, any>>) {
-      if (map.has(row.product_id)) continue
-      map.set(row.product_id, {
+      if (map.has(row[colonne])) continue
+      map.set(row[colonne], {
         campagne_id: row.campagne_id,
         campagne_nom: row.campagnes_marketing?.nom ?? 'Promotion',
-        product_id: row.product_id,
+        article_id: row[colonne],
         remise_type: row.remise_type === 'forfait' ? 'forfait' : 'pct',
         remise_valeur: Number(row.remise_valeur ?? 0),
         prix_promo_xaf: row.prix_promo_xaf === null || row.prix_promo_xaf === undefined ? null : Number(row.prix_promo_xaf),
@@ -153,6 +165,7 @@ function enrichirProduitPromo(row: any, p: any, promo: PromoActive | undefined) 
   const promoPrice = prixPromo(row.prix_public, promo)
   return {
     id:                    row.product_id,
+    type_article:          'produit' as const,
     ref:                   p.ref,
     nom:                   p.designation,
     description:           p.description,
@@ -186,8 +199,14 @@ async function creerBonSortieShop(args: {
   clientNom: string
   clientTelephone: string
   montantTtc: number
-  lignes: Array<{ product_id: string; designation: string; quantite: number }>
+  lignes: Array<{ product_id: string | null; designation: string; quantite: number }>
 }) {
+  // Seuls les articles de stock sortent du magasin ; un modèle fabriqué sur
+  // commande passe par la production. Aucune ligne de stock → pas de bon.
+  const lignesStock = args.lignes.filter((l): l is typeof l & { product_id: string } => Boolean(l.product_id))
+  if (lignesStock.length === 0) return null
+  args = { ...args, lignes: lignesStock }
+
   let existingQuery = db
     .from('bons_sortie')
     .select('id, commande_id')
@@ -264,13 +283,328 @@ async function creerBonSortieShop(args: {
   return bon
 }
 
+// ── Tarification serveur des commandes shop ───────────────────────────────────
+// Le prix envoyé par le navigateur n'est JAMAIS une source de vérité pour une
+// commande anonyme : on repart du prix public de la vitrine — produits_shop
+// (+ promotion active, même règle que l'affichage du catalogue) pour un article
+// de stock, modeles_shop pour un produit fini STANDARD. Seul le personnel
+// authentifié (vente en boutique) peut fixer un prix, et tout écart au prix de
+// référence est tracé dans rbac_audit_logs.
+
+type LigneDemandee = { product_id?: string; modele_id?: string; designation: string; quantite: number; prix_unitaire: number }
+
+type LigneTarifee = {
+  product_id:    string | null
+  modele_id:     string | null
+  designation:   string
+  quantite:      number
+  prix_unitaire: number
+  unite:         string | null
+}
+
+type EcartPrix =
+  | { product_id: string; prix_reference: number | null; prix_saisi: number }
+  | { modele_id: string;  prix_reference: number | null; prix_saisi: number }
+
+type ResultatTarification =
+  | { ok: true; lignes: LigneTarifee[]; ecartsPrix: EcartPrix[] }
+  | { ok: false; status: 422; error: string; code: string; details?: Record<string, unknown> }
+
+interface ProduitShopTarifRow {
+  product_id:   string
+  prix_public:  number | null
+  visible_shop: boolean
+  min_commande: number | null
+}
+
+/** Colonnes de modeles_shop + modèle + famille (pour le mode commercial effectif). */
+const SELECT_MODELE_VITRINE = `
+  modele_id, prix_public, visible_shop, description_longue, images, tags,
+  delai_fabrication_jours, min_commande,
+  modeles!inner (
+    id, reference, designation, description, unite_facturation, type_gamme, actif,
+    familles ( nom, type_gamme )
+  )
+`
+
+interface ModeleVitrineRow {
+  modele_id:               string
+  prix_public:             number | null
+  visible_shop:            boolean
+  description_longue:      string | null
+  images:                  unknown
+  tags:                    unknown
+  delai_fabrication_jours: number | null
+  min_commande:            number | null
+  modeles: {
+    id: string; reference: string; designation: string; description: string | null
+    unite_facturation: string | null; type_gamme: TypeGamme | null; actif: boolean
+    familles: { nom: string; type_gamme: TypeGamme } | null
+  }
+}
+
+/** Vendable en ligne : modèle actif dont le mode commercial effectif est STANDARD. */
+function modeleVendable(row: ModeleVitrineRow): boolean {
+  return row.modeles.actif
+    && resoudreModeCommercial(row.modeles, row.modeles.familles) === CommercialMode.STANDARD
+}
+
+/** Affichable au catalogue : STANDARD avec prix (panier) ou CONFIGURABLE (configurateur, prix calculé). */
+function modeleAffichable(row: ModeleVitrineRow): boolean {
+  if (!row.modeles?.actif) return false
+  const mode = resoudreModeCommercial(row.modeles, row.modeles.familles)
+  if (mode === CommercialMode.STANDARD) return Number(row.prix_public ?? 0) > 0
+  return mode === CommercialMode.CONFIGURABLE
+}
+
+/** Règles communes de vente en ligne anonyme : visible, prix public, minimum de commande. */
+function verifierVitrine(
+  vitrine: { visible: boolean; prixPublic: number; minCommande: number | null },
+  quantite: number,
+  designation: string,
+  cle: Record<string, string>,
+): Extract<ResultatTarification, { ok: false }> | null {
+  if (!vitrine.visible) {
+    return { ok: false, status: 422, code: 'PRODUIT_NON_EN_VENTE', error: `« ${designation} » n'est pas en vente en ligne`, details: cle }
+  }
+  if (vitrine.prixPublic <= 0) {
+    return { ok: false, status: 422, code: 'PRIX_INDISPONIBLE', error: `« ${designation} » n'a pas de prix public`, details: cle }
+  }
+  const minimum = Number(vitrine.minCommande ?? 1)
+  if (quantite < minimum) {
+    return {
+      ok: false, status: 422, code: 'QUANTITE_MINIMALE',
+      error: `Quantité minimale pour « ${designation} » : ${minimum}`,
+      details: { ...cle, minimum, demande: quantite },
+    }
+  }
+  return null
+}
+
+async function tarifierLignesShop(
+  lignes: LigneDemandee[],
+  produits: Map<string, { designation: string; prix_unitaire_xaf: number | null }>,
+  venteParPersonnel: boolean,
+): Promise<ResultatTarification> {
+  const idsProduits = [...new Set(lignes.flatMap((l) => l.product_id ? [l.product_id] : []))]
+  const idsModeles  = [...new Set(lignes.flatMap((l) => l.modele_id ? [l.modele_id] : []))]
+
+  let vitrineProduits = new Map<string, ProduitShopTarifRow>()
+  let promos          = new Map<string, PromoActive>()
+  if (idsProduits.length > 0) {
+    const { data, error } = await db
+      .from('produits_shop')
+      .select('product_id, prix_public, visible_shop, min_commande')
+      .in('product_id', idsProduits)
+
+    if (error) {
+      console.error('[shop] tarification produits_shop:', error.message)
+      return { ok: false, status: 422, error: 'Tarification indisponible, réessayez', code: 'TARIFICATION_INDISPONIBLE' }
+    }
+    vitrineProduits = new Map(((data ?? []) as ProduitShopTarifRow[]).map((r) => [r.product_id, r]))
+    if (!venteParPersonnel) promos = await promotionsActives(idsProduits)
+  }
+
+  let vitrineModeles = new Map<string, ModeleVitrineRow>()
+  let promosModeles  = new Map<string, PromoActive>()
+  if (idsModeles.length > 0) {
+    const { data, error } = await db
+      .from('modeles_shop')
+      .select(SELECT_MODELE_VITRINE)
+      .in('modele_id', idsModeles)
+
+    if (error) {
+      console.error('[shop] tarification modeles_shop:', error.message)
+      return { ok: false, status: 422, error: 'Tarification indisponible, réessayez', code: 'TARIFICATION_INDISPONIBLE' }
+    }
+    vitrineModeles = new Map(((data ?? []) as unknown as ModeleVitrineRow[]).map((r) => [r.modele_id, r]))
+    if (!venteParPersonnel) promosModeles = await promotionsActives(idsModeles, 'modele_id')
+  }
+
+  const tarifees: LigneTarifee[] = []
+  const ecartsPrix: EcartPrix[] = []
+
+  for (const ligne of lignes) {
+    // ── Produit fini STANDARD (modèle) ─────────────────────────────────────
+    if (ligne.modele_id) {
+      const modeleId    = ligne.modele_id
+      const row         = vitrineModeles.get(modeleId)
+      const designation = row?.modeles.designation ?? ligne.designation
+      const prixPublic  = Math.round(Number(row?.prix_public ?? 0))
+
+      // Même pour le personnel : un modèle configurable ou sur devis ne se vend
+      // jamais au panier, il passe par le configurateur ou par un devis.
+      if (!row || !modeleVendable(row)) {
+        return {
+          ok: false, status: 422, code: 'MODE_NON_STANDARD',
+          error: `« ${designation} » n'est pas un produit standard vendable au panier`,
+          details: { modele_id: modeleId },
+        }
+      }
+
+      if (venteParPersonnel) {
+        const reference = prixPublic > 0 ? prixPublic : null
+        if (reference === null || Math.round(ligne.prix_unitaire) !== reference) {
+          ecartsPrix.push({ modele_id: modeleId, prix_reference: reference, prix_saisi: ligne.prix_unitaire })
+        }
+        tarifees.push({
+          product_id: null, modele_id: modeleId, designation,
+          quantite: ligne.quantite, prix_unitaire: ligne.prix_unitaire, unite: row.modeles.unite_facturation,
+        })
+        continue
+      }
+
+      const refus = verifierVitrine(
+        { visible: row.visible_shop, prixPublic, minCommande: row.min_commande },
+        ligne.quantite, designation, { modele_id: modeleId },
+      )
+      if (refus) return refus
+      tarifees.push({
+        product_id: null, modele_id: modeleId, designation,
+        quantite: ligne.quantite, prix_unitaire: prixPromo(prixPublic, promosModeles.get(modeleId)) ?? prixPublic, unite: row.modeles.unite_facturation,
+      })
+      continue
+    }
+
+    // ── Article de stock (produit) ─────────────────────────────────────────
+    const productId   = ligne.product_id as string
+    const produit     = produits.get(productId)
+    const designation = produit?.designation ?? ligne.designation
+    const row         = vitrineProduits.get(productId)
+    const prixPublic  = Math.round(Number(row?.prix_public ?? 0))
+
+    if (venteParPersonnel) {
+      const reference = prixPublic > 0 ? prixPublic : (produit?.prix_unitaire_xaf ?? null)
+      if (reference === null || Math.round(ligne.prix_unitaire) !== Math.round(reference)) {
+        ecartsPrix.push({ product_id: productId, prix_reference: reference, prix_saisi: ligne.prix_unitaire })
+      }
+      tarifees.push({
+        product_id: productId, modele_id: null, designation,
+        quantite: ligne.quantite, prix_unitaire: ligne.prix_unitaire, unite: null,
+      })
+      continue
+    }
+
+    const refus = verifierVitrine(
+      { visible: Boolean(row?.visible_shop), prixPublic, minCommande: row?.min_commande ?? null },
+      ligne.quantite, designation, { product_id: productId },
+    )
+    if (refus) return refus
+
+    const prix = prixPromo(prixPublic, promos.get(productId)) ?? prixPublic
+    tarifees.push({
+      product_id: productId, modele_id: null, designation,
+      quantite: ligne.quantite, prix_unitaire: prix, unite: null,
+    })
+  }
+
+  return { ok: true, lignes: tarifees, ecartsPrix }
+}
+
+/**
+ * Article de catalogue public pour un modèle (même forme qu'un produit + type_article).
+ * CONFIGURABLE : pas de prix affiché ni de promotion — le prix vient du configurateur.
+ */
+function enrichirModeleVitrine(row: ModeleVitrineRow, promo?: PromoActive) {
+  const m = row.modeles
+  const configurable = resoudreModeCommercial(m, m.familles) === CommercialMode.CONFIGURABLE
+  const prixPublic = configurable ? null : Math.round(Number(row.prix_public ?? 0))
+  const prixRemise = prixPublic === null ? null : prixPromo(prixPublic, promo)
+  return {
+    id:                      row.modele_id,
+    type_article:            'modele' as const,
+    commercial_mode:         configurable ? CommercialMode.CONFIGURABLE : CommercialMode.STANDARD,
+    ref:                     m.reference,
+    nom:                     m.designation,
+    description:             m.description,
+    categorie:               m.familles?.nom ?? 'Produits finis',
+    unite:                   m.unite_facturation ?? 'unite',
+    stock_actuel:            null,            // fabriqué sur commande : pas de plafond de stock
+    seuil_alerte:            0,
+    prix_public:             prixRemise ?? prixPublic,
+    prix_barre_xaf:          prixRemise ? prixPublic : null,
+    description_longue:      row.description_longue,
+    images:                  Array.isArray(row.images) ? row.images : [],
+    tags:                    Array.isArray(row.tags) ? row.tags : [],
+    delai_fabrication_jours: row.delai_fabrication_jours,
+    min_commande:            row.min_commande ?? 1,
+    disponibilite:           'sur_commande' as const,
+    promotion:               prixRemise && promo ? {
+      campagne_id:       promo.campagne_id,
+      nom:               promo.campagne_nom,
+      remise_type:       promo.remise_type,
+      remise_valeur:     promo.remise_valeur,
+      prix_original_xaf: prixPublic,
+      prix_promo_xaf:    prixRemise,
+      date_fin:          promo.date_fin,
+    } : null,
+  }
+}
+
+/**
+ * Modèles visibles en ligne (STANDARD au panier, CONFIGURABLE au configurateur).
+ * Jamais bloquant : en cas d'erreur, le catalogue des articles de stock reste servi.
+ */
+async function chargerModelesVitrine(filtres: { id?: string; q?: string; categorie?: string } = {}) {
+  try {
+    let query = db.from('modeles_shop').select(SELECT_MODELE_VITRINE).eq('visible_shop', true)
+    if (filtres.id) query = query.eq('modele_id', filtres.id)
+    if (filtres.q)  query = query.ilike('modeles.designation', `%${filtres.q}%`)
+
+    const { data, error } = await query
+    if (error) {
+      console.warn('[shop/modeles] lecture ignoree:', error.message)
+      return []
+    }
+    const rows = ((Array.isArray(data) ? data : []) as unknown as ModeleVitrineRow[])
+      .filter(modeleAffichable)
+      .filter((row) => !filtres.categorie || row.modeles.familles?.nom === filtres.categorie)
+    const promos = await promotionsActives(rows.map((r) => r.modele_id), 'modele_id')
+    return rows.map((row) => enrichirModeleVitrine(row, promos.get(row.modele_id)))
+  } catch (e) {
+    console.warn('[shop/modeles] indisponible:', e instanceof Error ? e.message : e)
+    return []
+  }
+}
+
+/**
+ * Authentification OPTIONNELLE de POST /commandes.
+ * - pas d'en-tête Authorization → client anonyme du site (prix imposés)
+ * - en-tête valide + droit de vente (COMMERCIAL:CREATE ou CAISSE:CREATE) → personnel
+ * - en-tête présent mais invalide / sans droit → refus explicite, jamais de
+ *   repli silencieux sur le prix catalogue (le vendeur croirait son prix appliqué)
+ */
+async function identifierVendeur(authHeader: string | undefined): Promise<
+  | { ok: true; vendeur: HonoVariables['user'] | null }
+  | { ok: false; status: 401 | 403 | 500; error: string; code: string }
+> {
+  if (!authHeader) return { ok: true, vendeur: null }
+
+  const verification = await verifierBearer(authHeader)
+  if (!verification.ok) return verification
+
+  const { user } = verification
+  const commercial = await checkPermission(user.id, 'COMMERCIAL', 'CREATE', user.role)
+  if (commercial.allowed) return { ok: true, vendeur: user }
+  const caisse = await checkPermission(user.id, 'CAISSE', 'CREATE', user.role)
+  if (caisse.allowed) return { ok: true, vendeur: user }
+
+  return { ok: false, status: 403, error: 'Droit de vente requis pour fixer un prix', code: 'FORBIDDEN' }
+}
+
 // ── Schémas Zod ────────────────────────────────────────────────────────────────
 
+// Une ligne vise SOIT un article de stock (product_id), SOIT un produit fini
+// STANDARD (modele_id, Catalogue Hybride Phase 2). prix_unitaire n'est retenu
+// que pour le personnel authentifié — voir tarifierLignesShop.
 const ligneCommandeSchema = z.object({
-  product_id:      z.string().uuid(),
+  product_id:      z.string().uuid().optional(),
+  modele_id:       z.string().uuid().optional(),
   designation:     z.string().min(1),
   quantite:        z.number().positive(),
   prix_unitaire:   z.number().min(0),
+}).refine((l) => Boolean(l.product_id) !== Boolean(l.modele_id), {
+  message: 'Chaque ligne doit viser exactement un product_id ou un modele_id',
 })
 
 const commandeShopSchema = z.object({
@@ -352,8 +686,12 @@ shopRouter.get('/catalogue', async (c) => {
     return enrichirProduitPromo(row, p, promos.get(row.product_id))
   })
 
+  // Produits finis STANDARD en tête (Catalogue Hybride Phase 2), puis articles de stock.
+  const modeles = await chargerModelesVitrine({ q, categorie })
+  const articles = [...modeles, ...catalogue]
+
   c.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=30')
-  return c.json({ data: catalogue, total: catalogue.length })
+  return c.json({ data: articles, total: articles.length })
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -383,6 +721,9 @@ shopRouter.get('/catalogue/:id', async (c) => {
     .single()
 
   if (error || !data) {
+    // L'identifiant peut être celui d'un produit fini STANDARD (modèle).
+    const [modele] = await chargerModelesVitrine({ id })
+    if (modele) return c.json({ data: modele })
     return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
   }
 
@@ -408,7 +749,11 @@ shopRouter.get('/categories', async (c) => {
     return c.json({ error: 'Erreur catégories', code: 'DB_ERROR' }, 500)
   }
 
-  const categories = [...new Set((data ?? []).map((r: any) => r.produits.categorie))].sort()
+  const modeles    = await chargerModelesVitrine()
+  const categories = [...new Set([
+    ...(data ?? []).map((r: any) => r.produits.categorie),
+    ...modeles.map((m) => m.categorie),
+  ])].sort()
 
   c.header('Cache-Control', 'public, max-age=300')
   return c.json({ data: categories })
@@ -421,6 +766,17 @@ shopRouter.get('/categories', async (c) => {
 
 shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) => {
   const body = c.req.valid('json')
+
+  const identification = await identifierVendeur(c.req.header('Authorization'))
+  if (!identification.ok) {
+    return c.json({ error: identification.error, code: identification.code }, identification.status)
+  }
+  const vendeur = identification.vendeur
+
+  // Une vente « boutique » saute la création de la commande ERP : réservée au personnel.
+  if (body.source === 'boutique' && !vendeur) {
+    return c.json({ error: 'Vente boutique réservée au personnel authentifié', code: 'FORBIDDEN' }, 403)
+  }
 
   if (body.mode_livraison === 'livraison' && (!body.client_adresse || body.client_adresse.trim().length < 5)) {
     return c.json({
@@ -437,10 +793,12 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   }
 
   // 1. Vérifier disponibilité stock pour chaque ligne
+  const produitsLus = new Map<string, { designation: string; prix_unitaire_xaf: number | null }>()
   for (const ligne of body.lignes) {
+    if (!ligne.product_id) continue // produit fini sur commande : pas de contrôle de stock
     const { data: produit } = await db
       .from('produits')
-      .select('id, designation, stock_actuel, unite')
+      .select('id, designation, stock_actuel, unite, prix_unitaire_xaf')
       .eq('id', ligne.product_id)
       .single()
 
@@ -464,7 +822,24 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
         },
       }, 409)
     }
+
+    produitsLus.set(ligne.product_id, {
+      designation:       produit.designation,
+      prix_unitaire_xaf: produit.prix_unitaire_xaf ?? null,
+    })
   }
+
+  // 1 bis. Prix et frais recalculés côté serveur — jamais ceux du navigateur
+  const tarification = await tarifierLignesShop(body.lignes, produitsLus, Boolean(vendeur))
+  if (!tarification.ok) {
+    return c.json({ error: tarification.error, code: tarification.code, details: tarification.details }, tarification.status)
+  }
+  const lignes = tarification.lignes
+  const fraisLivraisonServeur = body.mode_livraison === 'retrait_boutique'
+    ? 0
+    : vendeur
+      ? body.frais_livraison
+      : (fraisLivraisonWeb(body.client_ville) ?? 0) // null = zone « sur devis », facturée après contact
 
   // 2. Vérifier éligibilité crédit si condition ≠ P100
   const clientId = await ensureClient({
@@ -483,9 +858,9 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     .eq('code', condCode)
     .maybeSingle()
   if (condCode !== 'P100') {
-    const montantEstime = Math.round(body.lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0))
+    const montantEstime = Math.round(lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0))
     const tvaEstimee    = Math.round(montantEstime * TVA_RATE)
-    const ttcEstime     = Math.round(montantEstime + tvaEstimee + body.frais_livraison)
+    const ttcEstime     = Math.round(montantEstime + tvaEstimee + fraisLivraisonServeur)
 
     const eligibilite = await verifierEligibiliteCredit(clientId, ttcEstime, 'web', condCode)
     if (!eligibilite.eligible) {
@@ -497,8 +872,8 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   }
 
   // 4. Calculer montants : la livraison est ajoutee apres TVA.
-  const montant_ht       = Math.round(body.lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0))
-  const frais_livraison  = Math.round(body.frais_livraison)
+  const montant_ht       = Math.round(lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire, 0))
+  const frais_livraison  = Math.round(fraisLivraisonServeur)
   const tva              = Math.round(montant_ht * TVA_RATE)
   const montant_ttc      = Math.round(montant_ht + tva + frais_livraison)
   const cp = conditionPaiement as { id?: string; acompte_pct?: number | null; delai_solde_jours?: number | null } | null
@@ -507,12 +882,13 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     ? new Date(Date.now() + Number(cp.delai_solde_jours) * 86400_000).toISOString().slice(0, 10)
     : null
 
-  // 5. Générer référence unique
-  const ref = genRef()
+  // 5. Référence unique (voir genRef) — réessayée à l'insertion si collision
+  let ref = genRef()
 
   // 6. Lignes JSONB
-  const lignesJson = body.lignes.map((l) => ({
+  const lignesJson = lignes.map((l) => ({
     product_id:     l.product_id,
+    ...(l.modele_id ? { modele_id: l.modele_id, type_article: 'modele' } : {}),
     designation:    l.designation,
     quantite:       l.quantite,
     prix_unitaire:  l.prix_unitaire,
@@ -520,7 +896,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   }))
 
   // 7. Insérer commande_shop
-  const { data: commandeShop, error: errShop } = await db
+  const insererCommandeShop = () => db
     .from('commandes_shop')
     .insert({
       ref,
@@ -544,9 +920,28 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
     .select('id, ref')
     .single()
 
+  let { data: commandeShop, error: errShop } = await insererCommandeShop()
+  for (let essai = 1; essai < 3 && errShop?.code === '23505'; essai++) {
+    ref = genRef()
+    ;({ data: commandeShop, error: errShop } = await insererCommandeShop())
+  }
+
   if (errShop || !commandeShop) {
     console.error('[shop] insert commandes_shop:', errShop)
     return c.json({ error: 'Erreur création commande', code: 'DB_ERROR' }, 500)
+  }
+
+  if (vendeur && tarification.ecartsPrix.length > 0) {
+    writeAuditLog({
+      userId:        vendeur.id,
+      actionType:    'VENTE_PRIX_FORCE',
+      module:        body.source === 'boutique' ? 'CAISSE' : 'COMMERCIAL',
+      resourceType:  'commandes_shop',
+      resourceId:    commandeShop.id,
+      payloadAfter:  { ref, ecarts: tarification.ecartsPrix },
+      ipAddress:     c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip'),
+      userAgent:     c.req.header('user-agent'),
+    })
   }
 
   const isBoutiqueSale = body.source === 'boutique'
@@ -586,9 +981,11 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
         .eq('id', commandeShop.id)
 
       // Insérer les lignes ERP
-      const lignesErp = body.lignes.map((l, i) => ({
+      const lignesErp = lignes.map((l, i) => ({
         commande_id:          erpCommande.id,
         produit_id:           l.product_id,
+        ...(l.modele_id ? { modele_id: l.modele_id } : {}),
+        ...(l.unite ? { unite: l.unite } : {}),
         designation:          l.designation,
         quantite:             l.quantite,
         prix_unitaire_ht_xaf: l.prix_unitaire,
@@ -596,6 +993,21 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
         ordre:                i,
       }))
       await db.from('commandes_lignes').insert(lignesErp)
+
+      // Produits finis STANDARD : fabriqués sur commande → l'atelier doit lancer la production.
+      const lignesAFabriquer = lignes.filter((l) => l.modele_id)
+      if (lignesAFabriquer.length > 0) {
+        await notifyWorkflow({
+          event:   'production.commande_standard_a_fabriquer',
+          module:  'production',
+          severite:'warning',
+          titre:   'Produit standard a fabriquer',
+          message: `Commande shop ${ref} : ${lignesAFabriquer.map((l) => `${l.quantite} × ${l.designation}`).join(', ')}.`,
+          ref,
+          url:     '/production',
+          data:    { commande_id: erpCommande.id, modeles: lignesAFabriquer.map((l) => ({ modele_id: l.modele_id, quantite: l.quantite })) },
+        })
+      }
       await ensureFactureForCommande({
         commandeId: erpCommande.id,
         statut:    'brouillon',
@@ -611,7 +1023,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
           clientNom:       body.client_nom,
           clientTelephone: body.client_telephone,
           montantTtc:      montant_ttc,
-          lignes:          body.lignes,
+          lignes:          lignes,
         })
       } catch (e) {
         console.error('[shop] auto bon sortie:', e)
@@ -622,7 +1034,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
             clientNom:       body.client_nom,
             clientTelephone: body.client_telephone,
             montantTtc:      montant_ttc,
-            lignes:          body.lignes,
+            lignes:          lignes,
           })
         } catch (fallbackError) {
           console.error('[shop] auto bon sortie fallback:', fallbackError)
@@ -649,18 +1061,20 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
           clientNom:       body.client_nom,
           clientTelephone: body.client_telephone,
           montantTtc:      montant_ttc,
-          lignes:          body.lignes,
+          lignes:          lignes,
         })
-        await notifyWorkflow({
-          event:   'stock.bon_sortie_a_preparer',
-          module:  'stock',
-          severite:'warning',
-          titre:   'Bon de sortie a preparer',
-          message: `Commande shop ${ref} : verifier les articles et preparer la sortie stock.`,
-          ref,
-          url:     '/stocks/bons-sortie',
-          data:    { commande_id: null, bon_id: (bonSortie as { id?: string }).id },
-        })
+        if (bonSortie) {
+          await notifyWorkflow({
+            event:   'stock.bon_sortie_a_preparer',
+            module:  'stock',
+            severite:'warning',
+            titre:   'Bon de sortie a preparer',
+            message: `Commande shop ${ref} : verifier les articles et preparer la sortie stock.`,
+            ref,
+            url:     '/stocks/bons-sortie',
+            data:    { commande_id: null, bon_id: (bonSortie as { id?: string }).id },
+          })
+        }
       } catch (e) {
         console.error('[shop] auto bon sortie fallback sans ERP:', e)
       }
@@ -674,7 +1088,7 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
         clientNom:       body.client_nom,
         clientTelephone: body.client_telephone,
         montantTtc:      montant_ttc,
-        lignes:          body.lignes,
+        lignes:          lignes,
       })
     } catch (e) {
       console.error('[shop] auto bon sortie boutique:', e)
@@ -1082,7 +1496,7 @@ export const shopErpRouter = new Hono<{ Variables: HonoVariables }>()
 
 // ── Helpers locaux ─────────────────────────────────────────────────────────────
 
-async function genererNumeroDevis(): Promise<string> {
+export async function genererNumeroDevis(): Promise<string> {
   const today     = new Date()
   const yyyymmdd  = today.toISOString().slice(0, 10).replace(/-/g, '')
   const startOfDay = `${today.toISOString().slice(0, 10)}T00:00:00.000Z`
@@ -1115,19 +1529,16 @@ async function syncProduitsShopManquants(): Promise<void> {
   await db.from('produits_shop').insert(manquants)
 }
 
-function extFromFile(file: File): string {
-  const byName = file.name.split('.').pop()?.toLowerCase()
-  if (byName && /^[a-z0-9]{2,5}$/.test(byName)) return byName
-  const byType = file.type.split('/').pop()?.toLowerCase()
-  return byType && /^[a-z0-9]{2,5}$/.test(byType) ? byType : 'jpg'
-}
+// Images des vitrines (produits et produits finis) : type vérifié par signature,
+// voir services/image-upload.service.ts.
+const BUCKET_IMAGES_SHOP = 'produits-shop'
 
 // ══════════════════════════════════════════════════════════════════════════════
 // GET /api/shop-erp/analytics
 // KPIs + CA mensuel comparé ERP vs Shop (6 derniers mois)
 // ══════════════════════════════════════════════════════════════════════════════
 
-shopErpRouter.get('/analytics', async (c) => {
+shopErpRouter.get('/analytics', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const today     = new Date().toISOString().split('T')[0]
   const debutMois = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
 
@@ -1199,7 +1610,7 @@ shopErpRouter.get('/analytics', async (c) => {
 // Tous les produits avec visibilité shop + stock ERP
 // ══════════════════════════════════════════════════════════════════════════════
 
-shopErpRouter.get('/produits', async (c) => {
+shopErpRouter.get('/produits', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   await syncProduitsShopManquants()
 
   const { data, error } = await db
@@ -1251,6 +1662,7 @@ shopErpRouter.get('/produits', async (c) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 shopErpRouter.put('/produits/:id/visibilite',
+  requirePermission('COMMERCIAL', 'UPDATE'),
   zValidator('json', z.object({ visible: z.boolean() })),
   async (c) => {
     const id      = c.req.param('id')
@@ -1263,11 +1675,14 @@ shopErpRouter.put('/produits/:id/visibilite',
       .select('product_id, visible_shop')
       .single()
 
+    // PGRST116 = aucune ligne ne correspond au .eq('product_id', id) : c'est un
+    // 404 (produit introuvable), pas une panne DB — doit être vérifié avant le
+    // cas d'erreur générique, sinon un produit inexistant renvoie 500.
+    if (!data || error?.code === 'PGRST116') return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
     if (error) {
       console.error('[shop-erp] visibilite update:', error)
       return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: error.message }, 500)
     }
-    if (!data) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
 
     return c.json({ data })
   }
@@ -1279,6 +1694,7 @@ shopErpRouter.put('/produits/:id/visibilite',
 // ══════════════════════════════════════════════════════════════════════════════
 
 shopErpRouter.put('/produits/:id/prix',
+  requirePermission('COMMERCIAL', 'UPDATE'),
   zValidator('json', z.object({ prix: z.number().min(0) })),
   async (c) => {
     const id    = c.req.param('id')
@@ -1291,11 +1707,13 @@ shopErpRouter.put('/produits/:id/prix',
       .select('product_id, prix_public')
       .single()
 
+    // PGRST116 = aucune ligne ne correspond (produit introuvable) — cf. note
+    // identique sur PUT /visibilite ci-dessus.
+    if (!data || error?.code === 'PGRST116') return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
     if (error) {
       console.error('[shop-erp] prix update:', error)
       return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: error.message }, 500)
     }
-    if (!data) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
 
     return c.json({ data })
   }
@@ -1307,6 +1725,7 @@ shopErpRouter.put('/produits/:id/prix',
 // ══════════════════════════════════════════════════════════════════════════════
 
 shopErpRouter.put('/produits/:id/vitrine',
+  requirePermission('COMMERCIAL', 'UPDATE'),
   zValidator('json', z.object({
     visible_shop: z.boolean().optional(),
     prix_public: z.number().min(0).nullable().optional(),
@@ -1362,7 +1781,176 @@ shopErpRouter.put('/produits/:id/vitrine',
   }
 )
 
-shopErpRouter.post('/produits/:id/images', async (c) => {
+// ══════════════════════════════════════════════════════════════════════════════
+// Vitrine des produits finis (Catalogue Hybride Phases 2 et 3)
+// GET  /api/shop-erp/modeles              — modèles STANDARD et CONFIGURABLES actifs + leur vitrine
+// PUT  /api/shop-erp/modeles/:id/vitrine  — visibilité, prix public, délai, minimum
+// ══════════════════════════════════════════════════════════════════════════════
+
+interface ModeleErpRow {
+  id: string; reference: string; designation: string; unite_facturation: string | null
+  type_gamme: TypeGamme | null; actif: boolean
+  familles: { nom: string; type_gamme: TypeGamme } | null
+  modeles_shop: Record<string, unknown> | Array<Record<string, unknown>> | null
+}
+
+shopErpRouter.get('/modeles', requirePermission('COMMERCIAL', 'READ'), async (c) => {
+  const { data, error } = await db
+    .from('modeles')
+    .select('id, reference, designation, unite_facturation, type_gamme, actif, familles(nom, type_gamme), modeles_shop(*)')
+    .eq('actif', true)
+    .order('designation')
+
+  if (error) {
+    console.error('[shop-erp] modeles:', error)
+    return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: error.message }, 500)
+  }
+
+  const modeles = ((data ?? []) as unknown as ModeleErpRow[])
+    .map((m) => ({ m, mode: resoudreModeCommercial(m, m.familles) }))
+    .filter(({ mode }) => mode === CommercialMode.STANDARD || mode === CommercialMode.CONFIGURABLE)
+    .map(({ m, mode }) => {
+      const vitrine = Array.isArray(m.modeles_shop) ? (m.modeles_shop[0] ?? null) : m.modeles_shop
+      return {
+        id:                m.id,
+        reference:         m.reference,
+        designation:       m.designation,
+        famille:           m.familles?.nom ?? null,
+        unite_facturation: m.unite_facturation,
+        commercial_mode:   mode,
+        vitrine,
+      }
+    })
+
+  return c.json({ data: modeles, total: modeles.length })
+})
+
+const vitrineModeleSchema = z.object({
+  visible_shop:            z.boolean().optional(),
+  prix_public:             z.number().int().min(0).optional(),
+  description_longue:      z.string().max(5000).nullable().optional(),
+  images:                  z.array(z.string().url()).max(12).optional(),
+  tags:                    z.array(z.string().max(50)).max(20).optional(),
+  delai_fabrication_jours: z.number().int().min(0).nullable().optional(),
+  min_commande:            z.number().int().min(1).optional(),
+})
+
+shopErpRouter.put(
+  '/modeles/:id/vitrine',
+  requirePermission('COMMERCIAL', 'UPDATE'),
+  zValidator('json', vitrineModeleSchema),
+  async (c) => {
+    const id   = c.req.param('id')
+    const body = c.req.valid('json')
+    const user = c.get('user')
+
+    const { data: modele, error: modeleError } = await db
+      .from('modeles')
+      .select('id, designation, type_gamme, actif, familles(nom, type_gamme), modeles_shop(prix_public, visible_shop)')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (modeleError) {
+      console.error('[shop-erp] vitrine modele lookup:', modeleError)
+      return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: modeleError.message }, 500)
+    }
+    if (!modele) return c.json({ error: 'Modèle introuvable', code: 'NOT_FOUND' }, 404)
+
+    type VitrineActuelle = { prix_public: number; visible_shop: boolean }
+    const m = modele as unknown as Omit<ModeleErpRow, 'modeles_shop'> & { modeles_shop: VitrineActuelle | VitrineActuelle[] | null }
+    // STANDARD : vendu au panier, prix public obligatoire pour la mise en ligne.
+    // CONFIGURABLE : présenté au configurateur, prix calculé (pas de prix public).
+    // SUR DEVIS : jamais en vitrine produit — passe par la demande de devis.
+    const mode = resoudreModeCommercial(m, m.familles)
+    if (mode !== CommercialMode.STANDARD && mode !== CommercialMode.CONFIGURABLE) {
+      return c.json({
+        error: 'Un modèle « sur devis » ne se met pas en vitrine : il passe par la demande de devis',
+        code:  'MODE_NON_VITRINE',
+      }, 422)
+    }
+
+    const actuel: VitrineActuelle | null = Array.isArray(m.modeles_shop) ? (m.modeles_shop[0] ?? null) : m.modeles_shop
+    const prixFinal    = body.prix_public ?? actuel?.prix_public ?? 0
+    const visibleFinal = body.visible_shop ?? actuel?.visible_shop ?? false
+    if (mode === CommercialMode.STANDARD && visibleFinal && prixFinal <= 0) {
+      return c.json({ error: 'Un prix public est requis pour mettre le modèle en vente', code: 'PRIX_REQUIS' }, 422)
+    }
+
+    const { data, error } = await db
+      .from('modeles_shop')
+      .upsert({ modele_id: id, ...body }, { onConflict: 'modele_id' })
+      .select()
+      .single()
+
+    if (error || !data) {
+      console.error('[shop-erp] vitrine modele upsert:', error)
+      return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: error?.message }, 500)
+    }
+
+    // §42 — toute modification de prix de vente est tracée
+    if (body.prix_public !== undefined && body.prix_public !== (actuel?.prix_public ?? null)) {
+      writeAuditLog({
+        userId:        user?.id,
+        actionType:    'PRIX_VITRINE_MODIFIE',
+        module:        'COMMERCIAL',
+        resourceType:  'modeles_shop',
+        resourceId:    id,
+        payloadBefore: { prix_public: actuel?.prix_public ?? null },
+        payloadAfter:  { prix_public: body.prix_public },
+        ipAddress:     c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip'),
+        userAgent:     c.req.header('user-agent'),
+      })
+    }
+
+    return c.json({ data })
+  },
+)
+
+// POST /api/shop-erp/modeles/:id/images — ajoute des images à la vitrine d'un
+// produit fini (champ multipart « images »). Contrairement aux articles de
+// stock, les URL sont enregistrées directement dans modeles_shop.images ; le
+// retrait d'une image passe par PUT /modeles/:id/vitrine { images }.
+shopErpRouter.post('/modeles/:id/images', requirePermission('COMMERCIAL', 'UPDATE'), async (c) => {
+  const id = c.req.param('id')
+  const form = await c.req.formData()
+  const files = form.getAll('images').filter((item) => item instanceof File) as unknown as File[]
+  if (files.length === 0) return c.json({ error: 'Aucune image fournie', code: 'NO_FILE' }, 400)
+
+  const { data: modele, error: modeleError } = await db
+    .from('modeles')
+    .select('id, modeles_shop(images)')
+    .eq('id', id)
+    .maybeSingle()
+
+  if (modeleError) {
+    console.error('[shop-erp] images modele lookup:', modeleError)
+    return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: modeleError.message }, 500)
+  }
+  if (!modele) return c.json({ error: 'Modèle introuvable', code: 'NOT_FOUND' }, 404)
+
+  const vitrine = (modele as { modeles_shop: { images: unknown } | Array<{ images: unknown }> | null }).modeles_shop
+  const actuelles = ((Array.isArray(vitrine) ? vitrine[0]?.images : vitrine?.images) ?? []) as string[]
+  const place = Math.max(0, 12 - actuelles.length)
+  if (place === 0) return c.json({ error: 'Maximum 12 images par produit', code: 'TOO_MANY_IMAGES' }, 422)
+
+  const { urls, errors } = await televerserImages(db, BUCKET_IMAGES_SHOP, `modeles/${id}`, files.slice(0, place))
+  if (urls.length === 0) {
+    return c.json({ error: 'Aucune image n\'a pu etre televersee', code: 'ALL_FAILED', errors }, 400)
+  }
+
+  const images = [...actuelles, ...urls]
+  const { error: saveError } = await db
+    .from('modeles_shop')
+    .upsert({ modele_id: id, images }, { onConflict: 'modele_id' })
+  if (saveError) {
+    console.error('[shop-erp] images modele save:', saveError)
+    return c.json({ error: 'Erreur base de donnees', code: 'DB_ERROR', details: saveError.message }, 500)
+  }
+
+  return c.json({ data: { urls, images, errors } }, 201)
+})
+
+shopErpRouter.post('/produits/:id/images', requirePermission('COMMERCIAL', 'UPDATE'), async (c) => {
   const id = c.req.param('id')
   const form = await c.req.formData()
   const files = form.getAll('images').filter(item => item instanceof File) as unknown as File[]
@@ -1383,40 +1971,16 @@ shopErpRouter.post('/produits/:id/images', async (c) => {
   }
   if (!produit) return c.json({ error: 'Produit introuvable', code: 'NOT_FOUND' }, 404)
 
-  const bucket = 'produits-shop'
-  await db.storage.createBucket(bucket, { public: true }).catch(() => {})
+  const { urls, errors } = await televerserImages(db, BUCKET_IMAGES_SHOP, id, files)
 
-  const urls: string[] = []
-
-  for (const file of files.slice(0, 12)) {
-    if (!file.type.startsWith('image/')) {
-      return c.json({ error: 'Seuls les fichiers image sont acceptes', code: 'INVALID_FILE' }, 400)
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      return c.json({ error: 'Image trop lourde, maximum 5 Mo', code: 'FILE_TOO_LARGE' }, 413)
-    }
-
-    const ext = extFromFile(file)
-    const path = `${id}/${Date.now()}-${randomUUID()}.${ext}`
-    const buffer = Buffer.from(await file.arrayBuffer())
-    const { error } = await db.storage.from(bucket).upload(path, buffer, {
-      contentType: file.type || 'image/jpeg',
-      upsert: false,
-    })
-
-    if (error) {
-      console.error('[shop-erp] upload image produit:', error)
-      return c.json({ error: 'Erreur upload image', details: error.message }, 500)
-    }
-
-    const { data } = db.storage.from(bucket).getPublicUrl(path)
-    urls.push(data.publicUrl)
+  if (urls.length === 0) {
+    return c.json({ error: 'Aucune image n\'a pu etre televersee', code: 'ALL_FAILED', errors }, 400)
   }
 
-  return c.json({ data: { urls } }, 201)
+  return c.json({ data: { urls, errors } }, 201)
 })
 
-shopErpRouter.get('/devis-web', async (c) => {
+shopErpRouter.get('/devis-web', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { statut } = c.req.query()
 
   let query = db
@@ -1442,6 +2006,7 @@ shopErpRouter.get('/devis-web', async (c) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 shopErpRouter.patch('/devis-web/:id/statut',
+  requirePermission('COMMERCIAL', 'UPDATE'),
   zValidator('json', z.object({ statut: z.enum(['nouvelle', 'en_cours', 'traitee', 'refusee']) })),
   async (c) => {
     const id = c.req.param('id')
@@ -1468,6 +2033,7 @@ const creerErpSchema = z.object({
 })
 
 shopErpRouter.post('/devis/:id/creer-erp',
+  requirePermission('COMMERCIAL', 'CREATE'),
   zValidator('json', creerErpSchema),
   async (c) => {
     const id   = c.req.param('id')
@@ -1564,6 +2130,7 @@ shopErpRouter.post('/devis/:id/creer-erp',
 
 shopErpRouter.patch(
   '/commandes/:id/annuler',
+  requirePermission('COMMERCIAL', 'VALIDATE'),
   zValidator('json', z.object({ motif: z.string().min(1).max(200) })),
   async (c) => {
     const id            = c.req.param('id')

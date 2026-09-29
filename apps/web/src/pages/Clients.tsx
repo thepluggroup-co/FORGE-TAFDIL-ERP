@@ -1,11 +1,12 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Eye, Phone, Building2, User, Landmark } from 'lucide-react'
-import { PageHeader, DataTable, StatusBadge, Button, SlideOver } from '@forge/ui'
+import { Plus, Eye, Phone, Building2, User, Landmark, Trash2, Archive } from 'lucide-react'
+import { PageHeader, DataTable, StatusBadge, Button, SlideOver, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF } from '@/lib/utils'
-import { useClients, useCreateClient } from '@/hooks/useClients'
+import { useAuth } from '@/context/AuthContext'
+import { useClients, useCreateClient, useDeleteClient, useUpdateClientStatut } from '@/hooks/useClients'
 import type { Client as ClientApi, CreateClientPayload } from '@/hooks/useClients'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -68,7 +69,11 @@ const DEFAULT_FORM: NouveauClientForm = {
 
 // ── Table columns ─────────────────────────────────────────────────────────────
 
-function buildColumns(navigate: ReturnType<typeof useNavigate>): Column<Client>[] {
+function buildColumns(
+  navigate: ReturnType<typeof useNavigate>,
+  isAdmin: boolean,
+  onDelete: (client: Client) => void,
+): Column<Client>[] {
   return [
     {
       id: 'nom', header: 'Client', accessor: 'nom',
@@ -126,13 +131,25 @@ function buildColumns(navigate: ReturnType<typeof useNavigate>): Column<Client>[
       sortable: false,
       csvSkip: true,   // ← never include action buttons in CSV exports
       render: (_, row) => (
-        <button
-          onClick={(e) => { e.stopPropagation(); navigate(`/clients/${row.id}`) }}
-          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg
-            border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
-        >
-          <Eye className="h-3 w-3" /> Fiche
-        </button>
+        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={() => navigate(`/clients/${row.id}`)}
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg
+              border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            <Eye className="h-3 w-3" /> Fiche
+          </button>
+          {isAdmin && (
+            <button
+              onClick={() => onDelete(row)}
+              title="Supprimer"
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg
+                border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          )}
+        </div>
       ),
     },
   ]
@@ -142,16 +159,28 @@ function buildColumns(navigate: ReturnType<typeof useNavigate>): Column<Client>[
 
 export default function Clients() {
   const navigate = useNavigate()
-  const { data, isLoading }  = useClients()
+  const { role }  = useAuth()
+  const isAdmin   = role === 'admin'
+
+  const [page, setPage]       = useState(1)
+  const [perPage, setPerPage] = useState(50)
+
+  const { data, isLoading }  = useClients({ page, perPage })
   const createClient         = useCreateClient()
+  const deleteClient         = useDeleteClient()
+  const updateStatut         = useUpdateClientStatut()
 
   const [slideOpen, setSlideOpen] = useState(false)
   const [form, setForm]           = useState<NouveauClientForm>(DEFAULT_FORM)
   const [formError, setFormError] = useState<string | null>(null)
 
-  const clients = (data?.data ?? []) as Client[]
-  const caTotal = clients.reduce((s, c) => s + (c.total_ca_xaf as number), 0)
-  const columns = buildColumns(navigate)
+  const [deleteTarget, setDeleteTarget] = useState<Client | null>(null)
+  const [deleteError, setDeleteError]   = useState<{ message: string; code?: string } | null>(null)
+
+  const clients    = (data?.data ?? []) as Client[]
+  const totalPages = data?.total_pages ?? 1
+  const caTotal    = clients.reduce((s, c) => s + (c.total_ca_xaf as number), 0)
+  const columns    = buildColumns(navigate, isAdmin, (client) => { setDeleteTarget(client); setDeleteError(null) })
 
   const handleCreate = () => {
     if (!form.nom.trim()) { setFormError('Le nom est obligatoire'); return }
@@ -210,6 +239,93 @@ export default function Clients() {
         onRowClick={(row) => navigate(`/clients/${row.id}`)}
         loading={isLoading}
       />
+
+      {/* ── Pagination ── */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-400">
+            {data?.total ?? 0} clients — page {page}/{totalPages}
+          </span>
+          <select
+            value={perPage}
+            onChange={(e) => { setPerPage(Number(e.target.value)); setPage(1) }}
+            className="px-2 py-1 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
+          >
+            {[20, 50, 100].map((n) => <option key={n} value={n}>{n} / page</option>)}
+          </select>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="ghost" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+            ← Précédent
+          </Button>
+          <Button variant="ghost" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+            Suivant →
+          </Button>
+        </div>
+      </div>
+
+      {/* ── Suppression client ── */}
+      <Modal
+        isOpen={!!deleteTarget}
+        onClose={() => { setDeleteTarget(null); setDeleteError(null) }}
+        title="Supprimer ce client ?"
+        size="sm"
+      >
+        {deleteTarget && (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">
+              Cette action est définitive. Voulez-vous vraiment supprimer{' '}
+              <span className="font-semibold text-[#212121]">{deleteTarget.nom}</span> ?
+            </p>
+
+            {deleteError && (
+              <div className="flex items-start gap-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-lg">
+                <svg className="w-4 h-4 text-red-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p className="text-xs font-medium text-red-700">{deleteError.message}</p>
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <Button variant="ghost" className="flex-1" onClick={() => { setDeleteTarget(null); setDeleteError(null) }}>
+                Annuler
+              </Button>
+              {deleteError?.code === 'ACTIVE_ORDERS' ? (
+                <button
+                  onClick={() => {
+                    updateStatut.mutate(
+                      { id: deleteTarget.id, statut: 'inactif' },
+                      { onSuccess: () => { setDeleteTarget(null); setDeleteError(null) } },
+                    )
+                  }}
+                  disabled={updateStatut.isPending}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold
+                    rounded-lg bg-amber-500 text-white hover:bg-amber-600 transition-colors disabled:opacity-50"
+                >
+                  <Archive className="h-4 w-4" />
+                  {updateStatut.isPending ? 'Archivage…' : 'Archiver plutôt'}
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    deleteClient.mutate(deleteTarget.id, {
+                      onSuccess: () => setDeleteTarget(null),
+                      onError: (err) => setDeleteError({ message: err.message, code: (err as Error & { code?: string }).code }),
+                    })
+                  }}
+                  disabled={deleteClient.isPending}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold
+                    rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {deleteClient.isPending ? 'Suppression…' : 'Confirmer'}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* ── Nouveau client slide-over ── */}
       <SlideOver isOpen={slideOpen} onClose={() => setSlideOpen(false)} title="Nouveau client" width="md">

@@ -50,10 +50,10 @@ function KpiCard({ label, value, icon: Icon, color, badge }: KpiProps) {
 // ── Colonnes DataTable ────────────────────────────────────────────────────────
 
 const LABELS_PAIEMENT: Record<string, string> = {
-  en_attente: 'En attente', paye: 'Payé', echec: 'Échec', rembourse: 'Remboursé',
+  en_attente: 'En attente', paye: 'Payé', paye_partiel: 'Avance reçue', echec: 'Échec', rembourse: 'Remboursé',
 }
 const COLORS_PAIEMENT: Record<string, string> = {
-  en_attente: '#d97706', paye: '#15803d', echec: '#dc2626', rembourse: '#6b7280',
+  en_attente: '#d97706', paye: '#15803d', paye_partiel: '#2563eb', echec: '#dc2626', rembourse: '#6b7280',
 }
 
 const TABLE_COLS: Column<CommandeShopRecord>[] = [
@@ -112,9 +112,10 @@ const FILTRES_STATUT_COMMANDE: { value: StatutCommandeShop | 'tous'; label: stri
 
 const FILTRES_PAIEMENT: { value: StatutPaiement | 'tous'; label: string }[] = [
   { value: 'tous',       label: 'Tout paiement' },
-  { value: 'en_attente', label: 'En attente'    },
-  { value: 'paye',       label: 'Payé'          },
-  { value: 'echec',      label: 'Échec'         },
+  { value: 'en_attente',  label: 'En attente'    },
+  { value: 'paye',        label: 'Payé'          },
+  { value: 'paye_partiel',label: 'Avance reçue'  },
+  { value: 'echec',       label: 'Échec'         },
 ]
 
 // ── Page ───────────────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import {
 import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
+import { uniteOptions } from '@/lib/constants'
 import { toast } from 'sonner'
 import { useCommandes, useStatutCommande, useCreateCommande, useConditionsPaiementEligibles } from '@/hooks/useCommandes'
 import type { Commande, CommandeLigne, CommandeHistorique, ConditionPaiement, ConditionPaiementEligible } from '@/hooks/useCommandes'
@@ -1049,12 +1050,13 @@ export default function Commandes() {
                     </div>
                     <div>
                       <label className="block text-[10px] font-medium text-gray-400 mb-1">Unité</label>
-                      <input
+                      <select
                         value={ligne.unite}
                         onChange={(e) => updateLigne(idx, { unite: e.target.value })}
-                        placeholder="unité"
                         className="w-full px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-                      />
+                      >
+                        {uniteOptions(ligne.unite).map((u) => <option key={u} value={u}>{u}</option>)}
+                      </select>
                     </div>
                     <div>
                       <label className="block text-[10px] font-medium text-gray-400 mb-1">P.U. HT (FCFA)</label>

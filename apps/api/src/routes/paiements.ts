@@ -364,7 +364,7 @@ paiementsRouter.post('/webhook', async (c) => {
     const { error: errUpdate } = await db
       .from('commandes_shop')
       .update({
-        statut_paiement: isPaiementTotal ? 'paye' : 'en_attente',
+        statut_paiement: isPaiementTotal ? 'paye' : 'paye_partiel',
         statut_commande: 'confirmee',
         updated_at:      new Date().toISOString(),
       })
@@ -436,12 +436,19 @@ paiementsRouter.post('/webhook', async (c) => {
 
     const siteUrl = process.env.SITE_URL ?? 'https://shop.tafdil.cm'
     if (commande.client_telephone) {
+      const soldeRestant = Math.max(0, Math.round(totalCommande - amount))
       await sendWhatsApp(
         commande.client_telephone,
-        `✅ Paiement reçu pour la commande *${commande.ref}*.\n` +
-        `Montant : ${fmt(Number(commande.montant_ttc))}\n` +
-        `Suivi : ${siteUrl}/suivi/${commande.ref}\n\n` +
-        `Merci de votre confiance ! — TAFDIL`
+        isPaiementTotal
+          ? `✅ Paiement reçu pour la commande *${commande.ref}*.\n` +
+            `Montant : ${fmt(Number(commande.montant_ttc))}\n` +
+            `Suivi : ${siteUrl}/suivi/${commande.ref}\n\n` +
+            `Merci de votre confiance ! — TAFDIL`
+          : `✅ Avance reçue pour la commande *${commande.ref}*.\n` +
+            `Montant avance : ${fmt(amount)}\n` +
+            `Solde restant (à régler à la livraison) : ${fmt(soldeRestant)}\n` +
+            `Suivi : ${siteUrl}/suivi/${commande.ref}\n\n` +
+            `Merci de votre confiance ! — TAFDIL`
       )
     }
 

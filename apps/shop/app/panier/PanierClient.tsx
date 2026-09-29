@@ -5,7 +5,7 @@ import Image from 'next/image'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ShoppingCart, Trash2, Plus, Minus, ArrowLeft, MessageCircle, Package } from 'lucide-react'
 import { toast } from 'sonner'
-import { useCartStore, computeTotal } from '@/lib/cart'
+import { useCartStore, computeTotal, quantiteMax } from '@/lib/cart'
 import type { CartItem } from '@/lib/cart'
 
 function fmt(n: number) {
@@ -66,7 +66,7 @@ function CartRow({
           <span className="w-8 text-center text-xs font-bold text-forge-dark">{item.quantite}</span>
           <button
             onClick={() => onQty(item.id, item.quantite + 1)}
-            disabled={item.quantite >= item.stock_actuel}
+            disabled={item.quantite >= quantiteMax(item)}
             className="flex h-7 w-7 items-center justify-center text-forge-steel transition hover:bg-gray-50 disabled:opacity-30"
           >
             <Plus size={12} />

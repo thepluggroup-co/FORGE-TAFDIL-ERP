@@ -89,12 +89,85 @@ export function useUpdateVitrineProduit() {
   })
 }
 
+export interface UploadImagesResult {
+  data: {
+    urls:   string[]
+    errors: Array<{ file: string; error: string }>
+  }
+}
+
 export function useUploadImagesProduit() {
   return useMutation({
     mutationFn: ({ id, files }: { id: string; files: File[] }) => {
       const form = new FormData()
       files.forEach((file) => form.append('images', file))
-      return apiClient.postForm<{ data: { urls: string[] } }>(`/api/shop-erp/produits/${id}/images`, form)
+      return apiClient.postForm<UploadImagesResult>(`/api/shop-erp/produits/${id}/images`, form)
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+// ── Produits finis STANDARD (Catalogue Hybride Phase 2) ────────────────────────
+
+export interface VitrineModele {
+  visible_shop:            boolean
+  prix_public:             number
+  description_longue:      string | null
+  delai_fabrication_jours: number | null
+  min_commande:            number
+  images?:                 string[]
+}
+
+export interface ModeleShopErp {
+  id:                string
+  reference:         string
+  designation:       string
+  famille:           string | null
+  unite_facturation: string | null
+  commercial_mode:   'STANDARD' | 'CONFIGURABLE'
+  vitrine:           VitrineModele | null
+}
+
+export type VitrineModelePayload = Partial<VitrineModele>
+
+export function useModelesShop() {
+  return useQuery({
+    queryKey: ['modeles-shop-erp'],
+    queryFn:  () =>
+      apiClient.get<{ data: ModeleShopErp[]; total: number }>('/api/shop-erp/modeles')
+        .then((r) => r.data),
+    staleTime: 30_000,
+  })
+}
+
+export function useUpdateVitrineModele() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: VitrineModelePayload }) =>
+      apiClient.put(`/api/shop-erp/modeles/${id}/vitrine`, payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['modeles-shop-erp'] })
+      toast.success('Vitrine du produit fini mise a jour')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
+/** Ajoute des images à la vitrine d'un produit fini (enregistrées côté serveur). */
+export function useUploadImagesModele() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, files }: { id: string; files: File[] }) => {
+      const form = new FormData()
+      files.forEach((file) => form.append('images', file))
+      return apiClient.postForm<{ data: { urls: string[]; images: string[]; errors: Array<{ file: string; error: string }> } }>(
+        `/api/shop-erp/modeles/${id}/images`, form,
+      )
+    },
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ['modeles-shop-erp'] })
+      const refusees = res.data.errors.length
+      toast.success(`${res.data.urls.length} image(s) ajoutee(s)${refusees ? ` — ${refusees} refusee(s)` : ''}`)
     },
     onError: (err: Error) => toast.error(err.message),
   })

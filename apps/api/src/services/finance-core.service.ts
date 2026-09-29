@@ -3,6 +3,15 @@ import { genererEcritureEncaissement, genererEcritureVente } from './comptabilit
 
 const db = supabaseAdmin!
 
+// §19 — le devis est brut (TVA = 0, cf. commerce.ts:calculerTotaux) ; transformer-commande
+// copie ensuite ce tva_xaf=0 tel quel sur la commande. Sans le recalcul ci-dessous, une
+// facture générée depuis un devis restait à 0 XAF de TVA jusqu'au paiement — la TVA
+// n'était donc JAMAIS appliquée pour le flux devis→commande→facture (bug identifié
+// et confirmé lors de l'inspection Phase 2). On recalcule donc systématiquement la TVA
+// ici, au stade facture, à partir du HT — idempotent pour les commandes créées hors
+// devis (qui portent déjà le bon tva_xaf depuis leur création).
+const TVA_RATE = 0.1925
+
 type FactureStatut = 'brouillon' | 'valide' | 'envoye' | 'paye' | 'annule'
 type PaiementMethode = 'mobile_money' | 'virement' | 'especes' | 'cheque' | 'NOKASH'
 
@@ -92,8 +101,13 @@ export function enrichirFactureSolde<T extends { total_ttc_xaf?: number; montant
   return { ...facture, solde_restant_xaf: Math.round(solde) }
 }
 
-function totalFactureCommande(cmd: Pick<CommandeRow, 'total_ht_xaf' | 'tva_xaf'>) {
-  return Math.round(Number(cmd.total_ht_xaf ?? 0) + Number(cmd.tva_xaf ?? 0))
+function tvaFacture(totalHtXaf: number): number {
+  return Math.round(totalHtXaf * TVA_RATE)
+}
+
+function totalFactureCommande(cmd: Pick<CommandeRow, 'total_ht_xaf'>) {
+  const totalHt = Number(cmd.total_ht_xaf ?? 0)
+  return Math.round(totalHt + tvaFacture(totalHt))
 }
 
 export function statutCreditDepuisSoldeEtEcheance(solde: number, echeance?: string | null) {
@@ -572,7 +586,7 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
       remise_globale_xaf:    Number(cmd.remise_globale_xaf ?? 0),
       remise_globale_motif:  cmd.remise_globale_motif ?? null,
       total_ht_xaf:          cmd.total_ht_xaf,
-      tva_xaf:               cmd.tva_xaf,
+      tva_xaf:               tvaFacture(Number(cmd.total_ht_xaf ?? 0)),
       frais_livraison_xaf:   0,
       total_ttc_xaf:         totalFactureXaf,
       net_a_payer_xaf:       totalFactureXaf,
@@ -621,7 +635,7 @@ export async function ensureFactureForCommande(options: EnsureFactureOptions) {
       date_emission:         dateEmission,
       client_nom:            cmd.client_nom,
       total_ht_xaf:          cmd.total_ht_xaf,
-      tva_xaf:               cmd.tva_xaf,
+      tva_xaf:               tvaFacture(Number(cmd.total_ht_xaf ?? 0)),
       frais_livraison_xaf:   0,
       total_ttc_xaf:         totalFactureXaf,
       brut_ht_xaf:           remiseTotaleHtXaf > 0 ? brutHtXaf : undefined,
@@ -696,8 +710,16 @@ export async function enregistrerPaiementCommande(options: EnregistrerPaiementCo
 
   if (paiementError) throw new Error(paiementError.message)
 
+  const statutPaiementCommande = nouveauPaye <= 0
+    ? 'non_paye'
+    : nouveauPaye >= totalReference ? 'solde_recu' : 'acompte_recu'
+
   await db.from('commandes')
-    .update({ montant_paye_xaf: nouveauPaye, updated_at: new Date().toISOString() })
+    .update({
+      montant_paye_xaf: nouveauPaye,
+      statut_paiement:  statutPaiementCommande,
+      updated_at:       new Date().toISOString(),
+    })
     .eq('id', options.commandeId)
 
   let factureUpdate = facture

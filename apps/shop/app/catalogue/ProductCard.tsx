@@ -12,6 +12,7 @@ const DISPO_CONFIG: Record<Disponibilite, { label: string; bg: string; text: str
   disponible:   { label: 'Disponible',   bg: '#dcfce7', text: '#15803d' },
   stock_faible: { label: 'Stock faible', bg: '#fef3c7', text: '#d97706' },
   indisponible: { label: 'Sur commande', bg: '#f3f4f6', text: '#6b7280' },
+  sur_commande: { label: 'Fabriqué sur commande', bg: '#e0e7ff', text: '#4338ca' },
 }
 
 export function BadgeDisponibilite({ dispo }: { dispo: Disponibilite }) {
@@ -36,6 +37,7 @@ interface Props {
 export function ProductCard({ produit }: Props) {
   const { addItem } = useCart()
   const indisponible = produit.disponibilite === 'indisponible'
+  const configurable = produit.commercial_mode === 'CONFIGURABLE'
   const hasPromo = Boolean(produit.promotion && produit.prix_barre_xaf && produit.prix_public)
 
   const whatsappUrl = `https://wa.me/237695884528?text=${encodeURIComponent(
@@ -44,7 +46,7 @@ export function ProductCard({ produit }: Props) {
 
   const handleAddToCart = () => {
     void addItem(
-      { id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null },
+      { id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null, type_article: produit.type_article, commercial_mode: produit.commercial_mode },
       1
     )
   }
@@ -130,7 +132,7 @@ export function ProductCard({ produit }: Props) {
               {produit.promotion && <p className="mt-0.5 text-[10px] font-bold uppercase text-forge-red">{produit.promotion.nom}</p>}
             </div>
           ) : (
-            <p className="text-sm font-semibold italic text-forge-steel">Prix sur devis</p>
+            <p className="text-sm font-semibold italic text-forge-steel">{configurable ? 'Prix sur configuration' : 'Prix sur devis'}</p>
           )}
 
           {/* Délai */}
@@ -156,7 +158,7 @@ export function ProductCard({ produit }: Props) {
           className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-forge-red py-2 text-xs font-semibold text-white transition-all hover:bg-forge-red-dark disabled:cursor-not-allowed disabled:opacity-40"
         >
           <ShoppingCart size={13} />
-          {indisponible ? 'Indisponible' : 'Panier'}
+          {indisponible ? 'Indisponible' : configurable ? 'Personnaliser' : 'Panier'}
         </button>
 
         <a

@@ -4,20 +4,22 @@ import { Wrench, Gauge, AlertTriangle, Clock, Plus, Play, CheckCircle2, Package 
 import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatDate } from '@/lib/utils'
+import { uniteOptions } from '@/lib/constants'
 import { useJobs, useCreateJob, useUpdateJobStatut } from '@/hooks/useOperations'
 import type { Job } from '@/hooks/useOperations'
 import { useStocks } from '@/hooks/useStocks'
+import { useEquipements, STATUTS_EQUIPEMENT_INDISPONIBLE } from '@/hooks/useEquipements'
 
 type JobRecord = Job & Record<string, unknown>
 
-const MACHINES = ['Soudure MIG #1', 'Soudure MIG #2', 'Découpe plasma', 'Pliage hydraulique', 'CNC Deckel', 'Meuleuse d\'angle']
+// Machines : référentiel unique `equipements` (décision D5) — plus de liste codée en dur.
 const TECHNICIENS = ['Mvondo Serge', 'Biya Christine', 'Atangana Félix', 'Nkolo Pierre']
 
 interface JobForm {
   typeJob: 'commande' | 'stock'
   produitId: string
   ref: string
-  produit: string; machines: string[]; techniciens: string[]
+  produit: string; machines: string[]; techniciens: string[]   // machines = ids d'équipements
   categorie: string; unite: string
   quantitePrevue: string
   prixUnitaire: string
@@ -90,6 +92,7 @@ export default function Production() {
   const { data, isLoading } = useJobs()
   const { data: stocksData } = useStocks()
   const createJob = useCreateJob()
+  const { data: equipements = [] } = useEquipements()
   const updateJobStatut = useUpdateJobStatut()
 
   const jobs = (data?.data ?? []) as JobRecord[]
@@ -151,7 +154,9 @@ export default function Production() {
         prix_public_xaf: form.prixPublic ? Number(form.prixPublic) : undefined,
         publier_shop: form.publierShop,
         description_produit: form.description || undefined,
-        machine_nom: form.machines.join(', '),
+        // D5 : l'équipement principal (1er choisi) est lié à l'OF ; tous restent lisibles dans machine_nom
+        equipement_id: form.machines[0] || undefined,
+        machine_nom: form.machines.map((id) => equipements.find((e) => e.id === id)?.designation ?? id).join(', '),
         technicien_nom: form.techniciens.join(', '),
         date_debut: form.debut,
         date_fin_prevue: form.finPrevue,
@@ -282,11 +287,13 @@ export default function Production() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Unité</label>
-                  <input
+                  <select
                     value={form.unite}
                     onChange={(e) => setForm((f) => ({ ...f, unite: e.target.value }))}
                     className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
-                  />
+                  >
+                    {uniteOptions(form.unite).map((u) => <option key={u} value={u}>{u}</option>)}
+                  </select>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -326,12 +333,17 @@ export default function Production() {
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Machines *</label>
             <select
               multiple
-              size={Math.min(4, MACHINES.length)}
+              size={Math.min(4, Math.max(1, equipements.length))}
               value={form.machines}
               onChange={(e) => setForm((f) => ({ ...f, machines: Array.from(e.target.selectedOptions, (option) => option.value).filter(Boolean) }))}
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
             >
-              {MACHINES.map((m) => <option key={m} value={m}>{m}</option>)}
+              {equipements.length === 0 && <option value="" disabled>Aucun équipement — créez-les dans Équipements</option>}
+              {equipements.map((e) => (
+                <option key={e.id} value={e.id} disabled={STATUTS_EQUIPEMENT_INDISPONIBLE.has(e.statut)}>
+                  {e.code} — {e.designation}{STATUTS_EQUIPEMENT_INDISPONIBLE.has(e.statut) ? ` (${e.statut})` : ''}
+                </option>
+              ))}
             </select>
           </div>
           <div>

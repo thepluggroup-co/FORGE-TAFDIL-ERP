@@ -7,7 +7,9 @@ describe('resolveInviteRedirectUrl', () => {
     process.env.INVITE_REDIRECT_URL = 'https://forge.example.com'
 
     try {
-      expect(resolveInviteRedirectUrl()).toBe('https://forge.example.com/login')
+      // /set-password (pas /login) : cf. utils/inviteRedirect.ts — un invité n'a
+      // pas encore de mot de passe au premier lien reçu.
+      expect(resolveInviteRedirectUrl()).toBe('https://forge.example.com/set-password')
     } finally {
       if (previous === undefined) delete process.env.INVITE_REDIRECT_URL
       else process.env.INVITE_REDIRECT_URL = previous
@@ -21,7 +23,7 @@ describe('resolveInviteRedirectUrl', () => {
     process.env.FRONTEND_URL = 'forge.example.com'
 
     try {
-      expect(resolveInviteRedirectUrl()).toBe('https://forge.example.com/login')
+      expect(resolveInviteRedirectUrl()).toBe('https://forge.example.com/set-password')
     } finally {
       if (previousInvite === undefined) delete process.env.INVITE_REDIRECT_URL
       else process.env.INVITE_REDIRECT_URL = previousInvite

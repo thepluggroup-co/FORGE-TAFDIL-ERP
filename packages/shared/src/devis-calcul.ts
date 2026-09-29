@@ -36,7 +36,9 @@ export const DimensionsSchema = z.object({
 }).partial()
 export type Dimensions = z.infer<typeof DimensionsSchema>
 
-export const TypeRessourceSchema = z.enum(['materiau', 'main_oeuvre', 'equipement'])
+// Catalogue Hybride Phase 4 (§17/§18) : consommables séparés des matières,
+// sous-traitance (opération confiée à un fournisseur, avec délai).
+export const TypeRessourceSchema = z.enum(['materiau', 'consommable', 'main_oeuvre', 'equipement', 'sous_traitance'])
 export type TypeRessource = z.infer<typeof TypeRessourceSchema>
 
 /** Une ligne de fiche_technique_ressources, telle que chargée depuis la DB. */
@@ -48,10 +50,14 @@ export interface RessourceTechnique {
   quantiteParUnite: number          // ex : 4 (kg d'acier) par unité de quantité facturable
   coutUnitaireReferenceXaf: number
   tempsReferenceH?: number | null
+  /** Quantité ajoutée une seule fois par commande (ex. temps de préparation d'une opération de gamme, Phase 5). */
+  quantiteFixe?: number | null
+  /** sous_traitance : délai du sous-traitant, en jours. */
+  delaiJours?: number | null
 }
 
 export interface DevisCalculInput {
-  produitId: string
+  modeleId: string
   modeCalcul: ModeCalcul
   quantite: number                  // nombre de pièces/forfaits demandés (ex : 2 barrières identiques)
   dimensions?: Dimensions
@@ -67,10 +73,11 @@ export interface RessourceCalculee {
   coutUnitaireXaf: number
   totalXaf: number
   tempsCalculeH?: number
+  delaiJours?: number
 }
 
 export interface PropositionDevis {
-  produitId: string
+  modeleId: string
   modeCalcul: ModeCalcul
   quantiteFacturable: number
   formuleUtilisee: string
@@ -79,6 +86,10 @@ export interface PropositionDevis {
   totalMateriauxXaf: number
   totalMainOeuvreXaf: number
   totalEquipementsXaf: number
+  totalConsommablesXaf: number
+  totalSousTraitanceXaf: number
+  /** Plus long délai de sous-traitance de la fiche (jours), ou null. */
+  delaiSousTraitanceJours: number | null
   totalHtXaf: number   // §19 : devis brut, HT, sans TVA ni remise
 }
 
@@ -187,6 +198,46 @@ export function calculerQuantiteFacturable(
   }
 }
 
+// ── §34 — champs de dimension pertinents pour un mode de calcul ─────────
+// Source unique pour GET /catalogue/modeles/:id/configuration (apps/api) et,
+// si besoin un jour, un rendu de formulaire côté web sans aller-retour API :
+// si une formule change ci-dessus, ce mapping doit changer avec elle.
+
+export interface ChampDimension {
+  cle:   'largeur' | 'hauteur' | 'longueur' | 'poids'
+  label: string
+  unite: string
+}
+
+const CHAMPS_DIMENSIONS_META: Record<ChampDimension['cle'], Omit<ChampDimension, 'cle'>> = {
+  largeur:  { label: 'Largeur',  unite: 'm' },
+  hauteur:  { label: 'Hauteur',  unite: 'm' },
+  longueur: { label: 'Longueur', unite: 'm' },
+  poids:    { label: 'Poids',    unite: 'kg' },
+}
+
+function champ(cle: ChampDimension['cle']): ChampDimension {
+  return { cle, ...CHAMPS_DIMENSIONS_META[cle] }
+}
+
+export function champsDimensionsPourMode(modeCalcul: ModeCalcul): ChampDimension[] {
+  switch (modeCalcul) {
+    case 'surface':  return [champ('largeur'), champ('hauteur')]
+    case 'lineaire': return [champ('longueur')]
+    case 'volume':   return [champ('longueur'), champ('largeur'), champ('hauteur')]
+    case 'poids':    return [champ('poids')]
+    case 'quantitatif':
+    case 'forfait':
+    case 'qualitatif':
+      return []
+    default: {
+      // Exhaustivité, même logique que calculerQuantiteFacturable ci-dessus.
+      const modeNonTraite: never = modeCalcul
+      return modeNonTraite
+    }
+  }
+}
+
 // ── Étape 2 : application de la fiche technique aux ressources (§16) ────
 
 export function calculerRessources(
@@ -194,7 +245,7 @@ export function calculerRessources(
   ressources: RessourceTechnique[],
 ): RessourceCalculee[] {
   return ressources.map((r) => {
-    const quantiteCalculee = arrondirQuantite(r.quantiteParUnite * quantiteFacturable)
+    const quantiteCalculee = arrondirQuantite(r.quantiteParUnite * quantiteFacturable + (r.quantiteFixe ?? 0))
     const totalXaf = arrondirXaf(quantiteCalculee * r.coutUnitaireReferenceXaf)
     const ligne: RessourceCalculee = {
       ressourceId: r.id,
@@ -208,6 +259,7 @@ export function calculerRessources(
     if (r.tempsReferenceH != null) {
       ligne.tempsCalculeH = arrondirQuantite(r.tempsReferenceH * quantiteFacturable)
     }
+    if (r.delaiJours != null) ligne.delaiJours = r.delaiJours
     return ligne
   })
 }
@@ -224,20 +276,24 @@ export function calculerDevisBrut(
   if (ressourcesDisponibles.length === 0) {
     return {
       ok: false,
-      erreurs: [{ code: 'RESSOURCES_MANQUANTES', message: 'Aucune ressource définie sur la fiche technique active de ce produit — impossible de chiffrer.' }],
+      erreurs: [{ code: 'RESSOURCES_MANQUANTES', message: 'Aucune ressource définie sur la fiche technique active de ce modèle — impossible de chiffrer.' }],
     }
   }
 
   const lignes = calculerRessources(etape1.quantiteFacturable, ressourcesDisponibles)
 
-  const totalMateriauxXaf   = arrondirXaf(lignes.filter((l) => l.type === 'materiau').reduce((s, l) => s + l.totalXaf, 0))
-  const totalMainOeuvreXaf  = arrondirXaf(lignes.filter((l) => l.type === 'main_oeuvre').reduce((s, l) => s + l.totalXaf, 0))
-  const totalEquipementsXaf = arrondirXaf(lignes.filter((l) => l.type === 'equipement').reduce((s, l) => s + l.totalXaf, 0))
+  const totalPour = (type: TypeRessource) => arrondirXaf(lignes.filter((l) => l.type === type).reduce((s, l) => s + l.totalXaf, 0))
+  const totalMateriauxXaf     = totalPour('materiau')
+  const totalConsommablesXaf  = totalPour('consommable')
+  const totalMainOeuvreXaf    = totalPour('main_oeuvre')
+  const totalEquipementsXaf   = totalPour('equipement')
+  const totalSousTraitanceXaf = totalPour('sous_traitance')
+  const delais = lignes.filter((l) => l.type === 'sous_traitance' && l.delaiJours != null).map((l) => l.delaiJours as number)
 
   return {
     ok: true,
     proposition: {
-      produitId: input.produitId,
+      modeleId: input.modeleId,
       modeCalcul: input.modeCalcul,
       quantiteFacturable: etape1.quantiteFacturable,
       formuleUtilisee: etape1.formule,
@@ -246,8 +302,11 @@ export function calculerDevisBrut(
       totalMateriauxXaf,
       totalMainOeuvreXaf,
       totalEquipementsXaf,
-      // §19 : total HT brut du travail, sans TVA ni remise (appliquées plus tard, à la facture)
-      totalHtXaf: arrondirXaf(totalMateriauxXaf + totalMainOeuvreXaf + totalEquipementsXaf),
+      totalConsommablesXaf,
+      totalSousTraitanceXaf,
+      delaiSousTraitanceJours: delais.length > 0 ? Math.max(...delais) : null,
+      // §19 : total HT brut du travail (coût direct), sans TVA ni remise (appliquées plus tard, à la facture)
+      totalHtXaf: arrondirXaf(totalMateriauxXaf + totalConsommablesXaf + totalMainOeuvreXaf + totalEquipementsXaf + totalSousTraitanceXaf),
     },
   }
 }

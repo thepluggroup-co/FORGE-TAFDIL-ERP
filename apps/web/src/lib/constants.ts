@@ -65,6 +65,24 @@ export const NAV_ITEMS = [
   { path: '/ai', label: 'FORGE AI', icon: 'Bot' },
 ] as const
 
+// --- Unités de mesure ---
+// Liste unique utilisée PARTOUT où une "unité" se saisit (fiche produit du
+// module Stocks, lignes de devis/commande, ressources de fiche technique,
+// etc.) — une seule liste, un seul endroit à faire évoluer. 'heure' ajouté
+// pour couvrir les ressources main-d'œuvre (fiche technique), absentes de
+// la liste d'origine (module Stocks, qui ne connaît que des articles).
+export const UNITES = ['pièce', 'kg', 'm', 'mm', 'm²', 'm³', 'litre', 'barre', 'rouleau', 'unité', 'heure', 'jour']
+
+/**
+ * Options d'un <select> d'unité : la liste canonique, plus la valeur actuelle
+ * si elle n'y figure pas (donnée existante avec une unité inhabituelle) —
+ * pour ne jamais la faire disparaître silencieusement au premier rendu.
+ */
+export function uniteOptions(current?: string | null): string[] {
+  if (current && !UNITES.includes(current)) return [current, ...UNITES]
+  return UNITES
+}
+
 // --- App ---
 export const APP_VERSION = '1.0.0'
 export const ITEMS_PER_PAGE = 20

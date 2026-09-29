@@ -9,6 +9,7 @@ import { requirePermission } from '../middleware/permission.middleware'
 import { notifyCommandeSms } from '../services/sms.service'
 import { enregistrerPaiementCommande, ensureFactureForCommande, getFactureActiveByCommande } from '../services/finance-core.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
+import { chargerJobsProductionCommande } from '../services/commande-workflow.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
@@ -232,7 +233,8 @@ const jobSchema = z.object({
   prix_public_xaf:     z.number().min(0).optional(),
   publier_shop:        z.boolean().optional(),
   description_produit: z.string().optional(),
-  machine_id:          z.string().optional(),
+  machine_id:          z.string().optional(),     // DÉPRÉCIÉ (D5) : résolu vers equipement_id
+  equipement_id:       z.string().uuid().optional(),
   machine_nom:         z.string().optional(),
   technicien_id:       z.string().optional(),
   technicien_nom:      z.string().optional(),
@@ -323,27 +325,39 @@ router.post('/production/jobs', requirePermission('PRODUCTION', 'CREATE'), zVali
     }
   }
 
-  // ── Bloquer si la machine est en panne ou en maintenance ─────────────────
-  if (body.machine_id) {
-    const { data: machine } = await db
-      .from('machines')
-      .select('nom, statut')
-      .eq('id', body.machine_id)
-      .single()
+  // ── Bloquer si l'équipement est en panne, en maintenance ou hors service ──
+  // Décision D5 : `equipements` est le référentiel unique. Un ancien machine_id
+  // est résolu vers l'équipement recopié (ancienne_machine_id) ; la table
+  // `machines` n'est plus lue qu'en repli, si la migration Phase 5 n'est pas passée.
+  if (body.equipement_id || body.machine_id) {
+    const requete = db.from('equipements').select('id, designation, statut')
+    const { data: equipement } = body.equipement_id
+      ? await requete.eq('id', body.equipement_id).maybeSingle()
+      : await requete.eq('ancienne_machine_id', body.machine_id!).maybeSingle()
 
-    if (machine) {
-      const m = machine as { nom: string; statut: string }
-      if (m.statut === 'panne') {
-        return c.json({
-          error: `Machine "${m.nom}" est en panne — assignation impossible`,
-          code:  'MACHINE_PANNE',
-        }, 422)
+    if (equipement) {
+      const e = equipement as { id: string; designation: string; statut: string }
+      if (e.statut === 'en_panne') {
+        return c.json({ error: `Équipement "${e.designation}" en panne — assignation impossible`, code: 'MACHINE_PANNE' }, 422)
       }
-      if (m.statut === 'maintenance') {
-        return c.json({
-          error: `Machine "${m.nom}" est en maintenance — assignation impossible`,
-          code:  'MACHINE_MAINTENANCE',
-        }, 422)
+      if (e.statut === 'maintenance') {
+        return c.json({ error: `Équipement "${e.designation}" en maintenance — assignation impossible`, code: 'MACHINE_MAINTENANCE' }, 422)
+      }
+      if (e.statut === 'hors_service' || e.statut === 'cede') {
+        return c.json({ error: `Équipement "${e.designation}" hors service — assignation impossible`, code: 'EQUIPEMENT_HORS_SERVICE' }, 422)
+      }
+      body.equipement_id = e.id
+      body.machine_nom = body.machine_nom ?? e.designation
+    } else if (body.equipement_id) {
+      return c.json({ error: 'Équipement introuvable', code: 'EQUIPEMENT_INTROUVABLE' }, 404)
+    } else {
+      const { data: machine } = await db.from('machines').select('nom, statut').eq('id', body.machine_id!).maybeSingle()
+      const m = machine as { nom: string; statut: string } | null
+      if (m?.statut === 'panne') {
+        return c.json({ error: `Machine "${m.nom}" est en panne — assignation impossible`, code: 'MACHINE_PANNE' }, 422)
+      }
+      if (m?.statut === 'maintenance') {
+        return c.json({ error: `Machine "${m.nom}" est en maintenance — assignation impossible`, code: 'MACHINE_MAINTENANCE' }, 422)
       }
     }
   }
@@ -694,71 +708,12 @@ router.patch(
 router.get('/production/historique/:commande_id', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { commande_id } = c.req.param()
 
-  const { data, error } = await db
-    .from('jobs_production')
-    .select(`
-      id, numero, produit_designation, statut, avancement_pct,
-      date_debut, date_fin_prevue, date_fin_reelle, notes,
-      created_at, updated_at,
-      machines(id, nom, type, statut),
-      employes(id, nom, poste)
-    `)
-    .eq('commande_id', commande_id)
-    .order('created_at', { ascending: true })
-
-  if (error) return c.json({ error: error.message }, 500)
-
-  const today = new Date()
-
-  const enriched = (data ?? []).map((j: Record<string, unknown>) => {
-    const debut      = j.date_debut      ? new Date(j.date_debut as string)      : null
-    const finPrevue  = j.date_fin_prevue ? new Date(j.date_fin_prevue as string)  : null
-    const finReelle  = j.date_fin_reelle ? new Date(j.date_fin_reelle as string)  : null
-
-    const duree_prevue_h = debut && finPrevue
-      ? Math.round((finPrevue.getTime() - debut.getTime()) / 3600000 * 10) / 10
-      : null
-
-    const duree_reelle_h = debut && finReelle
-      ? Math.round((finReelle.getTime() - debut.getTime()) / 3600000 * 10) / 10
-      : null
-
-    const en_retard = finPrevue && !finReelle &&
-      !['delivered', 'cancelled'].includes(j.statut as string) &&
-      today > finPrevue
-
-    return {
-      ...j,
-      statut:         j.statut as string,
-      avancement_pct: j.avancement_pct as number,
-      duree_prevue_h,
-      duree_reelle_h,
-      en_retard,
-      ecart_h: duree_prevue_h && duree_reelle_h
-        ? Math.round((duree_reelle_h - duree_prevue_h) * 10) / 10
-        : null,
-    }
-  })
-
-  // Récapitulatif
-  const total          = enriched.length
-  const termines       = enriched.filter(j => j.statut === 'delivered').length
-  const enRetard       = enriched.filter(j => j.en_retard).length
-  const avancementMoyen = total > 0
-    ? Math.round(enriched.reduce((s, j) => s + ((j.avancement_pct as number) ?? 0), 0) / total)
-    : 0
-
-  return c.json({
-    commande_id,
-    jobs:              enriched,
-    total,
-    recapitulatif: {
-      termines,
-      en_cours:         enriched.filter(j => j.statut === 'in_production').length,
-      en_retard:        enRetard,
-      avancement_moyen: avancementMoyen,
-    },
-  })
+  try {
+    const recap = await chargerJobsProductionCommande(commande_id)
+    return c.json({ commande_id, ...recap })
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 500)
+  }
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1123,12 +1078,17 @@ const campagneStatutSchema = z.object({
   conversions_count:   z.number().int().min(0).optional(),
 })
 
+// Une promotion vise SOIT un article de stock (product_id), SOIT un produit
+// fini STANDARD (modele_id, Catalogue Hybride Phase 2).
 const campagneProduitSchema = z.object({
-  product_id:      z.string().uuid(),
+  product_id:      z.string().uuid().optional(),
+  modele_id:       z.string().uuid().optional(),
   remise_type:     z.enum(['pct', 'forfait']).default('pct'),
   remise_valeur:   z.number().min(0).default(0),
   prix_promo_xaf:  z.number().min(0).nullable().optional(),
   priorite:        z.number().int().min(0).default(0),
+}).refine((p) => Boolean(p.product_id) !== Boolean(p.modele_id), {
+  message: 'Indiquer exactement un product_id ou un modele_id',
 })
 
 router.get('/marketing/campagnes', requirePermission('COMMERCIAL', 'READ'), async (c) => {
@@ -1180,19 +1140,29 @@ router.get('/marketing/campagnes/:id/produits', requirePermission('COMMERCIAL', 
       id,
       campagne_id,
       product_id,
+      modele_id,
       remise_type,
       remise_valeur,
       prix_promo_xaf,
       priorite,
       created_at,
-      produits!inner(ref, designation, categorie, unite)
+      produits(ref, designation, categorie, unite),
+      modeles(reference, designation, unite_facturation)
     `)
     .eq('campagne_id', id)
     .order('priorite', { ascending: false })
     .order('created_at', { ascending: false })
 
   if (error) return c.json({ error: error.message }, 500)
-  return c.json({ data: data ?? [], total: data?.length ?? 0 })
+
+  // `article` : vue unifiée (article de stock ou produit fini) pour l'affichage.
+  const lignes = ((data ?? []) as Array<Record<string, any>>).map((l) => ({
+    ...l,
+    article: l.modele_id
+      ? { type: 'modele', id: l.modele_id, ref: l.modeles?.reference ?? '', designation: l.modeles?.designation ?? '' }
+      : { type: 'produit', id: l.product_id, ref: l.produits?.ref ?? '', designation: l.produits?.designation ?? '' },
+  }))
+  return c.json({ data: lignes, total: lignes.length })
 })
 
 router.post('/marketing/campagnes/:id/produits', requirePermission('COMMERCIAL', 'CREATE'), zValidator('json', campagneProduitSchema), async (c) => {
@@ -1211,13 +1181,13 @@ router.post('/marketing/campagnes/:id/produits', requirePermission('COMMERCIAL',
     .from('campagnes_produits')
     .upsert({
       campagne_id:     id,
-      product_id:      body.product_id,
+      ...(body.modele_id ? { modele_id: body.modele_id } : { product_id: body.product_id }),
       remise_type:     body.remise_type,
       remise_valeur:   body.remise_valeur,
       prix_promo_xaf:  body.prix_promo_xaf ?? null,
       priorite:        body.priorite,
       updated_at:      new Date().toISOString(),
-    }, { onConflict: 'campagne_id,product_id' })
+    }, { onConflict: body.modele_id ? 'campagne_id,modele_id' : 'campagne_id,product_id' })
     .select()
     .single()
 
@@ -1226,12 +1196,16 @@ router.post('/marketing/campagnes/:id/produits', requirePermission('COMMERCIAL',
 })
 
 router.delete('/marketing/campagnes/:campagneId/produits/:productId', requirePermission('COMMERCIAL', 'DELETE'), async (c) => {
+  // productId : identifiant de l'article lié — article de stock OU produit fini.
   const { campagneId, productId } = c.req.param()
+  if (!z.string().uuid().safeParse(productId).success) {
+    return c.json({ error: 'Identifiant d\'article invalide', code: 'VALIDATION_ERROR' }, 400)
+  }
   const { error } = await db
     .from('campagnes_produits')
     .delete()
     .eq('campagne_id', campagneId)
-    .eq('product_id', productId)
+    .or(`product_id.eq.${productId},modele_id.eq.${productId}`)
 
   if (error) return c.json({ error: error.message }, 400)
   return c.json({ success: true })

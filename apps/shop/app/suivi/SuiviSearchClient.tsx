@@ -28,7 +28,7 @@ export function SuiviSearchClient() {
           type="text"
           value={ref}
           onChange={(e) => setRef(e.target.value.toUpperCase())}
-          placeholder="WEB-2026-XXXX"
+          placeholder="WEB-2026-XXXXXX"
           autoFocus
           className="w-full rounded-2xl border-2 border-gray-200 py-4 pl-11 pr-5 font-mono text-base font-bold uppercase tracking-widest outline-none transition placeholder:font-normal placeholder:tracking-normal placeholder:text-gray-400 focus:border-forge-red focus:ring-4 focus:ring-forge-red/10"
         />
@@ -48,7 +48,7 @@ export function SuiviSearchClient() {
         Suivre ma commande <ArrowRight size={16} />
       </button>
       <p className="text-center text-xs text-gray-400">
-        La référence figure dans votre SMS de confirmation (format WEB-2026-XXXX)
+        La référence figure dans votre SMS de confirmation (format WEB-2026-XXXXXX)
       </p>
     </form>
   )

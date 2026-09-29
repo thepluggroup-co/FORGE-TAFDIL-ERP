@@ -182,7 +182,7 @@ const chatSchema = z.object({
 // POST /ai/chat — Chat avec contexte live
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.post('/ai/chat', zValidator('json', chatSchema), async (c) => {
+router.post('/ai/chat', requirePermission('REPORTS', 'READ'), zValidator('json', chatSchema), async (c) => {
   const body = c.req.valid('json')
 
   let ctx: ForgeContext | null = null
@@ -313,7 +313,7 @@ router.get('/ai/rapport-hebdo', requireRole(['admin']), async (c) => {
 // GET /ai/alertes — Agrégation intelligente de toutes les alertes
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/ai/alertes', async (c) => {
+router.get('/ai/alertes', requirePermission('REPORTS', 'READ'), async (c) => {
   const today  = new Date().toISOString().slice(0, 10)
   const in7j   = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)
   const in30j  = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)
@@ -322,7 +322,8 @@ router.get('/ai/alertes', async (c) => {
     db.from('produits').select('id, ref, designation, stock_actuel, stock_critique, statut').in('statut', ['critique', 'rupture', 'alerte']),
     db.from('credits').select('id, numero, client_nom, solde_restant_xaf, echeance, statut').or(`statut.eq.echu,and(statut.eq.en_cours,echeance.lte.${in7j})`),
     db.from('commandes').select('id, numero, client_nom, statut, date_livraison_prevue').in('statut', ['confirmed', 'in_production', 'pret']).lte('date_livraison_prevue', in7j).not('date_livraison_prevue', 'is', null),
-    db.from('machines').select('id, nom, statut, prochaine_maintenance').in('statut', ['maintenance', 'panne']),
+    // D5 : référentiel unique des machines = equipements (alias de colonnes pour le traitement existant)
+    db.from('equipements').select('id, nom:designation, statut, prochaine_maintenance:prochaine_revision').in('statut', ['maintenance', 'en_panne']),
     db.from('capteurs_iot').select('id, nom, zone, statut, batterie_pct').or('statut.eq.alerte,statut.eq.hors_ligne,batterie_pct.lte.20'),
   ])
 
@@ -384,7 +385,7 @@ router.get('/ai/alertes', async (c) => {
     alertes.push({
       id:          `machine-${m.id}`,
       module:      'production',
-      severite:    m.statut === 'panne' ? 'critique' : 'alerte',
+      severite:    m.statut === 'en_panne' ? 'critique' : 'alerte',
       titre:       `Machine ${m.statut} — ${m.nom}`,
       description: m.prochaine_maintenance ? `Prochaine maintenance : ${m.prochaine_maintenance}` : 'Aucune maintenance planifiée',
       ts:          now,

@@ -44,6 +44,17 @@ export const AUDIT_ACTIONS = [
   // format, réutilisée plutôt que dupliquée (principe §4.1 du brief).
   'DEVIS_CREATED', 'DEVIS_UPDATED', 'DEVIS_LIGNE_AJUSTEE',
   'DEVIS_VALIDATION_CLIENT', 'DEVIS_CONVERTI_COMMANDE',
+  // Vente shop/boutique où le personnel a fixé un prix différent du prix de
+  // référence (le client anonyme, lui, ne peut jamais fixer de prix).
+  'VENTE_PRIX_FORCE',
+  // Modification du prix public d'un produit fini en vitrine (Catalogue Hybride Phase 2).
+  'PRIX_VITRINE_MODIFIE',
+  // Catalogue Hybride Phase 3 : taux de marge (D4) et configurations client.
+  'MARGE_MODIFIEE', 'CONFIGURATION_CREEE',
+  // Catalogue Hybride Phase 4 : frais indirects paramétrables.
+  'FRAIS_INDIRECTS_MODIFIES',
+  // Catalogue Hybride Phase 5 : coûts horaires (postes de travail, équipements).
+  'TAUX_HORAIRE_MODIFIE',
 ] as const
 
 export type AuditActionType = typeof AUDIT_ACTIONS[number]

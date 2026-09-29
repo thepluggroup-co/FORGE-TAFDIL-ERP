@@ -106,13 +106,19 @@ async function getPublicKeyForToken(token: string): Promise<ReturnType<typeof cr
   }
 }
 
-// ── Middleware ────────────────────────────────────────────────────────────────
-export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = async (c, next) => {
-  const authHeader = c.req.header('Authorization')
+// ── Vérification d'un en-tête Bearer ─────────────────────────────────────────
+// Extraite du middleware pour être réutilisée par les routes publiques à
+// authentification OPTIONNELLE (ex. POST /api/shop/commandes : anonyme = prix
+// catalogue imposé par le serveur, personnel authentifié = vente boutique).
 
+export type VerificationBearer =
+  | { ok: true; user: HonoVariables['user'] }
+  | { ok: false; status: 401 | 500; error: string; code: string }
+
+export async function verifierBearer(authHeader: string | undefined): Promise<VerificationBearer> {
   if (!authHeader?.startsWith('Bearer ')) {
     console.warn('[auth] ❌ No Bearer token')
-    return c.json({ error: 'Token manquant', code: 'MISSING_TOKEN' }, 401)
+    return { ok: false, status: 401, error: 'Token manquant', code: 'MISSING_TOKEN' }
   }
 
   const token = authHeader.slice(7)
@@ -123,7 +129,7 @@ export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = a
     const h = JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString()) as { alg?: string }
     alg = h.alg ?? 'HS256'
   } catch {
-    return c.json({ error: 'Token malformé', code: 'INVALID_TOKEN' }, 401)
+    return { ok: false, status: 401, error: 'Token malformé', code: 'INVALID_TOKEN' }
   }
 
   // ── Verify signature ──────────────────────────────────────────────────────────
@@ -137,20 +143,20 @@ export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = a
       const publicKey = await getPublicKeyForToken(token)
       if (!publicKey) {
         console.error('[auth] ❌ Could not obtain public key for alg:', alg)
-        return c.json({ error: 'Erreur configuration auth', code: 'SERVER_ERROR' }, 500)
+        return { ok: false, status: 500, error: 'Erreur configuration auth', code: 'SERVER_ERROR' }
       }
       payload = jwt.verify(token, publicKey, { algorithms: [alg as jwt.Algorithm] }) as jwt.JwtPayload
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error('[auth] ❌ JWT verification failed:', msg)
-    return c.json({ error: 'Token invalide', code: 'INVALID_TOKEN' }, 401)
+    return { ok: false, status: 401, error: 'Token invalide', code: 'INVALID_TOKEN' }
   }
 
   // ── Extract user from payload ─────────────────────────────────────────────────
   const userId = payload.sub
   if (!userId) {
-    return c.json({ error: 'Token invalide — sub manquant', code: 'INVALID_TOKEN' }, 401)
+    return { ok: false, status: 401, error: 'Token invalide — sub manquant', code: 'INVALID_TOKEN' }
   }
 
   const email = (payload['email'] as string | undefined) ?? ''
@@ -172,7 +178,17 @@ export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = a
 
   console.log('[auth] ✅', email, '| role:', role, '| jwt_raw:', appMeta.role, '| alg:', alg)
 
-  c.set('user', { id: userId, email, role })
+  return { ok: true, user: { id: userId, email, role } }
+}
+
+// ── Middleware ────────────────────────────────────────────────────────────────
+export const authMiddleware: MiddlewareHandler<{ Variables: HonoVariables }> = async (c, next) => {
+  const verification = await verifierBearer(c.req.header('Authorization'))
+  if (!verification.ok) {
+    return c.json({ error: verification.error, code: verification.code }, verification.status)
+  }
+
+  c.set('user', verification.user)
   c.set('requestId', crypto.randomUUID())
   await next()
 }

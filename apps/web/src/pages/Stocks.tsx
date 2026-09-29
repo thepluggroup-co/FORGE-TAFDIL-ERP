@@ -1,16 +1,18 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Minus, RotateCcw, FileOutput, ShoppingCart } from 'lucide-react'
+import { Plus, Minus, RotateCcw, FileOutput, ShoppingCart, Pencil, Upload, CheckCircle2 } from 'lucide-react'
 import { PageHeader, DataTable, StatusBadge, StockLevel, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatNombre, formatDateTime } from '@/lib/utils'
+import { UNITES } from '@/lib/constants'
 import { KpiCard } from '@forge/ui'
 import { Package, AlertTriangle, TrendingDown, DollarSign, History } from 'lucide-react'
 import { toast } from 'sonner'
-import { useStocks, useMouvement, useCreateProduit, useMouvementsStock } from '@/hooks/useStocks'
+import { useStocks, useMouvement, useCreateProduit, useUpdateProduit, useMouvementsStock } from '@/hooks/useStocks'
 import { useBonsEnAttente } from '@/hooks/useBons'
 import { useBonsApproBrouillonCount, useCreerApproManuel } from '@/hooks/useBonsAppro'
+import { useUploadImagesProduit, useUpdateVitrineProduit } from '@/hooks/useProduitsShop'
 import type { StockProduit, CreateProduitPayload, MouvementStock } from '@/hooks/useStocks'
 
 // ── Types (alignés sur l'API) ─────────────────────────────────────────────────
@@ -20,7 +22,6 @@ type Product = StockProduit & Record<string, unknown>
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MOTIFS = ['Achat fournisseur', 'Retour chantier', 'Correction inventaire', 'Don / perte', 'Autre']
-const UNITES = ['pièce', 'kg', 'm', 'mm', 'm²', 'm³', 'litre', 'barre', 'rouleau', 'unité']
 const CATEGORIES_DEFAULT = ['Acier', 'Aluminium', 'Inox', 'Consommable soudure', 'EPI', 'Outillage', 'Autre']
 
 const DEFAULT_PRODUIT: CreateProduitPayload = {
@@ -39,6 +40,7 @@ const buildColumns = (
   onEntree: (p: Product) => void,
   onSortie:  (p: Product) => void,
   onAppro:   (p: Product) => void,
+  onEdit:    (p: Product) => void,
 ): Column<Product>[] => [
   {
     id: 'reference',
@@ -124,6 +126,9 @@ const buildColumns = (
             Appro
           </Button>
         )}
+        <Button size="xs" variant="ghost" onClick={() => onEdit(row)} title="Modifier le produit">
+          <Pencil className="h-3 w-3" />
+        </Button>
       </div>
     ),
   },
@@ -162,6 +167,91 @@ const MVT_TYPE_CONFIG: Record<string, { label: string; color: string; bg: string
   transfert:  { label: 'Transfert',  color: '#1d4ed8', bg: '#dbeafe' },
 }
 
+// ── Champs formulaire produit (partagés création / modification) ──────────────
+
+function ProduitFormFields({
+  value, onChange, refWarning,
+}: {
+  value: CreateProduitPayload
+  onChange: (patch: Partial<CreateProduitPayload>) => void
+  refWarning?: string | null
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Référence *</label>
+          <input value={value.ref} onChange={(e) => onChange({ ref: e.target.value })}
+            placeholder="ex. AC-001" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+          {refWarning && (
+            <p className="mt-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+              {refWarning}
+            </p>
+          )}
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Unité</label>
+          <select value={value.unite} onChange={(e) => onChange({ unite: e.target.value })}
+            className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
+            {UNITES.map((u) => <option key={u} value={u}>{u}</option>)}
+          </select>
+        </div>
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Désignation *</label>
+        <input value={value.designation} onChange={(e) => onChange({ designation: e.target.value })}
+          placeholder="ex. Fer plat 40×5 mm" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Catégorie *</label>
+        <select value={value.categorie} onChange={(e) => onChange({ categorie: e.target.value })}
+          className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
+          <option value="">Sélectionner…</option>
+          {CATEGORIES_DEFAULT.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Stock initial</label>
+          <input type="number" min="0" value={value.stock_actuel}
+            onChange={(e) => onChange({ stock_actuel: Number(e.target.value) })}
+            className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Seuil alerte</label>
+          <input type="number" min="0" value={value.stock_min}
+            onChange={(e) => onChange({ stock_min: Number(e.target.value) })}
+            className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Seuil critique</label>
+          <input type="number" min="0" value={value.stock_critique}
+            onChange={(e) => onChange({ stock_critique: Number(e.target.value) })}
+            className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+        </div>
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Prix unitaire (FCFA)</label>
+        <input type="number" min="0" value={value.prix_unitaire_xaf}
+          onChange={(e) => onChange({ prix_unitaire_xaf: Number(e.target.value) })}
+          className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Emplacement</label>
+          <input value={value.emplacement ?? ''} onChange={(e) => onChange({ emplacement: e.target.value })}
+            placeholder="ex. Rack A-3" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Fournisseur</label>
+          <input value={value.fournisseur ?? ''} onChange={(e) => onChange({ fournisseur: e.target.value })}
+            placeholder="ex. ACIER CM" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Page component ─────────────────────────────────────────────────────────────
 
 export default function Stocks() {
@@ -181,6 +271,13 @@ export default function Stocks() {
   const [newProduit, setNewProduit]   = useState<CreateProduitPayload>(DEFAULT_PRODUIT)
   const [createError, setCreateError] = useState<string | null>(null)
   const [createDone, setCreateDone]   = useState(false)
+  const [createdProduit, setCreatedProduit] = useState<StockProduit | null>(null)
+  const [uploadedImages, setUploadedImages] = useState<string[]>([])
+
+  // ── Modifier produit ──────────────────────────────────────────────────────
+  const [editProduit, setEditProduit] = useState<Product | null>(null)
+  const [editForm, setEditForm]       = useState<CreateProduitPayload>(DEFAULT_PRODUIT)
+  const [editError, setEditError]     = useState<string | null>(null)
 
   // ── Historique tab state ──────────────────────────────────────────────────
   const [mvtPage, setMvtPage]           = useState(1)
@@ -197,11 +294,21 @@ export default function Stocks() {
   const { data, isLoading, isError } = useStocks({ search: debouncedSearch, categorie, statut: statusFilter })
   const mouvement = useMouvement()
   const createProduit = useCreateProduit()
+  const updateProduit = useUpdateProduit()
+  const uploadImages = useUploadImagesProduit()
+  const updateVitrine = useUpdateVitrineProduit()
   const existingReference = useMemo(() => {
     const normalizedReference = normalizeReference(newProduit.ref)
     if (!normalizedReference) return null
     return data?.data.find((product) => normalizeReference(product.ref) === normalizedReference) ?? null
   }, [data?.data, newProduit.ref])
+  const editExistingReference = useMemo(() => {
+    const normalizedReference = normalizeReference(editForm.ref)
+    if (!normalizedReference || !editProduit) return null
+    return data?.data.find((product) =>
+      product.id !== editProduit.id && normalizeReference(product.ref) === normalizedReference,
+    ) ?? null
+  }, [data?.data, editForm.ref, editProduit])
   const [approOpen, setApproOpen]   = useState(false)
   const [approForm, setApproForm]   = useState<ApproForm>(DEFAULT_APPRO)
 
@@ -243,6 +350,49 @@ export default function Stocks() {
     setApproOpen(true)
   }, [])
 
+  const openEdit = useCallback((p: Product) => {
+    setEditProduit(p)
+    setEditForm({
+      ref: p.ref, designation: p.designation, categorie: p.categorie, unite: p.unite,
+      stock_actuel: p.stock_actuel, stock_min: p.stock_min, stock_critique: p.stock_critique,
+      prix_unitaire_xaf: p.prix_unitaire_xaf,
+      emplacement: (p.emplacement as string | undefined) ?? '',
+      fournisseur: (p.fournisseur as string | undefined) ?? '',
+    })
+    setEditError(null)
+  }, [])
+
+  const closeNewProduit = useCallback(() => {
+    if (createProduit.isPending) return
+    setNewProduitOpen(false)
+    setNewProduit(DEFAULT_PRODUIT)
+    setCreateError(null)
+    setCreateDone(false)
+    setCreatedProduit(null)
+    setUploadedImages([])
+  }, [createProduit.isPending])
+
+  const handlePhotoUpload = useCallback((files: FileList | null) => {
+    if (!createdProduit || !files?.length) return
+    uploadImages.mutate(
+      { id: createdProduit.id, files: Array.from(files) },
+      {
+        onSuccess: (res) => {
+          const { urls, errors } = res.data
+          if (urls.length > 0) {
+            const next = [...uploadedImages, ...urls]
+            setUploadedImages(next)
+            updateVitrine.mutate({ id: createdProduit.id, payload: { images: next } })
+            toast.success(`${urls.length} photo${urls.length > 1 ? 's' : ''} ajoutée${urls.length > 1 ? 's' : ''}`)
+          }
+          for (const e of errors ?? []) {
+            toast.error(`${e.file} : ${e.error}`)
+          }
+        },
+      },
+    )
+  }, [createdProduit, uploadedImages, uploadImages, updateVitrine])
+
   const selectedProduct = produits.find((p) => p.id === form.produitId)
   const sortieError = form.type === 'sortie' && selectedProduct && form.quantite > (selectedProduct.stock_actuel as number)
     ? `Stock insuffisant (disponible : ${selectedProduct.stock_actuel} ${selectedProduct.unite})`
@@ -253,7 +403,7 @@ export default function Stocks() {
   const alertes      = useMemo(() => produits.filter((p) => p.statut === 'alerte').length, [produits])
   const valeurTotale = useMemo(() => produits.reduce((sum, p) => sum + (p.stock_actuel as number) * (p.prix_unitaire_xaf as number), 0), [produits])
 
-  const columns = useMemo(() => buildColumns(openEntree, openSortie, openAppro), [openEntree, openSortie, openAppro])
+  const columns = useMemo(() => buildColumns(openEntree, openSortie, openAppro, openEdit), [openEntree, openSortie, openAppro, openEdit])
 
   return (
     <motion.div
@@ -551,114 +701,66 @@ export default function Stocks() {
       {/* SlideOver nouveau produit */}
       <SlideOver
         isOpen={newProduitOpen}
-        onClose={() => {
-          if (createProduit.isPending) return
-          setNewProduitOpen(false)
-          setNewProduit(DEFAULT_PRODUIT)
-          setCreateError(null)
-          setCreateDone(false)
-        }}
+        onClose={closeNewProduit}
         title="Nouveau produit"
         width="md"
       >
-        {/* ── Succès ── */}
-        {createDone ? (
-          <div className="flex flex-col items-center justify-center py-16 space-y-4">
-            <div className="flex items-center justify-center w-16 h-16 rounded-full bg-green-100">
-              <svg className="w-8 h-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
+        {/* ── Succès + étape photos (optionnelle) ── */}
+        {createDone && createdProduit ? (
+          <div className="space-y-5">
+            <div className="flex items-center gap-3 px-3 py-2.5 bg-green-50 border border-green-200 rounded-lg">
+              <CheckCircle2 className="h-5 w-5 text-green-600 shrink-0" />
+              <div>
+                <p className="text-sm font-semibold text-green-800">Produit créé avec succès</p>
+                <p className="text-xs text-green-600">
+                  <span className="font-mono font-medium">{createdProduit.ref}</span> — {createdProduit.designation}
+                </p>
+              </div>
             </div>
-            <div className="text-center">
-              <p className="text-base font-semibold text-gray-800">Produit créé avec succès</p>
-              <p className="text-sm text-gray-500 mt-1">
-                <span className="font-mono font-medium">{newProduit.ref}</span> — {newProduit.designation}
-              </p>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">
+                Ajouter des photos <span className="text-gray-300 normal-case font-normal">(optionnel)</span>
+              </label>
+              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-3 text-sm font-medium text-gray-600 transition-colors hover:border-[#C62828] hover:text-[#C62828]">
+                <Upload className="h-4 w-4" />
+                {uploadImages.isPending ? 'Téléversement en cours…' : 'Téléverser depuis le PC'}
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  disabled={uploadImages.isPending}
+                  onChange={(e) => { handlePhotoUpload(e.target.files); e.currentTarget.value = '' }}
+                  className="hidden"
+                />
+              </label>
+              {uploadedImages.length > 0 && (
+                <div className="mt-2 flex gap-2 overflow-x-auto">
+                  {uploadedImages.map((src) => (
+                    <img key={src} src={src} alt="" className="h-16 w-16 shrink-0 rounded-lg border border-gray-100 object-cover" />
+                  ))}
+                </div>
+              )}
             </div>
-            <Button
-              className="mt-2"
-              onClick={() => {
-                setNewProduitOpen(false)
-                setNewProduit(DEFAULT_PRODUIT)
-                setCreateDone(false)
-                setCreateError(null)
-              }}
-            >
-              Fermer
-            </Button>
+
+            <div className="flex gap-3 pt-2 border-t border-gray-100">
+              <Button variant="ghost" className="flex-1" onClick={closeNewProduit}>
+                Passer
+              </Button>
+              <Button className="flex-1" disabled={uploadImages.isPending} onClick={closeNewProduit}>
+                Terminer
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Référence *</label>
-                <input value={newProduit.ref} onChange={(e) => setNewProduit((p) => ({ ...p, ref: e.target.value }))}
-                  placeholder="ex. AC-001" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
-                {existingReference && (
-                  <p className="mt-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
-                    Cette référence existe déjà pour « {existingReference.designation} ». Veuillez en choisir une autre.
-                  </p>
-                )}
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Unité</label>
-                <select value={newProduit.unite} onChange={(e) => setNewProduit((p) => ({ ...p, unite: e.target.value }))}
-                  className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
-                  {UNITES.map((u) => <option key={u} value={u}>{u}</option>)}
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Désignation *</label>
-              <input value={newProduit.designation} onChange={(e) => setNewProduit((p) => ({ ...p, designation: e.target.value }))}
-                placeholder="ex. Fer plat 40×5 mm" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Catégorie *</label>
-              <select value={newProduit.categorie} onChange={(e) => setNewProduit((p) => ({ ...p, categorie: e.target.value }))}
-                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
-                <option value="">Sélectionner…</option>
-                {CATEGORIES_DEFAULT.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Stock initial</label>
-                <input type="number" min="0" value={newProduit.stock_actuel}
-                  onChange={(e) => setNewProduit((p) => ({ ...p, stock_actuel: Number(e.target.value) }))}
-                  className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Seuil alerte</label>
-                <input type="number" min="0" value={newProduit.stock_min}
-                  onChange={(e) => setNewProduit((p) => ({ ...p, stock_min: Number(e.target.value) }))}
-                  className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Seuil critique</label>
-                <input type="number" min="0" value={newProduit.stock_critique}
-                  onChange={(e) => setNewProduit((p) => ({ ...p, stock_critique: Number(e.target.value) }))}
-                  className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Prix unitaire (FCFA)</label>
-              <input type="number" min="0" value={newProduit.prix_unitaire_xaf}
-                onChange={(e) => setNewProduit((p) => ({ ...p, prix_unitaire_xaf: Number(e.target.value) }))}
-                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Emplacement</label>
-                <input value={newProduit.emplacement ?? ''} onChange={(e) => setNewProduit((p) => ({ ...p, emplacement: e.target.value }))}
-                  placeholder="ex. Rack A-3" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Fournisseur</label>
-                <input value={newProduit.fournisseur ?? ''} onChange={(e) => setNewProduit((p) => ({ ...p, fournisseur: e.target.value }))}
-                  placeholder="ex. ACIER CM" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
-              </div>
-            </div>
+            <ProduitFormFields
+              value={newProduit}
+              onChange={(patch) => setNewProduit((p) => ({ ...p, ...patch }))}
+              refWarning={existingReference
+                ? `Cette référence existe déjà pour « ${existingReference.designation} ». Veuillez en choisir une autre.`
+                : null}
+            />
 
             {/* Champs requis manquants */}
             {(() => {
@@ -684,11 +786,7 @@ export default function Stocks() {
             )}
 
             <div className="flex gap-3 pt-2 border-t border-gray-100">
-              <Button variant="ghost" className="flex-1" onClick={() => {
-                setNewProduitOpen(false)
-                setNewProduit(DEFAULT_PRODUIT)
-                setCreateError(null)
-              }}>
+              <Button variant="ghost" className="flex-1" onClick={closeNewProduit}>
                 Annuler
               </Button>
               <Button
@@ -698,7 +796,7 @@ export default function Stocks() {
                   if (!newProduit.ref || !newProduit.designation || !newProduit.categorie) return
                   setCreateError(null)
                   createProduit.mutate(newProduit, {
-                    onSuccess: () => setCreateDone(true),
+                    onSuccess: (data) => { setCreatedProduit(data); setUploadedImages([]); setCreateDone(true) },
                     onError: (err: Error) => setCreateError(err.message || 'Erreur serveur — réessayez'),
                   })
                 }}
@@ -712,6 +810,58 @@ export default function Stocks() {
                     Création…
                   </span>
                 ) : 'Créer le produit'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </SlideOver>
+
+      {/* SlideOver modifier produit */}
+      <SlideOver
+        isOpen={!!editProduit}
+        onClose={() => { if (!updateProduit.isPending) setEditProduit(null) }}
+        title="Modifier le produit"
+        width="md"
+      >
+        {editProduit && (
+          <div className="space-y-4">
+            <ProduitFormFields
+              value={editForm}
+              onChange={(patch) => setEditForm((p) => ({ ...p, ...patch }))}
+              refWarning={editExistingReference
+                ? `Cette référence existe déjà pour « ${editExistingReference.designation} ». Veuillez en choisir une autre.`
+                : null}
+            />
+
+            {editError && (
+              <div className="flex items-start gap-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-lg">
+                <svg className="w-4 h-4 text-red-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p className="text-xs font-medium text-red-700">{editError}</p>
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-2 border-t border-gray-100">
+              <Button variant="ghost" className="flex-1" disabled={updateProduit.isPending} onClick={() => setEditProduit(null)}>
+                Annuler
+              </Button>
+              <Button
+                className="flex-1"
+                disabled={!editForm.ref || !editForm.designation || !editForm.categorie || !!editExistingReference || updateProduit.isPending}
+                onClick={() => {
+                  if (!editProduit) return
+                  setEditError(null)
+                  updateProduit.mutate(
+                    { id: editProduit.id, payload: editForm },
+                    {
+                      onSuccess: () => setEditProduit(null),
+                      onError: (err: Error) => setEditError(err.message || 'Erreur serveur — réessayez'),
+                    },
+                  )
+                }}
+              >
+                {updateProduit.isPending ? 'Enregistrement…' : 'Enregistrer'}
               </Button>
             </div>
           </div>

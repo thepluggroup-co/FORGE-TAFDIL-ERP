@@ -48,7 +48,7 @@ export const imputationPayeurEnum   = pgEnum('imputation_payeur_enum',  ['entrep
 export const statutPreparationEnum  = pgEnum('statut_preparation_enum', ['a_preparer', 'en_cours', 'pret'])
 export const remiseTypeEnum         = pgEnum('remise_type_enum',        ['pct', 'forfait'])
 export const caisseSessionStatutEnum = pgEnum('caisse_session_statut', ['ouverte', 'fermee'])
-export const ressourceTypeEnum      = pgEnum('ressource_type',      ['materiau', 'main_oeuvre', 'equipement'])
+export const ressourceTypeEnum      = pgEnum('ressource_type',      ['materiau', 'consommable', 'main_oeuvre', 'equipement', 'sous_traitance'])
 export const ficheTechniqueStatutEnum = pgEnum('fiche_technique_statut', ['brouillon', 'active', 'archivee'])
 export const modeCalculDevisEnum    = pgEnum('mode_calcul_devis',   ['quantitatif', 'surface', 'lineaire', 'volume', 'poids', 'forfait', 'qualitatif'])
 export const ticketVenteStatutEnum   = pgEnum('ticket_vente_statut',   ['paye', 'annule', 'rembourse'])
@@ -111,6 +111,12 @@ export type NouveauClientPg = typeof clientsPg.$inferInsert
 
 // ── Largeur de gamme : familles et catégories ───────────────────────────────
 // (MASTER PROMPT V3 §8 — Famille → Catégorie → Modèle(=produit) → Configuration)
+//
+// @deprecated produit_familles / produit_categories / produits.categorie_id :
+// jamais utilisés par le code. La hiérarchie officielle est l'arbre `familles`
+// (Catégorie → Famille → Sous-famille) + `modeles` — voir famillesPg plus bas et
+// ARCHITECTURE/COMMERCIAL_MODES.md (décision D2). Conservés (aucun DROP) ; ne
+// pas y brancher de nouveau code.
 
 export const produitFamillesPg = pgTable('produit_familles', {
   id:          id(),
@@ -179,7 +185,11 @@ export type NouveauProduitPg = typeof produitsPg.$inferInsert
 
 export const ficheTechniquePg = pgTable('fiche_technique', {
   id:          id(),
-  produitId:   uuid('produit_id').notNull().references(() => produitsPg.id),
+  // Phase 2 — repointé sur modeles (catalogue produits finis, Phase 1) : une fiche
+  // technique décrit COMMENT fabriquer un modèle (ex: PM-01), pas un article de
+  // stock. `produits` (matières premières) n'intervient qu'au niveau des ressources
+  // ci-dessous (fiche_technique_ressources.ressourceProduitId).
+  modeleId:    uuid('modele_id').notNull().references(() => modelesPg.id),
   version:     integer('version').notNull().default(1),
   statut:      ficheTechniqueStatutEnum('statut').notNull().default('brouillon'),
   modeCalcul:  modeCalculDevisEnum('mode_calcul').notNull(),
@@ -201,6 +211,9 @@ export const ficheTechniqueRessourcesPg = pgTable('fiche_technique_ressources', 
   quantiteParUnite:       real('quantite_par_unite').notNull(), // ex : 4 kg d'acier par m²
   coutUnitaireReferenceXaf: real('cout_unitaire_reference_xaf').notNull().default(0),
   tempsReferenceH:        real('temps_reference_h'),
+  // Phase 4 — sous_traitance : sous-traitant (fournisseurs, FK posée en SQL si la table existe) et délai
+  ressourceFournisseurId: uuid('ressource_fournisseur_id'),
+  delaiJours:             integer('delai_jours'),
   ordre:                  integer('ordre').notNull().default(0),
   actif:                  boolean('actif').notNull().default(true),
   createdAt:              ts('created_at'),
@@ -439,6 +452,9 @@ export const commandesLignesPg = pgTable('commandes_lignes', {
   id:                id(),
   commandeId:        uuid('commande_id').notNull().references(() => commandesPg.id),
   produitId:         uuid('produit_id').references(() => produitsPg.id),
+  // Catalogue Hybride Phase 2 : produit fini vendu (modèle STANDARD). Exclusif
+  // avec produitId en pratique ; les deux sont nuls pour une ligne issue d'un devis libre.
+  modeleId:          uuid('modele_id').references(() => modelesPg.id),
   designation:       text('designation').notNull(),
   unite:             text('unite').notNull().default('unité'),
   quantite:          real('quantite').notNull(),
@@ -834,6 +850,7 @@ export const validationsNiveauPg = pgTable('validations_niveau', {
 // PRODUCTION
 // ══════════════════════════════════════════════════════════════════════════════
 
+// @deprecated Décision D5 : référentiel unique = equipements (lignes recopiées, equipements.ancienne_machine_id).
 export const machinesPg = pgTable('machines', {
   id:                   id(),
   nom:                  text('nom').notNull(),
@@ -858,7 +875,8 @@ export const jobsProductionPg = pgTable('jobs_production', {
   unite:              text('unite'),
   quantitePrevue:     real('quantite_prevue'),
   prixUnitaireXaf:    real('prix_unitaire_xaf'),
-  machineId:          uuid('machine_id').references(() => machinesPg.id),
+  machineId:          uuid('machine_id').references(() => machinesPg.id),  // DÉPRÉCIÉ (D5) : utiliser equipementId
+  equipementId:       uuid('equipement_id').references(() => equipementsPg.id),
   machineNom:         text('machine_nom'),
   technicienId:       uuid('technicien_id').references(() => employesPg.id),
   technicienNom:      text('technicien_nom'),
@@ -1024,6 +1042,9 @@ export const equipementsPg = pgTable('equipements', {
   prochaineRevision:      text('prochaine_revision'),
   intervalleRevisionJ:    integer('intervalle_revision_j').notNull().default(365),
   notes:                  text('notes'),
+  // Phase 5 (D5 : référentiel unique des machines) — coût horaire machine et origine d'une ligne recopiée de `machines`
+  coutHoraireXaf:         real('cout_horaire_xaf'),
+  ancienneMachineId:      uuid('ancienne_machine_id'),
   createdBy:              uuid('created_by').references(() => profilesPg.id),
   createdAt:              ts('created_at'),
   updatedAt:              ts('updated_at'),
@@ -1169,3 +1190,111 @@ export const paiementsTicketPg = pgTable('paiements_ticket', {
 
 export type PaiementTicketPg        = typeof paiementsTicketPg.$inferSelect
 export type NouveauPaiementTicketPg = typeof paiementsTicketPg.$inferInsert
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CATALOGUE PRODUITS FINIS — Familles / Modèles / Spécifications (Phase 1)
+// ══════════════════════════════════════════════════════════════════════════════
+// Arbre de classification des produits finis fabriqués par TAFDIL (charpente,
+// portails, citernes, etc). Sans rapport avec `produits` (stock de matières
+// premières/consommables) : le lien entre les deux se fera en Phase 2 via
+// fiche_technique_ressources. Purement additif — aucune table existante touchée.
+
+export const typeGammeEnum = pgEnum('type_gamme', ['catalogue', 'sur_mesure', 'configuration'])
+
+export const famillesPg = pgTable('familles', {
+  id:          id(),
+  nom:         text('nom').notNull(),
+  // parent_id : auto-référence. Sans .references() (forward ref non supporté sans
+  // AnyPgColumn) — même contournement que bonsSortiePg.commandeId/devisId ci-dessus.
+  // La contrainte FK réelle est posée en SQL brut dans la migration.
+  parentId:    uuid('parent_id'),
+  typeGamme:   typeGammeEnum('type_gamme').notNull(),
+  ordre:       integer('ordre').notNull().default(0),
+  actif:       boolean('actif').notNull().default(true),
+  createdAt:   ts('created_at'),
+  updatedAt:   ts('updated_at'),
+})
+
+export type FamillePg       = typeof famillesPg.$inferSelect
+export type NouvelleFamillePg = typeof famillesPg.$inferInsert
+
+export const modelesPg = pgTable('modeles', {
+  id:                id(),
+  familleId:         uuid('famille_id').notNull().references(() => famillesPg.id),
+  reference:         text('reference').notNull().unique(),
+  designation:       text('designation').notNull(),
+  description:       text('description'),
+  // Texte libre conservé pour compat affichage/écriture front (§46) ; la
+  // source de vérité est unites_facturation, référencée par uniteFacturationId
+  // ci-dessous et résolue automatiquement par l'API à chaque écriture.
+  uniteFacturation:  text('unite_facturation').notNull().default('unite'),
+  uniteFacturationId: uuid('unite_facturation_id').references(() => unitesFacturationPg.id),
+  // nullable : hérite du type_gamme de la famille si non renseigné —
+  // voir resolveTypeGamme() dans apps/api/src/routes/catalogue.ts.
+  typeGamme:         typeGammeEnum('type_gamme'),
+  actif:             boolean('actif').notNull().default(true),
+  createdAt:         ts('created_at'),
+  updatedAt:         ts('updated_at'),
+})
+
+export type ModelePg       = typeof modelesPg.$inferSelect
+export type NouveauModelePg = typeof modelesPg.$inferInsert
+
+export const modeleSpecificationsPg = pgTable('modele_specifications', {
+  id:        id(),
+  modeleId:  uuid('modele_id').notNull().references(() => modelesPg.id),
+  cle:       text('cle').notNull(),
+  valeur:    text('valeur').notNull(),
+  unite:     text('unite'),
+  ordre:     integer('ordre').notNull().default(0),
+})
+
+// Vitrine web d'un modèle STANDARD (Catalogue Hybride Phase 2, décision D1) —
+// calquée sur produits_shop, qui reste la vitrine des articles de stock.
+export const modelesShopPg = pgTable('modeles_shop', {
+  modeleId:              uuid('modele_id').primaryKey().references(() => modelesPg.id),
+  visibleShop:           boolean('visible_shop').notNull().default(false),
+  prixPublic:            integer('prix_public').notNull().default(0),
+  descriptionLongue:     text('description_longue'),
+  images:                jsonb('images').notNull().default([]),
+  tags:                  jsonb('tags').notNull().default([]),
+  delaiFabricationJours: integer('delai_fabrication_jours'),
+  minCommande:           integer('min_commande').notNull().default(1),
+  createdAt:             ts('created_at'),
+  updatedAt:             ts('updated_at'),
+})
+
+export type ModeleShopPg = typeof modelesShopPg.$inferSelect
+
+export type ModeleSpecificationPg       = typeof modeleSpecificationsPg.$inferSelect
+export type NouvelleModeleSpecificationPg = typeof modeleSpecificationsPg.$inferInsert
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Gamme opératoire (Catalogue Hybride Phase 5, §15/§16/§21)
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const postesTravailPg = pgTable('postes_travail', {
+  id:             id(),
+  code:           text('code').notNull().unique(),
+  libelle:        text('libelle').notNull(),
+  coutHoraireXaf: real('cout_horaire_xaf').notNull(),
+  actif:          boolean('actif').notNull().default(true),
+  notes:          text('notes'),
+  createdAt:      ts('created_at'),
+  updatedAt:      ts('updated_at'),
+})
+
+export const gammeOperationsPg = pgTable('gamme_operations', {
+  id:               id(),
+  ficheTechniqueId: uuid('fiche_technique_id').notNull().references(() => ficheTechniquePg.id),
+  numero:           integer('numero').notNull(),
+  libelle:          text('libelle').notNull(),
+  posteId:          uuid('poste_id').references(() => postesTravailPg.id),
+  equipementId:     uuid('equipement_id').references(() => equipementsPg.id),
+  tempsUnitaireH:   real('temps_unitaire_h').notNull().default(0),   // par unité facturable
+  tempsFixeH:       real('temps_fixe_h').notNull().default(0),       // préparation, une fois par commande
+  actif:            boolean('actif').notNull().default(true),
+  notes:            text('notes'),
+  createdAt:        ts('created_at'),
+  updatedAt:        ts('updated_at'),
+})

@@ -10,9 +10,9 @@ import {
 } from 'lucide-react'
 import { z } from 'zod'
 import { toast } from 'sonner'
-import { useCartStore, computeTotal } from '@/lib/cart'
+import { useCartStore, computeTotal, estIndisponible } from '@/lib/cart'
 import type { CartItem, CartTotals } from '@/lib/cart'
-import { FRAIS_LIVRAISON, BOUTIQUE_RETRAIT } from '@forge/shared'
+import { fraisLivraisonWeb, BOUTIQUE_RETRAIT } from '@forge/shared'
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
@@ -52,11 +52,12 @@ const STEPS: { id: Step; label: string }[] = [
   { id: 4, label: 'Confirmation' },
 ]
 
+// null = tarif sur devis (contact commercial). Même règle que le recalcul serveur.
 const FRAIS: Record<Ville, number | null> = {
-  Douala:    FRAIS_LIVRAISON.douala.tarif,
-  Yaounde:   FRAIS_LIVRAISON.yaounde.tarif,
-  Bafoussam: null, // tarif sur devis — contact commercial
-  Autres:    null, // tarif sur devis — contact commercial
+  Douala:    fraisLivraisonWeb('Douala'),
+  Yaounde:   fraisLivraisonWeb('Yaounde'),
+  Bafoussam: fraisLivraisonWeb('Bafoussam'),
+  Autres:    fraisLivraisonWeb('Autres'),
 }
 
 const MODE_LABEL: Record<ModePaiement, string> = {
@@ -185,7 +186,7 @@ function StepPanier({ onNext }: { onNext: () => void }) {
   const { items, removeItem, refreshStockStatus } = useCartStore()
   const [checking, setChecking] = useState(true)
   const totals = computeTotal(items)
-  const hasInvalidStock = items.some(i => i.stock_insuffisant || i.stock_actuel <= 0)
+  const hasInvalidStock = items.some(estIndisponible)
 
   useEffect(() => {
     refreshStockStatus().finally(() => setChecking(false))
@@ -231,7 +232,7 @@ function StepPanier({ onNext }: { onNext: () => void }) {
           </thead>
           <tbody>
             {items.map((item: CartItem) => {
-              const isProblematic = item.stock_insuffisant || item.stock_actuel <= 0
+              const isProblematic = estIndisponible(item)
               return (
                 <tr key={item.id} className={`border-t border-gray-100 ${isProblematic ? 'bg-red-50' : ''}`}>
                   <td className="py-3 pl-4">
@@ -1187,8 +1188,9 @@ export function CheckoutClient() {
           mode_livraison:          modeLivraison,
           condition_paiement_code: conditionCode,
           avance_livraison_pct: modePaiement === 'livraison' ? avanceLivraisonPct : undefined,
+          // prix_unitaire est indicatif : le serveur applique le prix public en vigueur.
           lignes: items.map(i => ({
-            product_id:    i.id,
+            ...(i.type_article === 'modele' ? { modele_id: i.id } : { product_id: i.id }),
             designation:   i.nom,
             quantite:      i.quantite,
             prix_unitaire: i.prix ?? 0,

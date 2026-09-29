@@ -14,6 +14,7 @@ import { rhRouter } from './routes/rh'
 import { aiRouter } from './routes/ai'
 import { rapportsRouter } from './routes/rapports'
 import { shopRouter, shopErpRouter } from './routes/shop'
+import { configurateurRouter } from './routes/configurateur'
 import { paiementsRouter } from './routes/paiements'
 import { authPhonePinRouter } from './routes/auth-phone-pin'
 import { caisseRouter } from './routes/caisse'
@@ -24,6 +25,7 @@ import { creditRouter } from './routes/credit'
 import { profileRouter } from './routes/profile'
 import { fournisseursRouter } from './routes/fournisseurs'
 import { logistiqueRouter } from './routes/logistique'
+import { catalogueRouter } from './routes/catalogue'
 import { demarrerCronRelances } from './services/relances-cron.service'
 import { demarrerCronReappro } from './services/reappro-cron.service'
 import { checkOverdueInstallments } from './services/creditService'
@@ -94,6 +96,7 @@ app.use('*', rateLimitMiddleware)
 app.route('/', publicCommandesRouter)
 app.route('/', publicDevisRouter)
 app.route('/api/auth', authPhonePinRouter)
+app.route('/api/shop/configurateur', configurateurRouter)   // avant shopRouter : chemin plus spécifique
 app.route('/api/shop',      shopRouter)
 app.route('/api/paiements', paiementsRouter)
 
@@ -153,6 +156,7 @@ api.route('/credit',      creditRouter)
 api.route('/profile',     profileRouter)
 api.route('/fournisseurs', fournisseursRouter)
 api.route('/caisse',      caisseRouter)
+api.route('/catalogue',   catalogueRouter)
 
 app.route('/api', api)
 

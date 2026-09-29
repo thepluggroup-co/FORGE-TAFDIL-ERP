@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { Plus, Minus, Trash2, Star, Search, Printer, Lock, X, MessageCircle, History } from 'lucide-react'
 import { PageHeader, Button, Modal } from '@forge/ui'
 import { formatXAF, formatDateTime } from '@/lib/utils'
+import { uniteOptions } from '@/lib/constants'
 import { toast } from 'sonner'
 import { usePermissions } from '@/hooks/useRbac'
 import { useStocks } from '@/hooks/useStocks'
@@ -21,7 +22,6 @@ const TVA_RATE = 0
 // Doit rester alignée sur CAISSIER_REMISE_MAX_PCT (apps/api/src/services/rbacService.ts) —
 // le serveur revalide de toute façon, ceci n'est qu'un garde-fou d'affichage.
 const CAISSIER_REMISE_MAX_PCT = 5
-const UNITES_CAISSE = ['unité', 'm', 'kg', 'm²', 'litre']
 const FAVORIS_KEY = 'forge_caisse_favoris'
 
 const MODES: { value: ModePaiementCaisse; label: string; color: string }[] = [
@@ -552,7 +552,7 @@ function VenteScreen({ sessionId, isResponsable }: { sessionId: string; isRespon
                     onChange={(e) => updateLigne(l.key, { unite: e.target.value })}
                     className="text-xs border border-gray-200 rounded px-1.5 py-1"
                   >
-                    {UNITES_CAISSE.map((u) => <option key={u} value={u}>{u}</option>)}
+                    {uniteOptions(l.unite).map((u) => <option key={u} value={u}>{u}</option>)}
                   </select>
                   {isResponsable ? (
                     <input

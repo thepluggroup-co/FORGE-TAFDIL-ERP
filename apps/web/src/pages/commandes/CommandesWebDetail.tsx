@@ -13,17 +13,19 @@ import { supabase } from '@/lib/supabase'
 // ── Labels ──────────────────────────────────────────────────────────────────────
 
 const LABELS_PAIEMENT: Record<string, string> = {
-  en_attente: 'En attente',
-  paye:       'Payé',
-  echec:      'Échec',
-  rembourse:  'Remboursé',
+  en_attente:   'En attente',
+  paye:         'Payé',
+  paye_partiel: 'Avance reçue',
+  echec:        'Échec',
+  rembourse:    'Remboursé',
 }
 
 const COLORS_PAIEMENT: Record<string, string> = {
-  en_attente: '#d97706',
-  paye:       '#15803d',
-  echec:      '#dc2626',
-  rembourse:  '#6b7280',
+  en_attente:   '#d97706',
+  paye:         '#15803d',
+  paye_partiel: '#2563eb',
+  echec:        '#dc2626',
+  rembourse:    '#6b7280',
 }
 
 const LABELS_MODE: Record<string, string> = {

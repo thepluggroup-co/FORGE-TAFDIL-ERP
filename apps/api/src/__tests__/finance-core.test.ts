@@ -8,6 +8,18 @@
  *  - enregistrerPaiementCommande (plusieurs DB calls)
  *  - factureStatutDepuisPaiement (private, via comportement observable)
  *  - genererNumero              (private, via ensureFactureForCommande)
+ *
+ * Mock DB routé PAR TABLE (pas par position) : depuis l'ajout du moteur de
+ * crédit client (syncCreditForFacture / getCreditByFactureOrCommande, appelé
+ * automatiquement dès qu'une facture "engageante" est créée/mise à jour),
+ * ensureFactureForCommande et enregistrerPaiementCommande font des appels
+ * .from('credits') supplémentaires et imprévisibles en nombre. Une file
+ * positionnelle unique (mockImplementationOnce en séquence) se désynchronise
+ * dès qu'un appel de plus apparaît quelque part au milieu. Une file par
+ * table isole cette interférence : les appels vers 'credits' qu'on ne
+ * mocke jamais explicitement retombent sur la réponse par défaut (aucun
+ * crédit existant), sans jamais consommer un slot destiné à 'commandes' /
+ * 'factures' / 'paiements_commande'.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -45,6 +57,18 @@ function mkChain(response: Record<string, unknown>) {
   chain['maybeSingle'] = vi.fn().mockResolvedValue(response)
   chain['then']        = (cb: (v: unknown) => unknown) =>
     Promise.resolve({ data: [], count: 0, error: null, ...response }).then(cb)
+  return chain
+}
+
+type Chain = ReturnType<typeof mkChain>
+
+let queues: Record<string, Chain[]>
+
+/** Enfile la prochaine réponse pour un appel à `db.from(table)`, et retourne
+ * la chaîne mockée (pour asserter dessus, ex. `expect(chain.insert).not.toHaveBeenCalled()`). */
+function queueFrom(table: string, response: Record<string, unknown>): Chain {
+  const chain = mkChain(response)
+  ;(queues[table] ??= []).push(chain)
   return chain
 }
 
@@ -95,7 +119,14 @@ const FAC_BASE = {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  db.from.mockImplementation(() => mkChain({ data: null, error: null }))
+  queues = {}
+  // Réponse par défaut pour toute table non explicitement enfilée (notamment
+  // 'credits' : aucun crédit existant, le moteur de crédit s'arrête vite).
+  db.from.mockImplementation((table: string) => {
+    const q = queues[table]
+    if (q && q.length > 0) return q.shift()!
+    return mkChain({ data: null, error: null })
+  })
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -131,19 +162,19 @@ describe('enrichirFactureSolde', () => {
 
 describe('getFactureActiveByCommande', () => {
   it('retourne la facture active si trouvée', async () => {
-    db.from.mockImplementationOnce(() => mkChain({ data: FAC_BASE, error: null }))
+    queueFrom('factures', { data: FAC_BASE, error: null })
     const result = await getFactureActiveByCommande(CMD_ID)
     expect(result).toMatchObject({ id: FAC_ID })
   })
 
   it('retourne null si aucune facture', async () => {
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: null }))
+    queueFrom('factures', { data: null, error: null })
     const result = await getFactureActiveByCommande(CMD_ID)
     expect(result).toBeNull()
   })
 
   it('lève une erreur si DB échoue', async () => {
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: { message: 'DB error' } }))
+    queueFrom('factures', { data: null, error: { message: 'DB error' } })
     await expect(getFactureActiveByCommande(CMD_ID)).rejects.toThrow('DB error')
   })
 })
@@ -154,29 +185,26 @@ describe('getFactureActiveByCommande', () => {
 
 describe('ensureFactureForCommande', () => {
   it('retourne la facture existante sans la créer si elle existe déjà', async () => {
-    // getFactureActiveByCommande → existing
-    db.from.mockImplementationOnce(() => mkChain({ data: FAC_BASE, error: null }))
+    // getFactureActiveByCommande → existing (statut brouillon : le moteur de
+    // crédit s'arrête après la lecture, sans update/insert — cf. syncCreditForFacture)
+    const facturesChain = queueFrom('factures', { data: FAC_BASE, error: null })
 
     const result = await ensureFactureForCommande({ commandeId: CMD_ID })
     expect(result.created).toBe(false)
     expect(result.facture).toMatchObject({ id: FAC_ID })
-    expect(db.from).toHaveBeenCalledTimes(1) // seul l'appel maybySingle
+    expect(facturesChain.update).not.toHaveBeenCalled()
+    expect(facturesChain.insert).not.toHaveBeenCalled()
   })
 
   it('crée une facture quand aucune facture existante', async () => {
-    // 1. getFactureActiveByCommande → null
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: null }))
-    // 2. from('commandes').single() → CMD_BASE
-    db.from.mockImplementationOnce(() => mkChain({ data: CMD_BASE, error: null }))
-    // 3. genererNumero → count=0
-    db.from.mockImplementationOnce(() => mkChain({ data: null, count: 0, error: null }))
-    // 4. factures.insert.single()
-    db.from.mockImplementationOnce(() => mkChain({
+    queueFrom('factures', { data: null, error: null }) // getFactureActiveByCommande → aucune
+    queueFrom('commandes', { data: CMD_BASE, error: null })
+    queueFrom('factures', { data: null, count: 0, error: null }) // genererNumero
+    queueFrom('factures', {
       data: { id: FAC_ID, numero: `FAC-${YEAR}-0001`, total_ttc_xaf: 119_250, montant_paye_xaf: 0 },
       error: null,
-    }))
-    // 5. factures_lignes.insert
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: null }))
+    })
+    queueFrom('factures_lignes', { data: null, error: null })
 
     const result = await ensureFactureForCommande({ commandeId: CMD_ID })
     expect(result.created).toBe(true)
@@ -184,15 +212,43 @@ describe('ensureFactureForCommande', () => {
     expect(result.facture.solde_restant_xaf).toBe(119_250)
   })
 
+  it('recalcule la TVA au stade facture pour une commande issue d\'un devis (tva_xaf=0 en base)', async () => {
+    // §19 : le devis est brut (TVA=0) ; transformer-commande copie ce 0 sur la commande.
+    // Sans le recalcul, la facture générée héritait de ce 0 — jamais de TVA facturée.
+    const CMD_DEPUIS_DEVIS = { ...CMD_BASE, tva_xaf: 0, total_ttc_xaf: 100_000, net_a_payer_xaf: 100_000 }
+
+    queueFrom('factures', { data: null, error: null }) // getFactureActiveByCommande → aucune
+    queueFrom('commandes', { data: CMD_DEPUIS_DEVIS, error: null })
+    queueFrom('factures', { data: null, count: 0, error: null }) // genererNumero
+    const factureInsertChain = queueFrom('factures', {
+      data: { id: FAC_ID, numero: `FAC-${YEAR}-0001`, total_ttc_xaf: 119_250, montant_paye_xaf: 0 },
+      error: null,
+    })
+    queueFrom('factures_lignes', { data: null, error: null })
+
+    const result = await ensureFactureForCommande({ commandeId: CMD_ID, statut: 'valide' })
+
+    expect(result.created).toBe(true)
+    // 100_000 HT × 19,25 % = 19_250 XAF de TVA, jamais 0
+    expect(factureInsertChain.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ total_ht_xaf: 100_000, tva_xaf: 19_250, total_ttc_xaf: 119_250 }),
+    )
+
+    const { genererEcritureVente } = await import('../services/comptabilite.service')
+    expect(genererEcritureVente).toHaveBeenCalledWith(
+      expect.objectContaining({ tva_xaf: 19_250, total_ttc_xaf: 119_250 }),
+    )
+  })
+
   it('statut="paye" quand montantPayeXaf >= total_ttc', async () => {
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: null }))
-    db.from.mockImplementationOnce(() => mkChain({ data: CMD_BASE, error: null }))
-    db.from.mockImplementationOnce(() => mkChain({ data: null, count: 0, error: null }))
-    db.from.mockImplementationOnce(() => mkChain({
+    queueFrom('factures', { data: null, error: null })
+    queueFrom('commandes', { data: CMD_BASE, error: null })
+    queueFrom('factures', { data: null, count: 0, error: null })
+    queueFrom('factures', {
       data: { id: FAC_ID, numero: `FAC-${YEAR}-0001`, total_ttc_xaf: 119_250, montant_paye_xaf: 119_250 },
       error: null,
-    }))
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: null }))
+    })
+    queueFrom('factures_lignes', { data: null, error: null })
 
     const result = await ensureFactureForCommande({
       commandeId: CMD_ID,
@@ -203,8 +259,8 @@ describe('ensureFactureForCommande', () => {
   })
 
   it('lève une erreur si commande introuvable', async () => {
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: null })) // no existing facture
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: { message: 'NOT_FOUND' } })) // commande
+    queueFrom('factures', { data: null, error: null }) // no existing facture
+    queueFrom('commandes', { data: null, error: { message: 'NOT_FOUND' } })
 
     await expect(ensureFactureForCommande({ commandeId: 'xxx' })).rejects.toThrow()
   })
@@ -228,42 +284,41 @@ describe('enregistrerPaiementCommande', () => {
   })
 
   it('lève 404 si commande introuvable', async () => {
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: { message: 'Not found' } }))
+    queueFrom('commandes', { data: null, error: { message: 'Not found' } })
     await expect(enregistrerPaiementCommande(BASE_OPTS))
       .rejects.toMatchObject({ httpStatus: 404 })
   })
 
   it('lève 422 AMOUNT_EXCEEDED si montant > solde', async () => {
-    db.from.mockImplementationOnce(() => mkChain({
+    queueFrom('commandes', {
       data: { id: CMD_ID, numero: 'CMD-2026-0001', client_id: null, client_nom: 'X', total_ttc_xaf: 100_000, montant_paye_xaf: 80_000 },
       error: null,
-    }))
+    })
+    // ensureFactureForCommande (ensureFacture !== false par défaut) → facture
+    // existante déjà à 80 000/100 000 : le paiement de 30 000 dépasserait le solde.
+    queueFrom('factures', {
+      data: { id: FAC_ID, commande_id: CMD_ID, client_id: null, statut: 'envoye', total_ttc_xaf: 100_000, montant_paye_xaf: 80_000 },
+      error: null,
+    })
     await expect(enregistrerPaiementCommande({ ...BASE_OPTS, montantXaf: 30_000 }))
       .rejects.toMatchObject({ code: 'AMOUNT_EXCEEDED' })
   })
 
   it('enregistre un paiement et met à jour la commande + facture', async () => {
-    // 1. commandes.select.single
-    db.from.mockImplementationOnce(() => mkChain({
+    queueFrom('commandes', {
       data: { id: CMD_ID, numero: 'CMD-2026-0001', client_id: null, client_nom: 'SODECOTON', total_ttc_xaf: 119_250, montant_paye_xaf: 0 },
       error: null,
-    }))
-    // 2. getFactureActiveByCommande → null (facture n'existe pas)
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: null }))
-    // 3. from('commandes').select(detail).single → CMD_BASE (pour ensureFactureForCommande)
-    db.from.mockImplementationOnce(() => mkChain({ data: CMD_BASE, error: null }))
-    // 4. genererNumero factures count
-    db.from.mockImplementationOnce(() => mkChain({ data: null, count: 0, error: null }))
-    // 5. factures.insert.single
-    db.from.mockImplementationOnce(() => mkChain({ data: { id: FAC_ID, numero: `FAC-${YEAR}-0001`, total_ttc_xaf: 119_250, montant_paye_xaf: 50_000 }, error: null }))
-    // 6. factures_lignes.insert
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: null }))
-    // 7. paiements_commande.insert.single
-    db.from.mockImplementationOnce(() => mkChain({ data: { id: 'p1', montant_xaf: 50_000 }, error: null }))
-    // 8. commandes.update
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: null }))
-    // 9. factures.update.select.single
-    db.from.mockImplementationOnce(() => mkChain({ data: { id: FAC_ID, total_ttc_xaf: 119_250, montant_paye_xaf: 50_000 }, error: null }))
+    })
+    queueFrom('factures', { data: null, error: null }) // getFactureActiveByCommande → aucune
+    queueFrom('commandes', { data: CMD_BASE, error: null }) // ensureFactureForCommande : refetch commande
+    queueFrom('factures', { data: null, count: 0, error: null }) // genererNumero
+    // Facture fraîchement créée, non payée (le paiement est enregistré ensuite) —
+    // montant_paye_xaf doit être 0 ici, pas la valeur post-paiement.
+    queueFrom('factures', { data: { id: FAC_ID, numero: `FAC-${YEAR}-0001`, total_ttc_xaf: 119_250, montant_paye_xaf: 0 }, error: null })
+    queueFrom('factures_lignes', { data: null, error: null })
+    queueFrom('paiements_commande', { data: { id: 'p1', montant_xaf: 50_000 }, error: null })
+    queueFrom('commandes', { data: null, error: null }) // commande update
+    queueFrom('factures', { data: { id: FAC_ID, total_ttc_xaf: 119_250, montant_paye_xaf: 50_000 }, error: null }) // facture update
 
     const result = await enregistrerPaiementCommande(BASE_OPTS)
     expect(result.montant_paye_xaf).toBe(50_000)
@@ -272,38 +327,36 @@ describe('enregistrerPaiementCommande', () => {
   })
 
   it('solde_restant = 0 quand paiement complet', async () => {
-    db.from.mockImplementationOnce(() => mkChain({
+    queueFrom('commandes', {
       data: { id: CMD_ID, numero: 'CMD-2026-0001', client_id: null, client_nom: 'X', total_ttc_xaf: 119_250, montant_paye_xaf: 0 },
       error: null,
-    }))
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: null })) // no existing facture
-    db.from.mockImplementationOnce(() => mkChain({ data: CMD_BASE, error: null })) // commande detail
-    db.from.mockImplementationOnce(() => mkChain({ data: null, count: 0, error: null })) // count
-    db.from.mockImplementationOnce(() => mkChain({ data: { id: FAC_ID, total_ttc_xaf: 119_250, montant_paye_xaf: 119_250 }, error: null })) // insert facture
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: null })) // lignes
-    db.from.mockImplementationOnce(() => mkChain({ data: { id: 'p1' }, error: null })) // paiement insert
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: null })) // commande update
-    db.from.mockImplementationOnce(() => mkChain({ data: { id: FAC_ID, total_ttc_xaf: 119_250, montant_paye_xaf: 119_250 }, error: null })) // facture update
+    })
+    queueFrom('factures', { data: null, error: null }) // aucune facture existante
+    queueFrom('commandes', { data: CMD_BASE, error: null }) // commande detail
+    queueFrom('factures', { data: null, count: 0, error: null }) // count
+    queueFrom('factures', { data: { id: FAC_ID, total_ttc_xaf: 119_250, montant_paye_xaf: 0 }, error: null }) // insert facture (non payée)
+    queueFrom('factures_lignes', { data: null, error: null })
+    queueFrom('paiements_commande', { data: { id: 'p1' }, error: null })
+    queueFrom('commandes', { data: null, error: null }) // commande update
+    queueFrom('factures', { data: { id: FAC_ID, total_ttc_xaf: 119_250, montant_paye_xaf: 119_250 }, error: null }) // facture update
 
     const result = await enregistrerPaiementCommande({ ...BASE_OPTS, montantXaf: 119_250 })
     expect(result.solde_restant_xaf).toBe(0)
   })
 
   it('ensureFacture=false : utilise getFactureActiveByCommande sans en créer', async () => {
-    db.from.mockImplementationOnce(() => mkChain({
+    queueFrom('commandes', {
       data: { id: CMD_ID, numero: 'CMD-2026-0001', client_id: null, client_nom: 'X', total_ttc_xaf: 100_000, montant_paye_xaf: 0 },
       error: null,
-    }))
-    // getFactureActiveByCommande → facture existante
-    db.from.mockImplementationOnce(() => mkChain({ data: FAC_BASE, error: null }))
-    // paiements_commande insert
-    db.from.mockImplementationOnce(() => mkChain({ data: { id: 'p1', montant_xaf: 50_000 }, error: null }))
-    // commande update
-    db.from.mockImplementationOnce(() => mkChain({ data: null, error: null }))
-    // facture update
-    db.from.mockImplementationOnce(() => mkChain({ data: { id: FAC_ID, total_ttc_xaf: 119_250, montant_paye_xaf: 50_000 }, error: null }))
+    })
+    // getFactureActiveByCommande → facture existante (appelée directement, pas via ensureFactureForCommande)
+    const facturesChain = queueFrom('factures', { data: FAC_BASE, error: null })
+    queueFrom('paiements_commande', { data: { id: 'p1', montant_xaf: 50_000 }, error: null })
+    queueFrom('commandes', { data: null, error: null }) // commande update
+    queueFrom('factures', { data: { id: FAC_ID, total_ttc_xaf: 119_250, montant_paye_xaf: 50_000 }, error: null }) // facture update
 
     const result = await enregistrerPaiementCommande({ ...BASE_OPTS, ensureFacture: false })
     expect(result.paiement).toMatchObject({ id: 'p1' })
+    expect(facturesChain.insert).not.toHaveBeenCalled()
   })
 })

@@ -253,7 +253,7 @@ Test 1 : 3 unités · Test 2 : m² · Test 3 : mètre linéaire · Test 4 : m³ 
 
 ## 48. TEST CRITIQUE DE NON-RÉGRESSION
 
-Scénario complet : CLIENT → choisit produit → saisit dimensions → calcul automatique → devis → validation → commande → facture → acompte → production → stock → bon sortie → job production → livraison → timeline client. Le test doit vérifier les IDs et relations entre les objets. **[Pas encore écrit — voir section "Ce qu'il reste à faire" ci-dessous.]**
+Scénario complet : CLIENT → choisit produit → saisit dimensions → calcul automatique → devis → validation → commande → facture → acompte → production → stock → bon sortie → job production → livraison → timeline client. Le test doit vérifier les IDs et relations entre les objets. **[✅ écrit le 27/09/2026 — `apps/api/src/__tests__/integration/48-pipeline-e2e.test.ts`, couvre calcul auto → devis → commande → production avec propagation réelle des IDs ; facture/acompte et le module Livraison, déjà couverts par ailleurs, ne sont pas re-détaillés — voir l'en-tête du fichier pour le détail de la portée.]**
 
 ## 49. ACCEPTANCE CRITERIA (partiel — document source tronqué au-delà d'AC05)
 

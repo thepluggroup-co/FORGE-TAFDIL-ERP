@@ -51,6 +51,23 @@ vi.mock('../services/comptabilite.service', () => ({
 import app from '../app'
 import { supabase } from '@forge/db/supabase'
 
+// Ce fichier s'appuie sur le VRAI checkPermission (pas de mock de rbacService) :
+// son fallback LEGACY_ROLE_MAP résout correctement les rôles JWT de test sans
+// DB RBAC peuplée (cf. mise en garde docs/DETTE-TESTS-2026-09-26.md sur
+// commerce.test.ts — mocker checkPermission en bloc casse ce mécanisme).
+// ATTENTION avant de "corriger" ce fichier plus loin : la plupart des 74/78
+// tests actuellement verts le sont PARCE QUE rbacService met en cache (par
+// userId, cf. authHeaders() dans helpers.ts qui réutilise le même userId par
+// défaut) le rôle SUPER_ADMIN résolu par un test 'admin' antérieur dans le
+// fichier — ce cache "colle" ensuite aux requêtes suivantes quel que soit le
+// rôle réellement envoyé. Purger ce cache globalement (testé : beforeEach ->
+// invalidateAllPermissionCaches()) FAIT PASSER LES ÉCHECS DE 4 À 21, car les
+// permissions RBAC réelles (rbac_role_permissions) ne sont mockées nulle part
+// ici — seul SUPER_ADMIN est auto-accordé sans DB. Le bon fix par test qui
+// échoue VRAIMENT est donc chirurgical (mocks rbac_user_profiles/rbac_roles
+// corrects, ou userId dédié pour éviter d'hériter du cache partagé) — jamais
+// un changement global.
+
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 const EMPLOYE_ID   = '00000000-0000-0000-0000-000000000001'
@@ -92,6 +109,13 @@ describe('RH1 — GET /api/rh/employes : liste employés', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('retourne 200 avec data + total', async () => {
+    // Ce test est le tout premier appel HTTP du fichier : le cache RBAC est
+    // froid, donc checkPermission() interroge réellement rbac_user_profiles
+    // puis rbac_roles avant la logique métier — sans ces 2 mocks, ces appels
+    // consomment par erreur celui destiné à la liste des employés ci-dessous
+    // (cause dominante documentée dans docs/DETTE-TESTS-2026-09-26.md).
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never) // rbac_user_profiles → fallback legacy
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never) // rbac_roles → sans effet pour SUPER_ADMIN (auto-accordé)
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: [EMPLOYE], count: 1, error: null }) as never,
     )
@@ -277,9 +301,13 @@ describe('RH7 — POST /api/rh/apprenants : créer apprenant', () => {
   })
 
   it('retourne 403 si rôle operateur (superviseur requis)', async () => {
+    // userId dédié : évite d'hériter du cache RBAC SUPER_ADMIN partagé (voir
+    // note en tête de fichier) — sans ça, ce test se voit accorder l'accès
+    // par un test 'admin' antérieur qui a mis en cache ce rôle pour l'userId
+    // par défaut, et le 403 attendu ne se produit jamais.
     const res = await app.request('/api/rh/apprenants', {
       method:  'POST',
-      headers: new Headers(authHeaders('operateur')),
+      headers: new Headers(authHeaders('operateur', 'test-uid-rh7-deny')),
       body:    JSON.stringify(CREATE_APPRENANT),
     })
     expect(res.status).toBe(403)
@@ -390,7 +418,8 @@ describe('RH9 — GET /api/rh/paie : liste bulletins', () => {
   })
 
   it('retourne 403 si rôle operateur', async () => {
-    const res = await app.request('/api/rh/paie', { headers: new Headers(authHeaders('operateur')) })
+    // userId dédié : évite le cache RBAC SUPER_ADMIN partagé (voir note en tête de fichier)
+    const res = await app.request('/api/rh/paie', { headers: new Headers(authHeaders('operateur', 'test-uid-rh9-deny')) })
     expect(res.status).toBe(403)
   })
 })
@@ -482,7 +511,8 @@ describe('RH12 — GET /api/rh/avances-salaire : liste avances', () => {
   })
 
   it('retourne 403 si rôle operateur (superviseur+ requis)', async () => {
-    const res = await app.request('/api/rh/avances-salaire', { headers: new Headers(authHeaders('operateur')) })
+    // userId dédié : évite le cache RBAC SUPER_ADMIN partagé (voir note en tête de fichier)
+    const res = await app.request('/api/rh/avances-salaire', { headers: new Headers(authHeaders('operateur', 'test-uid-rh12-deny')) })
     expect(res.status).toBe(403)
   })
 

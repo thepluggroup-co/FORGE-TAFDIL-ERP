@@ -26,6 +26,8 @@ export interface CreateJobPayload {
   produit_id?: string
   produit_ref?: string
   produit_designation: string; machine_nom?: string; technicien_nom?: string
+  /** D5 : équipement principal de l'OF (référentiel unique equipements). */
+  equipement_id?: string
   categorie?: string; unite?: string
   quantite_prevue?: number
   prix_unitaire_xaf?: number
@@ -528,13 +530,18 @@ export interface Campagne {
 export interface CampagneProduit {
   id: string
   campagne_id: string
-  product_id: string
+  /** Article de stock visé — null si la promotion vise un produit fini (modele_id). */
+  product_id: string | null
+  modele_id?: string | null
   remise_type: 'pct' | 'forfait'
   remise_valeur: number
   prix_promo_xaf: number | null
   priorite: number
-  produits?: { ref: string; designation: string; categorie: string; unite: string }
+  produits?: { ref: string; designation: string; categorie: string; unite: string } | null
+  modeles?: { reference: string; designation: string; unite_facturation: string | null } | null
   produits_shop?: { prix_public: number | null; visible_shop: boolean; images?: string[] | null } | null
+  /** Vue unifiée renvoyée par l'API (article de stock ou produit fini). */
+  article?: { type: 'produit' | 'modele'; id: string; ref: string; designation: string }
 }
 export interface CreateCampagnePayload {
   nom: string; description?: string; canal: string; budget_xaf?: number
@@ -584,13 +591,14 @@ export function useAjouterProduitCampagne() {
   return useMutation({
     mutationFn: (payload: {
       campagneId: string
-      product_id: string
+      product_id?: string
+      modele_id?: string
       remise_type: 'pct' | 'forfait'
       remise_valeur: number
       prix_promo_xaf?: number | null
       priorite?: number
     }) => apiClient.post(`/api/marketing/campagnes/${payload.campagneId}/produits`, {
-      product_id: payload.product_id,
+      ...(payload.modele_id ? { modele_id: payload.modele_id } : { product_id: payload.product_id }),
       remise_type: payload.remise_type,
       remise_valeur: payload.remise_valeur,
       prix_promo_xaf: payload.prix_promo_xaf ?? null,

@@ -38,10 +38,11 @@ const STATUT_COMMANDE: Record<string, { label: string; cls: string }> = {
 }
 
 const STATUT_PAIEMENT: Record<string, { label: string; icon: React.ReactNode }> = {
-  en_attente: { label: 'En attente', icon: <Clock size={11} className="text-amber-500" /> },
-  paye:       { label: 'Payé',       icon: <CheckCircle2 size={11} className="text-green-500" /> },
-  echec:      { label: 'Échoué',     icon: <XCircle size={11} className="text-red-500" /> },
-  livraison:  { label: 'À la livraison', icon: <Package size={11} className="text-blue-500" /> },
+  en_attente:   { label: 'En attente',     icon: <Clock size={11} className="text-amber-500" /> },
+  paye:         { label: 'Payé',           icon: <CheckCircle2 size={11} className="text-green-500" /> },
+  paye_partiel: { label: 'Avance reçue',   icon: <CheckCircle2 size={11} className="text-blue-500" /> },
+  echec:        { label: 'Échoué',         icon: <XCircle size={11} className="text-red-500" /> },
+  livraison:    { label: 'À la livraison', icon: <Package size={11} className="text-blue-500" /> },
 }
 
 const STATUT_DEVIS: Record<string, { label: string; cls: string }> = {

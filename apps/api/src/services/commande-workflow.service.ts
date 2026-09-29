@@ -933,3 +933,97 @@ export async function synchroniserBonsExecutesWorkflowLegacy(options: {
 
   return result
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PRODUCTION — vue par commande (§34 : GET /commandes/:id/production)
+// Partagée entre operations.ts (GET /production/historique/:commande_id, vue
+// historique du module Production) et commerce.ts (GET /commandes/:id/production,
+// vue depuis la fiche commande) — même requête, deux points d'entrée, comme le
+// demande le Master Prompt V3 ("étendre l'existant, ne pas dupliquer").
+// ══════════════════════════════════════════════════════════════════════════════
+
+export type ProductionJobRecap = {
+  jobs: Array<Record<string, unknown> & {
+    statut: string
+    avancement_pct: number
+    duree_prevue_h: number | null
+    duree_reelle_h: number | null
+    en_retard: boolean
+    ecart_h: number | null
+  }>
+  total: number
+  recapitulatif: {
+    termines: number
+    en_cours: number
+    en_retard: number
+    avancement_moyen: number
+  }
+}
+
+export async function chargerJobsProductionCommande(commandeId: string): Promise<ProductionJobRecap> {
+  const { data, error } = await db
+    .from('jobs_production')
+    .select(`
+      id, numero, type_job, produit_id, produit_designation, unite,
+      quantite_prevue, prix_unitaire_xaf, ressources_besoin,
+      statut, avancement_pct,
+      date_debut, date_fin_prevue, date_fin_reelle, notes,
+      created_at, updated_at,
+      equipements(id, code, designation, statut),
+      employes(id, nom, poste)
+    `)
+    .eq('commande_id', commandeId)
+    .order('created_at', { ascending: true })
+
+  if (error) throw new Error(error.message)
+
+  const today = new Date()
+
+  const enriched = (data ?? []).map((j: Record<string, unknown>) => {
+    const debut     = j.date_debut      ? new Date(j.date_debut as string)      : null
+    const finPrevue = j.date_fin_prevue ? new Date(j.date_fin_prevue as string)  : null
+    const finReelle = j.date_fin_reelle ? new Date(j.date_fin_reelle as string)  : null
+
+    const duree_prevue_h = debut && finPrevue
+      ? Math.round((finPrevue.getTime() - debut.getTime()) / 3600000 * 10) / 10
+      : null
+
+    const duree_reelle_h = debut && finReelle
+      ? Math.round((finReelle.getTime() - debut.getTime()) / 3600000 * 10) / 10
+      : null
+
+    const en_retard = Boolean(finPrevue) && !finReelle &&
+      !['delivered', 'cancelled'].includes(j.statut as string) &&
+      today > (finPrevue as Date)
+
+    return {
+      ...j,
+      statut:         j.statut as string,
+      avancement_pct: j.avancement_pct as number,
+      duree_prevue_h,
+      duree_reelle_h,
+      en_retard,
+      ecart_h: duree_prevue_h !== null && duree_reelle_h !== null
+        ? Math.round((duree_reelle_h - duree_prevue_h) * 10) / 10
+        : null,
+    }
+  })
+
+  const total    = enriched.length
+  const termines = enriched.filter((j) => j.statut === 'delivered').length
+  const enRetard = enriched.filter((j) => j.en_retard).length
+  const avancementMoyen = total > 0
+    ? Math.round(enriched.reduce((s, j) => s + (j.avancement_pct ?? 0), 0) / total)
+    : 0
+
+  return {
+    jobs:  enriched,
+    total,
+    recapitulatif: {
+      termines,
+      en_cours:         enriched.filter((j) => j.statut === 'in_production').length,
+      en_retard:        enRetard,
+      avancement_moyen: avancementMoyen,
+    },
+  }
+}

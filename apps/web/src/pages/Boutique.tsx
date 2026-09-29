@@ -5,11 +5,12 @@ import {
   Store, ShoppingBag, Eye, EyeOff, FileText,
   TrendingUp, Package, Clock, BarChart2,
   CheckCircle, XCircle, Edit2, Image, Upload, Trash2,
-  ExternalLink,
+  ExternalLink, Factory,
 } from 'lucide-react'
 import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
+import { VitrineModeles } from '@/components/boutique/VitrineModeles'
 import { toast } from 'sonner'
 import { useProduitsShop, useToggleVisibilite, useUpdateVitrineProduit, useUploadImagesProduit } from '@/hooks/useProduitsShop'
 import type { ProduitShopErp } from '@/hooks/useProduitsShop'
@@ -40,7 +41,7 @@ const TYPES_PROJET_LABELS = [
 
 // ── Tab type ───────────────────────────────────────────────────────────────────
 
-type Tab = 'catalogue' | 'commandes' | 'devis'
+type Tab = 'catalogue' | 'produits_finis' | 'commandes' | 'devis'
 
 // ── Prix edit modal ────────────────────────────────────────────────────────────
 
@@ -79,14 +80,35 @@ function EditVitrineModal({
 
   const setImageList = (next: string[]) => setImages(next.join('\n'))
 
+  const buildVitrinePayload = (imagesOverride: string[]) => ({
+    visible_shop: visible,
+    prix_public: prix > 0 ? prix : null,
+    description_longue: description.trim() || null,
+    images: imagesOverride,
+    tags: tagList,
+    delai_fabrication_jours: delai,
+    min_commande: minCommande,
+  })
+
   const handleImageUpload = (files: FileList | null) => {
     if (!produit || !files?.length) return
     uploadImages.mutate(
       { id: produit.id, files: Array.from(files) },
       {
         onSuccess: (res) => {
-          setImageList([...imageList, ...res.data.urls])
-          toast.success(`${res.data.urls.length} image${res.data.urls.length > 1 ? 's' : ''} ajoutee${res.data.urls.length > 1 ? 's' : ''}`)
+          const { urls, errors } = res.data
+          if (urls.length > 0) {
+            // Sauvegarde immediate : une image televersee doit rester rattachee
+            // au produit meme si l'utilisateur ferme le modal sans cliquer sur
+            // "Enregistrer" (cause la plus frequente d'upload "perdu").
+            const next = [...imageList, ...urls]
+            setImageList(next)
+            updateVitrine.mutate({ id: produit.id, payload: buildVitrinePayload(next) })
+            toast.success(`${urls.length} image${urls.length > 1 ? 's' : ''} ajoutee${urls.length > 1 ? 's' : ''} et enregistree${urls.length > 1 ? 's' : ''}`)
+          }
+          for (const e of errors ?? []) {
+            toast.error(`${e.file} : ${e.error}`)
+          }
         },
       },
     )
@@ -95,15 +117,7 @@ function EditVitrineModal({
   const handleSave = () => {
     updateVitrine.mutate({
       id: produit.id,
-      payload: {
-        visible_shop: visible,
-        prix_public: prix > 0 ? prix : null,
-        description_longue: description.trim() || null,
-        images: imageList,
-        tags: tagList,
-        delai_fabrication_jours: delai,
-        min_commande: minCommande,
-      },
+      payload: buildVitrinePayload(imageList),
     }, { onSuccess: onClose })
   }
 
@@ -619,6 +633,7 @@ export default function Boutique() {
 
   const TABS = [
     { id: 'catalogue' as Tab, label: 'Catalogue', icon: Package, count: produitsList.length },
+    { id: 'produits_finis' as Tab, label: 'Produits finis', icon: Factory, count: 0 },
     { id: 'commandes' as Tab, label: 'Commandes web', icon: ShoppingBag, count: commandes.length },
     { id: 'devis' as Tab, label: 'Demandes devis', icon: FileText, count: devisList.filter((d: DevisWeb) => d.statut === 'nouvelle').length, },
   ]
@@ -700,6 +715,7 @@ export default function Boutique() {
               </div>
             )}
 
+            {tab === 'produits_finis' && <VitrineModeles />}
             {tab === 'commandes' && (
               <DataTable<CommandeShop>
                 columns={commandesCols}

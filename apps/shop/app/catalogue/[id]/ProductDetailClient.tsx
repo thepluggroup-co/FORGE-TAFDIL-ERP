@@ -46,14 +46,15 @@ const tabItems = [
   { key: 'livraison', label: 'Livraison & Retours', icon: Truck },
 ] as const
 
-function formatXAF(value: number | null | undefined) {
-  if (!value) return 'Prix sur devis'
+function formatXAF(value: number | null | undefined, configurable = false) {
+  if (!value) return configurable ? 'Prix sur configuration' : 'Prix sur devis'
   return new Intl.NumberFormat('fr-CM', { maximumFractionDigits: 0 }).format(value) + ' FCFA'
 }
 
 function statusConfig(disponibilite: Disponibilite) {
   if (disponibilite === 'stock_faible') return { label: 'Stock faible', className: 'bg-amber-100 text-amber-700' }
   if (disponibilite === 'indisponible') return { label: 'Sur commande', className: 'bg-gray-100 text-gray-600' }
+  if (disponibilite === 'sur_commande') return { label: 'Fabriqué sur commande', className: 'bg-indigo-100 text-indigo-700' }
   return { label: 'En stock', className: 'bg-green-100 text-green-700' }
 }
 
@@ -79,14 +80,14 @@ export function ProductDetailClient({ produit, similaires }: Props) {
 
   const features = [
     `${produit.categorie} de qualite professionnelle`,
-    produit.disponibilite === 'disponible' ? 'Disponible en stock' : 'Disponible sur commande',
+    produit.disponibilite === 'disponible' ? 'Disponible en stock' : produit.disponibilite === 'sur_commande' ? `Fabriqué sur commande en ${produit.delai_fabrication_jours ?? '—'} jour(s)` : 'Disponible sur commande',
     'Finition soignee et durable',
     'Facile a installer',
   ]
 
   const handleAddToCart = () => {
     void addItem(
-      { id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null },
+      { id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null, type_article: produit.type_article, commercial_mode: produit.commercial_mode },
       qty,
     )
   }
@@ -169,7 +170,7 @@ export function ProductDetailClient({ produit, similaires }: Props) {
 
           <div className="mt-7">
             <p className="text-3xl font-black text-forge-red">
-              {formatXAF(produit.prix_public)}
+              {formatXAF(produit.prix_public, produit.commercial_mode === 'CONFIGURABLE')}
               {produit.prix_public ? <span className="ml-2 text-sm font-semibold text-gray-500">/ {produit.unite}</span> : null}
             </p>
             {oldPrice && (
@@ -193,13 +194,13 @@ export function ProductDetailClient({ produit, similaires }: Props) {
                   <Plus size={15} />
                 </button>
               </div>
-              <span className="text-sm font-semibold text-gray-500">{produit.stock_actuel} {produit.unite} disponibles</span>
+              <span className="text-sm font-semibold text-gray-500">{produit.stock_actuel === null ? 'Fabriqué sur commande' : `${produit.stock_actuel} ${produit.unite} disponibles`}</span>
             </div>
           </div>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_48px]">
             <button onClick={handleAddToCart} disabled={indisponible} className="inline-flex h-12 items-center justify-center gap-2 rounded-md bg-forge-red px-5 text-sm font-black text-white shadow-sm hover:bg-forge-red-dark disabled:cursor-not-allowed disabled:opacity-40">
-              <ShoppingCart size={17} /> Ajouter au panier
+              <ShoppingCart size={17} /> {produit.commercial_mode === 'CONFIGURABLE' ? 'Personnaliser ce produit' : 'Ajouter au panier'}
             </button>
             <button className="flex h-12 items-center justify-center rounded-md border border-gray-200 text-forge-steel hover:border-forge-red hover:text-forge-red" aria-label="Ajouter aux favoris">
               <Heart size={18} />
@@ -296,7 +297,7 @@ export function ProductDetailClient({ produit, similaires }: Props) {
                 ['Marque', 'MetalForge'],
                 ['Materiau', produit.tags[0] || produit.categorie],
                 ['Delai', `${produit.delai_fabrication_jours} jour(s)`],
-                ['Stock', `${produit.stock_actuel} ${produit.unite}`],
+                ['Stock', produit.stock_actuel === null ? 'Sur commande' : `${produit.stock_actuel} ${produit.unite}`],
                 ['Min. commande', `${produit.min_commande} ${produit.unite}`],
               ].map(([label, value]) => (
                 <div key={label} className="flex justify-between gap-4">
@@ -401,7 +402,7 @@ function SimilarProductCard({ produit, index }: { produit: Produit; index: numbe
         <p className={`mt-1 text-xs font-semibold ${unavailable ? 'text-gray-500' : 'text-green-700'}`}>{unavailable ? 'Sur commande' : 'En stock'}</p>
       </div>
       <button
-        onClick={() => void addItem({ id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null }, 1)}
+        onClick={() => void addItem({ id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null, type_article: produit.type_article, commercial_mode: produit.commercial_mode }, 1)}
         disabled={unavailable}
         className="mx-4 mb-4 flex h-9 w-[calc(100%-2rem)] items-center justify-center rounded-md border border-gray-200 text-forge-steel hover:border-forge-red hover:text-forge-red disabled:cursor-not-allowed disabled:opacity-40"
         aria-label="Ajouter au panier"

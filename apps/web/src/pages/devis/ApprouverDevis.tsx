@@ -14,7 +14,11 @@ interface DevisPublic {
   date_validite: string
   statut: string
   approuve_par_client: boolean
-  devis_lignes: Array<{ designation: string; quantite: number; prix_unitaire_ht_xaf: number; unite: string }>
+  devis_lignes: Array<{
+    designation: string; quantite: number; prix_unitaire_ht_xaf: number; unite: string
+    // §42 — dimensions (sans coût ni formule) : pour que le client comprenne le calcul
+    configuration?: Record<string, unknown> | null
+  }>
 }
 
 type PageState = 'loading' | 'ready' | 'success_accept' | 'success_refuse' | 'error' | 'already_done'
