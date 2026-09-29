@@ -17,13 +17,27 @@
 -- Données existantes : comptées avant / après, aucune suppression.
 -- ═══════════════════════════════════════════════════════════════════════════
 
+-- NB : la base de production ne contient pas toujours ce que déclarent les
+-- anciennes migrations du dépôt (ex. jobs_production.machine_id absente,
+-- constaté le 28/09/2026). Tout ce qui touche à `machines` ou aux colonnes
+-- historiques est donc conditionnel : vérifié dans le catalogue Postgres,
+-- exécuté en SQL dynamique, jamais supposé.
+
 DO $$
+DECLARE
+  a_machines       BOOLEAN := to_regclass('public.machines') IS NOT NULL;
+  a_job_machine_id BOOLEAN := EXISTS (SELECT 1 FROM information_schema.columns
+                                       WHERE table_schema = 'public' AND table_name = 'jobs_production' AND column_name = 'machine_id');
+  n_machines BIGINT := 0;
+  n_jobs_machine BIGINT := 0;
 BEGIN
-  RAISE NOTICE 'Avant : machines=%, equipements=%, jobs_production=% (dont % avec machine_id)',
-    (SELECT count(*) FROM public.machines),
+  IF a_machines THEN EXECUTE 'SELECT count(*) FROM public.machines' INTO n_machines; END IF;
+  IF a_job_machine_id THEN EXECUTE 'SELECT count(*) FROM public.jobs_production WHERE machine_id IS NOT NULL' INTO n_jobs_machine; END IF;
+  RAISE NOTICE 'Avant : machines=% (table %), equipements=%, jobs_production=% (colonne machine_id %, % renseignés)',
+    n_machines, CASE WHEN a_machines THEN 'présente' ELSE 'absente' END,
     (SELECT count(*) FROM public.equipements),
     (SELECT count(*) FROM public.jobs_production),
-    (SELECT count(*) FROM public.jobs_production WHERE machine_id IS NOT NULL);
+    CASE WHEN a_job_machine_id THEN 'présente' ELSE 'absente' END, n_jobs_machine;
 END $$;
 
 -- ── A. Convergence machines → equipements ──────────────────────────────────
@@ -32,42 +46,88 @@ ALTER TABLE public.equipements
   ADD COLUMN IF NOT EXISTS cout_horaire_xaf    NUMERIC CHECK (cout_horaire_xaf IS NULL OR cout_horaire_xaf >= 0),
   ADD COLUMN IF NOT EXISTS ancienne_machine_id UUID UNIQUE;
 
--- Recopie des machines pas encore migrées. Statuts traduits vers le vocabulaire
--- des équipements ; code unique dérivé de l'identifiant (pas de collision possible
--- avec un code saisi à la main, préfixe MAC- réservé à cette migration).
-INSERT INTO public.equipements (code, designation, categorie, numero_serie, emplacement, statut, notes, ancienne_machine_id)
-SELECT
-  'MAC-' || upper(substr(replace(m.id::text, '-', ''), 1, 8)),
-  m.nom,
-  'machine_production',
-  m.numero_serie,
-  m.zone,
-  CASE m.statut
-    WHEN 'actif'       THEN 'disponible'
-    WHEN 'maintenance' THEN 'maintenance'
-    WHEN 'panne'       THEN 'en_panne'
-    WHEN 'reserve'     THEN 'disponible'
-    ELSE 'hors_service'
-  END,
-  'Migré depuis la table machines (type : ' || coalesce(m.type, '—') || ')',
-  m.id
-FROM public.machines m
-WHERE NOT EXISTS (SELECT 1 FROM public.equipements e WHERE e.ancienne_machine_id = m.id);
-
 ALTER TABLE public.jobs_production
   ADD COLUMN IF NOT EXISTS equipement_id UUID REFERENCES public.equipements(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_jobs_production_equipement ON public.jobs_production(equipement_id);
 
-UPDATE public.jobs_production j
-   SET equipement_id = e.id
-  FROM public.equipements e
- WHERE e.ancienne_machine_id = j.machine_id
-   AND j.equipement_id IS NULL;
+-- Technicien affecté à un OF = un employé (RH). Colonne déclarée par une
+-- ancienne migration mais absente de certaines bases : ajoutée si besoin.
+DO $$
+BEGIN
+  IF to_regclass('public.employes') IS NOT NULL THEN
+    ALTER TABLE public.jobs_production
+      ADD COLUMN IF NOT EXISTS technicien_id UUID REFERENCES public.employes(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_jobs_production_technicien ON public.jobs_production(technicien_id);
+  ELSE
+    RAISE NOTICE 'Table employes absente : jobs_production.technicien_id non créée';
+  END IF;
+END $$;
 
-COMMENT ON TABLE public.machines IS
-  'DÉPRÉCIÉ (décision D5) — référentiel unique : equipements. Lignes recopiées (equipements.ancienne_machine_id). Conservé sans suppression.';
-COMMENT ON COLUMN public.jobs_production.machine_id IS
-  'DÉPRÉCIÉ (décision D5) — utiliser equipement_id.';
+-- Recopie des machines pas encore migrées (seulement si la table existe).
+-- Statuts traduits vers le vocabulaire des équipements ; code unique dérivé de
+-- l'identifiant (préfixe MAC- réservé à cette migration). Les colonnes
+-- optionnelles de `machines` absentes sont remplacées par NULL.
+DO $$
+DECLARE
+  col_serie  TEXT := 'NULL';
+  col_zone   TEXT := 'NULL';
+  col_type   TEXT := '''—''';
+  col_statut TEXT := '''actif''';
+  n_copiees  BIGINT;
+BEGIN
+  IF to_regclass('public.machines') IS NULL THEN
+    RAISE NOTICE 'Table machines absente : rien à recopier';
+    RETURN;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='machines' AND column_name='numero_serie') THEN col_serie := 'm.numero_serie'; END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='machines' AND column_name='zone')         THEN col_zone  := 'm.zone';         END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='machines' AND column_name='type')         THEN col_type  := 'coalesce(m.type, ''—'')'; END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='machines' AND column_name='statut')       THEN col_statut := 'm.statut';      END IF;
+
+  EXECUTE format($sql$
+    INSERT INTO public.equipements (code, designation, categorie, numero_serie, emplacement, statut, notes, ancienne_machine_id)
+    SELECT
+      'MAC-' || upper(substr(replace(m.id::text, '-', ''), 1, 8)),
+      m.nom,
+      'machine_production',
+      %1$s,
+      %2$s,
+      CASE %3$s
+        WHEN 'actif'       THEN 'disponible'
+        WHEN 'maintenance' THEN 'maintenance'
+        WHEN 'panne'       THEN 'en_panne'
+        WHEN 'reserve'     THEN 'disponible'
+        ELSE 'hors_service'
+      END,
+      'Migré depuis la table machines (type : ' || %4$s || ')',
+      m.id
+    FROM public.machines m
+    WHERE NOT EXISTS (SELECT 1 FROM public.equipements e WHERE e.ancienne_machine_id = m.id)
+  $sql$, col_serie, col_zone, col_statut, col_type);
+  GET DIAGNOSTICS n_copiees = ROW_COUNT;
+  RAISE NOTICE 'Machines recopiées dans equipements : %', n_copiees;
+
+  EXECUTE $c$COMMENT ON TABLE public.machines IS 'DÉPRÉCIÉ (décision D5) — référentiel unique : equipements. Lignes recopiées (equipements.ancienne_machine_id). Conservé sans suppression.'$c$;
+END $$;
+
+-- Rattachement des OF à l'équipement recopié (seulement si machine_id existe).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = 'jobs_production' AND column_name = 'machine_id') THEN
+    EXECUTE $u$
+      UPDATE public.jobs_production j
+         SET equipement_id = e.id
+        FROM public.equipements e
+       WHERE e.ancienne_machine_id = j.machine_id
+         AND j.equipement_id IS NULL
+    $u$;
+    EXECUTE $c$COMMENT ON COLUMN public.jobs_production.machine_id IS 'DÉPRÉCIÉ (décision D5) — utiliser equipement_id.'$c$;
+  ELSE
+    RAISE NOTICE 'jobs_production.machine_id absente : aucun OF à rattacher (les machines n''étaient saisies qu''en texte, machine_nom)';
+  END IF;
+END $$;
 
 -- ── B1. Postes de travail (main-d'œuvre) ───────────────────────────────────
 
@@ -116,9 +176,11 @@ ALTER TABLE public.gamme_operations ENABLE ROW LEVEL SECURITY;
 ALTER TYPE audit_action_type ADD VALUE IF NOT EXISTS 'TAUX_HORAIRE_MODIFIE';
 
 DO $$
+DECLARE n_machines BIGINT := 0;
 BEGIN
+  IF to_regclass('public.machines') IS NOT NULL THEN EXECUTE 'SELECT count(*) FROM public.machines' INTO n_machines; END IF;
   RAISE NOTICE 'Après : machines=% (inchangé), equipements=% (dont % migrés), jobs_production=% (dont % avec equipement_id)',
-    (SELECT count(*) FROM public.machines),
+    n_machines,
     (SELECT count(*) FROM public.equipements),
     (SELECT count(*) FROM public.equipements WHERE ancienne_machine_id IS NOT NULL),
     (SELECT count(*) FROM public.jobs_production),

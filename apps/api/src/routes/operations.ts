@@ -10,6 +10,12 @@ import { notifyCommandeSms } from '../services/sms.service'
 import { enregistrerPaiementCommande, ensureFactureForCommande, getFactureActiveByCommande } from '../services/finance-core.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 import { chargerJobsProductionCommande } from '../services/commande-workflow.service'
+import { chargerGammeDansOF, ficheDepuisCommande } from '../services/production-of.service'
+import {
+  STATUTS_OPERATION_OF, transitionsOperationOF, transitionOperationAutorisee,
+  avancementDepuisOperations, resumerFabrication, rendementAtelier,
+} from '@forge/shared'
+import { coutsDesOF, controleDesCommandes } from '../services/controle-couts.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
@@ -236,7 +242,7 @@ const jobSchema = z.object({
   machine_id:          z.string().optional(),     // DÉPRÉCIÉ (D5) : résolu vers equipement_id
   equipement_id:       z.string().uuid().optional(),
   machine_nom:         z.string().optional(),
-  technicien_id:       z.string().optional(),
+  technicien_id:       z.string().uuid().optional(),   // employé (RH) — technicien principal de l'OF
   technicien_nom:      z.string().optional(),
   date_debut:          z.string().optional(),
   date_fin_prevue:     z.string().optional(),
@@ -264,6 +270,19 @@ const jobAvancementSchema = z.object({
 function isSchemaCacheColumnError(error?: { message?: string; code?: string } | null) {
   return Boolean(error?.code === 'PGRST204' || error?.message?.includes('schema cache'))
 }
+
+// ── Techniciens affectables à un OF = employés actifs (RH) ─────────────────
+// Route dédiée à la production : seulement l'identité et le poste, jamais les
+// données RH sensibles (salaire, CIN, CNPS) de GET /rh/employes, qui exige HR:READ.
+router.get('/production/techniciens', requirePermission('PRODUCTION', 'READ'), async (c) => {
+  const { data, error } = await db
+    .from('employes')
+    .select('id, nom, poste, departement, statut')
+    .in('statut', ['actif', 'essai'])
+    .order('nom')
+  if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 500)
+  return c.json({ data: data ?? [] })
+})
 
 router.get('/production/jobs', requirePermission('PRODUCTION', 'READ'), async (c) => {
   const { statut, commande_id, search } = c.req.query()
@@ -325,6 +344,18 @@ router.post('/production/jobs', requirePermission('PRODUCTION', 'CREATE'), zVali
     }
   }
 
+  // ── Technicien = employé RH existant et en activité ───────────────────────
+  if (body.technicien_id) {
+    const { data: employe } = await db
+      .from('employes').select('id, nom, statut').eq('id', body.technicien_id).maybeSingle()
+    const e = employe as { id: string; nom: string; statut: string } | null
+    if (!e) return c.json({ error: 'Technicien introuvable parmi les employés', code: 'TECHNICIEN_INTROUVABLE' }, 404)
+    if (e.statut !== 'actif' && e.statut !== 'essai') {
+      return c.json({ error: `${e.nom} n'est pas en activité (${e.statut}) — affectation impossible`, code: 'TECHNICIEN_INDISPONIBLE' }, 422)
+    }
+    body.technicien_nom = body.technicien_nom ?? e.nom
+  }
+
   // ── Bloquer si l'équipement est en panne, en maintenance ou hors service ──
   // Décision D5 : `equipements` est le référentiel unique. Un ancien machine_id
   // est résolu vers l'équipement recopié (ancienne_machine_id) ; la table
@@ -367,8 +398,12 @@ router.post('/production/jobs', requirePermission('PRODUCTION', 'CREATE'), zVali
   const year      = new Date().getFullYear()
   const numero    = `JOB-${year}-${String((count ?? 0) + 1).padStart(3, '0')}`
 
+  // machine_id (déprécié, D5) n'est jamais écrit : la colonne n'existe pas en
+  // production et faisait retomber l'insertion sur la charge utile minimale,
+  // perdant silencieusement commande, produit, quantité et prix.
+  const { machine_id: _machineIdDeprecie, ...champsJob } = body
   const insertPayload = {
-    ...body,
+    ...champsJob,
     type_job: typeJob,
     numero,
     statut: 'confirmed',
@@ -399,7 +434,11 @@ router.post('/production/jobs', requirePermission('PRODUCTION', 'CREATE'), zVali
     .insert(insertPayload)
     .select().single()
 
+  // Replis historiques pour une base incomplète : ils PERDENT des données (lien
+  // commande, produit…), donc ils sont journalisés au lieu d'être silencieux.
+  // Après la migration 20261008, ils ne devraient plus jamais servir.
   if (isSchemaCacheColumnError(error)) {
+    console.warn('[production] insertion OF : colonne manquante, repli sans catégorie —', error?.message)
     const retry = await db
       .from('jobs_production')
       .insert(insertWithoutCategoriePayload)
@@ -409,6 +448,7 @@ router.post('/production/jobs', requirePermission('PRODUCTION', 'CREATE'), zVali
   }
 
   if (isSchemaCacheColumnError(error)) {
+    console.error('[production] insertion OF : repli MINIMAL, commande/produit/quantité/prix perdus — appliquer 20261008 —', error?.message)
     const retry = await db
       .from('jobs_production')
       .insert(insertMinimalPayload)
@@ -419,6 +459,398 @@ router.post('/production/jobs', requirePermission('PRODUCTION', 'CREATE'), zVali
 
   if (error) return c.json({ error: error.message, code: error.code }, 400)
   return c.json(data, 201)
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FABRICATION D'UN OF — gamme, temps réels, consommations (Catalogue Hybride Phase 7)
+// ══════════════════════════════════════════════════════════════════════════════
+
+const OF_CLOS = ['delivered', 'cancelled']
+
+/** Étapes, consommations et synthèse prévu / réel d'un OF. */
+router.get('/production/jobs/:id/fabrication', requirePermission('PRODUCTION', 'READ'), async (c) => {
+  const { id } = c.req.param()
+  const { data: job } = await db
+    .from('jobs_production')
+    .select('id, numero, statut, fiche_technique_id, quantite_facturable, gamme_chargee_le')
+    .eq('id', id).maybeSingle()
+  if (!job) return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
+
+  const [ops, conso] = await Promise.all([
+    db.from('of_operations').select('*').eq('job_id', id).order('numero', { ascending: true }),
+    db.from('of_consommations').select('*').eq('job_id', id).order('created_at', { ascending: true }),
+  ])
+  if (ops.error)   return c.json({ error: ops.error.message, code: 'DB_ERROR' }, 500)
+  if (conso.error) return c.json({ error: conso.error.message, code: 'DB_ERROR' }, 500)
+
+  const operations    = (ops.data ?? []) as Array<{ statut: string; temps_prevu_h: number | null; temps_reel_h: number | null }>
+  const consommations = (conso.data ?? []) as Array<{ quantite_reelle: number | null }>
+  return c.json({
+    data: {
+      job,
+      operations: operations.map((o) => ({ ...o, transitions_possibles: transitionsOperationOF(o.statut) })),
+      consommations,
+      resume: resumerFabrication(operations, consommations),
+    },
+  })
+})
+
+const chargerGammeSchema = z.object({
+  fiche_technique_id:  z.string().uuid().optional(),
+  modele_id:           z.string().uuid().optional(),
+  quantite_facturable: z.number().positive().optional(),
+}).refine((b) => !(b.fiche_technique_id && b.modele_id), { message: 'fiche_technique_id OU modele_id, pas les deux' })
+
+/**
+ * Charge la gamme dans un OF qui n'en a pas : depuis le devis de la commande
+ * (fiche figée) par défaut, sinon depuis une fiche ou la fiche ACTIVE d'un modèle.
+ */
+router.post('/production/jobs/:id/gamme',
+  requirePermission('PRODUCTION', 'CREATE'),
+  zValidator('json', chargerGammeSchema),
+  async (c) => {
+    const { id } = c.req.param()
+    const body = c.req.valid('json')
+
+    const { data: job } = await db.from('jobs_production').select('id, statut, commande_id').eq('id', id).maybeSingle()
+    const j = job as { id: string; statut: string; commande_id: string | null } | null
+    if (!j) return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
+    if (OF_CLOS.includes(j.statut)) return c.json({ error: `OF ${j.statut} : gamme non modifiable`, code: 'OF_CLOS' }, 422)
+
+    let ficheId = body.fiche_technique_id ?? null
+    let quantite = body.quantite_facturable ?? null
+    if (body.modele_id) {
+      const { data: fiche } = await db.from('fiche_technique')
+        .select('id').eq('modele_id', body.modele_id).eq('statut', 'active').maybeSingle()
+      if (!fiche) return c.json({ error: 'Aucune fiche technique active pour ce modèle', code: 'FICHE_TECHNIQUE_INTROUVABLE' }, 422)
+      ficheId = (fiche as { id: string }).id
+    }
+    if (!ficheId && j.commande_id) {
+      const source = await ficheDepuisCommande(j.commande_id)
+      if (source) { ficheId = source.ficheTechniqueId; quantite = quantite ?? source.quantiteFacturable }
+    }
+    if (!ficheId) {
+      return c.json({ error: 'Aucune fiche technique : choisissez un modèle', code: 'FICHE_TECHNIQUE_INTROUVABLE' }, 422)
+    }
+    if (!quantite) {
+      return c.json({ error: 'Quantité facturable requise (m², ml, pièces… selon la fiche)', code: 'QUANTITE_INVALIDE' }, 422)
+    }
+
+    const resultat = await chargerGammeDansOF(id, ficheId, quantite)
+    if (!resultat.ok) {
+      const status = resultat.code === 'ERREUR_DB' ? 500 : resultat.code === 'GAMME_DEJA_CHARGEE' ? 409 : 422
+      return c.json({ error: resultat.message, code: resultat.code }, status)
+    }
+    return c.json({ data: resultat }, 201)
+  },
+)
+
+const operationOFSchema = z.object({
+  statut:        z.enum(STATUTS_OPERATION_OF).optional(),
+  temps_reel_h:  z.number().min(0).max(1000).optional(),
+  technicien_id: z.string().uuid().nullable().optional(),
+  notes:         z.string().max(1000).optional(),
+})
+
+/**
+ * Suivi d'une étape : démarrage, fin (temps réel obligatoire), technicien.
+ * L'avancement de l'OF est recalculé, pondéré par les temps prévus.
+ */
+router.patch('/production/jobs/:id/operations/:opId',
+  requirePermission('PRODUCTION', 'UPDATE'),
+  zValidator('json', operationOFSchema),
+  async (c) => {
+    const { id, opId } = c.req.param()
+    const body = c.req.valid('json')
+    const user = c.get('user')
+
+    const { data: job } = await db.from('jobs_production').select('id, statut').eq('id', id).maybeSingle()
+    const j = job as { id: string; statut: string } | null
+    if (!j) return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
+    if (OF_CLOS.includes(j.statut)) return c.json({ error: `OF ${j.statut} : saisie fermée`, code: 'OF_CLOS' }, 422)
+
+    const { data: op } = await db.from('of_operations').select('*').eq('id', opId).eq('job_id', id).maybeSingle()
+    const o = op as { id: string; statut: string; temps_reel_h: number | null; debut_le: string | null } | null
+    if (!o) return c.json({ error: 'Étape introuvable', code: 'NOT_FOUND' }, 404)
+
+    const updates: Record<string, unknown> = { saisi_par: user?.id ?? null }
+    if (body.statut && body.statut !== o.statut) {
+      if (!transitionOperationAutorisee(o.statut, body.statut)) {
+        return c.json({
+          error: `Passage de « ${o.statut} » à « ${body.statut} » non autorisé`,
+          code: 'INVALID_TRANSITION', transitions_autorisees: transitionsOperationOF(o.statut),
+        }, 422)
+      }
+      if (body.statut === 'en_cours' && j.statut !== 'in_production') {
+        return c.json({ error: 'Lancez d\'abord l\'OF (statut « en production »)', code: 'OF_NON_LANCE' }, 422)
+      }
+      const tempsReel = body.temps_reel_h ?? o.temps_reel_h
+      if (body.statut === 'terminee' && !(Number(tempsReel) > 0)) {
+        return c.json({ error: 'Saisissez le temps réellement passé sur l\'étape', code: 'TEMPS_REEL_REQUIS' }, 422)
+      }
+      updates.statut = body.statut
+      if (body.statut === 'en_cours' && !o.debut_le) updates.debut_le = new Date().toISOString()
+      if (body.statut === 'terminee') updates.fin_le = new Date().toISOString()
+      if (body.statut === 'a_faire') updates.fin_le = null
+    }
+    if (body.temps_reel_h !== undefined) updates.temps_reel_h = body.temps_reel_h
+    if (body.notes !== undefined) updates.notes = body.notes
+
+    if (body.technicien_id !== undefined) {
+      if (body.technicien_id === null) {
+        updates.technicien_id = null
+        updates.technicien_nom = null
+      } else {
+        const { data: employe } = await db.from('employes').select('id, nom, statut').eq('id', body.technicien_id).maybeSingle()
+        const e = employe as { id: string; nom: string; statut: string } | null
+        if (!e) return c.json({ error: 'Technicien introuvable parmi les employés', code: 'TECHNICIEN_INTROUVABLE' }, 404)
+        if (e.statut !== 'actif' && e.statut !== 'essai') {
+          return c.json({ error: `${e.nom} n'est pas en activité (${e.statut})`, code: 'TECHNICIEN_INDISPONIBLE' }, 422)
+        }
+        updates.technicien_id = e.id
+        updates.technicien_nom = e.nom
+      }
+    }
+
+    const { data: maj, error } = await db.from('of_operations').update(updates).eq('id', opId).select('*').single()
+    if (error || !maj) return c.json({ error: error?.message ?? 'Mise à jour impossible', code: 'DB_ERROR' }, 400)
+
+    // Avancement de l'OF recalculé depuis ses étapes. Le passage à « prêt »
+    // reste une décision explicite (entrée en stock, facture) : jamais automatique ici.
+    const { data: toutes } = await db.from('of_operations').select('statut, temps_prevu_h, temps_reel_h').eq('job_id', id)
+    const avancement = avancementDepuisOperations((toutes ?? []) as Array<{ statut: string; temps_prevu_h: number | null; temps_reel_h: number | null }>)
+    await db.from('jobs_production').update({ avancement_pct: avancement, updated_at: new Date().toISOString() }).eq('id', id)
+
+    return c.json({ data: { ...(maj as Record<string, unknown>), transitions_possibles: transitionsOperationOF((maj as { statut: string }).statut) }, avancement_pct: avancement })
+  },
+)
+
+const consommationSchema = z.object({
+  quantite_reelle: z.number().min(0).max(1_000_000),
+  sortir_stock:    z.boolean().optional(),
+  notes:           z.string().max(1000).optional(),
+})
+
+/**
+ * Consommation réelle d'une matière. Avec sortir_stock, seul l'ÉCART avec ce
+ * qui a déjà été déstocké est mouvementé (sortie, ou retour si on a surestimé) :
+ * ressaisir une quantité ne déstocke jamais deux fois.
+ */
+router.patch('/production/jobs/:id/consommations/:cId',
+  requirePermission('PRODUCTION', 'UPDATE'),
+  zValidator('json', consommationSchema),
+  async (c) => {
+    const { id, cId } = c.req.param()
+    const body = c.req.valid('json')
+    const user = c.get('user')
+
+    const { data: job } = await db.from('jobs_production').select('id, numero, statut').eq('id', id).maybeSingle()
+    const j = job as { id: string; numero: string; statut: string } | null
+    if (!j) return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
+    if (OF_CLOS.includes(j.statut)) return c.json({ error: `OF ${j.statut} : saisie fermée`, code: 'OF_CLOS' }, 422)
+
+    const { data: conso } = await db.from('of_consommations').select('*').eq('id', cId).eq('job_id', id).maybeSingle()
+    const k = conso as { id: string; produit_id: string | null; designation: string; quantite_sortie_stock: number } | null
+    if (!k) return c.json({ error: 'Consommation introuvable', code: 'NOT_FOUND' }, 404)
+
+    const updates: Record<string, unknown> = {
+      quantite_reelle: body.quantite_reelle,
+      saisi_par:       user?.id ?? null,
+      saisi_le:        new Date().toISOString(),
+    }
+    if (body.notes !== undefined) updates.notes = body.notes
+
+    if (body.sortir_stock) {
+      if (!k.produit_id) {
+        return c.json({ error: 'Cette matière n\'est liée à aucun article de stock', code: 'PRODUIT_STOCK_MANQUANT' }, 422)
+      }
+      const ecart = Math.round((body.quantite_reelle - Number(k.quantite_sortie_stock ?? 0)) * 1000) / 1000
+      if (ecart !== 0) {
+        try {
+          await enregistrerMouvementStock({
+            produit_id: k.produit_id,
+            type:       ecart > 0 ? 'sortie' : 'entree',
+            quantite:   Math.abs(ecart),
+            reference:  j.numero,
+            notes:      ecart > 0 ? `Consommation OF ${j.numero} — ${k.designation}` : `Retour OF ${j.numero} — ${k.designation}`,
+            user_id:    user?.id,
+          })
+        } catch (err) {
+          const e = err as Error & { httpStatus?: number; code?: string }
+          return c.json({ error: e.message, code: e.code ?? 'STOCK_ERROR' }, (e.httpStatus ?? 400) as ContentfulStatusCode)
+        }
+      }
+      updates.quantite_sortie_stock = body.quantite_reelle
+    }
+
+    const { data: maj, error } = await db.from('of_consommations').update(updates).eq('id', cId).select('*').single()
+    if (error || !maj) return c.json({ error: error?.message ?? 'Mise à jour impossible', code: 'DB_ERROR' }, 400)
+    return c.json({ data: maj })
+  },
+)
+
+const consommationImprevueSchema = z.object({
+  type:            z.enum(['materiau', 'consommable']),
+  designation:     z.string().trim().min(1).max(200),
+  unite:           z.string().trim().min(1).max(20),
+  produit_id:      z.string().uuid().optional(),
+  quantite_reelle: z.number().positive().max(1_000_000),
+  notes:           z.string().max(1000).optional(),
+})
+
+/** Consommation non prévue par la fiche (prévu = 0) : l'écart reste visible. */
+router.post('/production/jobs/:id/consommations',
+  requirePermission('PRODUCTION', 'UPDATE'),
+  zValidator('json', consommationImprevueSchema),
+  async (c) => {
+    const { id } = c.req.param()
+    const body = c.req.valid('json')
+
+    const { data: job } = await db.from('jobs_production').select('id, statut').eq('id', id).maybeSingle()
+    const j = job as { id: string; statut: string } | null
+    if (!j) return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
+    if (OF_CLOS.includes(j.statut)) return c.json({ error: `OF ${j.statut} : saisie fermée`, code: 'OF_CLOS' }, 422)
+
+    let cout = 0
+    if (body.produit_id) {
+      const { data: produit } = await db.from('produits').select('prix_unitaire_xaf').eq('id', body.produit_id).maybeSingle()
+      if (!produit) return c.json({ error: 'Article de stock introuvable', code: 'NOT_FOUND' }, 404)
+      cout = Number((produit as { prix_unitaire_xaf: number | null }).prix_unitaire_xaf ?? 0)
+    }
+
+    const { data, error } = await db.from('of_consommations').insert({
+      job_id:                      id,
+      type:                        body.type,
+      designation:                 body.designation,
+      unite:                       body.unite,
+      produit_id:                  body.produit_id ?? null,
+      quantite_prevue:             0,
+      cout_unitaire_reference_xaf: cout,
+      quantite_reelle:             body.quantite_reelle,
+      notes:                       body.notes ?? null,
+      saisi_par:                   c.get('user')?.id ?? null,
+      saisi_le:                    new Date().toISOString(),
+    }).select('*').single()
+    if (error || !data) return c.json({ error: error?.message ?? 'Enregistrement impossible', code: 'DB_ERROR' }, 400)
+    return c.json({ data }, 201)
+  },
+)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INDICATEURS ATELIER ET CONTRÔLE DES COÛTS (Catalogue Hybride Phase 8)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** Codes PostgREST / Postgres d'une table absente (migration pas encore appliquée). */
+const TABLE_ABSENTE = new Set(['42P01', 'PGRST205'])
+const CATEGORIES_MACHINES = ['machine_production', 'machine_legere']
+const STATUTS_MACHINE_OPERATIONNELLE = ['disponible', 'en_service', 'remplacement_prevu']
+
+/**
+ * Indicateurs de l'écran Production, tous calculés (plus aucune valeur en dur) :
+ * OF en cours / en retard, machines opérationnelles, rendement sur 30 jours,
+ * anomalies (OF en retard + machines en panne). Aucune donnée de coût.
+ */
+router.get('/production/indicateurs', requirePermission('PRODUCTION', 'READ'), async (c) => {
+  const aujourdHui = new Date().toISOString().slice(0, 10)
+  const il30Jours = new Date(Date.now() - 30 * 86_400_000).toISOString()
+
+  const [jobs, machines, etapes] = await Promise.all([
+    db.from('jobs_production').select('statut, date_fin_prevue').in('statut', ['confirmed', 'in_production', 'pret']),
+    db.from('equipements').select('statut').in('categorie', CATEGORIES_MACHINES).not('statut', 'in', '(cede,hors_service)'),
+    db.from('of_operations').select('temps_prevu_h, temps_reel_h').eq('statut', 'terminee').gte('fin_le', il30Jours),
+  ])
+  if (jobs.error) return c.json({ error: jobs.error.message, code: 'DB_ERROR' }, 500)
+  if (machines.error) return c.json({ error: machines.error.message, code: 'DB_ERROR' }, 500)
+  const etapesDisponibles = !etapes.error
+  if (etapes.error && !TABLE_ABSENTE.has(String((etapes.error as { code?: string }).code))) {
+    return c.json({ error: etapes.error.message, code: 'DB_ERROR' }, 500)
+  }
+
+  const ofs = (jobs.data ?? []) as Array<{ statut: string; date_fin_prevue: string | null }>
+  const parc = (machines.data ?? []) as Array<{ statut: string }>
+  const enRetard = ofs.filter((j) => j.date_fin_prevue && j.date_fin_prevue < aujourdHui && j.statut !== 'pret').length
+  const enPanne = parc.filter((m) => m.statut === 'en_panne').length
+  const lignes = etapesDisponibles ? (etapes.data ?? []) as Array<{ temps_prevu_h: number | null; temps_reel_h: number | null }> : []
+
+  return c.json({
+    data: {
+      of_en_cours:  ofs.filter((j) => j.statut === 'in_production').length,
+      of_a_lancer:  ofs.filter((j) => j.statut === 'confirmed').length,
+      of_en_retard: enRetard,
+      machines: {
+        operationnelles: parc.filter((m) => STATUTS_MACHINE_OPERATIONNELLE.includes(m.statut)).length,
+        total:           parc.length,
+        en_panne:        enPanne,
+        en_maintenance:  parc.filter((m) => m.statut === 'maintenance').length,
+      },
+      rendement_30j_pct:    rendementAtelier(lignes),
+      etapes_mesurees_30j:  lignes.filter((e) => Number(e.temps_reel_h) > 0).length,
+      anomalies: { total: enRetard + enPanne, of_en_retard: enRetard, machines_en_panne: enPanne },
+    },
+  })
+})
+
+// Coûts et marges : mêmes droits que les règles de marge (données internes, §27).
+
+/** Coût prévu / réel d'un OF, par poste (main-d'œuvre, machines, matières, consommables). */
+router.get('/production/jobs/:id/couts', requirePermission('COMMERCIAL', 'CONFIGURE'), async (c) => {
+  const { id } = c.req.param()
+  const { data: job } = await db.from('jobs_production').select('id').eq('id', id).maybeSingle()
+  if (!job) return c.json({ error: 'Job introuvable', code: 'NOT_FOUND' }, 404)
+  try {
+    const couts = await coutsDesOF([id])
+    return c.json({ data: couts.get(id) })
+  } catch (e) {
+    return c.json({ error: (e as Error).message, code: 'DB_ERROR' }, 500)
+  }
+})
+
+/** Marge prévue / réelle d'une commande. */
+router.get('/production/couts/commandes/:commandeId', requirePermission('COMMERCIAL', 'CONFIGURE'), async (c) => {
+  const { commandeId } = c.req.param()
+  try {
+    const [ligne] = await controleDesCommandes([commandeId])
+    if (!ligne) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
+    return c.json({ data: ligne })
+  } catch (e) {
+    return c.json({ error: (e as Error).message, code: 'DB_ERROR' }, 500)
+  }
+})
+
+/**
+ * Synthèse du contrôle des coûts : les commandes ayant des OF sur la période
+ * (90 jours par défaut, 365 maximum), avec marge prévue, réelle et écart.
+ */
+router.get('/production/couts/synthese', requirePermission('COMMERCIAL', 'CONFIGURE'), async (c) => {
+  const jours = Math.min(365, Math.max(1, parseInt(c.req.query('jours') ?? '90') || 90))
+  const depuis = new Date(Date.now() - jours * 86_400_000).toISOString()
+
+  const { data: jobs, error } = await db
+    .from('jobs_production').select('commande_id')
+    .not('commande_id', 'is', null).neq('statut', 'cancelled').gte('created_at', depuis)
+    .order('created_at', { ascending: false }).limit(500)
+  if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 500)
+
+  const commandeIds = [...new Set(((jobs ?? []) as Array<{ commande_id: string }>).map((j) => j.commande_id))].slice(0, 100)
+  try {
+    const lignes = await controleDesCommandes(commandeIds)
+    const totaux = lignes.reduce((t, l) => ({
+      prix_vente_ht_xaf:     t.prix_vente_ht_xaf + l.marge.prixVenteHtXaf,
+      cout_revient_reel_xaf: t.cout_revient_reel_xaf + l.marge.coutRevientReelXaf,
+      marge_reelle_xaf:      t.marge_reelle_xaf + l.marge.margeReelleXaf,
+    }), { prix_vente_ht_xaf: 0, cout_revient_reel_xaf: 0, marge_reelle_xaf: 0 })
+    return c.json({
+      data: lignes.sort((a, b) => a.marge.margeReelleXaf - b.marge.margeReelleXaf),   // les moins rentables d'abord
+      totaux: {
+        ...totaux,
+        taux_marge_reelle_pct: totaux.prix_vente_ht_xaf > 0 ? Math.round((totaux.marge_reelle_xaf / totaux.prix_vente_ht_xaf) * 1000) / 10 : null,
+        commandes_deficitaires: lignes.filter((l) => l.marge.margeReelleXaf < 0).length,
+      },
+      periode_jours: jours,
+    })
+  } catch (e) {
+    return c.json({ error: (e as Error).message, code: 'DB_ERROR' }, 500)
+  }
 })
 
 /**

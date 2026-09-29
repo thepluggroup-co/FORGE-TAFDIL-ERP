@@ -1,6 +1,10 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Wrench, Gauge, AlertTriangle, Clock, Plus, Play, CheckCircle2, Package } from 'lucide-react'
+import { Wrench, Gauge, AlertTriangle, Clock, Plus, Play, CheckCircle2, Package, ListChecks } from 'lucide-react'
+import { FabricationOFPanel } from '@/components/production/FabricationOF'
+import { ControleCouts } from '@/components/production/ControleCouts'
+import { useIndicateursProduction } from '@/hooks/useControleCouts'
+import { usePermissions } from '@/hooks/useRbac'
 import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatDate } from '@/lib/utils'
@@ -8,18 +12,18 @@ import { uniteOptions } from '@/lib/constants'
 import { useJobs, useCreateJob, useUpdateJobStatut } from '@/hooks/useOperations'
 import type { Job } from '@/hooks/useOperations'
 import { useStocks } from '@/hooks/useStocks'
-import { useEquipements, STATUTS_EQUIPEMENT_INDISPONIBLE } from '@/hooks/useEquipements'
+import { useEquipements, useTechniciens, STATUTS_EQUIPEMENT_INDISPONIBLE } from '@/hooks/useEquipements'
 
 type JobRecord = Job & Record<string, unknown>
 
 // Machines : référentiel unique `equipements` (décision D5) — plus de liste codée en dur.
-const TECHNICIENS = ['Mvondo Serge', 'Biya Christine', 'Atangana Félix', 'Nkolo Pierre']
+// Techniciens : employés RH actifs (GET /api/production/techniciens) — plus de liste codée en dur.
 
 interface JobForm {
   typeJob: 'commande' | 'stock'
   produitId: string
   ref: string
-  produit: string; machines: string[]; techniciens: string[]   // machines = ids d'équipements
+  produit: string; machines: string[]; techniciens: string[]   // ids d'équipements / ids d'employés
   categorie: string; unite: string
   quantitePrevue: string
   prixUnitaire: string
@@ -88,14 +92,19 @@ const BASE_COLUMNS: Column<JobRecord>[] = [
 export default function Production() {
   const [slideOpen, setSlideOpen] = useState(false)
   const [form, setForm] = useState<JobForm>(DEFAULT_FORM)
+  const [jobFabrication, setJobFabrication] = useState<JobRecord | null>(null)
 
   const { data, isLoading } = useJobs()
   const { data: stocksData } = useStocks()
   const createJob = useCreateJob()
   const { data: equipements = [] } = useEquipements()
+  const { data: techniciens = [] } = useTechniciens()
   const updateJobStatut = useUpdateJobStatut()
+  const { data: indicateurs } = useIndicateursProduction()
+  const { hasPermission } = usePermissions()
+  const voitCouts = hasPermission('COMMERCIAL', 'CONFIGURE')
 
-  const jobs = (data?.data ?? []) as JobRecord[]
+  const jobs =(data?.data ?? []) as JobRecord[]
   const stocks = stocksData?.data ?? []
   const formValid =
     form.produit.trim() !== '' &&
@@ -121,8 +130,12 @@ export default function Production() {
       accessor: 'id',
       render: (_, row) => (
         <div className="flex items-center justify-end gap-2">
+          <Button size="sm" variant="ghost" onClick={() => setJobFabrication(row)}>
+            <ListChecks className="h-3.5 w-3.5" /> Étapes
+          </Button>
           {row.statut === 'confirmed' ? (
-            <Button size="sm" variant="ghost" onClick={() => updateJobStatut.mutate({ id: row.id, statut: 'in_production', avancement_pct: 25 })}>
+            // Avancement : calculé depuis les étapes terminées (Phase 7), plus de 25 % fictifs au lancement
+            <Button size="sm" variant="ghost" onClick={() => updateJobStatut.mutate({ id: row.id, statut: 'in_production' })}>
               <Play className="h-3.5 w-3.5" /> Lancer
             </Button>
           ) : null}
@@ -157,7 +170,9 @@ export default function Production() {
         // D5 : l'équipement principal (1er choisi) est lié à l'OF ; tous restent lisibles dans machine_nom
         equipement_id: form.machines[0] || undefined,
         machine_nom: form.machines.map((id) => equipements.find((e) => e.id === id)?.designation ?? id).join(', '),
-        technicien_nom: form.techniciens.join(', '),
+        // Le 1er technicien choisi est lié à l'OF (employé RH) ; tous restent lisibles dans technicien_nom
+        technicien_id: form.techniciens[0] || undefined,
+        technicien_nom: form.techniciens.map((id) => techniciens.find((t) => t.id === id)?.nom ?? id).join(', '),
         date_debut: form.debut,
         date_fin_prevue: form.finPrevue,
       },
@@ -186,10 +201,32 @@ export default function Production() {
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard title="Jobs en cours" value={enCours} icon={<Wrench className="h-5 w-5" />} color="#C62828" trend="up" trendValue="+1 vs hier" delay={0} />
-        <KpiCard title="Machines actives" value="3/5" icon={<Gauge className="h-5 w-5" />} color="#1d4ed8" trend="neutral" trendValue="2 en maintenance" delay={0.07} />
-        <KpiCard title="Rendement" value="82" unit="%" icon={<Gauge className="h-5 w-5" />} color="#15803d" trend="up" trendValue="+3 % vs sem. dernière" delay={0.14} />
-        <KpiCard title="Anomalies actives" value={2} icon={<AlertTriangle className="h-5 w-5" />} color="#dc2626" trend="down" trendValue="-1 résolue" delay={0.21} />
+        {/* Indicateurs calculés côté serveur (GET /production/indicateurs) — plus aucune valeur en dur */}
+        <KpiCard
+          title="OF en cours" value={indicateurs?.of_en_cours ?? enCours}
+          icon={<Wrench className="h-5 w-5" />} color="#C62828" delay={0}
+          trend="neutral" trendValue={indicateurs ? `${indicateurs.of_a_lancer} à lancer · ${indicateurs.of_en_retard} en retard` : undefined}
+        />
+        <KpiCard
+          title="Machines actives" value={indicateurs ? `${indicateurs.machines.operationnelles}/${indicateurs.machines.total}` : '—'}
+          icon={<Gauge className="h-5 w-5" />} color="#1d4ed8" delay={0.07}
+          trend="neutral"
+          trendValue={indicateurs ? `${indicateurs.machines.en_maintenance} en maintenance · ${indicateurs.machines.en_panne} en panne` : undefined}
+        />
+        <KpiCard
+          title="Rendement (30 j)" value={indicateurs?.rendement_30j_pct ?? '—'} unit={indicateurs?.rendement_30j_pct != null ? '%' : undefined}
+          icon={<Gauge className="h-5 w-5" />} color="#15803d" delay={0.14}
+          trend={indicateurs?.rendement_30j_pct == null ? 'neutral' : indicateurs.rendement_30j_pct >= 100 ? 'up' : 'down'}
+          trendValue={indicateurs
+            ? (indicateurs.etapes_mesurees_30j > 0 ? `temps prévu ÷ réel sur ${indicateurs.etapes_mesurees_30j} étape(s)` : 'aucune étape terminée sur 30 jours')
+            : undefined}
+        />
+        <KpiCard
+          title="Anomalies actives" value={indicateurs?.anomalies.total ?? '—'}
+          icon={<AlertTriangle className="h-5 w-5" />} color="#dc2626" delay={0.21}
+          trend={indicateurs && indicateurs.anomalies.total > 0 ? 'down' : 'neutral'}
+          trendValue={indicateurs ? `${indicateurs.anomalies.of_en_retard} OF en retard · ${indicateurs.anomalies.machines_en_panne} machine(s) en panne` : undefined}
+        />
       </div>
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
@@ -201,6 +238,9 @@ export default function Production() {
         </div>
         <DataTable<JobRecord> columns={columns} data={jobs} keyField="id" loading={isLoading} />
       </div>
+
+      {/* Phase 8 — coûts et marges : réservé aux droits des règles de marge */}
+      {voitCouts && <ControleCouts />}
 
       <SlideOver isOpen={slideOpen} onClose={() => setSlideOpen(false)} title="Nouveau job de production" width="md">
         <div className="space-y-4">
@@ -350,12 +390,15 @@ export default function Production() {
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Techniciens *</label>
             <select
               multiple
-              size={Math.min(4, TECHNICIENS.length)}
+              size={Math.min(4, Math.max(1, techniciens.length))}
               value={form.techniciens}
               onChange={(e) => setForm((f) => ({ ...f, techniciens: Array.from(e.target.selectedOptions, (option) => option.value).filter(Boolean) }))}
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
             >
-              {TECHNICIENS.map((t) => <option key={t} value={t}>{t}</option>)}
+              {techniciens.length === 0 && <option value="" disabled>Aucun employé actif — ajoutez-les dans RH</option>}
+              {techniciens.map((t) => (
+                <option key={t.id} value={t.id}>{t.nom}{t.poste ? ` — ${t.poste}` : ''}{t.statut === 'essai' ? ' (essai)' : ''}</option>
+              ))}
             </select>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -387,6 +430,16 @@ export default function Production() {
           </div>
         </div>
       </SlideOver>
+
+      {jobFabrication && (
+        <FabricationOFPanel
+          jobId={jobFabrication.id}
+          titre={`${jobFabrication.numero} · ${jobFabrication.produit_designation}`}
+          aCommande={!!jobFabrication.commande_id}
+          voitCouts={voitCouts}
+          onClose={() => setJobFabrication(null)}
+        />
+      )}
     </motion.div>
   )
 }

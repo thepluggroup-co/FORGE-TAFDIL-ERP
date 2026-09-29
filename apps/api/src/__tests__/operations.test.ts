@@ -185,6 +185,37 @@ describe('POST /api/production/jobs', () => {
     expect((await res.json() as { code: string }).code).toBe('MACHINE_MAINTENANCE')
   })
 
+  it('GET /production/techniciens : employés actifs, sans aucune donnée RH sensible', async () => {
+    allow('COMMERCIAL')
+    const chaine = mkChain({ data: [{ id: 'e1', nom: 'Mvondo Serge', poste: 'Soudeur', departement: 'Atelier', statut: 'actif' }], error: null })
+    vi.mocked(supabase.from).mockReturnValueOnce(chaine as never)
+    const res = await app.request('/api/production/techniciens', { headers: new Headers(authHeaders('operateur')) })
+    expect(res.status).toBe(200)
+    const colonnes = (chaine.select as ReturnType<typeof vi.fn>).mock.calls[0][0] as string
+    expect(colonnes).not.toMatch(/salaire|cin|cnps|\*/)
+    expect((chaine.in as ReturnType<typeof vi.fn>).mock.calls[0]).toEqual(['statut', ['actif', 'essai']])
+  })
+
+  it('refuse un technicien inactif (422) ou inconnu (404)', async () => {
+    const EMP = '88888888-8888-4888-8888-888888888888'
+    allow('COMMERCIAL')
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: { id: EMP, nom: 'Nkolo Pierre', statut: 'inactif' }, error: null }) as never)
+    const inactif = await app.request('/api/production/jobs', {
+      method: 'POST', headers: new Headers(authHeaders('operateur')),
+      body: JSON.stringify({ produit_designation: 'Portail', technicien_id: EMP }),
+    })
+    expect(inactif.status).toBe(422)
+    expect((await inactif.json() as { code: string }).code).toBe('TECHNICIEN_INDISPONIBLE')
+
+    allow('COMMERCIAL')
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
+    const inconnu = await app.request('/api/production/jobs', {
+      method: 'POST', headers: new Headers(authHeaders('operateur')),
+      body: JSON.stringify({ produit_designation: 'Portail', technicien_id: EMP }),
+    })
+    expect(inconnu.status).toBe(404)
+  })
+
   it('refuse un équipement hors service (422) ou inconnu (404)', async () => {
     const EQ = '66666666-6666-4666-8666-666666666666'
     allow('COMMERCIAL')
@@ -203,6 +234,24 @@ describe('POST /api/production/jobs', () => {
       body: JSON.stringify({ produit_designation: 'Portail', equipement_id: EQ }),
     })
     expect(inconnu.status).toBe(404)
+  })
+
+  it('n’écrit jamais machine_id (colonne absente en prod) : l’OF garde commande, équipement et produit', async () => {
+    const CMD = '99999999-9999-4999-8999-999999999999'
+    allow('COMMERCIAL')
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: { id: 'eq-1', designation: 'CNC-1', statut: 'disponible' }, error: null }) as never) // equipements (via ancienne_machine_id)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)                                          // count jobs
+    const insert = mkChain({ data: { id: 'j1', numero: 'JOB-2026-001' }, error: null })
+    vi.mocked(supabase.from).mockReturnValueOnce(insert as never)
+
+    const res = await app.request('/api/production/jobs', {
+      method: 'POST', headers: new Headers(authHeaders('operateur')),
+      body: JSON.stringify({ produit_designation: 'Portail', machine_id: 'm1', commande_id: CMD, quantite_prevue: 2 }),
+    })
+    expect(res.status).toBe(201)
+    const payload = (insert.insert as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<string, unknown>
+    expect(payload).not.toHaveProperty('machine_id')
+    expect(payload).toMatchObject({ commande_id: CMD, equipement_id: 'eq-1', machine_nom: 'CNC-1', quantite_prevue: 2 })
   })
 
   it('cree un job avec plusieurs ressources malgre categorie absente du schema cache', async () => {

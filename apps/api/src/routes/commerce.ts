@@ -21,6 +21,8 @@ import { ensureClient } from '../services/client-sync.service'
 import { resolveCommandeContext, chargerJobsProductionCommande } from '../services/commande-workflow.service'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
 import { proposerDevis, devisCalculateSchema } from '../services/devis-calculation.service'
+import { synchroniserDemandeDepuisDevis } from '../services/demande-devis.service'
+import { chargerGammeDansOF, ficheDepuisCommande } from '../services/production-of.service'
 import type { TypeCommande } from '../services/credit-eligibility.service'
 import type { HonoVariables } from '../types'
 
@@ -236,6 +238,7 @@ async function checkExpireDevis(devisId: string, dateValidite: string, statut: s
   const today = new Date().toISOString().slice(0, 10)
   if (dateValidite < today && statut !== 'expire') {
     await db.from('devis').update({ statut: 'expire', updated_at: new Date().toISOString() }).eq('id', devisId)
+    await synchroniserDemandeDepuisDevis(devisId, 'expire')
     return 'expire'
   }
   return statut
@@ -566,10 +569,23 @@ async function creerJobsProductionCommande(
 
   if (jobs.length === 0) return false
 
-  const { error } = await db.from('jobs_production').insert(jobs)
+  const { data: crees, error } = await db.from('jobs_production').insert(jobs).select('id')
   if (error) {
     console.error('[commerce] creerJobsProductionCommande - insert jobs:', error.message)
     return false
+  }
+
+  // Phase 7 — l'OF reprend la gamme de la fiche figée au devis (étapes, temps
+  // prévus, matières). Même règle que ressources_besoin : un seul OF, sinon la
+  // gamme se charge depuis l'écran Production. Un échec n'annule pas l'OF.
+  const jobCree = Array.isArray(crees) && crees.length === 1 ? (crees[0] as { id: string }) : null
+  if (jobCree) {
+    const source = await ficheDepuisCommande(commandeId).catch(() => null)
+    if (source) {
+      const chargement = await chargerGammeDansOF(jobCree.id, source.ficheTechniqueId, source.quantiteFacturable)
+        .catch((e: Error) => ({ ok: false as const, code: 'ERREUR_DB' as const, message: e.message }))
+      if (!chargement.ok) console.error(`[commerce] gamme non chargée pour ${jobs[0].numero} :`, chargement.message)
+    }
   }
 
   return true
@@ -936,6 +952,7 @@ router.get('/devis', requirePermission('COMMERCIAL', 'READ'), async (c) => {
     await db.from('devis')
       .update({ statut: 'expire', updated_at: new Date().toISOString() })
       .in('id', ids)
+    for (const devisId of ids) await synchroniserDemandeDepuisDevis(devisId, 'expire')
     // Mettre à jour les objets locaux pour la réponse
     for (const d of data ?? []) {
       if (ids.includes((d as { id: string }).id)) {
@@ -1351,6 +1368,7 @@ router.patch('/devis/:id/statut', requirePermission('COMMERCIAL', 'VALIDATE'), z
     .single()
 
   if (error || !data) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
+  await synchroniserDemandeDepuisDevis(id, statut, c.get('user')?.id ?? null)
   return c.json(mapDevis(data))
 })
 
@@ -1644,6 +1662,7 @@ router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'U
     process.env.DIRECTEUR_WHATSAPP_PHONE ?? '',
     `📋 Devis ${d.numero} envoyé à ${d.client_nom} pour approbation (30j).\nLien : ${approvalUrl}`,
   )
+  await synchroniserDemandeDepuisDevis(id, 'envoye', c.get('user')?.id ?? null)
 
   return c.json({ token, expires_at: expiresAt, approval_url: approvalUrl })
 })
@@ -1714,6 +1733,7 @@ publicDevisRouter.post('/devis/approuver/:token', async (c) => {
     token_approbation:   null,    // invalider le token après usage
     updated_at:          new Date().toISOString(),
   }).eq('id', d.id)
+  await synchroniserDemandeDepuisDevis(d.id, body.decision)
 
   // §39 — audit métier. Route publique non authentifiée : userId omis
   // volontairement (rbac_audit_logs.user_id est nullable pour ce cas précis,
@@ -1997,6 +2017,7 @@ router.post('/devis/:id/transformer-commande', requirePermission('COMMERCIAL', '
     payloadBefore: { devis_numero: d.numero, statut: currentStatut },
     payloadAfter:  { commande_id: cmd.id, commande_numero: cmd.numero, total_ttc_xaf: d.total_ttc_xaf },
   })
+  await synchroniserDemandeDepuisDevis(d.id, 'transforme', user.id)
 
   return c.json({ commande, devis_numero: d.numero, commande_numero: cmd.numero }, 201)
 })
@@ -2102,6 +2123,32 @@ router.get('/commandes/:id/production', requirePermission('COMMERCIAL', 'READ'),
   } catch (e) {
     return c.json({ error: (e as Error).message }, 500)
   }
+})
+
+/**
+ * POST /commandes/:id/production/regenerer — crée les OF d'une commande en
+ * production qui n'en a pas (cas des commandes passées « en production » quand
+ * jobs_production.commande_id manquait, cf. migration 20261008). Idempotent :
+ * creerJobsProductionCommande ne crée rien si des OF existent déjà.
+ */
+router.post('/commandes/:id/production/regenerer', requirePermission('PRODUCTION', 'CREATE'), async (c) => {
+  const { id } = c.req.param()
+  const user = c.get('user')
+
+  const { data: commande } = await db.from('commandes').select('id, numero, statut').eq('id', id).maybeSingle()
+  if (!commande) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
+
+  const cmd = commande as { id: string; numero: string; statut: string }
+  if (!['in_production', 'pret'].includes(cmd.statut)) {
+    return c.json({ error: 'Seule une commande en production ou prête peut avoir ses OF régénérés', code: 'STATUT_INCOMPATIBLE' }, 422)
+  }
+
+  const { count: avant } = await db.from('jobs_production').select('id', { count: 'exact', head: true }).eq('commande_id', id)
+  const ok = await creerJobsProductionCommande(id, cmd.numero, user.id)
+  if (!ok) return c.json({ error: 'Création des OF impossible (commande sans ligne valide ou base incomplète)', code: 'OF_NON_CREES' }, 422)
+
+  const { count: apres } = await db.from('jobs_production').select('id', { count: 'exact', head: true }).eq('commande_id', id)
+  return c.json({ commande_id: id, of_existants: avant ?? 0, of_crees: Math.max(0, (apres ?? 0) - (avant ?? 0)) })
 })
 
 router.get('/commandes/:id/timeline', requirePermission('COMMERCIAL', 'READ'), async (c) => {

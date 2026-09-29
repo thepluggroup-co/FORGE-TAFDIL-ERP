@@ -11,7 +11,6 @@ import {
   DoorOpen, Settings, Building2, Package, ShoppingBag, HelpCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { api } from '@/lib/api'
 
 // ── Types de projet (savoir-faire TAFDIL) ─────────────────────────────────────
 
@@ -58,12 +57,21 @@ function Confetti() {
 
 // ── Formulaire principal ───────────────────────────────────────────────────────
 
-interface FormData {
+interface DevisFormState {
   nom: string
   telephone: string
   email: string
   type_projet: string[]
   description: string
+  quantite: string
+  dimensions: string
+  materiau: string
+  localisation: string
+  delai_souhaite: string
+}
+
+const FORM_VIDE: Omit<DevisFormState, 'type_projet' | 'description'> = {
+  nom: '', telephone: '', email: '', quantite: '', dimensions: '', materiau: '', localisation: '', delai_souhaite: '',
 }
 
 function DevisForm() {
@@ -71,10 +79,8 @@ function DevisForm() {
   const produitRef  = searchParams.get('ref') ?? ''
   const produitNom  = searchParams.get('nom') ?? ''
 
-  const [form, setForm] = useState<FormData>({
-    nom:          '',
-    telephone:    '',
-    email:        '',
+  const [form, setForm] = useState<DevisFormState>({
+    ...FORM_VIDE,
     type_projet:  produitNom ? ['Produit du catalogue'] : [],
     description:  produitNom
       ? `Je souhaite un devis pour le produit : ${produitNom}${produitRef ? ` (Réf. ${produitRef})` : ''}.\n\n`
@@ -84,9 +90,10 @@ function DevisForm() {
   const [loading, setLoading]           = useState(false)
   const [success, setSuccess]           = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
+  const [numeroDemande, setNumeroDemande] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const set = (field: keyof FormData) =>
+  const set = (field: keyof DevisFormState) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
       setForm((f) => ({ ...f, [field]: e.target.value }))
 
@@ -105,22 +112,43 @@ function DevisForm() {
       return
     }
 
+    // Multipart : les champs + les fichiers « documents » (vérifiés côté serveur).
+    const corps = new FormData()
+    const champs: Record<string, string> = {
+      nom:            form.nom,
+      telephone:      form.telephone,
+      email:          form.email,
+      description:    form.description,
+      type_projet:    form.type_projet.join(', '),
+      produit_ref:    produitRef,
+      quantite:       form.quantite,
+      dimensions:     form.dimensions,
+      materiau:       form.materiau,
+      localisation:   form.localisation,
+      delai_souhaite: form.delai_souhaite,
+    }
+    for (const [cle, valeur] of Object.entries(champs)) {
+      if (valeur.trim()) corps.append(cle, valeur.trim())
+    }
+    for (const f of fichiers) corps.append('documents', f)
+
     setLoading(true)
-    const { error } = await api.post('/api/shop/devis', {
-      nom:         form.nom,
-      telephone:   form.telephone,
-      email:       form.email || undefined,
-      description: form.description,
-      type_projet: form.type_projet.length > 0 ? form.type_projet.join(', ') : undefined,
-      produit_ref: produitRef || undefined,
-    })
+    let resultat: { numero?: string; documents?: { refuses?: Array<{ file: string; error: string }> } } | null = null
+    try {
+      const res = await fetch('/api/shop/devis', { method: 'POST', body: corps })
+      if (res.ok) resultat = await res.json()
+    } catch { /* réseau : message ci-dessous */ }
     setLoading(false)
 
-    if (error) {
+    if (!resultat) {
       toast.error("Erreur lors de l'envoi. Réessayez ou contactez-nous par WhatsApp.")
       return
     }
+    for (const r of resultat.documents?.refuses ?? []) {
+      toast.warning(`Fichier « ${r.file} » non joint : ${r.error}`)
+    }
 
+    setNumeroDemande(resultat.numero ?? null)
     setSuccess(true)
     setShowConfetti(true)
     setTimeout(() => setShowConfetti(false), 2500)
@@ -138,12 +166,17 @@ function DevisForm() {
       >
         <CheckCircle size={48} className="mb-4 text-green-500" />
         <h3 className="mb-2 text-xl font-bold text-forge-dark">Demande envoyée !</h3>
+        {numeroDemande && (
+          <p className="mb-2 text-sm text-forge-dark">
+            Référence de votre demande : <strong>{numeroDemande}</strong>
+          </p>
+        )}
         <p className="text-forge-steel">
           Notre équipe vous rappelle sous <strong>24h</strong> avec un devis détaillé.
         </p>
         <div className="mt-6 flex flex-col items-center gap-3 sm:flex-row">
           <button
-            onClick={() => { setSuccess(false); setForm({ nom: '', telephone: '', email: '', type_projet: [], description: '' }); setFichiers([]) }}
+            onClick={() => { setSuccess(false); setNumeroDemande(null); setForm({ ...FORM_VIDE, type_projet: [], description: '' }); setFichiers([]) }}
             className="text-sm text-forge-steel underline hover:text-forge-red"
           >
             Envoyer une autre demande
@@ -276,10 +309,34 @@ function DevisForm() {
           />
         </div>
 
+        {/* Précisions structurées (facultatives) : elles accélèrent le chiffrage */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-forge-steel">Quantité</label>
+            <input className={inputCls} type="number" min="1" step="any" placeholder="1" value={form.quantite} onChange={set('quantite')} />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-forge-steel">Dimensions</label>
+            <input className={inputCls} placeholder="ex. 4 m × 2 m" maxLength={300} value={form.dimensions} onChange={set('dimensions')} />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-forge-steel">Matériau souhaité</label>
+            <input className={inputCls} placeholder="ex. acier galvanisé, inox…" maxLength={100} value={form.materiau} onChange={set('materiau')} />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-forge-steel">Lieu d'installation / livraison</label>
+            <input className={inputCls} placeholder="ex. Douala, Bonamoussadi" maxLength={200} value={form.localisation} onChange={set('localisation')} />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-forge-steel">Délai souhaité</label>
+            <input className={inputCls} type="date" value={form.delai_souhaite} onChange={set('delai_souhaite')} />
+          </div>
+        </div>
+
         {/* Upload fichiers */}
         <div>
           <label className="mb-1.5 block text-xs font-semibold text-forge-steel">
-            Fichiers joints — plans, photos, croquis (max 5)
+            Fichiers joints — plans, photos, croquis en PDF ou image (max 5, 10 Mo chacun)
           </label>
           <button
             type="button"
@@ -292,7 +349,7 @@ function DevisForm() {
             ref={fileRef}
             type="file"
             multiple
-            accept="image/*,.pdf,.dwg,.dxf"
+            accept="image/*,.pdf"
             onChange={addFiles}
             className="hidden"
           />

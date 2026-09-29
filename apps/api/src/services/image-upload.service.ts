@@ -91,3 +91,62 @@ export async function televerserImages(
 
   return { urls, errors }
 }
+
+// ── Documents privés (demandes de devis : plans, photos, PDF — Phase 6, §46) ──
+
+export const TAILLE_MAX_DOCUMENT = 10 * 1024 * 1024
+export const NOMBRE_MAX_DOCUMENTS = 5
+
+/** Type réel d'un document accepté : image (voir detecterTypeImage) ou PDF. */
+export function detecterTypeDocument(buf: Uint8Array): string | null {
+  if (buf.length >= 5 && ascii(buf, 0, 5) === '%PDF-') return 'application/pdf'
+  return detecterTypeImage(buf)
+}
+
+export interface DocumentTeleverse {
+  nomFichier: string
+  typeMime: string
+  tailleOctets: number
+  storagePath: string
+}
+
+/**
+ * Téléverse des documents dans un bucket PRIVÉ (aucune URL publique) : ils ne
+ * sont consultables que via des liens signés temporaires émis par l'API.
+ */
+export async function televerserDocumentsPrives(
+  db: SupabaseClient,
+  bucket: string,
+  dossier: string,
+  files: File[],
+): Promise<{ documents: DocumentTeleverse[]; errors: Array<{ file: string; error: string }> }> {
+  await db.storage.createBucket(bucket, { public: false }).catch(() => {})
+
+  const documents: DocumentTeleverse[] = []
+  const errors: Array<{ file: string; error: string }> = []
+
+  for (const file of files.slice(0, NOMBRE_MAX_DOCUMENTS)) {
+    if (file.size > TAILLE_MAX_DOCUMENT) {
+      errors.push({ file: file.name, error: 'Fichier trop lourd, maximum 10 Mo' })
+      continue
+    }
+    const buffer = Buffer.from(await file.arrayBuffer())
+    const typeMime = detecterTypeDocument(buffer)
+    if (!typeMime) {
+      errors.push({ file: file.name, error: 'Seuls les PDF et les images (JPG, PNG, WEBP, HEIC…) sont acceptés' })
+      continue
+    }
+
+    const extension = typeMime === 'application/pdf' ? 'pdf' : EXTENSION_PAR_TYPE[typeMime]
+    const storagePath = `${dossier}/${Date.now()}-${randomUUID()}.${extension}`
+    const { error } = await db.storage.from(bucket).upload(storagePath, buffer, { contentType: typeMime, upsert: false })
+    if (error) {
+      console.error('[documents] upload:', error)
+      errors.push({ file: file.name, error: error.message })
+      continue
+    }
+    documents.push({ nomFichier: file.name.slice(0, 200), typeMime, tailleOctets: file.size, storagePath })
+  }
+
+  return { documents, errors }
+}
