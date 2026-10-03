@@ -590,8 +590,8 @@ router.patch('/production/jobs/:id/operations/:opId',
       }
       updates.statut = body.statut
       if (body.statut === 'en_cours' && !o.debut_le) updates.debut_le = new Date().toISOString()
-      if (body.statut === 'terminee') updates.fin_le = new Date().toISOString()
-      if (body.statut === 'a_faire') updates.fin_le = null
+      // Seule une étape terminée a une fin : une réouverture (terminee → en_cours) l'efface.
+      updates.fin_le = body.statut === 'terminee' ? new Date().toISOString() : null
     }
     if (body.temps_reel_h !== undefined) updates.temps_reel_h = body.temps_reel_h
     if (body.notes !== undefined) updates.notes = body.notes
@@ -650,7 +650,10 @@ router.patch('/production/jobs/:id/consommations/:cId',
     if (OF_CLOS.includes(j.statut)) return c.json({ error: `OF ${j.statut} : saisie fermée`, code: 'OF_CLOS' }, 422)
 
     const { data: conso } = await db.from('of_consommations').select('*').eq('id', cId).eq('job_id', id).maybeSingle()
-    const k = conso as { id: string; produit_id: string | null; designation: string; quantite_sortie_stock: number } | null
+    const k = conso as {
+      id: string; produit_id: string | null; designation: string; quantite_sortie_stock: number
+      quantite_reelle: number | null; saisi_par: string | null; saisi_le: string | null; notes: string | null
+    } | null
     if (!k) return c.json({ error: 'Consommation introuvable', code: 'NOT_FOUND' }, 404)
 
     const updates: Record<string, unknown> = {
@@ -660,31 +663,54 @@ router.patch('/production/jobs/:id/consommations/:cId',
     }
     if (body.notes !== undefined) updates.notes = body.notes
 
-    if (body.sortir_stock) {
-      if (!k.produit_id) {
-        return c.json({ error: 'Cette matière n\'est liée à aucun article de stock', code: 'PRODUIT_STOCK_MANQUANT' }, 422)
-      }
-      const ecart = Math.round((body.quantite_reelle - Number(k.quantite_sortie_stock ?? 0)) * 1000) / 1000
-      if (ecart !== 0) {
-        try {
-          await enregistrerMouvementStock({
-            produit_id: k.produit_id,
-            type:       ecart > 0 ? 'sortie' : 'entree',
-            quantite:   Math.abs(ecart),
-            reference:  j.numero,
-            notes:      ecart > 0 ? `Consommation OF ${j.numero} — ${k.designation}` : `Retour OF ${j.numero} — ${k.designation}`,
-            user_id:    user?.id,
-          })
-        } catch (err) {
-          const e = err as Error & { httpStatus?: number; code?: string }
-          return c.json({ error: e.message, code: e.code ?? 'STOCK_ERROR' }, (e.httpStatus ?? 400) as ContentfulStatusCode)
-        }
-      }
-      updates.quantite_sortie_stock = body.quantite_reelle
+    if (!body.sortir_stock) {
+      const { data: maj, error } = await db.from('of_consommations').update(updates).eq('id', cId).select('*').single()
+      if (error || !maj) return c.json({ error: error?.message ?? 'Mise à jour impossible', code: 'DB_ERROR' }, 400)
+      return c.json({ data: maj })
     }
 
-    const { data: maj, error } = await db.from('of_consommations').update(updates).eq('id', cId).select('*').single()
-    if (error || !maj) return c.json({ error: error?.message ?? 'Mise à jour impossible', code: 'DB_ERROR' }, 400)
+    if (!k.produit_id) {
+      return c.json({ error: 'Cette matière n\'est liée à aucun article de stock', code: 'PRODUIT_STOCK_MANQUANT' }, 422)
+    }
+    const dejaSortie = Number(k.quantite_sortie_stock ?? 0)
+    const ecart = Math.round((body.quantite_reelle - dejaSortie) * 1000) / 1000
+
+    // 1. Réserver l'écart AVANT de mouvementer le stock : la ligne n'est mise à
+    //    jour que si personne n'a déstocké entre-temps (verrou optimiste). Une
+    //    saisie concurrente échoue ici au lieu de déstocker une deuxième fois.
+    const { data: maj, error } = await db.from('of_consommations')
+      .update({ ...updates, quantite_sortie_stock: body.quantite_reelle })
+      .eq('id', cId).eq('quantite_sortie_stock', dejaSortie)
+      .select('*').maybeSingle()
+    if (error) return c.json({ error: error.message, code: 'DB_ERROR' }, 400)
+    if (!maj) {
+      return c.json({ error: 'Cette consommation vient d\'être modifiée par une autre saisie : rechargez puis recommencez', code: 'CONFLIT_SAISIE' }, 409)
+    }
+
+    // 2. Mouvement de l'écart. En cas d'échec, la réservation est annulée.
+    if (ecart !== 0) {
+      try {
+        await enregistrerMouvementStock({
+          produit_id: k.produit_id,
+          type:       ecart > 0 ? 'sortie' : 'entree',
+          quantite:   Math.abs(ecart),
+          reference:  j.numero,
+          notes:      ecart > 0 ? `Consommation OF ${j.numero} — ${k.designation}` : `Retour OF ${j.numero} — ${k.designation}`,
+          user_id:    user?.id,
+        })
+      } catch (err) {
+        const { error: errRetour } = await db.from('of_consommations').update({
+          quantite_reelle:       k.quantite_reelle,
+          quantite_sortie_stock: dejaSortie,
+          saisi_par:             k.saisi_par,
+          saisi_le:              k.saisi_le,
+          notes:                 k.notes,
+        }).eq('id', cId).eq('quantite_sortie_stock', body.quantite_reelle)
+        if (errRetour) console.error(`[production] consommation ${cId} : annulation de la réservation impossible :`, errRetour.message)
+        const e = err as Error & { httpStatus?: number; code?: string }
+        return c.json({ error: e.message, code: e.code ?? 'STOCK_ERROR' }, (e.httpStatus ?? 400) as ContentfulStatusCode)
+      }
+    }
     return c.json({ data: maj })
   },
 )

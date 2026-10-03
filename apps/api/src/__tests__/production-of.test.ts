@@ -144,6 +144,38 @@ describe('avancement et transitions (pur)', () => {
 // ── Chargement de la gamme ────────────────────────────────────────────────────
 
 describe('chargerGammeDansOF', () => {
+  const ficheUneEtape = (surcharge: (op: OpDb) => { data: unknown; error: unknown } | undefined = () => undefined) => (op: OpDb) => {
+    const r = surcharge(op)
+    if (r) return r
+    if (op.table === 'of_operations' && op.action === 'select') return { data: null, error: null, count: 0 }
+    if (op.table === 'gamme_operations') return { data: [{
+      id: 'g10', numero: 10, libelle: 'Découpe', temps_unitaire_h: 0.2, temps_fixe_h: 0.5,
+      postes_travail: { id: 'p-dec', libelle: 'Découpeur', cout_horaire_xaf: 2000 }, equipements: null,
+    }], error: null }
+    if (op.table === 'fiche_technique_ressources') return { data: [{
+      id: 'r-tube', type: 'materiau', designation: 'Tube 40×40', unite: 'ml', ressource_produit_id: 'prod-tube',
+      quantite_par_unite: 3.2, cout_unitaire_reference_xaf: 1800,
+    }], error: null }
+    return { data: null, error: null }
+  }
+
+  it('échec des matières : les étapes sont retirées, le chargement reste relançable', async () => {
+    etat.repondre = ficheUneEtape((op) => op.table === 'of_consommations' && op.action === 'insert'
+      ? { data: null, error: { message: 'insert refusé' } } : undefined)
+    expect(await chargerGammeDansOF(JOB, FT, 10)).toMatchObject({ ok: false, code: 'ERREUR_DB' })
+    expect(ops('of_operations', 'delete')).toHaveLength(1)
+    expect(ops('of_operations', 'delete')[0].filtres).toContainEqual(['job_id', JOB])
+    expect(ops('jobs_production', 'update')).toHaveLength(0)
+  })
+
+  it('chargement concurrent (doublon d\'étape) : signalé comme déjà chargé', async () => {
+    etat.repondre = ficheUneEtape((op) => op.table === 'of_operations' && op.action === 'insert'
+      ? { data: null, error: { code: '23505', message: 'duplicate key' } } : undefined)
+    expect(await chargerGammeDansOF(JOB, FT, 10)).toMatchObject({ ok: false, code: 'GAMME_DEJA_CHARGEE' })
+    expect(ops('of_consommations', 'insert')).toHaveLength(0)
+    expect(ops('of_operations', 'delete')).toHaveLength(0)
+  })
+
   it('copie étapes et matières dans l\'OF et le rattache à la fiche', async () => {
     etat.repondre = (op) => {
       if (op.table === 'of_operations' && op.action === 'select') return { data: null, error: null, count: 0 }
@@ -220,18 +252,28 @@ describe('PATCH /api/production/jobs/:id/operations/:opId', () => {
     // Jamais de passage automatique à « prêt » (entrée en stock, facture)
     expect((ops('jobs_production', 'update')[0].payload as Record<string, unknown>).statut).toBeUndefined()
   })
+
+  it('rouvrir une étape terminée efface sa date de fin', async () => {
+    scenario('in_production', 'terminee', 3.5)
+    const res = await patch({ statut: 'en_cours' })
+    expect(res.status).toBe(200)
+    expect(ops('of_operations', 'update')[0].payload).toMatchObject({ statut: 'en_cours', fin_le: null })
+  })
 })
 
 // ── Consommations ─────────────────────────────────────────────────────────────
 
 describe('PATCH /api/production/jobs/:id/consommations/:cId', () => {
-  const scenario = (dejaSortie: number) => {
+  const scenario = (dejaSortie: number, { stock = 100, conflit = false } = {}) => {
     etat.repondre = (op) => {
       if (op.table === 'jobs_production') return { data: { id: JOB, numero: 'OF-CMD-001-01', statut: 'in_production' }, error: null }
       if (op.table === 'of_consommations' && op.action === 'select')
-        return { data: { id: CO, produit_id: 'prod-tube', designation: 'Tube 40×40', quantite_sortie_stock: dejaSortie }, error: null }
-      if (op.table === 'of_consommations' && op.action === 'update') return { data: { id: CO }, error: null }
-      if (op.table === 'produits' && op.action === 'select') return { data: { stock_actuel: 100, stock_min: 5, stock_critique: 2 }, error: null }
+        return { data: {
+          id: CO, produit_id: 'prod-tube', designation: 'Tube 40×40', quantite_sortie_stock: dejaSortie,
+          quantite_reelle: dejaSortie, saisi_par: 'user-avant', saisi_le: '2026-09-01T08:00:00Z', notes: null,
+        }, error: null }
+      if (op.table === 'of_consommations' && op.action === 'update') return { data: conflit ? null : { id: CO }, error: null }
+      if (op.table === 'produits' && op.action === 'select') return { data: { stock_actuel: stock, stock_min: 5, stock_critique: 2 }, error: null }
       return { data: null, error: null }
     }
   }
@@ -245,6 +287,27 @@ describe('PATCH /api/production/jobs/:id/consommations/:cId', () => {
     expect(res.status).toBe(200)
     expect(ops('mouvements_stock', 'insert')[0].payload).toMatchObject({ produit_id: 'prod-tube', type: 'sortie', quantite: 4, reference: 'OF-CMD-001-01' })
     expect(ops('of_consommations', 'update')[0].payload).toMatchObject({ quantite_reelle: 34, quantite_sortie_stock: 34 })
+    // Réservation conditionnelle : seulement si personne n'a déstocké entre-temps
+    expect(ops('of_consommations', 'update')[0].filtres).toContainEqual(['quantite_sortie_stock', 30])
+  })
+
+  it('une saisie concurrente est refusée sans toucher au stock', async () => {
+    scenario(30, { conflit: true })
+    const res = await patch({ quantite_reelle: 34, sortir_stock: true })
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('CONFLIT_SAISIE')
+    expect(ops('mouvements_stock', 'insert')).toHaveLength(0)
+  })
+
+  it('stock insuffisant : la réservation est annulée', async () => {
+    scenario(30, { stock: 2 })
+    const res = await patch({ quantite_reelle: 34, sortir_stock: true })
+    expect(res.status).toBe(422)
+    expect(ops('mouvements_stock', 'insert')).toHaveLength(0)
+    const [reservation, annulation] = ops('of_consommations', 'update')
+    expect(reservation.payload).toMatchObject({ quantite_sortie_stock: 34 })
+    expect(annulation.payload).toMatchObject({ quantite_reelle: 30, quantite_sortie_stock: 30, saisi_par: 'user-avant' })
+    expect(annulation.filtres).toContainEqual(['quantite_sortie_stock', 34])
   })
 
   it('ressaisir la même quantité ne déstocke pas une deuxième fois', async () => {

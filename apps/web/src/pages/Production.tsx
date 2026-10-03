@@ -104,7 +104,7 @@ export default function Production() {
   const { hasPermission } = usePermissions()
   const voitCouts = hasPermission('COMMERCIAL', 'CONFIGURE')
 
-  const jobs =(data?.data ?? []) as JobRecord[]
+  const jobs = (data?.data ?? []) as JobRecord[]
   const stocks = stocksData?.data ?? []
   const formValid =
     form.produit.trim() !== '' &&

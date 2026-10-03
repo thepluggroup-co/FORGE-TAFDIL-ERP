@@ -15,29 +15,44 @@ const db = supabaseAdmin!
 type OperationRow = OperationCout & { job_id: string }
 type ConsommationRow = ConsommationCout & { job_id: string }
 
+/** Taille d'un filtre `.in()` : ~100 UUID gardent l'URL PostgREST loin de sa limite. */
+const TAILLE_PAQUET = 100
+
+/** Exécute une lecture `.in()` par paquets d'identifiants et concatène les lignes. */
+async function parPaquets(
+  ids: string[],
+  lire: (paquet: string[]) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>,
+): Promise<unknown[]> {
+  const paquets: string[][] = []
+  for (let i = 0; i < ids.length; i += TAILLE_PAQUET) paquets.push(ids.slice(i, i + TAILLE_PAQUET))
+  const resultats = await Promise.all(paquets.map(lire))
+  return resultats.flatMap((r) => {
+    if (r.error) throw new Error(r.error.message)
+    return r.data ?? []
+  })
+}
+
 /** Coûts prévus / réels de plusieurs OF, indexés par id d'OF. */
 export async function coutsDesOF(jobIds: string[]): Promise<Map<string, CoutsOF>> {
   const resultat = new Map<string, CoutsOF>()
   if (jobIds.length === 0) return resultat
 
   const [ops, conso] = await Promise.all([
-    db.from('of_operations')
+    parPaquets(jobIds, (ids) => db.from('of_operations')
       .select('job_id, numero, libelle, statut, temps_prevu_h, temps_reel_h, poste_libelle, equipement_designation, cout_horaire_poste_xaf, cout_horaire_equipement_xaf')
-      .in('job_id', jobIds),
-    db.from('of_consommations')
+      .in('job_id', ids)),
+    parPaquets(jobIds, (ids) => db.from('of_consommations')
       .select('job_id, designation, type, quantite_prevue, quantite_reelle, cout_unitaire_reference_xaf')
-      .in('job_id', jobIds),
+      .in('job_id', ids)),
   ])
-  if (ops.error) throw new Error(ops.error.message)
-  if (conso.error) throw new Error(conso.error.message)
 
   const parJob = <T extends { job_id: string }>(lignes: T[]) => {
     const m = new Map<string, T[]>()
     for (const l of lignes) m.set(l.job_id, [...(m.get(l.job_id) ?? []), l])
     return m
   }
-  const opsParJob = parJob((ops.data ?? []) as OperationRow[])
-  const consoParJob = parJob((conso.data ?? []) as ConsommationRow[])
+  const opsParJob = parJob(ops as OperationRow[])
+  const consoParJob = parJob(conso as ConsommationRow[])
 
   for (const id of jobIds) {
     const o = (opsParJob.get(id) ?? []).sort((a, b) => a.numero - b.numero)

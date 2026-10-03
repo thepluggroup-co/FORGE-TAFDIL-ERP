@@ -96,6 +96,8 @@ export async function chargerGammeDansOF(
       cout_horaire_poste_xaf:      o.coutHorairePosteXaf,
       cout_horaire_equipement_xaf: o.coutHoraireEquipementXaf,
     })))
+    // 23505 : un chargement concurrent a inséré les étapes juste avant (UNIQUE job_id, numero)
+    if (error?.code === '23505') return { ok: false, code: 'GAMME_DEJA_CHARGEE', message: 'Les étapes de cet OF sont déjà chargées.' }
     if (error) return { ok: false, code: 'ERREUR_DB', message: error.message }
   }
 
@@ -110,7 +112,13 @@ export async function chargerGammeDansOF(
       quantite_prevue:             r.quantitePrevue,
       cout_unitaire_reference_xaf: r.coutUnitaireReferenceXaf,
     })))
-    if (error) return { ok: false, code: 'ERREUR_DB', message: error.message }
+    if (error) {
+      // Pas de gamme à moitié chargée : sans ses matières, les étapes sont retirées
+      // pour que le chargement puisse être relancé (sinon GAMME_DEJA_CHARGEE à vie).
+      const { error: errRetrait } = await db.from('of_operations').delete().eq('job_id', jobId)
+      if (errRetrait) console.error(`[production] OF ${jobId} : étapes orphelines non retirées :`, errRetrait.message)
+      return { ok: false, code: 'ERREUR_DB', message: error.message }
+    }
   }
 
   const { error: errJob } = await db.from('jobs_production').update({
