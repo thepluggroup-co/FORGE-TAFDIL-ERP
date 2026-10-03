@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { motion } from 'framer-motion'
 import {
-  Send, CheckCircle, Paperclip, X, FileText, HardHat,
+  Send, CheckCircle, Paperclip, X, FileText, HardHat, ArrowRight,
   Clock, Phone, Mail, MapPin,
   Wrench, Droplets, Megaphone, Shield, Truck, Home,
   DoorOpen, Settings, Building2, Package, ShoppingBag, HelpCircle,
@@ -15,19 +15,19 @@ import { toast } from 'sonner'
 // ── Types de projet (savoir-faire TAFDIL) ─────────────────────────────────────
 
 const TYPES_PROJET = [
-  { label: 'Charpente / Hangar métallique',   icon: HardHat,     desc: 'Structure métallique, toiture, mezzanine',           atelier: 'Métallerie'  },
-  { label: 'Tuyauterie industrielle',          icon: Wrench,      desc: 'Installation et maintenance de tuyauteries',         atelier: 'Métallerie'  },
-  { label: 'Citerne / Bac de stockage',        icon: Droplets,    desc: "Citerne eau potable, bac carburant ou produits",     atelier: 'Métallerie'  },
-  { label: 'Panneau publicitaire / Kiosque',   icon: Megaphone,   desc: 'Supports de communication, kiosques commerciaux',    atelier: 'Métallerie'  },
-  { label: 'Portail / Grilles / Ferronnerie',  icon: Shield,      desc: 'Portails, grilles, garde-corps, rampes, escaliers',  atelier: 'Ferronnerie' },
-  { label: 'Carrosserie Plateau Camion',       icon: Truck,       desc: 'Plateau, benne, caisson pour véhicules',             atelier: 'Métallerie'  },
-  { label: 'Auvent / Couverture métallique',   icon: Home,        desc: 'Auvent, marquise, couverture en acier',              atelier: 'Métallerie'  },
-  { label: 'Menuiserie métallique',            icon: DoorOpen,    desc: 'Portes, fenêtres, volets, portes de garage',         atelier: 'Ferronnerie' },
-  { label: 'Mécanosoudure / Tôlerie',          icon: Settings,    desc: 'Assemblage, soudure de pièces sur mesure',           atelier: 'Métallerie'  },
-  { label: 'Aménagement / Bâtiment',           icon: Building2,   desc: 'Cloisons, cabines, faux-plafonds, architecture',     atelier: 'Les deux'    },
-  { label: 'Fournitures industrielles',        icon: Package,     desc: 'Équipements, matériels et fournitures',              atelier: 'Les deux'    },
-  { label: 'Produit du catalogue',             icon: ShoppingBag, desc: 'Commander un produit de notre gamme',                atelier: ''            },
-  { label: 'Autre / Je ne sais pas',           icon: HelpCircle,  desc: 'Décrivez votre besoin, nous vous orienterons',       atelier: ''            },
+  { label: 'Charpente / Hangar métallique',   icon: HardHat,     desc: 'Structure métallique, toiture, mezzanine',           atelier: 'Métallerie',  categorieCatalogue: 'Construction metallique' },
+  { label: 'Tuyauterie industrielle',          icon: Wrench,      desc: 'Installation et maintenance de tuyauteries',         atelier: 'Métallerie',  categorieCatalogue: 'Construction metallique' },
+  { label: 'Citerne / Bac de stockage',        icon: Droplets,    desc: "Citerne eau potable, bac carburant ou produits",     atelier: 'Métallerie',  categorieCatalogue: 'Construction metallique' },
+  { label: 'Panneau publicitaire / Kiosque',   icon: Megaphone,   desc: 'Supports de communication, kiosques commerciaux',    atelier: 'Métallerie',  categorieCatalogue: 'Construction metallique' },
+  { label: 'Portail / Grilles / Ferronnerie',  icon: Shield,      desc: 'Portails, grilles, garde-corps, rampes, escaliers',  atelier: 'Ferronnerie', categorieCatalogue: 'Ferronnerie' },
+  { label: 'Carrosserie Plateau Camion',       icon: Truck,       desc: 'Plateau, benne, caisson pour véhicules',             atelier: 'Métallerie',  categorieCatalogue: 'Construction metallique' },
+  { label: 'Auvent / Couverture métallique',   icon: Home,        desc: 'Auvent, marquise, couverture en acier',              atelier: 'Métallerie',  categorieCatalogue: 'Construction metallique' },
+  { label: 'Menuiserie métallique',            icon: DoorOpen,    desc: 'Portes, fenêtres, volets, portes de garage',         atelier: 'Ferronnerie', categorieCatalogue: 'Ferronnerie' },
+  { label: 'Mécanosoudure / Tôlerie',          icon: Settings,    desc: 'Assemblage, soudure de pièces sur mesure',           atelier: 'Métallerie',  categorieCatalogue: 'Ferronnerie' },
+  { label: 'Aménagement / Bâtiment',           icon: Building2,   desc: 'Cloisons, cabines, faux-plafonds, architecture',     atelier: 'Les deux',    categorieCatalogue: 'Construction metallique' },
+  { label: 'Fournitures industrielles',        icon: Package,     desc: 'Équipements, matériels et fournitures',              atelier: 'Les deux',    categorieCatalogue: 'Outils & Accessoires' },
+  { label: 'Produit du catalogue',             icon: ShoppingBag, desc: 'Commander un produit de notre gamme',                atelier: '',            categorieCatalogue: null },
+  { label: 'Autre / Je ne sais pas',           icon: HelpCircle,  desc: 'Décrivez votre besoin, nous vous orienterons',       atelier: '',            categorieCatalogue: null },
 ]
 
 // ── Confetti léger ─────────────────────────────────────────────────────────────
@@ -86,6 +86,9 @@ function DevisForm() {
       ? `Je souhaite un devis pour le produit : ${produitNom}${produitRef ? ` (Réf. ${produitRef})` : ''}.\n\n`
       : '',
   })
+  const categoriesCatalogue = [...new Set(form.type_projet.map((label) =>
+      TYPES_PROJET.find((type) => type.label === label)?.categorieCatalogue ?? null,
+  ))]
   const [fichiers, setFichiers]         = useState<File[]>([])
   const [loading, setLoading]           = useState(false)
   const [success, setSuccess]           = useState(false)
@@ -296,6 +299,20 @@ function DevisForm() {
               )
             })}
           </div>
+          {categoriesCatalogue.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {categoriesCatalogue.map((categorie) => (
+                <Link
+                  key={categorie ?? 'tout'}
+                  href={categorie ? `/catalogue?categorie=${encodeURIComponent(categorie)}` : '/catalogue'}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-forge-red/20 bg-forge-red/5 px-3 py-2 text-xs font-semibold text-forge-red transition-colors hover:bg-forge-red/10"
+                >
+                  {categorie ? `Voir la famille ${categorie}` : 'Voir tout le catalogue'}
+                  <ArrowRight size={13} />
+                </Link>
+              ))}
+            </div>
+          )}
         </div>
 
         <div>

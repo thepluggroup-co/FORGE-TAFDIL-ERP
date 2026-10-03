@@ -67,6 +67,11 @@ export function ParametresConfigurationModal({ modele, onClose }: { modele: Mode
             {parametres.map((p, i) => (
               <div key={i} className="space-y-2 rounded-xl border border-gray-100 p-3">
                 <div className="grid grid-cols-12 gap-2">
+                  <span className="col-span-3 text-[10px] font-semibold uppercase text-gray-400">Code client</span>
+                  <span className="col-span-4 text-[10px] font-semibold uppercase text-gray-400">Libellé affiché</span>
+                  <span className="col-span-2 text-[10px] font-semibold uppercase text-gray-400">Type</span>
+                  <span className="col-span-2 text-[10px] font-semibold uppercase text-gray-400">Requis</span>
+                  <span className="col-span-1" />
                   <input className={`${CHAMP} col-span-3`} placeholder="code (ex. largeur)" value={p.code}
                     onChange={(e) => maj(i, { code: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '') })} />
                   <input className={`${CHAMP} col-span-4`} placeholder="Libellé client" value={p.libelle} onChange={(e) => maj(i, { libelle: e.target.value })} />
@@ -85,19 +90,32 @@ export function ParametresConfigurationModal({ modele, onClose }: { modele: Mode
                 </div>
 
                 {p.type === 'nombre' && (
-                  <div className="grid grid-cols-5 gap-2">
-                    <select className={CHAMP} value={p.unite ?? ''} onChange={(e) => maj(i, { unite: (e.target.value || null) as ParametrePayload['unite'] })}>
-                      <option value="">sans unité</option><option value="mm">mm</option><option value="cm">cm</option><option value="m">m</option>
-                    </select>
-                    <input className={CHAMP} type="number" placeholder="min" value={p.min ?? ''} onChange={(e) => maj(i, { min: nombreOuNull(e.target.value) })} />
-                    <input className={CHAMP} type="number" placeholder="max" value={p.max ?? ''} onChange={(e) => maj(i, { max: nombreOuNull(e.target.value) })} />
-                    <input className={CHAMP} type="number" placeholder="pas" value={p.pas ?? ''} onChange={(e) => maj(i, { pas: nombreOuNull(e.target.value) })} />
-                    <select className={CHAMP} value={p.role_calcul ?? ''} onChange={(e) => maj(i, { role_calcul: (e.target.value || null) as RoleCalcul | null })}
-                      title="Dimension transmise au moteur de calcul de la fiche technique">
-                      <option value="">— calcul —</option>
-                      <option value="largeur">largeur</option><option value="hauteur">hauteur</option><option value="longueur">longueur</option>
-                      <option value="epaisseur">épaisseur</option><option value="diametre">diamètre</option><option value="poids">poids</option>
-                    </select>
+                  <div className="space-y-1.5">
+                    <p className="text-[10px] font-semibold uppercase text-gray-500">Paramètres de dimension</p>
+                    <div className="grid grid-cols-5 gap-2">
+                      <label className="text-[10px] text-gray-500">Unité
+                        <select className={CHAMP} value={p.unite ?? ''} onChange={(e) => maj(i, { unite: (e.target.value || null) as ParametrePayload['unite'] })}>
+                          <option value="">sans unité</option><option value="mm">mm</option><option value="cm">cm</option><option value="m">m</option>
+                        </select>
+                      </label>
+                      <label className="text-[10px] text-gray-500">Minimum
+                        <input className={CHAMP} type="number" placeholder="min" value={p.min ?? ''} onChange={(e) => maj(i, { min: nombreOuNull(e.target.value) })} />
+                      </label>
+                      <label className="text-[10px] text-gray-500">Maximum
+                        <input className={CHAMP} type="number" placeholder="max" value={p.max ?? ''} onChange={(e) => maj(i, { max: nombreOuNull(e.target.value) })} />
+                      </label>
+                      <label className="text-[10px] text-gray-500">Pas
+                        <input className={CHAMP} type="number" placeholder="pas" value={p.pas ?? ''} onChange={(e) => maj(i, { pas: nombreOuNull(e.target.value) })} />
+                      </label>
+                      <label className="text-[10px] text-gray-500">Dimension calculée
+                        <select className={CHAMP} value={p.role_calcul ?? ''} onChange={(e) => maj(i, { role_calcul: (e.target.value || null) as RoleCalcul | null })}
+                          title="Dimension transmise au moteur de calcul de la fiche technique">
+                          <option value="">— aucune —</option>
+                          <option value="largeur">largeur</option><option value="hauteur">hauteur</option><option value="longueur">longueur</option>
+                          <option value="epaisseur">épaisseur</option><option value="diametre">diamètre</option><option value="poids">poids</option>
+                        </select>
+                      </label>
+                    </div>
                   </div>
                 )}
 
@@ -114,6 +132,15 @@ export function ParametresConfigurationModal({ modele, onClose }: { modele: Mode
 
                 {p.type === 'choix' && (
                   <div className="space-y-1.5">
+                    <p className="text-[10px] font-semibold uppercase text-gray-500">Finitions et options proposées au client</p>
+                    <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold uppercase text-gray-400">
+                      <span className="col-span-2">Code</span>
+                      <span className="col-span-3">Finition / choix</span>
+                      <span className="col-span-2">Coût interne +</span>
+                      <span className="col-span-3">Nature du coût</span>
+                      <span className="col-span-1">Validation</span>
+                      <span className="col-span-1" />
+                    </div>
                     {p.valeurs.map((v, k) => (
                       <div key={k} className="grid grid-cols-12 items-center gap-2">
                         <input className={`${CHAMP} col-span-2`} placeholder="code" value={v.code}
