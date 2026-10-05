@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import PDFDocument from 'pdfkit'
@@ -2003,9 +2003,10 @@ router.put(
 // HISTORIQUE APPRENANT  (GET /rh/apprenants/:id/historique)
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/rh/apprenants/:id/historique', requirePermission('HR', 'READ'), async (c) => {
-  const { id } = c.req.param()
-
+// Parcours complet d'un apprenant : fiche, validations de niveau, inscriptions.
+// Partagé entre la vue RH (n'importe quel apprenant) et le parcours personnel
+// du technicien (uniquement l'apprenant lié à son compte).
+async function chargerParcours(id: string) {
   const [{ data: appr }, { data: validations }, { data: inscriptions }] = await Promise.all([
     db.from('apprenants').select('*').eq('id', id).single(),
     db.from('validations_niveau')
@@ -2018,13 +2019,106 @@ router.get('/rh/apprenants/:id/historique', requirePermission('HR', 'READ'), asy
       .order('date_inscription', { ascending: true }),
   ])
 
-  if (!appr) return c.json({ error: 'Apprenant introuvable', code: 'NOT_FOUND' }, 404)
+  if (!appr) return null
 
-  return c.json({
+  return {
     apprenant:   appr,
     validations: validations ?? [],
     inscriptions: inscriptions ?? [],
+  }
+}
+
+router.get('/rh/apprenants/:id/historique', requirePermission('HR', 'READ'), async (c) => {
+  const parcours = await chargerParcours(c.req.param('id'))
+  if (!parcours) return c.json({ error: 'Apprenant introuvable', code: 'NOT_FOUND' }, 404)
+  return c.json(parcours)
+})
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PARCOURS PERSONNEL DU TECHNICIEN
+// Le technicien (READONLY) n'a pas HR:READ (règle immuable) : ces routes ne
+// demandent que l'authentification et ne renvoient QUE l'apprenant lié à son
+// compte (apprenants.profile_id = user.id). Aucun identifiant en paramètre :
+// impossible de consulter le parcours d'un autre.
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function apprenantDuCompte(userId: string): Promise<string | null> {
+  const { data } = await db.from('apprenants').select('id').eq('profile_id', userId).maybeSingle()
+  return (data as { id: string } | null)?.id ?? null
+}
+
+const PARCOURS_NON_LIE = {
+  error: 'Aucun parcours de formation n\'est rattaché à votre compte. Contactez votre responsable.',
+  code:  'APPRENANT_NON_LIE',
+}
+
+router.get('/formation/mon-parcours', async (c) => {
+  const apprenantId = await apprenantDuCompte(c.get('user').id)
+  if (!apprenantId) return c.json(PARCOURS_NON_LIE, 404)
+
+  const parcours = await chargerParcours(apprenantId)
+  if (!parcours) return c.json(PARCOURS_NON_LIE, 404)
+  return c.json(parcours)
+})
+
+router.get('/formation/mon-parcours/attestation', async (c) => {
+  const apprenantId = await apprenantDuCompte(c.get('user').id)
+  if (!apprenantId) return c.json(PARCOURS_NON_LIE, 404)
+
+  const { data } = await db.from('apprenants').select('statut').eq('id', apprenantId).single()
+  const statut = (data as { statut: string } | null)?.statut
+  if (statut !== 'diplome' && statut !== 'recrute') {
+    return c.json({ error: 'L\'attestation est disponible une fois la formation terminée', code: 'FORMATION_EN_COURS' }, 422)
+  }
+  return envoyerAttestation(c, apprenantId)
+})
+
+// ── Rattachement compte technicien ↔ apprenant (RH) ──────────────────────────
+
+router.get('/rh/comptes-techniciens', requirePermission('HR', 'UPDATE'), async (c) => {
+  const [{ data: comptes, error }, { data: lies }] = await Promise.all([
+    db.from('profiles').select('id, nom, email').eq('role', 'technicien').eq('actif', true).order('nom'),
+    db.from('apprenants').select('id, profile_id').not('profile_id', 'is', null),
+  ])
+  if (error) return c.json({ error: error.message }, 500)
+
+  const apprenantParCompte = new Map(
+    ((lies ?? []) as Array<{ id: string; profile_id: string }>).map(a => [a.profile_id, a.id]),
+  )
+  return c.json({
+    data: ((comptes ?? []) as Array<{ id: string; nom: string; email: string }>).map(p => ({
+      ...p,
+      apprenant_id: apprenantParCompte.get(p.id) ?? null,
+    })),
   })
+})
+
+const lierCompteSchema = z.object({ profile_id: z.string().uuid().nullable() })
+
+router.patch('/rh/apprenants/:id/compte', requirePermission('HR', 'UPDATE'), zValidator('json', lierCompteSchema), async (c) => {
+  const { id } = c.req.param()
+  const { profile_id } = c.req.valid('json')
+
+  if (profile_id) {
+    const { data: profil } = await db.from('profiles').select('id, role').eq('id', profile_id).maybeSingle()
+    if (!profil) return c.json({ error: 'Compte introuvable', code: 'PROFILE_NOT_FOUND' }, 404)
+    if ((profil as { role: string }).role !== 'technicien') {
+      return c.json({ error: 'Seul un compte technicien peut être rattaché à un apprenant', code: 'ROLE_INVALIDE' }, 422)
+    }
+    const dejaLie = await apprenantDuCompte(profile_id)
+    if (dejaLie && dejaLie !== id) {
+      return c.json({ error: 'Ce compte est déjà rattaché à un autre apprenant', code: 'COMPTE_DEJA_LIE' }, 409)
+    }
+  }
+
+  const { data, error } = await db
+    .from('apprenants')
+    .update({ profile_id, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single()
+  if (error || !data) return c.json({ error: 'Apprenant introuvable', code: 'NOT_FOUND' }, 404)
+  return c.json(data)
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2256,8 +2350,11 @@ router.get('/rh/cnps/rapport', requirePermission('HR', 'READ'), async (c) => {
 
 // ── Attestation de formation PDF (Gap 4 CDC MOD-05) ──────────────────────────
 
-router.get('/apprenants/:id/attestation', requirePermission('HR', 'READ'), async (c) => {
-  const { id } = c.req.param()
+router.get('/apprenants/:id/attestation', requirePermission('HR', 'READ'), (c) =>
+  envoyerAttestation(c, c.req.param('id')),
+)
+
+async function envoyerAttestation(c: Context<{ Variables: HonoVariables }>, id: string) {
   const { data: apprenant } = await db
     .from('apprenants')
     .select('nom, specialite, niveau, duree_mois, statut')
@@ -2283,7 +2380,7 @@ router.get('/apprenants/:id/attestation', requirePermission('HR', 'READ'), async
   c.header('Content-Type', 'application/pdf')
   c.header('Content-Disposition', `inline; filename="Attestation-${ap.nom.replace(/\s+/g, '-')}.pdf"`)
   return c.body(buf.buffer as ArrayBuffer)
-})
+}
 
 export { router as rhRouter }
 

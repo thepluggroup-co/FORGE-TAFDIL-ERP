@@ -79,6 +79,7 @@ const Marketing    = lazy(() => import('@/pages/Marketing'))
 const Securite     = lazy(() => import('@/pages/Securite'))
 const IoT          = lazy(() => import('@/pages/IoT'))
 const Formation    = lazy(() => import('@/pages/Formation'))
+const MonParcours  = lazy(() => import('@/pages/MonParcours'))
 const Boutique     = lazy(() => import('@/pages/Boutique'))
 const Catalogue    = lazy(() => import('@/pages/Catalogue'))
 const ModulePage   = lazy(() => import('@/pages/ModulePage'))
@@ -168,6 +169,16 @@ function RequirePermission({ module, children }: { module: RbacModule; children:
   return <>{children}</>
 }
 
+// /formation : vue RH complète avec HR:READ ; le technicien (sans HR, règle
+// immuable) voit uniquement son propre parcours ; les autres rôles sont redirigés.
+function FormationRoute() {
+  const { hasPermission, data, loading } = usePermissions()
+  if (loading) return <PageLoader />
+  if (hasPermission('HR', 'READ')) return <Formation />
+  if (data?.legacyRole === 'technicien') return <MonParcours />
+  return <Navigate to="/dashboard" replace />
+}
+
 function Shell({ children, requiredModule }: { children: React.ReactNode; requiredModule?: RbacModule }) {
   return (
     <ProtectedRoute>
@@ -232,7 +243,7 @@ function AppRoutes() {
           <Route path="/marketing" element={<Shell requiredModule="COMMERCIAL"><Marketing /></Shell>} />
           <Route path="/securite" element={<Shell requiredModule="HR"><Securite /></Shell>} />
           <Route path="/iot" element={<Shell requiredModule="PRODUCTION"><IoT /></Shell>} />
-          <Route path="/formation" element={<Shell requiredModule="HR"><Formation /></Shell>} />
+          <Route path="/formation" element={<Shell><FormationRoute /></Shell>} />
           <Route path="/boutique" element={<Shell requiredModule="COMMERCIAL"><Boutique /></Shell>} />
           <Route path="/catalogue" element={<Shell requiredModule="PRODUCTION"><Catalogue /></Shell>} />
 

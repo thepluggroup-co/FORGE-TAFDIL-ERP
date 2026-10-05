@@ -8,12 +8,14 @@ import {
 } from 'lucide-react'
 import { PageHeader, KpiCard, SlideOver, Button, Modal } from '@forge/ui'
 import { toast } from 'sonner'
-import { apiClient } from '@/lib/api-client'
 import {
   useApprenants, useProgressionApprenant, useRecruterApprenant, useCreateApprenant,
   useEmployes, useFormationSessions, useCreateFormationSession, useDeleteFormationSession,
-  useInscrireApprenant, useApprenantHistorique,
+  useInscrireApprenant, useApprenantHistorique, useComptesTechniciens, useLierCompteApprenant,
 } from '@/hooks/useRH'
+import {
+  NIVEAU_COLORS, STATUS_SESSION, ParcoursResume, ParcoursTimeline, telechargerAttestation,
+} from '@/components/formation/ParcoursTimeline'
 import type {
   Apprenant, RecruterPayload, FormationSession,
   CreateFormationSessionPayload,
@@ -42,15 +44,6 @@ const PLANS = [
   { module: "Management d'équipe & projets",    duree: '2 mois',     niveau: 5, description: "Gestion de chantier, coordination équipe, relation client" },
 ]
 
-const NIVEAU_COLORS: Record<number, string> = { 1: '#C62828', 2: '#d97706', 3: '#0891b2', 4: '#1d4ed8', 5: '#15803d' }
-
-const STATUS_SESSION: Record<FormationSession['statut'], { label: string; color: string; bg: string }> = {
-  planifiee: { label: 'Planifiée',  color: '#1d4ed8', bg: '#dbeafe' },
-  en_cours:  { label: 'En cours',  color: '#15803d', bg: '#dcfce7' },
-  terminee:  { label: 'Terminée',  color: '#6b7280', bg: '#f3f4f6' },
-  annulee:   { label: 'Annulée',   color: '#dc2626', bg: '#fee2e2' },
-}
-
 // ── Star rating ────────────────────────────────────────────────────────────────
 
 function StarRating({ level }: { level: number }) {
@@ -74,9 +67,8 @@ function ApprenantCard({
   onRecruter: (a: Apprenant) => void
   onHistorique: (a: Apprenant) => void
 }) {
-  const handleAttestation = () => {
-    window.open(`/api/rh/apprenants/${apprenant.id}/attestation`, '_blank')
-  }
+  const handleAttestation = () =>
+    void telechargerAttestation(`/api/apprenants/${apprenant.id}/attestation`, apprenant.nom)
   const progress              = (apprenant.niveau / 5) * 100
   const isCandidatRecrutement = apprenant.niveau === 5 && apprenant.duree_mois >= 6
   const progressColor         = progress >= 80 ? '#15803d' : progress >= 60 ? '#d97706' : '#C62828'
@@ -161,30 +153,6 @@ function HistoriqueDrawer({ apprenant, onClose }: { apprenant: Apprenant | null;
   const validations  = data?.validations  ?? []
   const inscriptions = data?.inscriptions ?? []
 
-  // Frise chronologique fusionnée et triée
-  type TimelineItem =
-    | { type: 'niveau'; date: string | null; niveau: number; commentaire: string | null }
-    | { type: 'session'; date: string | null; module: string; statut: string; evaluation: number | null; nb_seances: number; formateur?: string | null; lieu?: string | null }
-
-  const timeline: TimelineItem[] = [
-    ...validations.map(v => ({
-      type:        'niveau' as const,
-      date:        v.date_validation,
-      niveau:      v.niveau,
-      commentaire: v.commentaire,
-    })),
-    ...inscriptions.map(i => ({
-      type:       'session' as const,
-      date:       i.date_inscription,
-      module:     i.formation_sessions?.module ?? '—',
-      statut:     i.statut,
-      evaluation: i.evaluation,
-      nb_seances: i.nb_seances,
-      formateur:  i.formation_sessions?.formateur ?? null,
-      lieu:       i.formation_sessions?.lieu ?? null,
-    })),
-  ].sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''))
-
   return (
     <SlideOver isOpen={!!apprenant} onClose={onClose} title={`Évolution — ${apprenant.nom}`} width="md">
       {isLoading ? (
@@ -193,76 +161,9 @@ function HistoriqueDrawer({ apprenant, onClose }: { apprenant: Apprenant | null;
         </div>
       ) : (
         <div className="space-y-5">
-          {/* Résumé */}
-          <div className="grid grid-cols-3 gap-3">
-            {[
-              { label: 'Niveau actuel', value: `${apprenant.niveau}/5`, color: NIVEAU_COLORS[apprenant.niveau] },
-              { label: 'Durée totale',  value: `${apprenant.duree_mois} mois`, color: '#1d4ed8' },
-              { label: 'Sessions',      value: String(inscriptions.length), color: '#7c3aed' },
-            ].map(k => (
-              <div key={k.label} className="bg-gray-50 rounded-xl p-3 text-center">
-                <div className="text-lg font-bold" style={{ color: k.color }}>{k.value}</div>
-                <div className="text-[11px] text-gray-400 mt-0.5">{k.label}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Frise */}
-          {timeline.length === 0 ? (
-            <div className="text-center py-8 text-gray-400 text-sm">
-              <ClipboardList className="h-8 w-8 mx-auto mb-2 text-gray-200" />
-              Aucune activité enregistrée
-            </div>
-          ) : (
-            <div className="relative pl-6">
-              {/* Ligne verticale */}
-              <div className="absolute left-2.5 top-0 bottom-0 w-0.5 bg-gray-200" />
-
-              <div className="space-y-4">
-                {timeline.map((item, i) => (
-                  <div key={i} className="relative">
-                    {/* Point */}
-                    <div className="absolute -left-6 top-1.5 w-3.5 h-3.5 rounded-full border-2 border-white shadow-sm flex items-center justify-center"
-                      style={{ backgroundColor: item.type === 'niveau' ? (NIVEAU_COLORS[item.niveau] ?? '#C62828') : '#7c3aed' }} />
-
-                    <div className="bg-gray-50 rounded-xl p-3 space-y-1 border border-gray-100">
-                      {item.type === 'niveau' ? (
-                        <>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white"
-                              style={{ backgroundColor: NIVEAU_COLORS[item.niveau] ?? '#C62828' }}>
-                              Niveau {item.niveau} validé
-                            </span>
-                            {item.date && <span className="text-[11px] text-gray-400">{item.date}</span>}
-                          </div>
-                          {item.commentaire && (
-                            <p className="text-xs text-gray-500 italic">« {item.commentaire} »</p>
-                          )}
-                        </>
-                      ) : (
-                        <>
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs font-semibold text-[#212121]">{item.module}</span>
-                            <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
-                              style={{ color: STATUS_SESSION[item.statut as FormationSession['statut']]?.color ?? '#6b7280', backgroundColor: STATUS_SESSION[item.statut as FormationSession['statut']]?.bg ?? '#f3f4f6' }}>
-                              {STATUS_SESSION[item.statut as FormationSession['statut']]?.label ?? item.statut}
-                            </span>
-                          </div>
-                          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-gray-400">
-                            {item.date       && <span>📅 {item.date}</span>}
-                            {item.formateur  && <span>👨‍🏫 {item.formateur}</span>}
-                            {item.lieu       && <span>📍 {item.lieu}</span>}
-                            {item.nb_seances > 0 && <span>✅ {item.nb_seances} séances suivies</span>}
-                            {item.evaluation != null && <span>⭐ {item.evaluation}/20</span>}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          <ParcoursResume apprenant={apprenant} nbSessions={inscriptions.length} />
+          <CompteTechnicienSection apprenant={data?.apprenant ?? apprenant} />
+          <ParcoursTimeline validations={validations} inscriptions={inscriptions} />
 
           <div className="pt-2 border-t border-gray-100">
             <Button variant="ghost" className="w-full" onClick={onClose}>Fermer</Button>
@@ -270,6 +171,37 @@ function HistoriqueDrawer({ apprenant, onClose }: { apprenant: Apprenant | null;
         </div>
       )}
     </SlideOver>
+  )
+}
+
+// ── Rattachement du compte technicien ─────────────────────────────────────────
+// Le technicien rattaché voit ce parcours, et seulement celui-ci, dans
+// « Mon parcours » (GET /api/formation/mon-parcours).
+
+function CompteTechnicienSection({ apprenant }: { apprenant: Apprenant }) {
+  const { data, isLoading } = useComptesTechniciens()
+  const lier = useLierCompteApprenant()
+  const comptes = data?.data ?? []
+  const actuel  = apprenant.profile_id ?? ''
+
+  return (
+    <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 space-y-1.5">
+      <label className="text-xs font-semibold text-[#212121] flex items-center gap-1.5">
+        <UserCheck className="h-3.5 w-3.5" /> Compte technicien rattaché
+      </label>
+      <select
+        className="w-full text-sm border border-gray-200 rounded-lg px-2 py-1.5 bg-white"
+        value={actuel}
+        disabled={isLoading || lier.isPending}
+        onChange={e => lier.mutate({ id: apprenant.id, profile_id: e.target.value || null })}
+      >
+        <option value="">Aucun — parcours non visible par le technicien</option>
+        {comptes
+          .filter(c => !c.apprenant_id || c.apprenant_id === apprenant.id || c.id === actuel)
+          .map(c => <option key={c.id} value={c.id}>{c.nom || c.email} — {c.email}</option>)}
+      </select>
+      <p className="text-[11px] text-gray-400">Seuls les comptes de rôle technicien non encore rattachés sont proposés.</p>
+    </div>
   )
 }
 
