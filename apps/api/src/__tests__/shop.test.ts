@@ -109,6 +109,7 @@ import app from '../app'
 import { supabase } from '@forge/db/supabase'
 import { checkPermission, writeAuditLog } from '../services/rbacService'
 import { notifyWorkflow } from '../services/workflow-notifications.service'
+import { notifyCommandeSms } from '../services/sms.service'
 
 /** Autorise la requête suivante — à appeler juste avant chaque app.request() protégé. */
 function allow(roleName = 'SUPER_ADMIN') {
@@ -486,6 +487,67 @@ describe('GET /api/shop/commandes/:ref', () => {
   it('retourne 404 si commande introuvable', async () => {
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: { message: 'not found' } }) as never)
     const res = await app.request('/api/shop/commandes/WEB-0000-0000')
+    expect(res.status).toBe(404)
+  })
+
+  const COMMANDE = {
+    ref: 'WEB-2026-0042', statut_commande: 'livree', montant_ttc: 250000, lignes: [],
+    client_ville: 'Douala', photos_livraison: ['https://x/photo.jpg'], client_telephone: '+237 690 00 00 00',
+  }
+
+  it('masque ville, photos et téléphone sans ?tel= (références devinables)', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: COMMANDE, error: null }) as never)
+    const res = await app.request('/api/shop/commandes/WEB-2026-0042')
+    expect(res.status).toBe(200)
+    const body = await res.json() as { data: Record<string, unknown>; telephone_verifie: boolean }
+    expect(body.telephone_verifie).toBe(false)
+    expect(body.data.statut_commande).toBe('livree')
+    expect(body.data).not.toHaveProperty('client_ville')
+    expect(body.data).not.toHaveProperty('photos_livraison')
+    expect(body.data).not.toHaveProperty('client_telephone')
+  })
+
+  it('renvoie ville et photos si ?tel= correspond, jamais le téléphone', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: COMMANDE, error: null }) as never)
+    const res = await app.request('/api/shop/commandes/WEB-2026-0042?tel=237690000000')
+    const body = await res.json() as { data: Record<string, unknown>; telephone_verifie: boolean }
+    expect(body.telephone_verifie).toBe(true)
+    expect(body.data.client_ville).toBe('Douala')
+    expect(body.data.photos_livraison).toEqual(['https://x/photo.jpg'])
+    expect(body.data).not.toHaveProperty('client_telephone')
+  })
+})
+
+describe('GET /api/shop/commandes — liste réservée au personnel', () => {
+  it('401 sans jeton', async () => {
+    const res = await app.request('/api/shop/commandes')
+    expect(res.status).toBe(401)
+    expect(supabase.from).not.toHaveBeenCalledWith('commandes_shop')
+  })
+
+  it('403 sans COMMERCIAL:READ', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: false, roleName: 'LIVREUR' })
+    const res = await app.request('/api/shop/commandes', { headers: { Authorization: 'Bearer valide' } })
+    expect(res.status).toBe(403)
+  })
+
+  it('200 avec COMMERCIAL:READ', async () => {
+    allow('COMMERCIAL')
+    const res = await app.request('/api/shop/commandes', { headers: { Authorization: 'Bearer valide' } })
+    expect(res.status).toBe(200)
+    expect(vi.mocked(checkPermission)).toHaveBeenCalledWith('vendeur-1', 'COMMERCIAL', 'READ', 'operateur')
+  })
+})
+
+describe('Endpoints retirés', () => {
+  it('POST /api/shop/test-sms n\'existe plus (retombe sur /api/* authentifié)', async () => {
+    const res = await app.request('/api/shop/test-sms', { method: 'POST', headers: JSON_HEADERS, body: '{"telephone":"+237690000001"}' })
+    expect(res.status).toBe(401)
+    expect(vi.mocked(notifyCommandeSms)).not.toHaveBeenCalled()
+  })
+
+  it('GET /health/env n\'existe plus', async () => {
+    const res = await app.request('/health/env')
     expect(res.status).toBe(404)
   })
 })

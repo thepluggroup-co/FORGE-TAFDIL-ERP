@@ -479,6 +479,27 @@ describe('L5 — PATCH /api/logistique/livraisons/:id/statut : state machine', (
     expect(body.code).toBe('FORBIDDEN')
   })
 
+  it('livreur 403 si livraison assignée à un autre livreur', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'LIVREUR' } as never)
+
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({
+        data: { ...LIVRAISON_BASE, statut: 'planifiee', livreur_id: 'autre-uuid', created_by: 'autre-uuid' },
+        error: null,
+      }) as never,
+    )
+
+    const res = await app.request(`/api/logistique/livraisons/${LIV_ID}/statut`, {
+      method:  'PATCH',
+      headers: new Headers(authHeaders('livreur')),
+      body:    JSON.stringify({ statut: 'annulee' }),
+    })
+
+    expect(res.status).toBe(403)
+    const body = await res.json() as { code: string }
+    expect(body.code).toBe('FORBIDDEN')
+  })
+
   it('retourne 404 si livraison inconnue', async () => {
     vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
 
@@ -503,9 +524,8 @@ describe('L6 — PATCH /api/logistique/livraisons/:id/assigner : attribution liv
 
   it('assigne un livreur 200 — admin (SUPER_ADMIN via mock service)', async () => {
     // checkPermission est mocké au niveau service → pas de mocks DB pour le RBAC
-    // checkPermission est appelé 2 fois : 1x par requirePermission (middleware) + 1x explicitement dans le handler assigner
+    // checkPermission n'est appelé qu'une fois (middleware) ; le handler vérifie ensuite le rôle admin/superviseur
     // Séquence DB (4 appels) : livraisons fetch → profiles livreur → livraisons update → historique
-    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
     vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
 
     vi.mocked(supabase.from).mockReturnValueOnce(
@@ -547,10 +567,21 @@ describe('L6 — PATCH /api/logistique/livraisons/:id/assigner : attribution liv
     expect(body.code).toBe('FORBIDDEN')
   })
 
+  it('retourne 403 si livreur, même avec LOGISTICS:UPDATE', async () => {
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'LIVREUR' } as never)
+
+    const res = await app.request(`/api/logistique/livraisons/${LIV_ID}/assigner`, {
+      method:  'PATCH',
+      headers: new Headers(authHeaders('livreur')),
+      body:    JSON.stringify({ livreur_id: LIVREUR_ID }),
+    })
+
+    expect(res.status).toBe(403)
+    expect(vi.mocked(supabase.from)).not.toHaveBeenCalled()
+  })
+
   it('retourne 422 LIVREUR_NOT_FOUND si profil inconnu', async () => {
     // Séquence DB (2 appels) : livraisons fetch → profiles null → 422
-    // checkPermission est appelé 2 fois : 1x middleware + 1x handler assigner
-    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
     vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
 
     vi.mocked(supabase.from).mockReturnValueOnce(

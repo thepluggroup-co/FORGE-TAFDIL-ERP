@@ -7,7 +7,6 @@ import {
   CheckCircle2, Circle, Clock, Package, Truck, Star,
   MessageCircle, ChevronLeft, Share2, Copy, Check, Loader2,
 } from 'lucide-react'
-import { createClient } from '@/lib/supabase'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -191,8 +190,11 @@ function ShareButton({ commandeRef }: { commandeRef: string }) {
 
 // ── Composant principal ────────────────────────────────────────────────────────
 
-export function SuiviClient({ commandeRef, initialCommande }: {
+const POLL_MS = 15_000
+
+export function SuiviClient({ commandeRef, telephone, initialCommande }: {
   commandeRef:      string
+  telephone?:       string
   initialCommande:  CommandeSuivi
 }) {
   const [commande, setCommande] = useState<CommandeSuivi>(initialCommande)
@@ -203,34 +205,34 @@ export function SuiviClient({ commandeRef, initialCommande }: {
   const [smsCooldown, setSmsCooldown] = useState(0)
   const prevStatut = useRef(initialCommande.statut_commande)
 
-  // ── Realtime subscription ──────────────────────────────────────────────────
+  // ── Rafraîchissement périodique ────────────────────────────────────────────
+  // Plus de Realtime Supabase : commandes_shop n'est plus lisible avec la clé
+  // anonyme. On interroge le proxy serveur, qui applique le masquage par téléphone.
   useEffect(() => {
-    const sb = createClient()
+    let cancelled = false
+    const url = `/api/shop/commandes/${encodeURIComponent(commandeRef)}${telephone ? `?tel=${encodeURIComponent(telephone)}` : ''}`
 
-    const channel = sb
-      .channel(`suivi-${commandeRef}`)
-      .on(
-        'postgres_changes',
-        {
-          event:  'UPDATE',
-          schema: 'public',
-          table:  'commandes_shop',
-          filter: `ref=eq.${commandeRef}`,
-        },
-        (payload) => {
-          const updated = payload.new as CommandeSuivi
-          if (updated.statut_commande !== prevStatut.current) {
-            prevStatut.current = updated.statut_commande
-            setFlash(true)
-            setTimeout(() => setFlash(false), 1800)
-          }
-          setCommande((prev) => ({ ...prev, ...updated }))
+    const refresh = async () => {
+      try {
+        const res = await fetch(url, { cache: 'no-store' })
+        if (!res.ok) return
+        const payload = await res.json() as { data?: CommandeSuivi }
+        const updated = payload.data
+        if (!updated || cancelled) return
+        if (updated.statut_commande !== prevStatut.current) {
+          prevStatut.current = updated.statut_commande
+          setFlash(true)
+          setTimeout(() => setFlash(false), 1800)
         }
-      )
-      .subscribe()
+        setCommande((prev) => ({ ...prev, ...updated }))
+      } catch {
+        // réseau indisponible : on réessaiera au prochain tick
+      }
+    }
 
-    return () => { void sb.removeChannel(channel) }
-  }, [commandeRef])
+    const timer = window.setInterval(refresh, POLL_MS)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [commandeRef, telephone])
 
   useEffect(() => {
     if (smsCooldown <= 0) return
