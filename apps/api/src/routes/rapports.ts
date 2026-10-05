@@ -2,12 +2,13 @@ import { Hono, type Context } from 'hono'
 import { supabaseAdmin } from '@forge/db'
 
 const db = supabaseAdmin!
-import { requireRole } from '../middleware/rbac'
+import { requireRole, refuserLectureSeule } from '../middleware/rbac'
 import { requirePermission } from '../middleware/permission.middleware'
 import { planComptable } from '../services/comptabilite.service'
 import type { HonoVariables } from '../types'
 
 const router = new Hono<{ Variables: HonoVariables }>()
+router.use('*', refuserLectureSeule)
 type RapportsContext = Context<{ Variables: HonoVariables }>
 
 // ── Types internes ─────────────────────────────────────────────────────────────

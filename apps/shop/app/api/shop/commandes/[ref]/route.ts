@@ -1,21 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createPublicClient } from '@/lib/supabase'
+import { forgeApiBaseUrl } from '@/lib/forge-api'
 
-export async function GET(_req: NextRequest, { params }: { params: { ref: string } }) {
+// Proxy du suivi public : l'API FORGE ne renvoie la ville et les photos de
+// livraison que si ?tel= correspond au téléphone de la commande.
+export async function GET(req: NextRequest, { params }: { params: { ref: string } }) {
   try {
-    const db = createPublicClient()
+    const tel = req.nextUrl.searchParams.get('tel')
+    const qs  = tel ? `?tel=${encodeURIComponent(tel)}` : ''
+    const res = await fetch(`${forgeApiBaseUrl()}/api/shop/commandes/${encodeURIComponent(params.ref.toUpperCase())}${qs}`, {
+      cache: 'no-store',
+    })
 
-    const { data, error } = await db
-      .from('commandes_shop')
-      .select('ref, statut_commande, statut_paiement, mode_paiement, payment_reference, lignes, montant_ht, tva, montant_ttc, frais_livraison, created_at, updated_at, client_ville, photos_livraison')
-      .eq('ref', params.ref.toUpperCase())
-      .single()
-
-    if (error || !data) {
-      return NextResponse.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, { status: 404 })
-    }
-
-    return NextResponse.json({ data })
+    const payload = await res.json().catch(() => ({}))
+    return NextResponse.json(payload, { status: res.status })
   } catch {
     return NextResponse.json({ error: 'Erreur serveur', code: 'INTERNAL_ERROR' }, { status: 500 })
   }

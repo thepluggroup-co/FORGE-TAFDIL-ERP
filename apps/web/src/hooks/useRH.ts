@@ -84,6 +84,7 @@ export interface ControlePaie {
 export interface Apprenant {
   id: string; nom: string; specialite: string; niveau: number; duree_mois: number
   statut: 'actif' | 'suspendu' | 'diplome' | 'recrute'; notes?: string | null
+  profile_id?: string | null   // compte technicien rattaché (parcours personnel)
 }
 export interface FormationSession {
   id: string; module: string; niveau: number
@@ -517,6 +518,46 @@ export function useApprenantHistorique(id: string | null) {
     queryKey: ['apprenant-historique', id],
     queryFn:  () => apiClient.get<ApprenantHistorique>(`/api/rh/apprenants/${id}/historique`),
     enabled: !!id, staleTime: 30_000,
+  })
+}
+
+// ── Parcours personnel (technicien) ─────────────────────────────────────────────
+// L'API ne renvoie que l'apprenant rattaché au compte connecté (404
+// APPRENANT_NON_LIE sinon) — aucun identifiant n'est passé.
+
+export function useMonParcours() {
+  return useQuery({
+    queryKey: ['mon-parcours'],
+    queryFn:  () => apiClient.get<ApprenantHistorique>('/api/formation/mon-parcours'),
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+export interface CompteTechnicien {
+  id: string; nom: string; email: string; apprenant_id: string | null
+}
+
+export function useComptesTechniciens(enabled = true) {
+  return useQuery({
+    queryKey: ['comptes-techniciens'],
+    queryFn:  () => apiClient.get<{ data: CompteTechnicien[] }>('/api/rh/comptes-techniciens'),
+    enabled, staleTime: 60_000,
+  })
+}
+
+export function useLierCompteApprenant() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, profile_id }: { id: string; profile_id: string | null }) =>
+      apiClient.patch<Apprenant>(`/api/rh/apprenants/${id}/compte`, { profile_id }),
+    onSuccess: (_d, { profile_id }) => {
+      void qc.invalidateQueries({ queryKey: ['apprenants'] })
+      void qc.invalidateQueries({ queryKey: ['comptes-techniciens'] })
+      void qc.invalidateQueries({ queryKey: ['apprenant-historique'] })
+      toast.success(profile_id ? 'Compte rattaché' : 'Compte détaché')
+    },
+    onError: (err: Error) => toast.error(err.message),
   })
 }
 

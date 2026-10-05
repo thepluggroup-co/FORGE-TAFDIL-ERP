@@ -1150,7 +1150,19 @@ shopRouter.post('/commandes', zValidator('json', commandeShopSchema), async (c) 
   return c.json({ ref, montant_ttc, statut: 'recue', sms: smsStatusPayload(smsResult) }, 201)
 })
 
+// Liste complète (nom, téléphone, adresse de tous les clients) : réservée au
+// personnel ayant COMMERCIAL:READ. Seul le suivi par référence reste public.
 shopRouter.get('/commandes', async (c) => {
+  const verification = await verifierBearer(c.req.header('Authorization'))
+  if (!verification.ok) {
+    return c.json({ error: verification.error, code: verification.code }, verification.status)
+  }
+  const { user } = verification
+  const perm = await checkPermission(user.id, 'COMMERCIAL', 'READ', user.role)
+  if (!perm.allowed) {
+    return c.json({ error: 'Accès refusé', code: 'FORBIDDEN', details: 'Permission requise : COMMERCIAL:READ' }, 403)
+  }
+
   const { page, per_page, statut_commande, statut_paiement, search, source } = c.req.query()
   const pageNum = Math.max(1, Number(page ?? 1))
   const perPageNum = Math.min(50, Math.max(1, Number(per_page ?? 10)))
@@ -1239,14 +1251,18 @@ shopRouter.get('/commandes', async (c) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // GET /api/shop/commandes/:ref
 // Suivi public par référence (sans auth)
+// Les références sont séquentielles (WEB-AAAA-NNNN) donc devinables : la ville
+// et les photos de livraison ne sont renvoyées que si ?tel= correspond au
+// téléphone de la commande.
 // ══════════════════════════════════════════════════════════════════════════════
 
 shopRouter.get('/commandes/:ref', async (c) => {
-  const ref = c.req.param('ref')
+  const ref = c.req.param('ref').toUpperCase()
+  const tel = (c.req.query('tel') ?? '').replace(/\D/g, '')
 
   const { data, error } = await db
     .from('commandes_shop')
-    .select('ref, statut_commande, statut_paiement, mode_paiement, payment_reference, lignes, montant_ht, tva, montant_ttc, frais_livraison, created_at, updated_at, client_ville, photos_livraison')
+    .select('ref, statut_commande, statut_paiement, mode_paiement, payment_reference, lignes, montant_ht, tva, montant_ttc, frais_livraison, created_at, updated_at, client_ville, photos_livraison, client_telephone')
     .eq('ref', ref)
     .single()
 
@@ -1254,7 +1270,13 @@ shopRouter.get('/commandes/:ref', async (c) => {
     return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
   }
 
-  return c.json({ data })
+  const { client_telephone, client_ville, photos_livraison, ...publique } = data as Record<string, unknown>
+  const telephoneVerifie = tel.length > 0 && String(client_telephone ?? '').replace(/\D/g, '') === tel
+
+  return c.json({
+    data: telephoneVerifie ? { ...publique, client_ville, photos_livraison } : publique,
+    telephone_verifie: telephoneVerifie,
+  })
 })
 
 shopRouter.post('/commandes/:ref/sms/renvoyer', zValidator('json', resendSmsSchema), async (c) => {
@@ -1497,19 +1519,6 @@ shopRouter.get('/livraison/tarifs', (c) => {
       zones_connues:   Object.keys(TARIFS_LIVRAISON),
     },
   })
-})
-
-// ── TEST ONLY: remove before production ───────────────────────────────────────
-shopRouter.post('/test-sms', async (c) => {
-  if (process.env.NODE_ENV === 'production') return c.json({ error: 'Disabled in production' }, 403)
-  const { telephone } = await c.req.json<{ telephone: string }>()
-  const result = await notifyCommandeSms({
-    numero:        'WEB-2026-TEST',
-    client_nom:    'Client Test',
-    telephone,
-    total_ttc_xaf: 50000,
-  }, 'commande_recue')
-  return c.json(result)
 })
 
 // ══════════════════════════════════════════════════════════════════════════════

@@ -108,6 +108,13 @@ function checkImmutableRules(
     return { decision: 'DENY' }
   }
 
+  // READONLY (technicien, ex-apprenant) : jamais RH ni Finance, même en
+  // lecture — salaires, bulletins de paie et comptabilité restent hors de
+  // portée, quelle que soit la matrice en base.
+  if (roleName === 'READONLY' && (module === 'HR' || module === 'FINANCE')) {
+    return { decision: 'DENY' }
+  }
+
   // CAISSIER : lecture seule sur le stock (pas de modification de prix d'achat)
   if (roleName === 'CAISSIER' && module === 'STOCK' && action !== 'READ') {
     return { decision: 'DENY' }

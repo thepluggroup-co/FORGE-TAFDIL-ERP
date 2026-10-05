@@ -98,6 +98,23 @@ describe('RBAC rapports', () => {
     const body = await res.json() as { code: string }
     expect(body.code).toBe('FORBIDDEN')
   })
+
+  it.each(['/api/rapports/balance', '/api/rapports/grand-livre?compte=411', '/api/rapports/bilan'])(
+    'technicien 403 sur %s, même avec REPORTS:READ',
+    async (url) => {
+      vi.mocked(checkPermission).mockResolvedValue({ allowed: true, roleName: 'READONLY' })
+      const res = await app.request(url, { headers: new Headers(authHeaders('apprenant')) })
+      vi.mocked(checkPermission).mockReset()
+      expect(res.status).toBe(403)
+    },
+  )
+
+  it('technicien garde le tableau de bord (/api/rapports/dashboard)', async () => {
+    vi.mocked(checkPermission).mockResolvedValue({ allowed: true, roleName: 'READONLY' })
+    const res = await app.request('/api/rapports/dashboard', { headers: new Headers(authHeaders('apprenant')) })
+    vi.mocked(checkPermission).mockReset()
+    expect(res.status).not.toBe(403)
+  })
 })
 
 // ── GET /grand-livre ─────────────────────────────────────────────────────────

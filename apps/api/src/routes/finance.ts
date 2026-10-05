@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
 
 const db = supabaseAdmin!
-import { requireRole } from '../middleware/rbac'
+import { requireRole, refuserLectureSeule } from '../middleware/rbac'
 import { requirePermission } from '../middleware/permission.middleware'
 import { generateFacturePDF, generateRecuPDF, uploadPDF } from '../services/pdf.service'
 import {
@@ -2536,7 +2536,7 @@ router.post('/ecritures/journal', requireRole(['admin']), zValidator('json', jou
   }, 201)
 })
 
-router.get('/rapports/bilan', requirePermission('REPORTS', 'READ'), async (c) => {
+router.get('/rapports/bilan', requirePermission('REPORTS', 'READ'), refuserLectureSeule, async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
 
   const { data: ecritures, error } = await db

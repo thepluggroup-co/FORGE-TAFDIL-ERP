@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 import { SuiviClient, type CommandeSuivi } from './SuiviClient'
-import { createPublicClient } from '@/lib/supabase'
+import { forgeApiBaseUrl } from '@/lib/forge-api'
 
 function normalizePhone(value?: string | null) {
   return (value ?? '').replace(/\D/g, '')
@@ -21,25 +21,25 @@ export default async function SuiviRefPage({ params, searchParams }: {
   const commandeRef = params.ref.toUpperCase()
   const telephone = searchParams?.tel
 
-  try {
-    const db = createPublicClient()
-    const { data, error } = await db
-      .from('commandes_shop')
-      .select('ref, statut_commande, statut_paiement, mode_paiement, payment_reference, lignes, montant_ht, tva, montant_ttc, frais_livraison, created_at, updated_at, client_ville, photos_livraison, client_telephone')
-      .eq('ref', commandeRef)
-      .single()
+  // Lecture via l'API FORGE (clé service côté serveur) : la table commandes_shop
+  // n'est plus lisible avec la clé anonyme. Ville et photos de livraison ne
+  // reviennent que si ?tel= correspond.
+  const tel = normalizePhone(telephone)
+  const res = await fetch(
+    `${forgeApiBaseUrl()}/api/shop/commandes/${encodeURIComponent(commandeRef)}${tel ? `?tel=${tel}` : ''}`,
+    { cache: 'no-store' },
+  ).catch(() => null)
+  if (!res?.ok) notFound()
 
-    if (error || !data) notFound()
-    if (telephone && normalizePhone((data as { client_telephone?: string | null }).client_telephone) !== normalizePhone(telephone)) {
-      notFound()
-    }
+  const payload = await res.json().catch(() => null) as { data?: Omit<CommandeSuivi, 'client_ville' | 'photos_livraison'> & Partial<CommandeSuivi>; telephone_verifie?: boolean } | null
+  if (!payload?.data) notFound()
+  if (tel && !payload.telephone_verifie) notFound()
 
-    return (
-      <main className="mx-auto max-w-lg px-4 py-8">
-        <SuiviClient commandeRef={commandeRef} initialCommande={data as CommandeSuivi} />
-      </main>
-    )
-  } catch {
-    notFound()
-  }
+  const initialCommande: CommandeSuivi = { client_ville: null, photos_livraison: null, ...payload.data }
+
+  return (
+    <main className="mx-auto max-w-lg px-4 py-8">
+      <SuiviClient commandeRef={commandeRef} telephone={tel || undefined} initialCommande={initialCommande} />
+    </main>
+  )
 }

@@ -21,6 +21,8 @@ interface NavItem {
   dynamicBadge?: boolean
   /** Module RBAC dont la permission READ pilote la visibilité — undefined = toujours visible */
   requiredModule?: RbacModule
+  /** Rôles legacy qui voient l'entrée même sans la permission (ex: technicien → son propre parcours) */
+  alsoForRoles?: string[]
 }
 
 interface NavGroup {
@@ -64,7 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { path: '/finance',     label: 'Finance',     icon: DollarSign,   requiredModule: 'FINANCE' },
       { path: '/rh',          label: 'RH',          icon: Users,        requiredModule: 'HR' },
-      { path: '/formation',   label: 'Formation',   icon: GraduationCap, requiredModule: 'HR' },
+      { path: '/formation',   label: 'Formation',   icon: GraduationCap, requiredModule: 'HR', alsoForRoles: ['technicien'] },
       { path: '/equipements', label: 'Équipements', icon: Hammer,       requiredModule: 'PRODUCTION' },
       { path: '/projets',     label: 'Projets',     icon: Kanban,       requiredModule: 'PRODUCTION' },
     ],
@@ -131,7 +133,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     })
   }
 
-  const { hasPermission } = usePermissions()
+  const { hasPermission, data: myPermissions } = usePermissions()
 
   // Inject admin item at bottom of Gestion group, then filter by real permission —
   // ADMIN:CONFIGURE mirrors the immutable SUPER_ADMIN-only rule in rbacService.ts.
@@ -141,7 +143,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       : g
     return {
       ...withAdmin,
-      items: withAdmin.items.filter(item => !item.requiredModule || hasPermission(item.requiredModule, 'READ')),
+      items: withAdmin.items.filter((item: NavItem) =>
+        !item.requiredModule
+        || hasPermission(item.requiredModule, 'READ')
+        || (!!myPermissions?.legacyRole && !!item.alsoForRoles?.includes(myPermissions.legacyRole))),
     }
   }).filter(g => g.items.length > 0)
 

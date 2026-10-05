@@ -127,6 +127,19 @@ describe('checkPermission — IMMUTABLE_RULES', () => {
     const result = await checkPermission('user-readonly', 'STOCK', 'READ')
     expect(result.allowed).toBe(true)
   })
+
+  it.each(['HR', 'FINANCE'] as const)('READONLY ne lit jamais %s, même si la DB l\'accorde', async (module) => {
+    invalidatePermissionCache('user-readonly')
+    mockDb({
+      rbac_user_profiles:    { data: { role_id: 'role-ro', is_active: true }, error: null },
+      rbac_roles:            { data: { id: 'role-ro', name: 'READONLY' }, error: null },
+      rbac_role_permissions: { data: [{ permission_id: 'perm-read-002' }], error: null },
+      rbac_permissions:      { data: [{ module, action: 'READ' }], error: null },
+    })
+    const result = await checkPermission('user-readonly', module, 'READ')
+    expect(result.allowed).toBe(false)
+    expect(result.reason).toContain('IMMUTABLE_RULE')
+  })
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════

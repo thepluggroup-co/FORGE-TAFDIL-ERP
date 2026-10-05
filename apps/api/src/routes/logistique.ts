@@ -3,7 +3,7 @@ import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { supabaseAdmin } from '@forge/db'
 import { requirePermission } from '../middleware/permission.middleware'
-import { checkPermission, writeAuditLog } from '../services/rbacService'
+import { writeAuditLog } from '../services/rbacService'
 import { enregistrerPaiementCommande, ensureFactureForCommande, getFactureActiveByCommande } from '../services/finance-core.service'
 import { resolveBonSortieLivrableForCommande, synchroniserCommandesWorkflow } from '../services/commande-workflow.service'
 import { signerBonLivraison, telechargerBonLivraison, getBonLivraisonInfo, SignatureError } from '../services/bl.service'
@@ -621,8 +621,9 @@ logistiqueRouter.patch(
       date_depart?: string | null; date_livraison_prevue?: string | null
     }
 
-    // Un operateur ne peut modifier que ses propres livraisons
-    if (user.role === 'operateur') {
+    // Un operateur ou un livreur ne peut modifier que ses propres livraisons
+    // (même règle que la signature et le BL plus bas)
+    if (user.role === 'operateur' || user.role === 'livreur') {
       const isOwner = lv.livreur_id === user.id || lv.created_by === user.id
       if (!isOwner) {
         writeAuditLog({
@@ -826,9 +827,9 @@ logistiqueRouter.patch(
     const { id } = c.req.param()
     const body = c.req.valid('json')
 
-    // Vérification RBAC : MANAGER ou SUPER_ADMIN uniquement
-    const perm = await checkPermission(user.id, 'LOGISTICS', 'UPDATE', user.role)
-    if (!perm.allowed) {
+    // MANAGER ou SUPER_ADMIN uniquement : LOGISTICS:UPDATE seul ne suffit pas,
+    // LIVREUR et COMMERCIAL le possèdent aussi (statut, signature).
+    if (user.role !== 'admin' && user.role !== 'superviseur') {
       writeAuditLog({
         userId:       user.id,
         actionType:   'ACCESS_DENIED',
@@ -837,7 +838,7 @@ logistiqueRouter.patch(
         resourceId:   id,
       })
       return c.json({
-        error: `Accès refusé — MANAGER ou SUPER_ADMIN requis (rôle actuel : ${perm.roleName ?? user.role})`,
+        error: `Accès refusé — MANAGER ou SUPER_ADMIN requis (rôle actuel : ${user.role})`,
         code:  'FORBIDDEN',
       }, 403)
     }

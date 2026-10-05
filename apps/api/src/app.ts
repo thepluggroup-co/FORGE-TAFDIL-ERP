@@ -113,27 +113,22 @@ app.get('/health', (c) =>
 // Diagnostic endpoint — tests DB connection without requiring a session
 app.get('/health/db', async (c) => {
   if (!supabaseAdmin) {
-    return c.json({ ok: false, error: 'supabaseAdmin is null — SERVICE_ROLE_KEY missing' }, 503)
+    console.error('[health/db] supabaseAdmin null — SERVICE_ROLE_KEY manquante')
+    return c.json({ ok: false }, 503)
   }
+  // Public : jamais de message d'erreur brut (noms de tables, config) dans la réponse
   try {
-    const { data, error } = await supabaseAdmin.from('produits' as never).select('id').limit(1)
-    if (error) return c.json({ ok: false, error: error.message, code: error.code }, 500)
-    return c.json({ ok: true, db: 'connected', rows_sampled: (data as unknown[]).length })
+    const { error } = await supabaseAdmin.from('produits' as never).select('id').limit(1)
+    if (error) {
+      console.error('[health/db]', error.code, error.message)
+      return c.json({ ok: false }, 500)
+    }
+    return c.json({ ok: true, db: 'connected' })
   } catch (err) {
-    return c.json({ ok: false, error: String(err) }, 500)
+    console.error('[health/db]', err)
+    return c.json({ ok: false }, 500)
   }
 })
-
-// Diagnostic endpoint — shows which env vars are loaded
-app.get('/health/env', (c) =>
-  c.json({
-    supabase_url:       process.env.SUPABASE_URL ?? '(not set)',
-    service_key_set:    Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_KEY),
-    jwt_secret_set:     Boolean(process.env.SUPABASE_JWT_SECRET),
-    node_env:           process.env.NODE_ENV ?? '(not set)',
-    supabaseAdmin_null: supabaseAdmin === null,
-  }),
-)
 
 const api = new Hono<{ Variables: HonoVariables }>()
 
