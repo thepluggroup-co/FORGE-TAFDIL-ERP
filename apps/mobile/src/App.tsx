@@ -2,6 +2,7 @@ import React from 'react'
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { BottomNav } from './components/BottomNav'
+import { OfflineBanner } from './components/OfflineBanner'
 import { LoginPage } from './pages/LoginPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { OrdersPage } from './pages/OrdersPage'
@@ -17,6 +18,7 @@ function AuthenticatedApp() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-50 overflow-hidden">
+      <OfflineBanner />
       <main className="flex-1 overflow-y-auto pb-nav">
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />

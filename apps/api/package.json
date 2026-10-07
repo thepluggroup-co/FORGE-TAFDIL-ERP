@@ -21,6 +21,7 @@
     "@supabase/supabase-js": "^2.105.4",
     "@upstash/ratelimit": "^2.0.8",
     "@upstash/redis": "^1.38.0",
+    "firebase-admin": "^13.0.0",
     "hono": "^4.5.0",
     "jsonwebtoken": "^9.0.3",
     "node-cron": "^3.0.3",

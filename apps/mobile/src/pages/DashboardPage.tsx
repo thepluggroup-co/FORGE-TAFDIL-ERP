@@ -1,22 +1,23 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { TopBar } from '../components/TopBar'
 import { COMPANY_NAME } from '@forge/shared'
 import { fetchCommandes, fetchStocks, type ApiCommandeClient, type ApiStock } from '../lib/api'
 
+// Valeurs réelles de commandes.statut (commandeStatutEnum, packages/db/src/schema.pg.ts) —
+// cf. même correction dans OrdersPage.tsx.
 const statusLabels: Record<string, string> = {
-  draft: 'Brouillon',
   confirmed: 'Confirmé',
   in_production: 'En production',
-  shipped: 'Expédié',
+  pret: 'Prêt',
   delivered: 'Livré',
   cancelled: 'Annulé',
 }
 
 const statusColor: Record<string, string> = {
-  draft: 'bg-gray-100 text-gray-600',
   confirmed: 'bg-blue-100 text-blue-700',
   in_production: 'bg-yellow-100 text-yellow-700',
-  shipped: 'bg-orange-100 text-orange-700',
+  pret: 'bg-purple-100 text-purple-700',
   delivered: 'bg-green-100 text-green-700',
   cancelled: 'bg-red-100 text-red-700',
 }
@@ -52,12 +53,12 @@ export function DashboardPage() {
   const totalRevenue = useMemo(
     () => orders
       .filter(order => order.statut === 'delivered')
-      .reduce((sum, order) => sum + order.total_ttc_xaf, 0),
+      .reduce((sum, order) => sum + order.montant_ttc_xaf, 0),
     [orders],
   )
 
   const totalBoutiqueSales = useMemo(
-    () => orders.reduce((sum, order) => sum + order.total_ttc_xaf, 0),
+    () => orders.reduce((sum, order) => sum + order.montant_ttc_xaf, 0),
     [orders],
   )
 
@@ -150,7 +151,7 @@ export function DashboardPage() {
               >
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-gray-900 truncate">{order.client.nom}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">{formatXAF(order.total_ttc_xaf)}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{formatXAF(order.montant_ttc_xaf)}</p>
                 </div>
                 <span className={`text-xs font-medium px-2 py-1 rounded-full shrink-0 ml-2 ${statusColor[order.statut]}`}>
                   {statusLabels[order.statut] ?? order.statut}
@@ -162,12 +163,18 @@ export function DashboardPage() {
 
         {lowStock > 0 && (
           <section>
-            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">
-              Stocks en alerte
-            </h2>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
+                Stocks en alerte
+              </h2>
+              <Link to="/stocks" className="text-xs font-medium text-[#C62828]">
+                Voir tout →
+              </Link>
+            </div>
             <div className="space-y-2">
               {stocks
                 .filter(stock => stock.stock_actuel < 10)
+                .slice(0, 5)
                 .map(stock => (
                   <div
                     key={stock.id}

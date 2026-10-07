@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { setApiToken } from '../lib/api'
+import { initPushNotifications, teardownPushNotifications } from '../lib/push'
 
 export type MobileRole = 'admin' | 'superviseur' | 'operateur' | 'apprenant' | 'livreur' | 'caissier'
 
@@ -55,6 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (session) {
         setApiToken(session.access_token)
         setUser(buildUser(session))
+        initPushNotifications().catch(e => console.error('[push] init:', e))
       } else {
         setApiToken(null)
       }
@@ -65,6 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (session) {
         setApiToken(session.access_token)
         setUser(buildUser(session))
+        initPushNotifications().catch(e => console.error('[push] init:', e))
       } else {
         setApiToken(null)
         setUser(null)
@@ -86,6 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   function logout() {
     setUser(null)
     setApiToken(null)
+    teardownPushNotifications().catch(() => {})
     supabase.auth.signOut({ scope: 'local' }).catch(() => {})
   }
 

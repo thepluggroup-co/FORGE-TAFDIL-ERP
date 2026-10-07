@@ -1,3 +1,7 @@
+import { cachedGet } from './offline/cache'
+import { enqueueMutation, registerProcessor } from './offline/queue'
+import { isOnline } from './offline/network'
+
 const rawApiUrl = import.meta.env.VITE_API_URL as string | undefined
 const browserOrigin = typeof window !== 'undefined' && window.location?.origin?.startsWith('http')
   ? window.location.origin
@@ -58,10 +62,10 @@ export interface ApiStock {
 
 export interface ApiCommandeClient {
   id: string
-  numero: string
+  reference: string
   statut: string
   date_commande: string
-  total_ttc_xaf: number
+  montant_ttc_xaf: number
   client: {
     nom: string
     telephone: string | null
@@ -149,6 +153,20 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export async function registerPushToken(token: string, platform: 'android' | 'ios', appVersion?: string) {
+  return apiFetch<{ ok: boolean }>('/api/push/register', {
+    method: 'POST',
+    body: JSON.stringify({ token, platform, app_version: appVersion }),
+  })
+}
+
+export async function unregisterPushToken(token: string) {
+  return apiFetch<{ ok: boolean }>('/api/push/unregister', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  })
+}
+
 export async function loginApi(email: string, password: string) {
   return apiFetch<{ token: string; user: { id: string; name: string; email: string; role: string } }>(
     '/api/auth/login',
@@ -164,7 +182,7 @@ export async function fetchStocks(opts?: { search?: string; page?: number; per_p
     categorie: opts?.categorie,
     statut: opts?.statut,
   })
-  return apiFetch<FetchStocksResult>(`/api/stocks${query}`)
+  return cachedGet(`stocks${query}`, () => apiFetch<FetchStocksResult>(`/api/stocks${query}`))
 }
 
 export async function fetchCommandes(opts?: { statut?: string; client_id?: string; search?: string; page?: number; per_page?: number }) {
@@ -175,7 +193,7 @@ export async function fetchCommandes(opts?: { statut?: string; client_id?: strin
     page: opts?.page ?? 1,
     per_page: opts?.per_page ?? 100,
   })
-  return apiFetch<FetchCommandesResult>(`/api/commandes${query}`)
+  return cachedGet(`commandes${query}`, () => apiFetch<FetchCommandesResult>(`/api/commandes${query}`))
 }
 
 export async function fetchShopCommandes(opts?: { statut_commande?: string; statut_paiement?: string; search?: string; page?: number; per_page?: number }) {
@@ -290,6 +308,40 @@ export async function createStockMouvement(
     method: 'POST',
     body: JSON.stringify(body),
   })
+}
+
+registerProcessor('stock_mouvement', async (payload) => {
+  const { id, body } = payload as { id: string; body: Parameters<typeof createStockMouvement>[1] }
+  await createStockMouvement(id, body)
+})
+
+/**
+ * Même contrat que createStockMouvement, mais fonctionne hors ligne : en
+ * absence de réseau, met la mutation en file (rejouée à la reconnexion) et
+ * renvoie un résultat optimiste calculé localement, pour que l'écran Stocks
+ * reflète l'action immédiatement sans attendre la synchronisation.
+ */
+export async function createStockMouvementOffline(
+  stock: ApiStock,
+  body: { type: 'entree' | 'sortie' | 'ajustement' | 'transfert'; quantite: number; reference?: string; motif?: string },
+  label: string,
+): Promise<{ mouvement: StockMouvement | null; produit: ApiStock; queued: boolean }> {
+  if (isOnline()) {
+    try {
+      const res = await createStockMouvement(stock.id, body)
+      return { ...res, queued: false }
+    } catch (err) {
+      // Le fetch a échoué malgré isOnline() (ex. coupure pendant la requête) —
+      // on bascule sur la file plutôt que de perdre l'action de l'utilisateur.
+      if (!(err instanceof TypeError)) throw err
+    }
+  }
+
+  await enqueueMutation('stock_mouvement', { id: stock.id, body }, label)
+
+  const delta = body.type === 'entree' ? body.quantite : -body.quantite
+  const produit: ApiStock = { ...stock, stock_actuel: Math.max(0, stock.stock_actuel + delta) }
+  return { mouvement: null, produit, queued: true }
 }
 
 export async function fetchBonsSoumis(): Promise<BonSortie[]> {

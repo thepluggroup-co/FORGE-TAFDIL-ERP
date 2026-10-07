@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { TopBar } from '../components/TopBar'
-import { fetchStocks, createStock, uploadStockImages, createStockMouvement, type ApiStock, type CreateStockPayload } from '../lib/api'
+import { fetchStocks, createStock, uploadStockImages, createStockMouvementOffline, type ApiStock, type CreateStockPayload } from '../lib/api'
+import { subscribeQueue, type QueuedMutation } from '../lib/offline/queue'
 
 function formatXAF(amount: number): string {
   return new Intl.NumberFormat('fr-CM', {
@@ -17,6 +18,7 @@ export function StocksPage() {
   const [error, setError] = useState('')
   const [actionLoading, setActionLoading] = useState(false)
   const [actionError, setActionError] = useState('')
+  const [queuedMutations, setQueuedMutations] = useState<QueuedMutation[]>([])
   const [createOpen, setCreateOpen] = useState(false)
   const [createLoading, setCreateLoading] = useState(false)
   const [createError, setCreateError] = useState('')
@@ -64,17 +66,28 @@ export function StocksPage() {
     return () => clearTimeout(timer)
   }, [loadStocks])
 
+  useEffect(() => subscribeQueue(setQueuedMutations), [])
+
+  const pendingSyncForStock = useCallback((stockId: string) => {
+    return queuedMutations.some(m =>
+      m.kind === 'stock_mouvement' && (m.payload as { id: string }).id === stockId && m.status !== 'syncing',
+    )
+  }, [queuedMutations])
+
   const updateStock = useCallback(async (stock: ApiStock, type: 'entree' | 'sortie') => {
     setActionLoading(true)
     setActionError('')
     try {
       const qty = Math.max(1, Math.ceil(stock.stock_actuel * 0.1))
-      const result = await createStockMouvement(stock.id, {
-        type,
-        quantite: qty,
-        motif: type === 'entree' ? 'Entrée mobile' : 'Sortie mobile',
-      })
+      const result = await createStockMouvementOffline(
+        stock,
+        { type, quantite: qty, motif: type === 'entree' ? 'Entrée mobile' : 'Sortie mobile' },
+        `${type === 'entree' ? 'Entrée' : 'Sortie'} — ${stock.designation}`,
+      )
       setStocks((prev) => prev.map((item) => item.id === result.produit.id ? result.produit : item))
+      if (result.queued) {
+        setActionError('') // pas une erreur : l'action est enregistrée, elle sera synchronisée dès le retour du réseau
+      }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Erreur de mise à jour du stock')
     } finally {
@@ -410,6 +423,9 @@ export function StocksPage() {
                       <p className="text-xs text-gray-400 mt-0.5">
                         {stock.ref} · {stock.categorie}
                       </p>
+                      {pendingSyncForStock(stock.id) && (
+                        <p className="text-[11px] text-blue-600 mt-0.5">🔄 En attente de synchronisation</p>
+                      )}
                     </div>
                     <span className={`text-xs font-medium px-2 py-1 rounded-full shrink-0 ${stockStatus.cls}`}>
                       {stockStatus.label}
@@ -444,7 +460,9 @@ export function StocksPage() {
                     >
                       Sortie
                     </button>
-                    {['alerte', 'critique', 'rupture'].includes(stock.statut) && (
+                    {/* Même seuil que le badge ci-dessus (stock_actuel) plutôt que stock.statut,
+                        qui peut être désynchronisé de la quantité réelle — cf. revue UX. */}
+                    {stock.stock_actuel < 10 && (
                       <button
                         type="button"
                         onClick={() => updateStock(stock, 'entree')}

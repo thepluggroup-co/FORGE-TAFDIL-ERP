@@ -7,6 +7,7 @@ import { writeAuditLog } from '../services/rbacService'
 import { enregistrerPaiementCommande, ensureFactureForCommande, getFactureActiveByCommande } from '../services/finance-core.service'
 import { resolveBonSortieLivrableForCommande, synchroniserCommandesWorkflow } from '../services/commande-workflow.service'
 import { signerBonLivraison, telechargerBonLivraison, getBonLivraisonInfo, SignatureError } from '../services/bl.service'
+import { sendPushToUser } from '../services/push.service'
 import type { HonoVariables } from '../types'
 
 const db = supabaseAdmin!
@@ -893,6 +894,13 @@ logistiqueRouter.patch(
       commentaire:    `Assigné à ${lp.nom}`,
       changed_by:     user.id,
     })
+
+    const dest = (updated as { destination?: string | null } | null)?.destination
+    sendPushToUser(body.livreur_id, {
+      title: 'Nouvelle livraison assignée',
+      body:  dest ? `Destination : ${dest}` : 'Consultez l\'app pour les détails.',
+      data:  { url: `/livraisons/${id}` },
+    }).catch(e => console.error('[push:assigner]', e))
 
     return c.json(updated)
   },

@@ -1,24 +1,27 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import type { OrderStatus } from '@forge/shared'
 import { TopBar } from '../components/TopBar'
 import { fetchCommandes, type ApiCommandeClient } from '../lib/api'
 
-const ALL_STATUSES: OrderStatus[] = ['draft', 'confirmed', 'in_production', 'shipped', 'delivered', 'cancelled']
+// Valeurs réelles de commandes.statut (commandeStatutEnum, packages/db/src/schema.pg.ts) —
+// @forge/shared OrderStatus utilise un autre jeu de valeurs (draft/shipped n'existent pas
+// en base, "pret" en manquait), ce qui rendait 2 des 6 filtres toujours vides et aucun
+// filtre possible sur "Prêt".
+type OrderStatus = 'confirmed' | 'in_production' | 'pret' | 'delivered' | 'cancelled'
+
+const ALL_STATUSES: OrderStatus[] = ['confirmed', 'in_production', 'pret', 'delivered', 'cancelled']
 
 const statusLabel: Record<OrderStatus, string> = {
-  draft: 'Brouillon',
   confirmed: 'Confirmé',
   in_production: 'En production',
-  shipped: 'Expédié',
+  pret: 'Prêt',
   delivered: 'Livré',
   cancelled: 'Annulé',
 }
 
 const statusColor: Record<OrderStatus, string> = {
-  draft: 'bg-gray-100 text-gray-600',
   confirmed: 'bg-blue-100 text-blue-700',
   in_production: 'bg-yellow-100 text-yellow-700',
-  shipped: 'bg-orange-100 text-orange-700',
+  pret: 'bg-purple-100 text-purple-700',
   delivered: 'bg-green-100 text-green-700',
   cancelled: 'bg-red-100 text-red-700',
 }
@@ -114,7 +117,7 @@ export function OrdersPage() {
                   </span>
                 </div>
                 <div className="flex items-center justify-between mt-2">
-                  <span className="text-sm font-bold text-[#C62828]">{formatXAF(order.total_ttc_xaf)}</span>
+                  <span className="text-sm font-bold text-[#C62828]">{formatXAF(order.montant_ttc_xaf)}</span>
                   <span className="text-xs text-gray-400">{date}</span>
                 </div>
               </div>

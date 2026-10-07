@@ -39,31 +39,45 @@ export function normalizePhone(phone?: string | null) {
   return `+${cleaned}`
 }
 
+function isSandbox() {
+  const env = (process.env.AFRICASTALKING_ENV ?? process.env.AT_ENV ?? '').trim().toLowerCase()
+  return env === 'sandbox' || process.env.AFRICASTALKING_SANDBOX === 'true'
+}
+
 function smsEndpoint() {
-  const env = (process.env.AFRICASTALKING_ENV ?? process.env.AT_ENV ?? '').toLowerCase()
-  if (env === 'sandbox' || process.env.AFRICASTALKING_SANDBOX === 'true') {
-    return 'https://api.sandbox.africastalking.com/version1/messaging'
-  }
-  return 'https://api.africastalking.com/version1/messaging'
+  return isSandbox()
+    ? 'https://api.sandbox.africastalking.com/version1/messaging'
+    : 'https://api.africastalking.com/version1/messaging'
 }
 
 function smsConfig() {
-  const username = process.env.AFRICASTALKING_USERNAME ?? process.env.AT_USERNAME ?? ''
-  const apiKey   = process.env.AFRICASTALKING_API_KEY ?? process.env.AT_API_KEY ?? ''
-  const senderId = process.env.AFRICASTALKING_SENDER_ID ?? process.env.AT_SENDER_ID ?? ''
+  // trim : un espace/retour chariot collé dans la console Railway/Vercel suffit
+  // à faire répondre "authentication is invalid" ou "missing field" par AT.
+  const username = (process.env.AFRICASTALKING_USERNAME ?? process.env.AT_USERNAME ?? '').trim()
+  const apiKey   = (process.env.AFRICASTALKING_API_KEY ?? process.env.AT_API_KEY ?? '').trim()
+  let senderId   = (process.env.AFRICASTALKING_SENDER_ID ?? process.env.AT_SENDER_ID ?? '').trim()
+  // "AFRICASTALKING" est le sender du sandbox uniquement : en production AT
+  // rejette tout le lot avec InvalidSenderId (HTTP 201, aucun SMS envoyé).
+  if (!isSandbox() && senderId.toUpperCase() === 'AFRICASTALKING') senderId = ''
   return { username, apiKey, senderId }
 }
 
-export async function sendSms(to: string, message: string): Promise<SmsResult> {
-  const phone = normalizePhone(to)
-  if (!phone) return { ok: false, skipped: true, error: 'Telephone invalide' }
+interface AtRecipient { number?: string; status?: string; statusCode?: number }
 
-  const { username, apiKey, senderId } = smsConfig()
-  if (!username || !apiKey) {
-    console.info('[sms:africastalking:dry-run]', phone, message.slice(0, 120))
-    return { ok: true, skipped: true, provider: 'africastalking' }
-  }
+/**
+ * AT répond HTTP 201 même quand rien n'est parti (sender refusé, solde
+ * insuffisant, numéro invalide) : le vrai résultat est dans le corps.
+ * Retourne null si au moins un destinataire est en Success, sinon la raison.
+ */
+function atFailureReason(payload: unknown): string | null {
+  const data = (payload as { SMSMessageData?: { Message?: string; Recipients?: AtRecipient[] } })?.SMSMessageData
+  if (!data) return typeof payload === 'string' && payload ? payload.slice(0, 160) : 'Réponse Africa\'s Talking illisible'
+  const recipients = data.Recipients ?? []
+  if (recipients.some((r) => r.status === 'Success')) return null
+  return recipients[0]?.status ?? data.Message ?? 'Aucun destinataire accepté'
+}
 
+async function postSms(phone: string, message: string, username: string, apiKey: string, senderId: string) {
   const body = new URLSearchParams({
     username,
     to:      phone,
@@ -88,24 +102,56 @@ export async function sendSms(to: string, message: string): Promise<SmsResult> {
       body,
       signal: controller.signal,
     })
-
     const text = await res.text()
     let payload: unknown = text
     try { payload = JSON.parse(text) } catch { /* keep raw provider response */ }
+    return { status: res.status, ok: res.ok, text, payload }
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
-    if (!res.ok) {
-      console.warn('[sms:africastalking] non-OK response:', res.status, text.slice(0, 200))
-      return { ok: false, provider: 'africastalking', error: `HTTP ${res.status}`, response: payload }
+export async function sendSms(to: string, message: string): Promise<SmsResult> {
+  const phone = normalizePhone(to)
+  if (!phone) return { ok: false, skipped: true, error: 'Telephone invalide' }
+
+  const { username, apiKey, senderId } = smsConfig()
+  if (!username || !apiKey) {
+    console.info('[sms:africastalking:dry-run]', phone, message.slice(0, 120))
+    return { ok: true, skipped: true, provider: 'africastalking' }
+  }
+
+  try {
+    let res = await postSms(phone, message, username, apiKey, senderId)
+
+    // Sender ID non (encore) approuvé par AT : on renvoie sans `from` pour que
+    // le client reçoive quand même le SMS (expéditeur générique AT).
+    if (res.ok && senderId && atFailureReason(res.payload) === 'InvalidSenderId') {
+      console.warn(`[sms:africastalking] sender "${senderId}" refusé (InvalidSenderId) — renvoi sans sender`)
+      res = await postSms(phone, message, username, apiKey, '')
     }
 
-    return { ok: true, provider: 'africastalking', response: payload }
+    if (!res.ok) {
+      // Le corps d'AT est du texte brut explicite ("Request is missing required
+      // form field 'username'", "The supplied authentication is invalid"…) :
+      // on le remonte, sinon l'UI n'affiche qu'un "HTTP 400" indéchiffrable.
+      const detail = res.text.trim().slice(0, 160)
+      console.warn('[sms:africastalking] non-OK response:', res.status, detail)
+      return { ok: false, provider: 'africastalking', error: `HTTP ${res.status}${detail ? ` — ${detail}` : ''}`, response: res.payload }
+    }
+
+    const failure = atFailureReason(res.payload)
+    if (failure) {
+      console.warn('[sms:africastalking] rejected:', phone, failure)
+      return { ok: false, provider: 'africastalking', error: failure, response: res.payload }
+    }
+
+    return { ok: true, provider: 'africastalking', response: res.payload }
   } catch (err) {
     const isTimeout = err instanceof Error && err.name === 'AbortError'
     const messageError = isTimeout ? 'Délai dépassé (Africa\'s Talking injoignable)' : err instanceof Error ? err.message : String(err)
     console.error('[sms:africastalking] send error:', messageError)
     return { ok: false, provider: 'africastalking', error: messageError }
-  } finally {
-    clearTimeout(timer)
   }
 }
 
