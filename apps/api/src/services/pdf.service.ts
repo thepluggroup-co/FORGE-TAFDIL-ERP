@@ -1,28 +1,39 @@
 import PDFDocument from 'pdfkit'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { supabaseAdmin } from '@forge/db'
-import type { TypeRessource } from '@forge/shared'
+import { TAFDIL_ENTREPRISE, type TypeRessource } from '@forge/shared'
 
 const db = supabaseAdmin!
 
 // ── Company info ───────────────────────────────────────────────────────────────
+// Coordonnées : source unique partagée avec l'aperçu web (packages/shared/src/entreprise.ts)
 const CO = {
-  nom:       'TAFDIL SARL',
-  activite:  'Microusine Métallurgique & BTP',
-  adresse:   'Kotto Mauryvanas, Douala, Cameroun',
-  tel:       '+237 695 884 528',
-  email:     'tafdilsarl@gmail.com',
-  niu:       'M052116085624A',
-  rccm:      'RC/DLA/2021/B/2624',
+  ...TAFDIL_ENTREPRISE,
+  tel:       TAFDIL_ENTREPRISE.telephones.join(' / '),
   capital:   '10 000 000 XAF',
   directeur: 'M. CARMEL TANEKEU',
 } as const
 
-// Logo TAFDIL — placer le fichier dans apps/api/src/assets/logo-tafdil.jpeg
-const LOGO_PATH = join(process.cwd(), 'src', 'assets', 'logo-tafdil.jpeg')
+// Logo TAFDIL (apps/api/src/assets). Résolu parmi plusieurs emplacements :
+// en production Railway lance `node apps/api/dist/index.js` depuis la RACINE du
+// dépôt — process.cwd()/src/assets n'y existe pas et le logo manquait sur
+// toutes les factures (recette AD-12).
+function cheminAsset(fichier: string): string {
+  const ici = dirname(fileURLToPath(import.meta.url))
+  const candidats = [
+    join(process.cwd(), 'src', 'assets', fichier),
+    join(process.cwd(), 'apps', 'api', 'src', 'assets', fichier),
+    join(ici, '..', 'src', 'assets', fichier),   // dist/index.js → apps/api/src/assets
+    join(ici, '..', 'assets', fichier),          // src/services → src/assets
+  ]
+  return candidats.find(existsSync) ?? candidats[0]
+}
+const LOGO_PATH = cheminAsset('logo-tafdil.jpeg')
 // Version fond transparent (PNG, canal alpha) — utilisée pour le gabarit devis
 // (en-tête + filigrane pleine page), copiée depuis apps/web/public/tafdil-logo.png.
-const LOGO_TRANSPARENT_PATH = join(process.cwd(), 'src', 'assets', 'logo-tafdil-transparent.png')
+const LOGO_TRANSPARENT_PATH = cheminAsset('logo-tafdil-transparent.png')
 
 // ── Design tokens ──────────────────────────────────────────────────────────────
 const C = {
@@ -248,11 +259,13 @@ function drawClientBox(doc: InstanceType<typeof PDFDocument>, client: PdfClient)
   doc.font('Helvetica-Bold').fontSize(11).fillColor(C.dark)
     .text(client.nom, ML + 12, 144)
 
+  // Nom, email, téléphone et NIU du client sur chaque facture (recette AD-12) —
+  // le NIU s'affiche dès qu'il est connu, particulier compris.
   const details = [
+    client.telephone ? `Tél : ${client.telephone}` : null,
+    client.email     ? `Email : ${client.email}`   : null,
+    client.niu       ? `NIU : ${client.niu}`       : null,
     client.adresse,
-    client.telephone,
-    client.email,
-    client.niu && client.type === 'entreprise' ? `NIU : ${client.niu}` : null,
   ].filter(Boolean).join('  ·  ')
 
   if (details) {
@@ -409,25 +422,6 @@ function drawTotals(
   return y
 }
 
-function drawLegalMentions(doc: InstanceType<typeof PDFDocument>, y: number, tva: number): number {
-  y += 8
-  doc.font('Helvetica-Bold').fontSize(7).fillColor(C.muted)
-    .text('MENTIONS LÉGALES ET FISCALES (DGI Cameroun)', ML, y)
-  y += 10
-  doc.font('Helvetica').fontSize(7).fillColor(C.muted)
-  const mentions = [
-    `• TVA collectée : ${xaf(tva)} au taux de 19,25% — CGI Cameroun Art. 125.`,
-    '• Facture assujettie à la TVA. Droit à déduction pour les assujettis — CGI Art. 145.',
-    '• Toute facture fictive ou falsifiée est passible de sanctions pénales — CGI Art. 538.',
-    '• Document à conserver 10 ans conformément à la réglementation camerounaise.',
-  ]
-  for (const m of mentions) {
-    doc.text(m, ML, y, { width: W })
-    y += 10
-  }
-  return y
-}
-
 function drawPaymentTerms(doc: InstanceType<typeof PDFDocument>, y: number, conditionLibelle?: string | null): number {
   y += 10
   doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.mid)
@@ -437,8 +431,6 @@ function drawPaymentTerms(doc: InstanceType<typeof PDFDocument>, y: number, cond
   if (conditionLibelle) {
     doc.text(`• Condition convenue : ${conditionLibelle}`, ML, y); y += 10
   }
-  doc.text('• Mode de règlement : Virement bancaire / Chèque certifié / Espèces', ML, y); y += 10
-  doc.text('• Pénalités de retard : 1,5% par mois sur le montant TTC impayé', ML, y); y += 10
   return y
 }
 
@@ -562,15 +554,19 @@ function buildPdf(
       y = meta.extraFn(doc, y)
     }
 
-    // ── Legal mentions ───────────────────────────────────────────────────────
-    if (y + 80 > PAGE_END) {
-      drawFooter(doc, page)
-      doc.addPage()
-      page++
-      y = 40
+    // ── Condition de paiement convenue (si connue) ───────────────────────────
+    // Les « Mentions légales et fiscales » et les modalités génériques
+    // (virement / chèque / pénalités) sont retirées à la demande de la
+    // direction (recette AD-12) : aucune modalité réelle n'est encore définie.
+    if (meta.conditionPaiement) {
+      if (y + 40 > PAGE_END) {
+        drawFooter(doc, page)
+        doc.addPage()
+        page++
+        y = 40
+      }
+      y = drawPaymentTerms(doc, y, meta.conditionPaiement)
     }
-    y = drawLegalMentions(doc, y, totaux.tva)
-    y = drawPaymentTerms(doc, y, meta.conditionPaiement)
 
     // ── Signature zone ───────────────────────────────────────────────────────
     if (y + 90 > PAGE_END) {

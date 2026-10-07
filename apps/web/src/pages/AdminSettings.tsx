@@ -2,12 +2,12 @@ import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   Users, UserPlus, Shield, CheckCircle, XCircle,
-  Mail, Crown, ChevronDown, Loader2, Search, Phone,
+  Mail, Crown, ChevronDown, Loader2, Search, Phone, KeyRound,
 } from 'lucide-react'
 import { PageHeader, Button, SlideOver } from '@forge/ui'
 import { useAuth } from '@/context/AuthContext'
-import { useAdminUsers, useUpdateUser, useInviteUser } from '@/hooks/useAdmin'
-import type { ForgeRole, UserProfile } from '@/hooks/useAdmin'
+import { useAdminUsers, useUpdateUser, useInviteUser, useGeneratePin } from '@/hooks/useAdmin'
+import type { ForgeRole, UserProfile, ResultatPin } from '@/hooks/useAdmin'
 import { toast } from 'sonner'
 import { UserManagement, PermissionsMatrix, AuditLogViewer, SecuritySettings } from '@/features/admin'
 import type { RbacRoleName } from '@/hooks/useRbac'
@@ -21,7 +21,9 @@ const ROLES: { value: ForgeRole; label: string; color: string; bg: string; desc:
   { value: 'admin',       label: 'Admin (Patron)',  color: '#C62828', bg: '#FFEBEE', desc: 'Accès complet + gestion utilisateurs' },
   { value: 'superviseur', label: 'Superviseur',     color: '#1d4ed8', bg: '#dbeafe', desc: 'Validation, stocks, rapports, formation' },
   { value: 'operateur',   label: 'Opérateur',       color: '#15803d', bg: '#dcfce7', desc: 'Stocks, commandes, bons, production' },
-  { value: 'technicien',  label: 'Technicien',      color: '#6b7280', bg: '#f3f4f6', desc: 'Activité complète + modules commerciaux' },
+  { value: 'technicien',  label: 'Technicien',      color: '#6b7280', bg: '#f3f4f6', desc: 'Lecture seule + son parcours de formation' },
+  { value: 'caissier',    label: 'Caissier',        color: '#0891b2', bg: '#cffafe', desc: 'Vente comptoir, encaissement, sessions caisse' },
+  { value: 'livreur',     label: 'Livreur',         color: '#ea580c', bg: '#ffedd5', desc: 'Ses livraisons et leurs bons de livraison' },
 ]
 
 function RoleBadge({ role }: { role: ForgeRole }) {
@@ -87,7 +89,80 @@ function RoleSelect({
 
 // ── User row ───────────────────────────────────────────────────────────────────
 
-function UserRow({ user, isSelf }: { user: UserProfile; isSelf: boolean }) {
+// ── PIN de connexion ──────────────────────────────────────────────────────────
+// Le PIN généré est affiché UNE fois ici (aussi envoyé par SMS) : l'admin peut
+// le transmettre lui-même si le SMS n'arrive pas. Il devra être changé à la
+// première connexion.
+
+function PinGenere({ pin, smsEnvoye, telephone }: { pin: string; smsEnvoye?: boolean; telephone?: string }) {
+  return (
+    <div className="rounded-xl border border-green-200 bg-green-50 p-4 space-y-2">
+      <p className="text-xs font-semibold text-green-800">PIN de connexion généré</p>
+      <p className="text-3xl font-black tracking-[0.4em] text-forge-dark text-center select-all">{pin}</p>
+      <p className="text-xs text-green-800">
+        {smsEnvoye
+          ? `Envoyé par SMS${telephone ? ` au ${telephone}` : ''}.`
+          : `SMS non envoyé${telephone ? ` au ${telephone}` : ''} : transmettez ce PIN vous-même.`}
+        {' '}Il ne sera plus affiché après fermeture et devra être changé à la première connexion.
+      </p>
+    </div>
+  )
+}
+
+function PinSlideOver({ user, onClose }: { user: UserProfile | null; onClose: () => void }) {
+  const generer = useGeneratePin()
+  const [telephone, setTelephone] = useState('')
+  const [resultat, setResultat]   = useState<ResultatPin | null>(null)
+
+  const fermer = () => { setResultat(null); setTelephone(''); generer.reset(); onClose() }
+
+  if (!user) return null
+  return (
+    <SlideOver isOpen={!!user} onClose={fermer} title={`PIN de connexion — ${user.nom || user.email}`} width="md">
+      <div className="space-y-5">
+        {resultat?.pin ? (
+          <PinGenere pin={resultat.pin} smsEnvoye={resultat.smsEnvoye} telephone={resultat.telephone} />
+        ) : (
+          <>
+            <p className="text-sm text-gray-500">
+              Génère un nouveau PIN à 4 chiffres pour la connexion par téléphone. L'ancien PIN cesse de fonctionner.
+            </p>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Téléphone</label>
+              <div className="relative">
+                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="tel"
+                  value={telephone}
+                  placeholder={user.telephone || '+237 6XX XX XX XX'}
+                  onChange={(e) => setTelephone(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-forge-red/20"
+                />
+              </div>
+              <p className="text-[11px] text-gray-400 mt-1">
+                {user.telephone ? 'Laissez vide pour garder le numéro actuel.' : 'Obligatoire : ce compte n\'a pas encore de numéro.'}
+              </p>
+            </div>
+            <Button
+              className="w-full"
+              disabled={generer.isPending || (!user.telephone && telephone.trim().length < 8)}
+              onClick={() => generer.mutate(
+                { id: user.id, telephone: telephone.trim() || undefined },
+                { onSuccess: setResultat, onError: (e: Error) => toast.error(e.message) },
+              )}
+            >
+              {generer.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+              Générer le PIN
+            </Button>
+          </>
+        )}
+        <Button variant="ghost" className="w-full" onClick={fermer}>Fermer</Button>
+      </div>
+    </SlideOver>
+  )
+}
+
+function UserRow({ user, isSelf, onPin }: { user: UserProfile; isSelf: boolean; onPin: (u: UserProfile) => void }) {
   const updateUser = useUpdateUser()
   const initial = (user.nom || user.email).charAt(0).toUpperCase()
 
@@ -163,18 +238,28 @@ function UserRow({ user, isSelf }: { user: UserProfile; isSelf: boolean }) {
 
       {/* Actions */}
       <td className="px-4 py-3">
-        {!isSelf && (
+        <div className="flex items-center gap-2">
           <button
-            onClick={handleToggleActive}
-            disabled={isPending}
-            className="text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-600
-              hover:bg-gray-100 transition-colors disabled:opacity-40"
+            onClick={() => onPin(user)}
+            title={user.telephone ? `PIN de connexion (${user.telephone})` : 'Générer un PIN de connexion'}
+            className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-600
+              hover:bg-gray-100 transition-colors"
           >
-            {isPending
-              ? <Loader2 className="h-3 w-3 animate-spin" />
-              : user.actif ? 'Désactiver' : 'Réactiver'}
+            <KeyRound className="h-3 w-3" /> PIN
           </button>
-        )}
+          {!isSelf && (
+            <button
+              onClick={handleToggleActive}
+              disabled={isPending}
+              className="text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-600
+                hover:bg-gray-100 transition-colors disabled:opacity-40"
+            >
+              {isPending
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : user.actif ? 'Désactiver' : 'Réactiver'}
+            </button>
+          )}
+        </div>
       </td>
     </tr>
   )
@@ -207,7 +292,10 @@ const DEFAULT_INVITE = { email: '', rbacRoleName: 'COMMERCIAL' as RbacRoleName, 
 function InviteSlideOver({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [form, setForm] = useState(DEFAULT_INVITE)
   const [err, setErr]   = useState<string | null>(null)
+  const [pinInvite, setPinInvite] = useState<ResultatPin | null>(null)
   const inviteUser      = useInviteUser()
+
+  const fermer = () => { setPinInvite(null); onClose() }
 
   const handleSubmit = () => {
     if (!form.email.trim()) { setErr('Email requis'); return }
@@ -217,13 +305,27 @@ function InviteSlideOver({ open, onClose }: { open: boolean; onClose: () => void
     inviteUser.mutate(
       { email: form.email, nom: form.nom, rbacRoleName: form.rbacRoleName, phone: form.phone.trim() || undefined },
       {
-        onSuccess: () => {
+        onSuccess: (res) => {
           toast.success(`Invitation envoyée à ${form.email}`)
           setForm(DEFAULT_INVITE)
-          onClose()
+          // Téléphone fourni → un PIN a été généré : on l'affiche avant de fermer
+          if (res.pin) setPinInvite({ ...res, telephone: form.phone.trim() })
+          else onClose()
         },
         onError: (e: Error) => setErr(e.message),
       },
+    )
+  }
+
+  if (pinInvite?.pin) {
+    return (
+      <SlideOver isOpen={open} onClose={fermer} title="Utilisateur invité" width="md">
+        <div className="space-y-5">
+          <p className="text-sm text-gray-500">L'email d'invitation est parti. Voici aussi son PIN pour la connexion par téléphone.</p>
+          <PinGenere pin={pinInvite.pin} smsEnvoye={pinInvite.smsEnvoye} telephone={pinInvite.telephone} />
+          <Button variant="ghost" className="w-full" onClick={fermer}>Fermer</Button>
+        </div>
+      </SlideOver>
     )
   }
 
@@ -352,6 +454,7 @@ export default function AdminSettings() {
   const [inviteOpen, setInvite] = useState(false)
   const [adminTab, setAdminTab]       = useState<AdminTab>('Utilisateurs')
   const [permRoleIdx, setPermRoleIdx] = useState(0)
+  const [pinUser, setPinUser]         = useState<UserProfile | null>(null)
 
   const users: UserProfile[] = data?.data ?? []
 
@@ -485,7 +588,7 @@ export default function AdminSettings() {
               </thead>
               <tbody>
                 {filtered.map((u) => (
-                  <UserRow key={u.id} user={u} isSelf={u.id === user?.id} />
+                  <UserRow key={u.id} user={u} isSelf={u.id === user?.id} onPin={setPinUser} />
                 ))}
               </tbody>
             </table>
@@ -510,6 +613,7 @@ export default function AdminSettings() {
 
       {/* Invite slide-over */}
       <InviteSlideOver open={inviteOpen} onClose={() => setInvite(false)} />
+      <PinSlideOver user={pinUser} onClose={() => setPinUser(null)} />
 
         </div>
       )}

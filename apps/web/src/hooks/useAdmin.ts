@@ -3,7 +3,7 @@ import { apiClient } from '@/lib/api-client'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export type ForgeRole = 'admin' | 'superviseur' | 'operateur' | 'technicien'
+export type ForgeRole = 'admin' | 'superviseur' | 'operateur' | 'technicien' | 'caissier' | 'livreur'
 
 export interface UserProfile {
   id:          string
@@ -44,7 +44,25 @@ export function useInviteUser() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (payload: { email: string; nom: string; rbacRoleName?: string; phone?: string }) =>
-      apiClient.post<{ success: boolean; userId?: string }>('/api/admin/users/invite', payload),
+      apiClient.post<{ success: boolean; userId?: string } & ResultatPin>('/api/admin/users/invite', payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
+  })
+}
+
+// ── PIN de connexion ───────────────────────────────────────────────────────────
+// Le PIN en clair n'est renvoyé qu'une fois, à l'admin qui l'a généré.
+
+export interface ResultatPin {
+  pin?:        string | null
+  smsEnvoye?:  boolean
+  telephone?:  string
+}
+
+export function useGeneratePin() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, telephone }: { id: string; telephone?: string }) =>
+      apiClient.post<{ success: boolean } & ResultatPin>(`/api/admin/users/${id}/pin`, { telephone }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
   })
 }

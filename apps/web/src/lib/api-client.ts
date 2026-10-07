@@ -220,6 +220,31 @@ async function requestBlob(path: string): Promise<Blob> {
   }
 }
 
+/**
+ * Télécharge un fichier servi par l'API (PDF, CSV, XLS) avec le jeton de
+ * session. Ne jamais faire window.open('/api/…') : l'URL relative pointe vers
+ * l'hébergement du web (Vercel → 404) et n'envoie pas l'en-tête Authorization.
+ */
+async function downloadFile(path: string, filename: string): Promise<void> {
+  const blob = await requestBlob(path)
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href     = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+/** Ouvre un fichier de l'API dans un nouvel onglet (aperçu PDF), jeton compris. */
+async function openFile(path: string): Promise<void> {
+  const blob = await requestBlob(path)
+  const url  = URL.createObjectURL(blob)
+  window.open(url, '_blank')
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
 export const apiClient = {
   get:      <T>(path: string)                                          => request<T>('GET',    path),
   post:     <T>(path: string, body: unknown, timeoutMs?: number)       => request<T>('POST',   path, body, false, timeoutMs),
@@ -228,4 +253,6 @@ export const apiClient = {
   delete:   <T>(path: string)                                          => request<T>('DELETE', path),
   postForm: <T>(path: string, form: FormData)                          => requestForm<T>(path, form),
   getBlob:  (path: string)                                             => requestBlob(path),
+  downloadFile,
+  openFile,
 }

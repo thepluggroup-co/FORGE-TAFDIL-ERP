@@ -10,7 +10,7 @@ import { PageHeader, DataTable, StatusBadge, Button, Modal, SlideOver } from '@f
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import {
-  useFactures, useCredits, useEcritures, useEnvoyerFacture, useRemboursement, useCreerFacture,
+  useFactures, useCredits, useEcritures, useEnvoiWhatsappFacture, useRemboursement, useCreerFacture,
   useUpdateStatutFacture, usePaiementFacture, useFinanceDashboard,
   useDeclarationsFiscales, usePreparerDeclarationTva, useUpdateStatutDeclaration, useRelanceFacture,
   usePlanComptable, useJournauxComptables, useGrandLivre,
@@ -23,7 +23,8 @@ import {
   useAnnulerSortieTresorerie, useUploadJustificatifCharge, useUploadJustificatifSortie,
   useSynchroniserFactures, useRegulariserLivraisonFactures,
 } from '@/hooks/useFinance'
-import type { Facture as FactureApi, Credit as CreditApi, FactureLigne, Versement, Charge, SortieTresorerie, ModePaiementSortie, ModeEncaissementFacture } from '@/hooks/useFinance'
+import type { Facture as FactureApi, FactureClient, Credit as CreditApi, FactureLigne, Versement, Charge, SortieTresorerie, ModePaiementSortie, ModeEncaissementFacture } from '@/hooks/useFinance'
+import { TAFDIL_ENTREPRISE } from '@forge/shared'
 import { useClients } from '@/hooks/useClients'
 import { useCommandes } from '@/hooks/useCommandes'
 import { API_BASE, apiClient } from '@/lib/api-client'
@@ -116,7 +117,7 @@ type FactureSort = 'recent' | 'oldest' | 'amount-desc' | 'amount-asc' | 'due-asc
 
 interface PreviewableFacture {
   numero: string
-  client: { nom: string }
+  client: Pick<FactureClient, 'nom' | 'email' | 'telephone' | 'niu' | 'adresse' | 'ville'>
   date_emission: string
   date_echeance: string
   lignes: FactureLigne[]
@@ -132,13 +133,17 @@ function InvoicePreview({ facture }: { facture: PreviewableFacture }) {
     <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-inner" style={{ fontFamily: 'Georgia, serif' }}>
       <div className="p-8">
         {/* Header */}
+        {/* Coordonnées : packages/shared/src/entreprise.ts, identiques au PDF */}
         <div className="flex justify-between items-start mb-8">
-          <div>
-            <div className="font-black text-3xl text-[#C62828] tracking-tight">FORGE</div>
-            <div className="text-gray-600 text-sm font-sans font-semibold mt-1">TAFDIL SARL</div>
-            <div className="text-gray-400 text-xs font-sans mt-0.5">Zone Industrielle de Bassa, Douala</div>
-            <div className="text-gray-400 text-xs font-sans">RC : DLA-2020-B-1234 · NINEA : 123456789</div>
-            <div className="text-gray-400 text-xs font-sans">+237 699 001 200 · admin@tafdil.com</div>
+          <div className="flex items-start gap-3">
+            <img src="/tafdil-logo.png" alt="TAFDIL" className="h-16 w-16 object-contain shrink-0" />
+            <div>
+              <div className="text-forge-dark text-base font-sans font-bold">{TAFDIL_ENTREPRISE.nom}</div>
+              <div className="text-gray-400 text-xs font-sans mt-0.5">{TAFDIL_ENTREPRISE.adresse}</div>
+              <div className="text-gray-400 text-xs font-sans">NIU : {TAFDIL_ENTREPRISE.niu} · RCCM : {TAFDIL_ENTREPRISE.rccm}</div>
+              <div className="text-gray-400 text-xs font-sans">{TAFDIL_ENTREPRISE.telephones.join(' / ')}</div>
+              <div className="text-gray-400 text-xs font-sans">{TAFDIL_ENTREPRISE.email}</div>
+            </div>
           </div>
           <div className="text-right">
             <div className="text-2xl font-bold font-sans text-gray-800 tracking-widest uppercase">Facture</div>
@@ -154,7 +159,14 @@ function InvoicePreview({ facture }: { facture: PreviewableFacture }) {
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-6 font-sans">
           <div className="text-xs text-gray-400 uppercase font-semibold tracking-wide mb-1">Facturé à</div>
           <div className="font-bold text-gray-800">{facture.client.nom}</div>
-          <div className="text-sm text-gray-500">Cameroun</div>
+          <div className="mt-1 space-y-0.5 text-xs text-gray-500">
+            {facture.client.email     && <div>Email : {facture.client.email}</div>}
+            {facture.client.telephone && <div>Tél : {facture.client.telephone}</div>}
+            {facture.client.niu       && <div>NIU : {facture.client.niu}</div>}
+            {(facture.client.adresse || facture.client.ville) && (
+              <div>{[facture.client.adresse, facture.client.ville].filter(Boolean).join(', ')}</div>
+            )}
+          </div>
         </div>
 
         {/* Lignes */}
@@ -204,23 +216,10 @@ function InvoicePreview({ facture }: { facture: PreviewableFacture }) {
         </div>
       </div>
 
-      {/* Footer */}
-      <div className="px-8 py-4 bg-gray-50 border-t border-gray-200 font-sans">
-        <div className="flex justify-between items-start text-xs text-gray-400">
-          <div>
-            <div className="font-semibold text-gray-500 mb-1">Modalités de paiement</div>
-            <div>Virement bancaire — UBA Cameroun</div>
-            <div className="font-mono">IBAN : CM21 1000 2016 0010 1234 5678 901</div>
-          </div>
-          <div className="text-right">
-            <div className="font-semibold text-gray-500 mb-1">Pénalités de retard</div>
-            <div>3× taux légal en vigueur</div>
-            <div>Indemnité forfaitaire : 40 000 FCFA</div>
-          </div>
-        </div>
-        <div className="text-center text-xs text-gray-300 mt-3 border-t border-gray-200 pt-3">
-          TAFDIL SARL — Capital social : 5 000 000 FCFA — RCCM Douala 2020 B 1234
-        </div>
+      {/* Pied de page : coordonnées réelles uniquement — pas de modalités de
+          paiement ni de mentions légales tant qu'elles ne sont pas définies (AD-12) */}
+      <div className="px-8 py-3 bg-gray-50 border-t border-gray-200 font-sans text-center text-xs text-gray-400">
+        {TAFDIL_ENTREPRISE.nom} — NIU : {TAFDIL_ENTREPRISE.niu} — RCCM : {TAFDIL_ENTREPRISE.rccm} — {TAFDIL_ENTREPRISE.email}
       </div>
     </div>
   )
@@ -741,7 +740,8 @@ function RemboursementModal({ isOpen, onClose, credit }: { isOpen: boolean; onCl
   }
 
   const handleRecu = () => {
-    window.open(`/api/finance/credits/${credit.id}/recu`, '_blank')
+    apiClient.openFile(`/api/credits/${credit.id}/recu`)
+      .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'Reçu indisponible'))
   }
 
   return (
@@ -903,16 +903,22 @@ function PaiementFactureModal({ isOpen, onClose, facture }: { isOpen: boolean; o
   )
 }
 
-function RelanceFactureModal({ isOpen, onClose, facture }: { isOpen: boolean; onClose: () => void; facture: FactureRecord | null }) {
+// mode 'relance' : rappel d'un solde impayé (trace dans relances_factures).
+// mode 'envoi'   : envoi ou renvoi de la facture, soldée comprise (recette AD-14).
+function RelanceFactureModal({ isOpen, onClose, facture, mode = 'relance' }: {
+  isOpen: boolean; onClose: () => void; facture: FactureRecord | null; mode?: 'relance' | 'envoi'
+}) {
   const [waUrl, setWaUrl] = useState('')
   const [message, setMessage] = useState('')
   const relance = useRelanceFacture()
+  const envoi   = useEnvoiWhatsappFacture()
+  const action  = mode === 'envoi' ? envoi : relance
 
   useEffect(() => {
     if (!isOpen || !facture) return
     setWaUrl('')
     setMessage('')
-    relance.mutate({ id: facture.id as string }, {
+    action.mutate({ id: facture.id as string }, {
       onSuccess: (res) => {
         setWaUrl(res.url)
         setMessage(res.message)
@@ -922,12 +928,22 @@ function RelanceFactureModal({ isOpen, onClose, facture }: { isOpen: boolean; on
 
   if (!facture) return null
 
+  const solde = Number(facture.solde_restant_xaf ?? 0)
+  const titre = mode === 'envoi' ? 'Envoyer la facture par WhatsApp' : 'Relancer une facture'
+  const encart = mode === 'envoi' && solde <= 0
+    ? 'border-green-100 bg-green-50 text-green-800'
+    : 'border-red-100 bg-red-50 text-red-800'
+
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Relancer une facture" size="sm">
+    <Modal isOpen={isOpen} onClose={onClose} title={titre} size="sm">
       <div className="space-y-4">
-        <div className="rounded-xl border border-red-100 bg-red-50 p-3">
-          <div className="text-sm font-semibold text-red-800">{facture.client?.nom as string} - {facture.numero as string}</div>
-          <div className="mt-0.5 text-xs text-red-600">Solde restant : <span className="font-bold">{formatXAF(Number(facture.solde_restant_xaf ?? 0))}</span></div>
+        <div className={`rounded-xl border p-3 ${encart}`}>
+          <div className="text-sm font-semibold">{facture.client?.nom as string} - {facture.numero as string}</div>
+          <div className="mt-0.5 text-xs">
+            {solde <= 0
+              ? 'Facture entièrement réglée'
+              : <>Solde restant : <span className="font-bold">{formatXAF(solde)}</span></>}
+          </div>
         </div>
         <div>
           <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Message WhatsApp</label>
@@ -946,10 +962,10 @@ function RelanceFactureModal({ isOpen, onClose, facture }: { isOpen: boolean; on
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={onClose}>Annuler</Button>
           <Button
-            disabled={relance.isPending || !waUrl}
+            disabled={action.isPending || !waUrl}
             onClick={() => { window.open(waUrl, '_blank'); onClose() }}
           >
-            {relance.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageCircle className="h-3.5 w-3.5" />}
+            {action.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageCircle className="h-3.5 w-3.5" />}
             Ouvrir WhatsApp
           </Button>
         </div>
@@ -1758,6 +1774,7 @@ export default function Finance() {
   const [selectedFacture, setSelectedFacture] = useState<FactureRecord | null>(null)
   const [paiementFacture, setPaiementFacture] = useState<FactureRecord | null>(null)
   const [relanceFacture, setRelanceFacture] = useState<FactureRecord | null>(null)
+  const [envoiFacture, setEnvoiFacture]     = useState<FactureRecord | null>(null)
   const [remboursementCredit, setRemboursementCredit] = useState<CreditRecord | null>(null)
   const [relanceCredit, setRelanceCredit] = useState<CreditRecord | null>(null)
   const [documentsCredit, setDocumentsCredit] = useState<CreditRecord | null>(null)
@@ -1803,7 +1820,6 @@ export default function Finance() {
   const { data: sortiesData, isLoading: sortiesLoading } = useSortiesTresorerie()
   const { data: chargesDashboardData } = useChargesDashboard()
   const { data: declarationsData, isLoading: declarationsLoading } = useDeclarationsFiscales({ type: 'TVA' })
-  const envoyerFacture = useEnvoyerFacture()
   const synchroniserFactures = useSynchroniserFactures()
   const regulariserLivraisonFactures = useRegulariserLivraisonFactures()
   const updateStatutFacture = useUpdateStatutFacture()
@@ -1970,9 +1986,9 @@ export default function Finance() {
             className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
             <Download className="h-3.5 w-3.5" />
           </button>
-          <button title="Marquer envoyee"
-            onClick={(e) => { e.stopPropagation(); envoyerFacture.mutate(row.id as string) }}
-            disabled={envoyerFacture.isPending || row.statut === 'annule' || row.statut === 'paye'}
+          <button title="Envoyer par WhatsApp"
+            onClick={(e) => { e.stopPropagation(); setEnvoiFacture(row) }}
+            disabled={row.statut === 'annule'}
             className="p-1.5 rounded hover:bg-green-50 text-gray-400 hover:text-green-600 transition-colors disabled:opacity-50">
             <MessageCircle className="h-3.5 w-3.5" />
           </button>
@@ -1983,7 +1999,7 @@ export default function Finance() {
         </div>
       ),
     },
-  ], [envoyerFacture.isPending, updateStatutFacture.isPending])
+  ], [updateStatutFacture.isPending])
 
   const creditColumns = useMemo<Column<CreditRecord>[]>(() => [
     { id: 'numero', header: 'Référence', accessor: 'numero', render: (v) => <span className="font-mono text-xs font-semibold text-gray-700">{v as string}</span> },
@@ -2282,9 +2298,9 @@ export default function Finance() {
                         <Download className="h-3.5 w-3.5" /> PDF
                       </Button>
                       <Button variant="ghost" size="sm"
-                        onClick={() => envoyerFacture.mutate(selectedFacture.id as string)}
-                        disabled={envoyerFacture.isPending || selectedFacture.statut === 'annule' || selectedFacture.statut === 'paye'}>
-                        <MessageCircle className="h-3.5 w-3.5" /> Envoyee
+                        onClick={() => setEnvoiFacture(selectedFacture)}
+                        disabled={selectedFacture.statut === 'annule'}>
+                        <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => printFacturePdf(selectedFacture.id as string).catch((err: Error) => toast.error(err.message))}><Printer className="h-3.5 w-3.5" /> Imprimer</Button>
                     </div>
@@ -3219,6 +3235,7 @@ export default function Finance() {
       <NouveauVersementModal isOpen={showNouveauVersement} onClose={() => setShowNouveauVersement(false)} facture={selectedFacture} />
       <PaiementFactureModal isOpen={!!paiementFacture} onClose={() => setPaiementFacture(null)} facture={paiementFacture} />
       <RelanceFactureModal isOpen={!!relanceFacture} onClose={() => setRelanceFacture(null)} facture={relanceFacture} />
+      <RelanceFactureModal mode="envoi" isOpen={!!envoiFacture} onClose={() => setEnvoiFacture(null)} facture={envoiFacture} />
       <RemboursementModal isOpen={!!remboursementCredit} onClose={() => setRemboursementCredit(null)} credit={remboursementCredit} />
       <RelanceModal isOpen={!!relanceCredit} onClose={() => setRelanceCredit(null)} credit={relanceCredit} />
       <DocumentsModal isOpen={!!documentsCredit} onClose={() => setDocumentsCredit(null)} credit={documentsCredit} />

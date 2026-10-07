@@ -193,6 +193,16 @@ export function useCreateEmploye() {
   })
 }
 
+export function useUpdateEmploye() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...payload }: Partial<CreateEmployePayload> & { id: string }) =>
+      apiClient.put<Employe>(`/api/rh/employes/${id}`, payload),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['employes'] }); toast.success('Employé modifié') },
+    onError:   (err: Error) => toast.error(err.message),
+  })
+}
+
 // ── Présences ─────────────────────────────────────────────────────────────────
 
 export function usePresences(params?: { date?: string; employe_id?: string }) {

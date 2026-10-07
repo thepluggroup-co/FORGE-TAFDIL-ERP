@@ -3,14 +3,14 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Users, Calendar, DollarSign, Plus, Briefcase, FileText,
   Check, X, Clock, Download, AlertCircle, ChevronDown, ChevronUp,
-  Eye, Loader2,
+  Eye, Loader2, Pencil,
 } from 'lucide-react'
 import { PageHeader, DataTable, StatusBadge, Button, SlideOver } from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import {
   useEmployes, usePresences, useBulletinsPaie, useGenererPaie,
-  useCreateEmploye, usePresenceBatch,
+  useCreateEmploye, useUpdateEmploye, usePresenceBatch,
   useConges, useCreateConge, useApprouverConge, useSoldesConges,
   useUpdateStatutBulletin, useBulletinPdf,
   useAvancesSalaire, useCreateAvanceSalaire, useAnnulerAvanceSalaire,
@@ -124,14 +124,19 @@ function anciennete(dateEntree: string): string {
 
 interface NouvelEmployeForm {
   nom: string; poste: string; departement: string
-  type_contrat: 'CDI' | 'CDD'; date_entree: string; salaire_base_xaf: number
+  type_contrat: 'CDI' | 'CDD' | 'stage' | 'freelance'; date_entree: string; salaire_base_xaf: number
   telephone: string; cnps: string
+  statut: 'actif' | 'inactif' | 'conge' | 'essai'
 }
 const DEFAULT_EMP: NouvelEmployeForm = {
   nom: '', poste: '', departement: 'Atelier soudure',
   type_contrat: 'CDI', date_entree: new Date().toISOString().split('T')[0],
-  salaire_base_xaf: 0, telephone: '', cnps: '',
+  salaire_base_xaf: 0, telephone: '', cnps: '', statut: 'actif',
 }
+const STATUTS_EMPLOYE: Array<{ value: NouvelEmployeForm['statut']; label: string }> = [
+  { value: 'actif', label: 'Actif' }, { value: 'essai', label: "Période d'essai" },
+  { value: 'conge', label: 'En congé' }, { value: 'inactif', label: 'Inactif (sorti)' },
+]
 const DEPARTEMENTS = ['Atelier soudure', 'Atelier découpe', 'Atelier CNC', 'Pliage', 'Logistique', 'Administration']
 
 interface AvanceSalaireForm {
@@ -632,6 +637,7 @@ export default function RH() {
   const [moisPaie, setMoisPaie]        = useState(new Date().toISOString().slice(0, 7))
   const [empSlide, setEmpSlide]        = useState(false)
   const [empForm, setEmpForm]          = useState<NouvelEmployeForm>(DEFAULT_EMP)
+  const [empEditId, setEmpEditId]      = useState<string | null>(null)   // null = création
   const [avanceSlide, setAvanceSlide]  = useState(false)
   const [avanceForm, setAvanceForm]    = useState<AvanceSalaireForm>(() => createDefaultAvance(new Date().toISOString().slice(0, 7)))
   const [retenueSlide, setRetenueSlide] = useState(false)
@@ -650,6 +656,7 @@ export default function RH() {
 
   const genererPaie      = useGenererPaie()
   const createEmploye    = useCreateEmploye()
+  const updateEmploye    = useUpdateEmploye()
   const updateStatut     = useUpdateStatutBulletin()
   const bulletinPdf      = useBulletinPdf()
   const createAvance     = useCreateAvanceSalaire()
@@ -711,6 +718,22 @@ export default function RH() {
   }
 
   // Colonnes employés
+  const ouvrirEditionEmploye = (e: EmployeApi) => {
+    setEmpEditId(e.id)
+    setEmpForm({
+      nom:              e.nom ?? '',
+      poste:            e.poste ?? '',
+      departement:      e.departement ?? DEPARTEMENTS[0],
+      type_contrat:     (e.type_contrat as NouvelEmployeForm['type_contrat']) ?? 'CDI',
+      date_entree:      (e.date_entree ?? '').slice(0, 10),
+      salaire_base_xaf: Number(e.salaire_base_xaf ?? 0),
+      telephone:        e.telephone ?? '',
+      cnps:             e.cnps ?? '',
+      statut:           (e.statut as NouvelEmployeForm['statut']) ?? 'actif',
+    })
+    setEmpSlide(true)
+  }
+
   const employeColumns: Column<EmployeRecord>[] = [
     {
       id: 'nom', header: 'Employé', accessor: 'nom',
@@ -742,6 +765,14 @@ export default function RH() {
     { id: 'entree', header: 'Ancienneté', accessor: 'date_entree', render: v => <span className="text-sm text-gray-500">{anciennete(v as string)}</span> },
     { id: 'salaire', header: 'Salaire brut', accessor: 'salaire_base_xaf', render: v => <span className="text-sm font-semibold">{formatXAF(v as number)}</span> },
     { id: 'statut', header: 'Statut', accessor: 'statut', render: v => <StatusBadge status={v as string} /> },
+    {
+      id: 'actions', header: '', accessor: 'id',
+      render: (_v, row) => (
+        <Button variant="ghost" size="sm" onClick={() => ouvrirEditionEmploye(row as unknown as EmployeApi)}>
+          <Pencil className="h-3.5 w-3.5" /> Modifier
+        </Button>
+      ),
+    },
   ]
 
   // Colonnes bulletins
@@ -902,7 +933,7 @@ export default function RH() {
         breadcrumbs={[{ label: 'FORGE', href: '/' }, { label: 'RH' }]}
         actions={
           activeTab === 'Employés' ? (
-            <Button size="sm" onClick={() => { setEmpForm(DEFAULT_EMP); setEmpSlide(true) }}>
+            <Button size="sm" onClick={() => { setEmpEditId(null); setEmpForm(DEFAULT_EMP); setEmpSlide(true) }}>
               <Plus className="h-3.5 w-3.5" /> Nouvel employé
             </Button>
           ) : activeTab === 'Paie' ? (
@@ -1230,7 +1261,7 @@ export default function RH() {
       </div>
 
       {/* SlideOver nouvel employé */}
-      <SlideOver isOpen={empSlide} onClose={() => setEmpSlide(false)} title="Nouvel employé" width="md">
+      <SlideOver isOpen={empSlide} onClose={() => setEmpSlide(false)} title={empEditId ? `Modifier — ${empForm.nom}` : 'Nouvel employé'} width="md">
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Nom complet *</label>
@@ -1248,16 +1279,19 @@ export default function RH() {
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Département</label>
             <select value={empForm.departement} onChange={e => setEmpForm(f => ({ ...f, departement: e.target.value }))}
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
-              {DEPARTEMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+              {[...DEPARTEMENTS, ...(DEPARTEMENTS.includes(empForm.departement) ? [] : [empForm.departement])]
+                .map(d => <option key={d} value={d}>{d}</option>)}
             </select>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Contrat</label>
-              <select value={empForm.type_contrat} onChange={e => setEmpForm(f => ({ ...f, type_contrat: e.target.value as 'CDI' | 'CDD' }))}
+              <select value={empForm.type_contrat} onChange={e => setEmpForm(f => ({ ...f, type_contrat: e.target.value as NouvelEmployeForm['type_contrat'] }))}
                 className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
                 <option value="CDI">CDI</option>
                 <option value="CDD">CDD</option>
+                <option value="stage">Stage</option>
+                <option value="freelance">Freelance</option>
               </select>
             </div>
             <div>
@@ -1286,28 +1320,42 @@ export default function RH() {
                 className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
             </div>
           </div>
+          {empEditId && (
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Statut</label>
+              <select value={empForm.statut} onChange={e => setEmpForm(f => ({ ...f, statut: e.target.value as NouvelEmployeForm['statut'] }))}
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-forge-red">
+                {STATUTS_EMPLOYE.map(st => <option key={st.value} value={st.value}>{st.label}</option>)}
+              </select>
+              {empForm.statut === 'inactif' && (
+                <p className="text-[11px] text-gray-400 mt-1">Un employé inactif disparaît de la liste et n'est plus inclus dans la paie.</p>
+              )}
+            </div>
+          )}
           <div className="flex gap-3 pt-2 border-t border-gray-100">
             <Button variant="ghost" className="flex-1" onClick={() => setEmpSlide(false)}>Annuler</Button>
             <Button
               className="flex-1"
-              disabled={!empForm.nom || !empForm.poste || empForm.salaire_base_xaf <= 0 || createEmploye.isPending}
+              disabled={!empForm.nom || !empForm.poste || empForm.salaire_base_xaf <= 0 || createEmploye.isPending || updateEmploye.isPending}
               onClick={() => {
-                createEmploye.mutate(
-                  {
-                    nom:              empForm.nom,
-                    poste:            empForm.poste,
-                    departement:      empForm.departement,
-                    type_contrat:     empForm.type_contrat,
-                    date_entree:      empForm.date_entree,
-                    salaire_base_xaf: empForm.salaire_base_xaf,
-                    telephone:        empForm.telephone || undefined,
-                    cnps:             empForm.cnps || undefined,
-                  },
-                  { onSuccess: () => { setEmpSlide(false); setEmpForm(DEFAULT_EMP) } },
-                )
+                const payload = {
+                  nom:              empForm.nom,
+                  poste:            empForm.poste,
+                  departement:      empForm.departement,
+                  type_contrat:     empForm.type_contrat,
+                  date_entree:      empForm.date_entree,
+                  salaire_base_xaf: empForm.salaire_base_xaf,
+                  telephone:        empForm.telephone || undefined,
+                  cnps:             empForm.cnps || undefined,
+                }
+                const fini = { onSuccess: () => { setEmpSlide(false); setEmpForm(DEFAULT_EMP); setEmpEditId(null) } }
+                if (empEditId) updateEmploye.mutate({ id: empEditId, ...payload, statut: empForm.statut }, fini)
+                else createEmploye.mutate(payload, fini)
               }}
             >
-              {createEmploye.isPending ? 'Enregistrement…' : 'Créer le dossier'}
+              {createEmploye.isPending || updateEmploye.isPending
+                ? 'Enregistrement…'
+                : empEditId ? 'Enregistrer les modifications' : 'Créer le dossier'}
             </Button>
           </div>
         </div>

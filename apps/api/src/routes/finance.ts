@@ -7,6 +7,7 @@ const db = supabaseAdmin!
 import { requireRole, refuserLectureSeule } from '../middleware/rbac'
 import { requirePermission } from '../middleware/permission.middleware'
 import { generateFacturePDF, generateRecuPDF, uploadPDF } from '../services/pdf.service'
+import { normalizePhone } from '../services/sms.service'
 import {
   genererEcritureVente,
   genererEcritureEncaissement,
@@ -239,6 +240,69 @@ async function autoEchoirCredits(clientId?: string): Promise<number> {
  * solde_restant = total_ttc - montant_paye (minimum 0).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// Coordonnées client (email, téléphone, NIU) affichées sur l'aperçu et le PDF
+// des factures (recette AD-12). Une requête groupée, sans jointure PostgREST.
+interface ClientFacture {
+  nom?: string | null; email: string | null; telephone: string | null
+  niu: string | null; adresse: string | null; ville: string | null; type: string | null
+}
+async function clientsDesFactures(rows: Array<{ client_id?: string | null }>): Promise<Map<string, ClientFacture>> {
+  const ids = [...new Set(rows.map(r => r.client_id).filter((id): id is string => Boolean(id)))]
+  if (ids.length === 0) return new Map()
+  const { data } = await db.from('clients').select('id, nom, email, telephone, niu, adresse, ville, type').in('id', ids)
+  return new Map(((data ?? []) as Array<ClientFacture & { id: string }>).map(c => [c.id, c]))
+}
+async function avecClient<T extends { client_id?: string | null }>(rows: T[]): Promise<Array<T & { client_details: ClientFacture | null }>> {
+  const clients = await clientsDesFactures(rows)
+  return rows.map(r => ({ ...r, client_details: (r.client_id && clients.get(r.client_id)) || null }))
+}
+
+/**
+ * PDF d'une facture, TOUJOURS régénéré avec le gabarit et les coordonnées du
+ * moment (une copie en cache dans Storage figeait l'ancien gabarit), puis
+ * déposé dans Storage pour obtenir un lien signé partageable (bucket privé :
+ * un lien « public » ne s'ouvre pas chez le client).
+ */
+async function pdfFacture(id: string, options: { partager?: boolean } = {}) {
+  const { data: facture, error } = await db.from('factures').select('*, factures_lignes(*)').eq('id', id).single()
+  if (error || !facture) return null
+
+  const f = facture as {
+    numero: string; client_id: string | null; client_nom: string; date_emission: string; date_echeance: string
+    statut: string; total_ht_xaf: number; tva_xaf: number; frais_livraison_xaf?: number | null; total_ttc_xaf: number
+    montant_paye_xaf?: number | null; remise_globale_xaf?: number | null; acompte_recu_xaf?: number | null; net_a_payer_xaf?: number | null
+    factures_lignes: FactureLignePdf[]
+  }
+  const client = f.client_id ? (await clientsDesFactures([f])).get(f.client_id) : undefined
+
+  const buffer = await generateFacturePDF(
+    {
+      numero:              f.numero,
+      date_emission:       f.date_emission,
+      date_echeance:       f.date_echeance,
+      total_ht_xaf:        f.total_ht_xaf,
+      tva_xaf:             f.tva_xaf,
+      frais_livraison_xaf: f.frais_livraison_xaf,
+      total_ttc_xaf:       f.total_ttc_xaf,
+      remise_globale_xaf:  f.remise_globale_xaf,
+      acompte_recu_xaf:    f.acompte_recu_xaf,
+      net_a_payer_xaf:     f.net_a_payer_xaf,
+    },
+    {
+      nom:       client?.nom || f.client_nom,
+      email:     client?.email ?? null,
+      telephone: client?.telephone ?? null,
+      niu:       client?.niu ?? null,
+      adresse:   [client?.adresse, client?.ville].filter(Boolean).join(', ') || null,
+      type:      client?.type ?? null,
+    },
+    f.factures_lignes,
+  )
+
+  const lien = options.partager ? await uploadPDF(buffer, 'factures', `${f.numero}.pdf`) : null
+  return { facture: f, client, buffer, lien }
+}
+
 function enrichirFacture(f: any): any {
   const total = montantFactureAPayer(f)
   const solde = Math.max(0, total - Number(f.montant_paye_xaf ?? 0))
@@ -811,9 +875,9 @@ router.get('/factures', requirePermission('FINANCE', 'READ'), async (c) => {
     return c.json({ error: error.message }, 500)
   }
 
-  // Enrichir chaque facture avec solde_restant_xaf
+  // Enrichir chaque facture avec solde_restant_xaf et les coordonnées client
   return c.json({
-    data:        (data ?? []).map(enrichirFacture),
+    data:        (await avecClient((data ?? []) as Array<{ client_id?: string | null }>)).map(enrichirFacture),
     total:       count ?? 0,
     page,
     per_page:    perPage,
@@ -1063,57 +1127,52 @@ router.get('/factures/:id', requirePermission('FINANCE', 'READ'), async (c) => {
   const { data, error } = await db.from('factures').select('*, factures_lignes(*)').eq('id', id).single()
   if (error || !data) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
 
-  const f = data as { numero: string }
-  const pdf_url = db.storage.from('factures').getPublicUrl(`${f.numero}.pdf`).data.publicUrl
-  return c.json(enrichirFacture({ ...data, pdf_url }))
+  const [avecDetails] = await avecClient([data as { client_id?: string | null }])
+  return c.json(enrichirFacture(avecDetails))
 })
 
 router.get('/factures/:id/pdf', requirePermission('FINANCE', 'READ'), async (c) => {
-  const { id } = c.req.param()
-  const { data: facture, error } = await db
-    .from('factures').select('*, factures_lignes(*)').eq('id', id).single()
-  if (error || !facture) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
-
-  const f = facture as {
-    numero: string; client_nom: string; date_emission: string; date_echeance: string
-    total_ht_xaf: number; tva_xaf: number; frais_livraison_xaf?: number | null; total_ttc_xaf: number
-    remise_globale_xaf?: number | null; acompte_recu_xaf?: number | null; net_a_payer_xaf?: number | null
-    condition_paiement_id?: string | null
-    factures_lignes: FactureLignePdf[]
-  }
-
-  // Essayer Supabase Storage d'abord
-  try {
-    const { data: blob } = await db.storage.from('factures').download(`${f.numero}.pdf`)
-    if (blob) {
-      c.header('Content-Type', 'application/pdf')
-      c.header('Content-Disposition', `inline; filename="${f.numero}.pdf"`)
-      c.header('Cache-Control', 'private, max-age=3600')
-      return c.body(await blob.arrayBuffer())
-    }
-  } catch { /* PDF absent dans Storage — régénérer */ }
-
-  // Régénération à la volée si absent dans Storage
-  const buf = await generateFacturePDF(
-    {
-      numero:              f.numero,
-      date_emission:       f.date_emission,
-      date_echeance:       f.date_echeance,
-      total_ht_xaf:        f.total_ht_xaf,
-      tva_xaf:             f.tva_xaf,
-      frais_livraison_xaf: f.frais_livraison_xaf,
-      total_ttc_xaf:       f.total_ttc_xaf,
-      remise_globale_xaf:  f.remise_globale_xaf,
-      acompte_recu_xaf:    f.acompte_recu_xaf,
-      net_a_payer_xaf:     f.net_a_payer_xaf,
-    },
-    { nom: f.client_nom },
-    f.factures_lignes,
-  )
+  const pdf = await pdfFacture(c.req.param('id'))
+  if (!pdf) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
 
   c.header('Content-Type', 'application/pdf')
-  c.header('Content-Disposition', `inline; filename="${f.numero}.pdf"`)
-  return c.body(buf.buffer as ArrayBuffer)
+  c.header('Content-Disposition', `inline; filename="${pdf.facture.numero}.pdf"`)
+  c.header('Cache-Control', 'no-store')
+  return c.body(pdf.buffer.buffer as ArrayBuffer)
+})
+
+// ── POST /factures/:id/envoi-whatsapp — envoyer (ou renvoyer) une facture ────
+// Disponible pour toute facture non annulée, soldée comprise (recette AD-14) :
+// le client peut redemander sa facture acquittée. Prépare un lien wa.me avec un
+// lien signé (7 jours) vers le PDF à jour. Une facture « valide » passe
+// « envoyée » ; les autres statuts ne changent pas.
+router.post('/factures/:id/envoi-whatsapp', requirePermission('FINANCE', 'UPDATE'), zValidator('json', relanceFactureSchema), async (c) => {
+  const { id } = c.req.param()
+  const body   = c.req.valid('json')
+
+  const pdf = await pdfFacture(id, { partager: true })
+  if (!pdf) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
+  const f = pdf.facture
+  if (f.statut === 'annule') {
+    return c.json({ error: 'Une facture annulée ne peut pas être envoyée', code: 'FACTURE_ANNULEE' }, 422)
+  }
+
+  const telephone = normalizePhone(pdf.client?.telephone ?? null)
+  const solde     = Math.max(0, Number(f.total_ttc_xaf ?? 0) - Number(f.montant_paye_xaf ?? 0))
+  const message = body.message ?? (solde <= 0
+    ? `Bonjour ${f.client_nom},\n\nVeuillez trouver votre facture TAFDIL ${f.numero}, entièrement réglée.\nMontant TTC : ${xaf(f.total_ttc_xaf)}.\n\nFacture (PDF) : ${pdf.lien}\n\nMerci pour votre confiance.\nTAFDIL SARL`
+    : `Bonjour ${f.client_nom},\n\nVeuillez trouver votre facture TAFDIL ${f.numero}.\nMontant TTC : ${xaf(f.total_ttc_xaf)}\nReste à régler : ${xaf(solde)} (échéance ${f.date_echeance}).\n\nFacture (PDF) : ${pdf.lien}\n\nTAFDIL SARL`)
+
+  const encoded = encodeURIComponent(message)
+  const url = telephone
+    ? `https://wa.me/${telephone.replace(/\D/g, '')}?text=${encoded}`
+    : `https://wa.me/?text=${encoded}`
+
+  if (f.statut === 'valide') {
+    await db.from('factures').update({ statut: 'envoye', updated_at: new Date().toISOString() }).eq('id', id)
+  }
+
+  return c.json({ url, telephone, message, solde_restant_xaf: Math.round(solde) })
 })
 
 /**
@@ -1423,11 +1482,12 @@ router.post('/factures/:id/whatsapp', requireRole(['admin']), zValidator('json',
   const { id } = c.req.param()
   const body   = c.req.valid('json')
 
-  const { data: facture } = await db.from('factures').select('numero, client_nom, total_ttc_xaf').eq('id', id).single()
-  if (!facture) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
+  // Lien signé vers le PDF à jour (bucket privé : getPublicUrl ne s'ouvrait pas)
+  const pdf = await pdfFacture(id, { partager: true })
+  if (!pdf) return c.json({ error: 'Facture introuvable', code: 'NOT_FOUND' }, 404)
 
-  const f = facture as { numero: string; client_nom: string; total_ttc_xaf: number }
-  const pdfUrl = db.storage.from('factures').getPublicUrl(`${f.numero}.pdf`).data.publicUrl
+  const f = pdf.facture
+  const pdfUrl = pdf.lien
 
   const message = body.message ??
     `Bonjour,\nVeuillez trouver votre facture TAFDIL :\nN° ${f.numero}\nClient : ${f.client_nom}\nMontant TTC : ${xaf(f.total_ttc_xaf)}\nPDF : ${pdfUrl}`

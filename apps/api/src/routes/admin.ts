@@ -11,6 +11,7 @@ import {
 } from '../services/rbacService'
 import { resolveInviteRedirectUrl } from '../utils/inviteRedirect'
 import { generateAndSendPin } from '../services/phone-pin.service'
+import { normalizePhone } from '../services/sms.service'
 
 // ── Schémas Zod ───────────────────────────────────────────────────────────────
 // RBAC_ROLE_NAMES/RBAC_MODULES/RBAC_ACTIONS viennent de packages/db/src/schema-rbac.ts
@@ -65,8 +66,30 @@ adminRouter.use('*', requireRole(['admin']))
 // traitent comme un rôle legacy à part entière, distinct de 'operateur'.
 // Sans lui, un compte RBAC CAISSIER créé via RBAC_TO_LEGACY reçoit le rôle
 // legacy 'operateur' et le module Caisse reste invisible dans la sidebar.
-const VALID_ROLES = ['admin', 'superviseur', 'operateur', 'technicien', 'caissier'] as const
+// 'livreur' : même raison — sans lui, un livreur invité recevait 'operateur'.
+const VALID_ROLES = ['admin', 'superviseur', 'operateur', 'technicien', 'caissier', 'livreur'] as const
 type ForgeRole = typeof VALID_ROLES[number]
+
+/**
+ * Active ou désactive un compte PARTOUT où l'état est lu : Supabase Auth (ban →
+ * la connexion est refusée), profiles.actif (liste Utilisateurs) et
+ * rbac_user_profiles.is_active (onglet RBAC + checkPermission). L'onglet RBAC
+ * ne touchait que le dernier : l'utilisateur « désactivé » pouvait encore se
+ * connecter (recette AD-06).
+ */
+async function definirActivation(userId: string, actif: boolean): Promise<string | null> {
+  const { error: authErr } = await supabaseAdmin!.auth.admin.updateUserById(userId, {
+    ban_duration: actif ? 'none' : '876000h', // 100 ans = désactivé
+  })
+  if (authErr) return authErr.message
+
+  const [{ error: profErr }, { error: rbacErr }] = await Promise.all([
+    supabaseAdmin!.from('profiles').update({ actif }).eq('id', userId),
+    supabaseAdmin!.from('rbac_user_profiles').update({ is_active: actif }).eq('profile_id', userId),
+  ])
+  invalidatePermissionCache(userId)
+  return profErr?.message ?? rbacErr?.message ?? null
+}
 
 // ── GET /api/admin/users ──────────────────────────────────────────────────────
 adminRouter.get('/users', async (c) => {
@@ -103,18 +126,23 @@ adminRouter.patch('/users/:id', async (c) => {
     return c.json({ error: 'Vous ne pouvez pas changer votre propre rôle' }, 400)
   }
 
-  // Update profile table
+  if (caller.id === id && body.actif === false) {
+    return c.json({ error: 'Vous ne pouvez pas désactiver votre propre compte' }, 400)
+  }
+
+  // Update profile table (actif est géré plus bas, partout à la fois)
   const profileUpdate: Record<string, unknown> = {}
   if (body.role  !== undefined) profileUpdate.role  = body.role
-  if (body.actif !== undefined) profileUpdate.actif = body.actif
   if (body.nom   !== undefined) profileUpdate.nom   = body.nom
 
-  const { error: profileError } = await supabaseAdmin
-    .from('profiles')
-    .update(profileUpdate)
-    .eq('id', id)
+  if (Object.keys(profileUpdate).length > 0) {
+    const { error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .update(profileUpdate)
+      .eq('id', id)
 
-  if (profileError) return c.json({ error: profileError.message }, 500)
+    if (profileError) return c.json({ error: profileError.message }, 500)
+  }
 
   // Sync role to auth.users app_metadata so the JWT reflects the new role
   if (body.role) {
@@ -126,11 +154,9 @@ adminRouter.patch('/users/:id', async (c) => {
     }
   }
 
-  // Disable / re-enable account in auth.users
   if (body.actif !== undefined) {
-    await supabaseAdmin.auth.admin.updateUserById(id, {
-      ban_duration: body.actif ? 'none' : '876000h', // 100 years = effectively disabled
-    }).catch((e) => console.error('[admin] ban update failed:', e))
+    const erreur = await definirActivation(id, body.actif)
+    if (erreur) return c.json({ error: erreur }, 500)
   }
 
   return c.json({ success: true })
@@ -142,6 +168,7 @@ const RBAC_TO_LEGACY: Record<string, ForgeRole> = {
   MANAGER:     'superviseur',
   COMMERCIAL:  'operateur',
   CAISSIER:    'caissier',
+  LIVREUR:     'livreur',
   MAGASINIER:  'operateur',
   FORMATEUR:   'technicien',
   READONLY:    'technicien',
@@ -194,7 +221,8 @@ adminRouter.post('/users/invite', async (c) => {
       nom,
       role:      legacyRole,
       actif:     true,
-      ...(phone ? { telephone: phone } : {}),
+      // Normalisé (+237…) : la connexion par PIN cherche le numéro sous cette forme
+      ...(normalizePhone(phone) ? { telephone: normalizePhone(phone) } : {}),
     })
 
     // createUser positionne déjà app_metadata.role ci-dessus — cet appel ne
@@ -239,13 +267,47 @@ adminRouter.post('/users/invite', async (c) => {
     // Téléphone fourni → PIN aléatoire à 4 chiffres généré et envoyé par SMS
     // (+ WhatsApp best-effort). Non bloquant : un échec d'envoi ne doit pas
     // faire échouer la création du compte, qui reste utilisable par email.
+    // Le PIN est renvoyé une fois à l'admin (affiché à l'écran) au cas où le
+    // SMS ne part pas : il peut le transmettre lui-même.
     if (phone) {
       const pinResult = await generateAndSendPin(data.user.id, phone)
-      if (!pinResult.ok) console.error('[admin] génération/envoi PIN échoué:', pinResult.error)
+      if (!pinResult.ok) console.error('[admin] génération PIN échouée:', pinResult.error)
+      return c.json({
+        success: true, userId: data.user.id,
+        pin: pinResult.pin ?? null, smsEnvoye: pinResult.smsEnvoye ?? false,
+      })
     }
   }
 
   return c.json({ success: true, userId: data.user?.id })
+})
+
+// ── POST /api/admin/users/:id/pin — (re)générer le PIN de connexion ──────────
+// Pour un compte existant : enregistre le téléphone (normalisé, unique) puis
+// génère un nouveau PIN à 4 chiffres, envoyé par SMS et renvoyé UNE fois à
+// l'admin. L'utilisateur devra le changer à sa première connexion.
+adminRouter.post('/users/:id/pin', zValidator('json', z.object({ telephone: z.string().min(8).max(20).optional() })), async (c) => {
+  const id     = c.req.param('id')
+  const caller = c.get('user')
+  const { telephone } = c.req.valid('json')
+
+  const { data: profil } = await supabaseAdmin!.from('profiles').select('id, telephone').eq('id', id).maybeSingle()
+  if (!profil) return c.json({ error: 'Utilisateur introuvable', code: 'NOT_FOUND' }, 404)
+
+  const numero = normalizePhone(telephone ?? (profil as { telephone: string | null }).telephone)
+  if (!numero) return c.json({ error: 'Numéro de téléphone requis', code: 'PHONE_REQUIRED' }, 422)
+
+  const { data: autre } = await supabaseAdmin!.from('profiles').select('id').eq('telephone', numero).neq('id', id).maybeSingle()
+  if (autre) return c.json({ error: 'Ce numéro est déjà utilisé par un autre compte', code: 'PHONE_TAKEN' }, 409)
+
+  const { error: telErr } = await supabaseAdmin!.from('profiles').update({ telephone: numero }).eq('id', id)
+  if (telErr) return c.json({ error: telErr.message }, 500)
+
+  const res = await generateAndSendPin(id, numero)
+  if (!res.ok) return c.json({ error: res.error ?? 'Génération du PIN impossible' }, 500)
+
+  writeAuditLog({ userId: caller.id, actionType: 'USER_UPDATED', resourceType: 'user', resourceId: id, payloadAfter: { pin: 'régénéré', telephone: numero } })
+  return c.json({ success: true, telephone: numero, pin: res.pin, smsEnvoye: res.smsEnvoye })
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -330,7 +392,8 @@ adminRouter.patch(
       const { error } = await db
         .from('rbac_user_profiles')
         .upsert(
-          { profile_id: targetId, role_id: roleRow.id, is_active: body.isActive ?? true },
+          // Changer de rôle ne doit pas réactiver un compte désactivé : on garde l'état actuel
+          { profile_id: targetId, role_id: roleRow.id, is_active: body.isActive ?? before?.is_active ?? true },
           { onConflict: 'profile_id' },
         )
 
@@ -339,10 +402,11 @@ adminRouter.patch(
     }
 
     if (body.isActive !== undefined) {
-      await db
-        .from('rbac_user_profiles')
-        .update({ is_active: body.isActive })
-        .eq('profile_id', targetId)
+      if (caller.id === targetId && !body.isActive) {
+        return c.json({ error: 'Vous ne pouvez pas désactiver votre propre compte' }, 400)
+      }
+      const erreur = await definirActivation(targetId, body.isActive)
+      if (erreur) return c.json({ error: erreur }, 500)
     }
 
     writeAuditLog({
@@ -366,12 +430,12 @@ adminRouter.patch('/rbac/users/:id/deactivate', async (c) => {
   const permCheck = await checkPermission(caller.id, 'ADMIN', 'UPDATE', caller.role)
   if (!permCheck.allowed) return c.json({ error: 'Accès refusé', code: 'FORBIDDEN' }, 403)
 
-  await db
-    .from('rbac_user_profiles')
-    .update({ is_active: false })
-    .eq('profile_id', targetId)
+  if (caller.id === targetId) {
+    return c.json({ error: 'Vous ne pouvez pas désactiver votre propre compte' }, 400)
+  }
 
-  invalidatePermissionCache(targetId)
+  const erreur = await definirActivation(targetId, false)
+  if (erreur) return c.json({ error: erreur }, 500)
 
   writeAuditLog({
     userId: caller.id, actionType: 'USER_DEACTIVATED',
@@ -657,7 +721,7 @@ adminRouter.get('/rbac/audit-logs/export', async (c) => {
   const permCheck = await checkPermission(caller.id, 'ADMIN', 'EXPORT', caller.role)
   if (!permCheck.allowed) return c.json({ error: 'Accès refusé', code: 'FORBIDDEN' }, 403)
 
-  const { from, to, actionType, userId: filterUserId } = c.req.query()
+  const { from, to, actionType, module, userId: filterUserId } = c.req.query()
 
   let query = db
     .from('rbac_audit_logs')
@@ -667,6 +731,7 @@ adminRouter.get('/rbac/audit-logs/export', async (c) => {
 
   if (filterUserId) query = query.eq('user_id', filterUserId)
   if (actionType)   query = query.eq('action_type', actionType)
+  if (module)       query = query.eq('module', module)
   if (from)         query = query.gte('created_at', from)
   if (to)           query = query.lte('created_at', to)
 

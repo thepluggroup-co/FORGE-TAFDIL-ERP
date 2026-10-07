@@ -20,9 +20,16 @@ export interface Facture {
   montant_ttc_xaf: number
   montant_paye_xaf: number
   solde_restant_xaf: number
-  client: { id: string; nom: string }
+  client: FactureClient
   lignes: FactureLigne[]
   pdf_url?: string
+}
+
+/** Coordonnées du client affichées sur la facture (aperçu et PDF). */
+export interface FactureClient {
+  id: string; nom: string
+  email?: string | null; telephone?: string | null; niu?: string | null
+  adresse?: string | null; ville?: string | null
 }
 
 export interface Credit {
@@ -354,6 +361,7 @@ function mapFacture(row: Record<string, unknown>): Facture {
     montant_paye_xaf:  paye,
     solde_restant_xaf: Number(row.solde_restant_xaf ?? Math.max(0, ttc - paye)),
     client: {
+      ...((row.client_details as Omit<FactureClient, 'id' | 'nom'> | null) ?? {}),
       id:  (row.client_id as string | null) ?? '',
       nom: (row.client_nom as string | null) ?? '',
     },
@@ -372,15 +380,20 @@ export function useFactures(params?: { statut?: string; page?: number; per_page?
   })
 }
 
-export function useEnvoyerFacture() {
+/**
+ * Prépare l'envoi (ou le renvoi) d'une facture par WhatsApp — y compris une
+ * facture soldée. Le serveur régénère le PDF et renvoie un lien wa.me prêt à
+ * ouvrir ; une facture « valide » passe « envoyée » au passage.
+ */
+export function useEnvoiWhatsappFacture() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) =>
-      apiClient.patch<Record<string, unknown>>(`/api/factures/${id}/statut`, { statut: 'envoye' }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['factures'] })
-      toast.success('Facture marquee envoyee')
-    },
+    mutationFn: (payload: { id: string; message?: string }) =>
+      apiClient.post<{ url: string; telephone: string | null; message: string; solde_restant_xaf: number }>(
+        `/api/factures/${payload.id}/envoi-whatsapp`,
+        { message: payload.message },
+      ),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['factures'] }) },
     onError: (err: Error) => toast.error(err.message),
   })
 }

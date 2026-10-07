@@ -28,6 +28,10 @@ function generateFourDigitPin(): string {
 export interface GeneratePinResult {
   ok: boolean
   error?: string
+  /** PIN en clair, renvoyé UNE fois à l'admin qui l'a généré (jamais stocké en clair) */
+  pin?: string
+  /** false si le PIN est enregistré mais que le SMS n'est pas parti : l'admin le transmet lui-même */
+  smsEnvoye?: boolean
 }
 
 /**
@@ -60,11 +64,12 @@ export async function generateAndSendPin(userId: string, phone: string): Promise
 
   const message = `FORGE TAFDIL — Votre code PIN de connexion : ${pin}\nÀ changer dès votre première connexion.`
   const sms = await sendSms(normalized, message)
-  if (!sms.ok) return { ok: false, error: sms.error ?? 'Envoi SMS échoué' }
-
   void notifyWhatsApp(normalized.replace(/^\+/, ''), message)
 
-  return { ok: true }
+  // Le PIN est enregistré même si le SMS échoue : l'admin le voit une fois et
+  // peut le transmettre lui-même (SMS non configuré, numéro injoignable…).
+  if (!sms.ok) return { ok: true, pin, smsEnvoye: false, error: sms.error ?? 'Envoi SMS échoué' }
+  return { ok: true, pin, smsEnvoye: !sms.skipped }
 }
 
 export interface VerifyPinResult {

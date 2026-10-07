@@ -5,6 +5,8 @@ import {
   X, Eye, AlertCircle, CheckCircle, LogIn, LogOut,
 } from 'lucide-react'
 import { Button } from '@forge/ui'
+import { toast } from 'sonner'
+import { apiClient } from '@/lib/api-client'
 import {
   useAuditLogs,
   useAuditLogDetail,
@@ -162,7 +164,9 @@ export function AuditLogViewer() {
     if (filter.module)     params.set('module', filter.module)
     if (filter.from)       params.set('from', filter.from ?? '')
     if (filter.to)         params.set('to', filter.to ?? '')
-    window.open(`/api/admin/rbac/audit-logs/export?${params.toString()}`, '_blank')
+    const jour = new Date().toISOString().slice(0, 10)
+    apiClient.downloadFile(`/api/admin/rbac/audit-logs/export?${params.toString()}`, `journal-audit-${jour}.csv`)
+      .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'Export impossible'))
   }
 
   return (

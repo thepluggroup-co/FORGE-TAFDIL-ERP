@@ -1,6 +1,44 @@
 import { describe, expect, it } from 'vitest'
 import { resolveInviteRedirectUrl } from '../utils/inviteRedirect'
 
+function avecEnv(env: Record<string, string | undefined>, fn: () => void) {
+  const avant: Record<string, string | undefined> = {}
+  for (const k of Object.keys(env)) {
+    avant[k] = process.env[k]
+    if (env[k] === undefined) delete process.env[k]
+    else process.env[k] = env[k]
+  }
+  try { fn() } finally {
+    for (const [k, v] of Object.entries(avant)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  }
+}
+
+describe('resolveInviteRedirectUrl — origines locales (recette AD-04)', () => {
+  it('ignore les origines localhost en tête de FRONTEND_URL', () => {
+    avecEnv({
+      INVITE_REDIRECT_URL: undefined,
+      FRONTEND_URL: 'http://localhost:5173,http://localhost:3000,https://erp.tafdil.cm',
+    }, () => {
+      expect(resolveInviteRedirectUrl()).toBe('https://erp.tafdil.cm/set-password')
+    })
+  })
+
+  it('en production, jamais localhost : retombe sur l\'URL web par défaut', () => {
+    avecEnv({ INVITE_REDIRECT_URL: undefined, FRONTEND_URL: 'http://localhost:5173', NODE_ENV: 'production' }, () => {
+      expect(resolveInviteRedirectUrl()).toBe('https://forge-tafdil-erp-web.vercel.app/set-password')
+    })
+  })
+
+  it('hors production, localhost reste utilisable faute de mieux', () => {
+    avecEnv({ INVITE_REDIRECT_URL: undefined, FRONTEND_URL: 'http://localhost:5173', NODE_ENV: 'test' }, () => {
+      expect(resolveInviteRedirectUrl()).toBe('http://localhost:5173/set-password')
+    })
+  })
+})
+
 describe('resolveInviteRedirectUrl', () => {
   it('uses INVITE_REDIRECT_URL when provided', () => {
     const previous = process.env.INVITE_REDIRECT_URL

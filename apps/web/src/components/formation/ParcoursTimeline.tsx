@@ -20,13 +20,7 @@ export const STATUS_SESSION: Record<FormationSession['statut'], { label: string;
 /** Télécharge l'attestation PDF avec le jeton (window.open n'envoie pas l'en-tête Authorization). */
 export async function telechargerAttestation(path: string, nom: string) {
   try {
-    const blob = await apiClient.getBlob(path)
-    const url  = URL.createObjectURL(blob)
-    const a    = document.createElement('a')
-    a.href     = url
-    a.download = `Attestation-${nom.replace(/\s+/g, '-')}.pdf`
-    a.click()
-    URL.revokeObjectURL(url)
+    await apiClient.downloadFile(path, `Attestation-${nom.replace(/\s+/g, '-')}.pdf`)
   } catch (err) {
     toast.error(err instanceof Error ? err.message : 'Téléchargement impossible')
   }
