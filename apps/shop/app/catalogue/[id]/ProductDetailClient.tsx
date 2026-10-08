@@ -247,11 +247,11 @@ export function ProductDetailClient({ produit, similaires }: Props) {
 
           <InfoCard title="Besoin d aide ?">
             <p className="text-sm leading-6 text-gray-600">Notre equipe est a votre ecoute pour vous conseiller sur ce produit.</p>
-            <a href="https://wa.me/237695884528" target="_blank" rel="noopener noreferrer" className="mt-4 inline-flex items-center gap-2 rounded-md border border-gray-200 px-4 py-2 text-sm font-black text-forge-dark hover:border-forge-red hover:text-forge-red">
+            <a href="https://wa.me/237688227397" target="_blank" rel="noopener noreferrer" className="mt-4 inline-flex items-center gap-2 rounded-md border border-gray-200 px-4 py-2 text-sm font-black text-forge-dark hover:border-forge-red hover:text-forge-red">
               WhatsApp
             </a>
             <div className="mt-4 space-y-1 text-sm font-semibold text-gray-600">
-              <p>+237 695884528</p>
+              <p>+237 6 88 22 73 97</p>
               <p>Lun - Sam : 7h30 - 18h</p>
             </div>
           </InfoCard>

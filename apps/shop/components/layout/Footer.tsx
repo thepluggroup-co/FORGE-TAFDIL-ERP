@@ -3,7 +3,7 @@ import { Mail, MapPin, Phone, Send, ShieldCheck, Truck, Wallet, Headphones } fro
 import { MetalForgeLogo } from '@/components/ui/BrandLogo'
 
 export function Footer() {
-  const whatsapp = '237695884528'
+  const whatsapp = '237688227397'
 
   return (
     <footer className="bg-[#111820] text-white">

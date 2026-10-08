@@ -4,6 +4,8 @@ import type { Metadata } from 'next'
 export const dynamic = 'force-dynamic'
 import { createServiceClient } from '@/lib/supabase'
 import { DashboardClient } from './DashboardClient'
+import { appelApiClient } from '@/lib/compte-client'
+import type { DevisErp } from './DevisSuivi'
 
 export const metadata: Metadata = {
   title: 'Mon espace | FORGE TAFDIL Shop',
@@ -14,7 +16,13 @@ export default async function DashboardPage() {
   const hdrs      = headers()
   const clientId  = hdrs.get('x-client-id')  ?? ''
   const telephone = hdrs.get('x-client-telephone') ?? ''
+  const email     = hdrs.get('x-client-email') ?? ''
   const nom       = hdrs.get('x-client-nom') ?? ''
+
+  // Devis établis par TAFDIL pour ce client (rattachés par email vérifié ou téléphone)
+  const devisErpRes = await appelApiClient<{ data?: DevisErp[] }>(`/clients/${encodeURIComponent(clientId)}/devis`)
+    .catch(() => ({ ok: false, status: 0, data: {} as { data?: DevisErp[] } }))
+  const devisErp = devisErpRes.ok ? devisErpRes.data.data ?? [] : []
 
   const db = createServiceClient()
 
@@ -50,6 +58,7 @@ export default async function DashboardPage() {
   const client = {
     id:        clientId,
     telephone,
+    email,
     nom,
   }
 
@@ -59,6 +68,7 @@ export default async function DashboardPage() {
         client={client}
         commandes={(commandes ?? []) as CommandeShop[]}
         devis={(devis ?? []) as DevisWeb[]}
+        devisErp={devisErp}
         factures={(factures ?? []) as Facture[]}
       />
     </main>
@@ -96,5 +106,6 @@ export interface Facture {
 export interface Client {
   id:        string
   telephone: string
+  email:     string
   nom:       string
 }

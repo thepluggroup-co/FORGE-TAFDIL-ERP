@@ -7,9 +7,10 @@ const COOKIE_NAME = 'forge-shop-token'
 const TOKEN_TTL   = '30d'
 
 export interface ShopTokenPayload extends JWTPayload {
-  sub:       string  // client_shop.id
-  telephone: string
-  nom?:      string
+  sub:        string  // client_shop.id
+  telephone?: string  // absent pour un compte email / Google / Facebook sans téléphone
+  email?:     string
+  nom?:       string
 }
 
 export async function signToken(payload: Omit<ShopTokenPayload, 'iat' | 'exp'>): Promise<string> {

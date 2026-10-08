@@ -37,7 +37,7 @@ type SmsStatus = {
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://shop.tafdil.cm'
-const WA_TEL   = '237695884528'
+const WA_TEL   = '237688227397'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 

@@ -137,7 +137,7 @@ export function CartDrawer() {
   }, [closeDrawer])
 
   const whatsappItems = items.map(i => `• ${i.nom} (${i.ref}) × ${i.quantite}`).join('\n')
-  const whatsappUrl = `https://wa.me/237695884528?text=${encodeURIComponent(
+  const whatsappUrl = `https://wa.me/237688227397?text=${encodeURIComponent(
     `Bonjour TAFDIL, je souhaite commander :\n${whatsappItems}\n\nTotal estimé : ${fmt(grandTotal)} TTC`
   )}`
 

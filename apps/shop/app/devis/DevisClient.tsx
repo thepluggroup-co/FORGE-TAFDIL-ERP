@@ -456,12 +456,12 @@ export function DevisClient() {
                   <div>
                     <p className="text-xs font-medium text-forge-dark">WhatsApp</p>
                     <a
-                      href="https://wa.me/237695884528"
+                      href="https://wa.me/237688227397"
                       className="text-sm text-forge-red hover:underline"
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      +237 695884528
+                      +237 6 88 22 73 97
                     </a>
                   </div>
                 </li>

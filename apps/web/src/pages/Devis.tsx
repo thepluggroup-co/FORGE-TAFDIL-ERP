@@ -13,9 +13,10 @@ import { uniteOptions } from '@/lib/constants'
 import { toast } from 'sonner'
 import {
   useDevis, useCreateDevis, useUpdateDevis, useDeleteDevis,
-  useUpdateStatutDevis, useEnvoyerApprobation, useTransformerDevis,
+  useUpdateStatutDevis, useEnvoyerApprobation, useTransformerDevis, useDecisionClientDevis,
   useConditionsPaiement,
 } from '@/hooks/useDevis'
+import type { CanalDecisionClient } from '@/hooks/useDevis'
 import { apiClient } from '@/lib/api-client'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/context/AuthContext'
@@ -128,28 +129,52 @@ function formatConfigDetail(configuration?: Record<string, unknown>): string | n
 
 // ── Alerte expiration (banner) ─────────────────────────────────────────────────
 
+// Devis expirés déjà vus et masqués par l'utilisateur (préférence locale au
+// navigateur) : le bandeau ne revient que si un NOUVEAU devis expire.
+const CLE_EXPIRES_MASQUES = 'forge.devis.expires-masques'
+
+function lireExpiresMasques(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem(CLE_EXPIRES_MASQUES) ?? '[]') as string[]) }
+  catch { return new Set() }
+}
+
 function AlerteExpiration({ devis }: { devis: DevisRecord[] }) {
+  const [masques, setMasques] = useState<Set<string>>(lireExpiresMasques)
   const expirantBientot = devis.filter((d) => {
     if (['transforme', 'expire', 'refuse'].includes(d.statut as string)) return false
     const jr = d.jours_restants as number | null
     return jr !== null && jr >= 0 && jr <= 7
   })
   const expires = devis.filter((d) => d.expire && !['transforme', 'refuse'].includes(d.statut as string))
+  const expiresVisibles = expires.some((d) => !masques.has(d.id as string))
 
-  if (expirantBientot.length === 0 && expires.length === 0) return null
+  const masquerExpires = () => {
+    const ids = new Set(expires.map((d) => d.id as string))
+    setMasques(ids)
+    try { localStorage.setItem(CLE_EXPIRES_MASQUES, JSON.stringify([...ids])) } catch { /* navigation privée */ }
+  }
+
+  if (expirantBientot.length === 0 && !expiresVisibles) return null
 
   return (
     <div className="space-y-2">
-      {expires.length > 0 && (
+      {expiresVisibles && (
         <motion.div
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
           className="flex items-center gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl"
         >
           <OctagonX className="h-4 w-4 text-red-600 shrink-0" />
-          <p className="text-sm text-red-700">
+          <p className="text-sm text-red-700 flex-1">
             <span className="font-bold">{expires.length} devis expiré(s)</span> — ils ne peuvent plus être approuvés par le client.
           </p>
+          <button
+            onClick={masquerExpires}
+            title="Masquer ce message (il réapparaîtra si un nouveau devis expire)"
+            className="p-1 rounded-md text-red-400 hover:bg-red-100 hover:text-red-700 transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </motion.div>
       )}
       {expirantBientot.length > 0 && (
@@ -165,6 +190,71 @@ function AlerteExpiration({ devis }: { devis: DevisRecord[] }) {
           </p>
         </motion.div>
       )}
+    </div>
+  )
+}
+
+// ── Décision du client saisie en interne ──────────────────────────────────────
+// Le client a donné son accord (ou son refus) par téléphone, en boutique… :
+// l'utilisateur habilité l'enregistre ici. L'API trace l'auteur et le canal.
+
+const CANAUX_DECISION: Array<{ value: CanalDecisionClient; label: string }> = [
+  { value: 'telephone', label: 'Par téléphone' },
+  { value: 'presence',  label: 'En présence du client' },
+  { value: 'whatsapp',  label: 'Par WhatsApp' },
+  { value: 'email',     label: 'Par email' },
+  { value: 'autre',     label: 'Autre' },
+]
+
+function DecisionClientInterne({ devisId }: { devisId: string }) {
+  const decision = useDecisionClientDevis()
+  const [ouvert, setOuvert]           = useState(false)
+  const [canal, setCanal]             = useState<CanalDecisionClient>('telephone')
+  const [commentaire, setCommentaire] = useState('')
+
+  const enregistrer = (choix: 'accepte' | 'refuse') =>
+    decision.mutate({ id: devisId, decision: choix, canal, commentaire: commentaire.trim() || undefined })
+
+  if (!ouvert) {
+    return (
+      <button
+        onClick={() => setOuvert(true)}
+        className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-100 hover:bg-gray-50 transition-colors text-left"
+      >
+        <ShieldCheck className="h-4 w-4 text-green-600 shrink-0" />
+        <span className="text-sm font-medium text-gray-700">Enregistrer la décision du client</span>
+      </button>
+    )
+  }
+
+  return (
+    <div className="rounded-xl border border-gray-200 p-3 space-y-3">
+      <p className="text-xs text-gray-500">
+        Le client a donné sa réponse hors de la plateforme : enregistrez-la en son nom. Votre nom et le canal seront tracés.
+      </p>
+      <select
+        value={canal}
+        onChange={(e) => setCanal(e.target.value as CanalDecisionClient)}
+        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-forge-red"
+      >
+        {CANAUX_DECISION.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+      </select>
+      <textarea
+        value={commentaire}
+        onChange={(e) => setCommentaire(e.target.value)}
+        rows={2}
+        placeholder="Précision (facultatif) : nom de l'interlocuteur, conditions convenues…"
+        className="w-full resize-none px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-forge-red"
+      />
+      <div className="flex gap-2">
+        <Button variant="ghost" size="sm" className="flex-1" onClick={() => setOuvert(false)}>Annuler</Button>
+        <Button variant="ghost" size="sm" className="flex-1 text-red-600" disabled={decision.isPending} onClick={() => enregistrer('refuse')}>
+          <X className="h-3.5 w-3.5" /> Refusé
+        </Button>
+        <Button size="sm" className="flex-1" disabled={decision.isPending} onClick={() => enregistrer('accepte')}>
+          {decision.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Accepté
+        </Button>
+      </div>
     </div>
   )
 }
@@ -189,7 +279,6 @@ function DevisDetailPanel({
   const statut         = devis.statut as string
   const approuve       = devis.approuve_par_client as boolean
   const commentClient  = devis.commentaire_client as string | null
-  const pdfUrl         = devis.pdf_url as string | null
   const lignes         = devis.lignes as DevisLigne[]
   const client         = devis.client as DevisApi['client']
   // §41.E — détail des ressources (matériaux/MO/équipements), figé au calcul (§21) ;
@@ -358,10 +447,13 @@ function DevisDetailPanel({
           </div>
         )}
 
-        {/* PDF */}
-        {pdfUrl && (
-          <button
-            onClick={() => window.open(pdfUrl, '_blank')}
+        {/* PDF régénéré par l'API à chaque ouverture : le lien stocké (pdf_url)
+            expire au bout de 7 jours (« InvalidJWT … exp claim ») */}
+        <button
+            onClick={() => {
+              apiClient.openFile(`/api/devis/${devis.id as string}/pdf`)
+                .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'PDF indisponible'))
+            }}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-gray-200 hover:border-[#C62828] hover:bg-red-50 transition-colors text-left"
           >
             <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ backgroundColor: '#FFEBEE' }}>
@@ -373,7 +465,6 @@ function DevisDetailPanel({
             </div>
             <ChevronRight className="h-4 w-4 text-gray-300 ml-auto" />
           </button>
-        )}
 
         {/* Actions principales */}
         <div className="border-t border-gray-100 pt-4 space-y-2">
@@ -432,6 +523,11 @@ function DevisDetailPanel({
             </div>
           )}
 
+          {/* Décision donnée par le client hors plateforme, saisie par le personnel habilité */}
+          {canAdmin && !approuve && ['brouillon', 'envoye', 'accepte', 'refuse'].includes(statut) && !devis.expire && (
+            <DecisionClientInterne devisId={devis.id as string} />
+          )}
+
           {/* CMD01 — transformer en commande */}
           {canTransformer && (
             <button
@@ -455,7 +551,7 @@ function DevisDetailPanel({
               <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
               <div>
                 <p className="text-xs font-bold text-amber-700">Commande impossible (CMD01)</p>
-                <p className="text-xs text-amber-600">Le client doit d'abord approuver ce devis via le lien d'approbation.</p>
+                <p className="text-xs text-amber-600">Le client doit d'abord approuver ce devis : via le lien d'approbation, ou enregistrez sa décision ci-dessus.</p>
               </div>
             </div>
           )}
@@ -463,12 +559,19 @@ function DevisDetailPanel({
           {/* Partager WhatsApp */}
           {statut !== 'transforme' && (
             <button
-              onClick={() => {
+              onClick={async () => {
+                // Onglet ouvert tout de suite (sinon bloqué après l'await), rempli
+                // ensuite avec un lien PDF frais valable 7 jours.
+                const onglet = window.open('', '_blank')
+                const lien = await apiClient.get<{ url: string }>(`/api/devis/${devis.id as string}/lien-pdf`)
+                  .then((r) => r.url).catch(() => null)
                 const phone = client.telephone?.replace(/\s+/g, '').replace(/^\+/, '') ?? ''
                 const text  = encodeURIComponent(
-                  `Bonjour ${client.nom},\n\nVotre devis *${devis.reference as string}* d'un montant de *${formatXAF(devis.montant_ttc_xaf as number)}* TTC est prêt.\n\n${pdfUrl ? `📄 PDF : ${pdfUrl}` : ''}\n\nCordialement,\nFORGE – TAFDIL SARL`
+                  `Bonjour ${client.nom},\n\nVotre devis *${devis.reference as string}* d'un montant de *${formatXAF(devis.montant_ttc_xaf as number)}* TTC est prêt.\n\n${lien ? `📄 PDF : ${lien}` : ''}\n\nCordialement,\nFORGE – TAFDIL SARL`
                 )
-                window.open(phone ? `https://wa.me/${phone}?text=${text}` : `https://wa.me/?text=${text}`, '_blank')
+                const wa = phone ? `https://wa.me/${phone}?text=${text}` : `https://wa.me/?text=${text}`
+                if (onglet) onglet.location.href = wa
+                else window.open(wa, '_blank')
               }}
               className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-100 hover:bg-green-50 hover:border-green-200 transition-colors text-left"
             >

@@ -14,6 +14,7 @@ import { rhRouter } from './routes/rh'
 import { aiRouter } from './routes/ai'
 import { rapportsRouter } from './routes/rapports'
 import { shopRouter, shopErpRouter } from './routes/shop'
+import { shopClientRouter } from './routes/shop-client'
 import { configurateurRouter } from './routes/configurateur'
 import { paiementsRouter } from './routes/paiements'
 import { authPhonePinRouter } from './routes/auth-phone-pin'
@@ -98,6 +99,7 @@ app.route('/', publicCommandesRouter)
 app.route('/', publicDevisRouter)
 app.route('/api/auth', authPhonePinRouter)
 app.route('/api/shop/configurateur', configurateurRouter)   // avant shopRouter : chemin plus spécifique
+app.route('/api/shop-client', shopClientRouter)            // serveur du shop uniquement (x-shop-secret)
 app.route('/api/shop',      shopRouter)
 app.route('/api/paiements', paiementsRouter)
 
