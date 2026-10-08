@@ -22,7 +22,8 @@ export async function middleware(req: NextRequest) {
   // Passer les infos client via headers (lisibles côté Server Component)
   const headers = new Headers(req.headers)
   headers.set('x-client-id',        payload.sub)
-  headers.set('x-client-telephone', payload.telephone)
+  headers.set('x-client-telephone', payload.telephone ?? '')
+  headers.set('x-client-email',     payload.email ?? '')
   headers.set('x-client-nom',       payload.nom ?? '')
 
   return NextResponse.next({ request: { headers } })

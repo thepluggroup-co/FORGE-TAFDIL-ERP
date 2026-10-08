@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useCartStore } from '@/lib/cart'
 import type { CommandeShop, DevisWeb, Facture, Client } from './page'
+import { DevisSuivi, type DevisErp } from './DevisSuivi'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -230,11 +231,12 @@ function FactureCard({ facture }: { facture: Facture }) {
 // ── Composant principal ────────────────────────────────────────────────────────
 
 export function DashboardClient({
-  client, commandes, devis, factures,
+  client, commandes, devis, devisErp, factures,
 }: {
   client:    Client
   commandes: CommandeShop[]
   devis:     DevisWeb[]
+  devisErp:  DevisErp[]
   factures:  Facture[]
 }) {
   const router             = useRouter()
@@ -264,7 +266,7 @@ export function DashboardClient({
 
   const tabs_count: Record<Tab, number | null> = {
     commandes: commandes.length,
-    devis:     devis.length,
+    devis:     devis.length + devisErp.length,
     factures:  factures.length,
     profil:    null,
   }
@@ -278,7 +280,7 @@ export function DashboardClient({
           <h1 className="mt-0.5 text-xl font-black text-forge-dark">
             {client.nom ? `Bonjour, ${client.nom.split(' ')[0]} !` : 'Mon espace'}
           </h1>
-          <p className="text-xs text-gray-400">{client.telephone}</p>
+          <p className="text-xs text-gray-400">{client.telephone || client.email}</p>
         </div>
         <button
           onClick={handleLogout}
@@ -332,7 +334,20 @@ export function DashboardClient({
           {/* ── Devis ── */}
           {tab === 'devis' && (
             <div className="space-y-3">
-              {devis.length === 0
+              <DevisSuivi devis={devisErp} />
+              {devisErp.length > 0 && devis.length > 0 && (
+                <h3 className="pt-2 text-xs font-bold uppercase tracking-wider text-forge-steel">Vos demandes de devis</h3>
+              )}
+              {devis.length === 0 && devisErp.length > 0
+                ? (
+                  <Link
+                    href="/devis"
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-forge-red py-3 text-sm font-bold text-forge-red hover:bg-forge-red hover:text-white transition"
+                  >
+                    Nouvelle demande →
+                  </Link>
+                )
+                : devis.length === 0
                 ? (
                   <div className="space-y-4">
                     <EmptyState icon={<FileText size={48} />} text="Aucune demande de devis." />
@@ -392,7 +407,7 @@ export function DashboardClient({
                   <label className="mb-1 block text-xs font-semibold text-forge-steel">Téléphone</label>
                   <div className="flex items-center gap-2 rounded-xl border-2 border-gray-100 bg-gray-50 px-3 py-2.5">
                     <Phone size={14} className="text-gray-400" />
-                    <span className="text-sm font-semibold text-forge-dark">{client.telephone}</span>
+                    <span className="text-sm font-semibold text-forge-dark">{client.telephone || client.email}</span>
                     <span className="ml-auto text-[10px] text-gray-400">Non modifiable</span>
                   </div>
                 </div>

@@ -3,12 +3,24 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent, ClipboardEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Phone, ArrowRight, Loader2, ChevronLeft, ShieldCheck } from 'lucide-react'
+import { Phone, Mail, ArrowRight, Loader2, ChevronLeft, ShieldCheck } from 'lucide-react'
 import { MetalForgeLogo } from '@/components/ui/BrandLogo'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type Step = 'phone' | 'otp'
+type Canal = 'telephone' | 'email'
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+// Messages des retours Google / Facebook (?erreur=… posé par la route de callback)
+const ERREURS_OAUTH: Record<string, string> = {
+  annule:         'Connexion annulée.',
+  session:        'La connexion a expiré, réessayez.',
+  compte:         'Impossible de créer votre compte pour le moment.',
+  fournisseur:    'Le service de connexion a refusé la demande, réessayez.',
+  'non-configure': 'Ce mode de connexion n\'est pas encore disponible.',
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -94,7 +106,9 @@ export function LoginClient() {
   const router = useRouter()
 
   const [step,      setStep]      = useState<Step>('phone')
+  const [canal,     setCanal]     = useState<Canal>('telephone')
   const [telephone, setTelephone] = useState('')
+  const [email,     setEmail]     = useState('')
   const [otp,       setOtp]       = useState<string[]>(Array(DIGITS).fill(''))
   const [loading,   setLoading]   = useState(false)
   const [error,     setError]     = useState('')
@@ -103,7 +117,12 @@ export function LoginClient() {
 
   const phoneRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { phoneRef.current?.focus() }, [])
+  useEffect(() => { phoneRef.current?.focus() }, [canal])
+
+  useEffect(() => {
+    const motif = new URLSearchParams(window.location.search).get('erreur')
+    if (motif) setError(ERREURS_OAUTH[motif] ?? 'Connexion impossible, réessayez.')
+  }, [])
 
   // Compte à rebours pour renvoyer le code
   useEffect(() => {
@@ -115,22 +134,33 @@ export function LoginClient() {
   }, [expiresAt])
 
   const handleSendOtp = async () => {
-    if (!PHONE_RE.test(telephone.trim())) {
+    if (canal === 'telephone' && !PHONE_RE.test(telephone.trim())) {
       setError('Numéro invalide — format : 6XX XX XX XX (Cameroun)')
+      return
+    }
+    if (canal === 'email' && !EMAIL_RE.test(email.trim())) {
+      setError('Adresse email invalide')
       return
     }
     setLoading(true); setError('')
 
     try {
-      const res = await fetch('/api/auth/shop/demander-otp', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ telephone: telephone.trim() }),
-      })
+      const res = canal === 'telephone'
+        ? await fetch('/api/auth/shop/demander-otp', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ telephone: telephone.trim() }),
+          })
+        : await fetch('/api/auth/shop/email/code', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ email: email.trim() }),
+          })
       const json = await res.json()
       if (!res.ok) { setError(json.error ?? 'Erreur réseau'); return }
 
-      setExpiresAt(new Date(json.expires_at))
+      // Code SMS : 5 min (renvoyé par le serveur) ; code email : 10 min
+      setExpiresAt(json.expires_at ? new Date(json.expires_at) : new Date(Date.now() + 10 * 60_000))
       setOtp(Array(DIGITS).fill(''))
       setStep('otp')
     } catch {
@@ -146,10 +176,10 @@ export function LoginClient() {
     setLoading(true); setError('')
 
     try {
-      const res = await fetch('/api/auth/shop/verifier-otp', {
+      const res = await fetch(canal === 'telephone' ? '/api/auth/shop/verifier-otp' : '/api/auth/shop/email/verifier', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ telephone: telephone.trim(), code }),
+        body:    JSON.stringify(canal === 'telephone' ? { telephone: telephone.trim(), code } : { email: email.trim(), code }),
       })
       const json = await res.json()
       if (!res.ok) { setError(json.error ?? 'Code incorrect'); return }
@@ -174,7 +204,7 @@ export function LoginClient() {
       <div className="mb-8 flex flex-col items-center text-center">
         <MetalForgeLogo size={44} variant="color" />
         <h1 className="mt-4 text-2xl font-black text-forge-dark">Mon espace client</h1>
-        <p className="mt-1 text-sm text-forge-steel">Connexion par SMS — sans mot de passe</p>
+        <p className="mt-1 text-sm text-forge-steel">Sans mot de passe : code par SMS ou email, Google ou Facebook</p>
       </div>
 
       <AnimatePresence mode="wait" custom={step === 'otp' ? 1 : -1}>
@@ -189,6 +219,40 @@ export function LoginClient() {
             transition={{ duration: 0.22, ease: 'easeOut' }}
             className="space-y-5"
           >
+            {/* Choix du canal de réception du code */}
+            <div className="grid grid-cols-2 gap-1 rounded-xl bg-gray-100 p-1">
+              {([['telephone', 'Téléphone'], ['email', 'Email']] as const).map(([valeur, libelle]) => (
+                <button
+                  key={valeur}
+                  type="button"
+                  onClick={() => { setCanal(valeur); setError('') }}
+                  className={`rounded-lg py-2 text-sm font-bold transition ${canal === valeur ? 'bg-white text-forge-red shadow-sm' : 'text-forge-steel hover:text-forge-dark'}`}
+                >
+                  {libelle}
+                </button>
+              ))}
+            </div>
+
+            {canal === 'email' ? (
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-forge-steel">
+                Adresse email
+              </label>
+              <div className="relative">
+                <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  ref={phoneRef}
+                  type="email"
+                  autoComplete="email"
+                  placeholder="vous@exemple.com"
+                  value={email}
+                  onChange={(e) => { setEmail(e.target.value); setError('') }}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSendOtp()}
+                  className="w-full rounded-xl border-2 border-gray-200 py-3 pl-10 pr-4 text-base font-semibold outline-none transition focus:border-forge-red focus:ring-2 focus:ring-forge-red/20"
+                />
+              </div>
+            </div>
+            ) : (
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-forge-steel">
                 Numéro de téléphone
@@ -211,6 +275,7 @@ export function LoginClient() {
               </div>
               <p className="mt-1.5 text-[11px] text-gray-400">Format : 6XX XX XX XX ou +237 6XX XX XX XX</p>
             </div>
+            )}
 
             {error && (
               <motion.p
@@ -229,9 +294,28 @@ export function LoginClient() {
             >
               {loading
                 ? <Loader2 size={17} className="animate-spin" />
-                : <><span>Recevoir le code par SMS</span><ArrowRight size={16} /></>
+                : <><span>{canal === 'telephone' ? 'Recevoir le code par SMS' : 'Recevoir le code par email'}</span><ArrowRight size={16} /></>
               }
             </button>
+
+            {/* Connexion via Google / Facebook */}
+            <div className="flex items-center gap-3 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+              <span className="h-px flex-1 bg-gray-200" /> ou <span className="h-px flex-1 bg-gray-200" />
+            </div>
+            <div className="space-y-2">
+              <a
+                href="/api/auth/shop/oauth/google"
+                className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-gray-200 bg-white py-3 text-sm font-bold text-forge-dark transition hover:border-gray-300"
+              >
+                <span aria-hidden className="text-base font-black text-[#4285F4]">G</span> Continuer avec Google
+              </a>
+              <a
+                href="/api/auth/shop/oauth/facebook"
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#1877F2] py-3 text-sm font-bold text-white transition hover:bg-[#166FE5]"
+              >
+                <span aria-hidden className="text-base font-black">f</span> Continuer avec Facebook
+              </a>
+            </div>
           </motion.div>
         ) : (
           <motion.div
@@ -250,16 +334,16 @@ export function LoginClient() {
                 onClick={() => { setStep('phone'); setError('') }}
                 className="flex items-center gap-1 text-sm text-forge-steel hover:text-forge-red transition"
               >
-                <ChevronLeft size={16} /> Changer de numéro
+                <ChevronLeft size={16} /> {canal === 'telephone' ? 'Changer de numéro' : 'Changer d\'email'}
               </button>
             </div>
 
             <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
               <div className="flex items-center gap-2 mb-1">
                 <ShieldCheck size={15} className="text-forge-red" />
-                <p className="text-xs font-semibold text-forge-steel">Code envoyé par SMS</p>
+                <p className="text-xs font-semibold text-forge-steel">{canal === 'telephone' ? 'Code envoyé par SMS' : 'Code envoyé par email'}</p>
               </div>
-              <p className="text-sm font-bold text-forge-dark">{telephone}</p>
+              <p className="text-sm font-bold text-forge-dark">{canal === 'telephone' ? telephone : email}</p>
               {countdown > 0 && (
                 <p className="mt-1 text-[11px] text-gray-400">
                   Expire dans <span className="font-semibold tabular-nums">{Math.floor(countdown / 60)}:{String(countdown % 60).padStart(2, '0')}</span>
@@ -300,7 +384,9 @@ export function LoginClient() {
                   Renvoyer un code
                 </button>
               ) : (
-                <p className="text-xs text-gray-400">Pas reçu le code ? Vérifiez votre SMS ou attendez l'expiration pour renvoyer.</p>
+                <p className="text-xs text-gray-400">{canal === 'telephone'
+                  ? 'Pas reçu le code ? Vérifiez vos SMS ou attendez l\'expiration pour renvoyer.'
+                  : 'Pas reçu le code ? Vérifiez vos courriers indésirables ou attendez l\'expiration pour renvoyer.'}</p>
               )}
             </div>
           </motion.div>

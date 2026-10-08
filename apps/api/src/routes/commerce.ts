@@ -1794,32 +1794,16 @@ publicDevisRouter.get('/devis/approuver/:token', async (c) => {
   return c.json({ token_valide: true, devis: data })
 })
 
-publicDevisRouter.post('/devis/approuver/:token', async (c) => {
-  const { token } = c.req.param()
-  const body = await c.req.json<{ decision: 'accepte' | 'refuse'; commentaire?: string }>()
-
-  if (!['accepte', 'refuse'].includes(body.decision)) {
-    return c.json({ error: 'Décision invalide — accepte ou refuse', code: 'INVALID_DECISION' }, 422)
-  }
-
-  const { data } = await db
-    .from('devis')
-    .select('id, numero, client_nom, statut, token_expires_at')
-    .eq('token_approbation', token)
-    .single()
-
-  if (!data) return c.json({ error: 'Lien invalide', code: 'INVALID_TOKEN' }, 404)
-
-  const d = data as { id: string; numero: string; client_nom: string; statut: string; token_expires_at: string }
-
-  if (new Date(d.token_expires_at) < new Date()) {
-    return c.json({ error: 'Ce lien d\'approbation a expiré', code: 'TOKEN_EXPIRED' }, 410)
-  }
-
-  if (['transforme', 'expire'].includes(d.statut)) {
-    return c.json({ error: 'Ce devis n\'est plus en attente d\'approbation', code: 'INVALID_STATUS' }, 410)
-  }
-
+/**
+ * Applique la décision du CLIENT sur un devis : statut, demande web liée,
+ * audit, alerte WhatsApp + email au directeur, notification ERP. Partagé par
+ * le lien public d'approbation et l'espace client du shop (client connecté).
+ */
+async function appliquerDecisionClient(
+  d: { id: string; numero: string; client_nom: string; statut: string },
+  body: { decision: 'accepte' | 'refuse'; commentaire?: string | null },
+  decideur: string,
+): Promise<void> {
   await db.from('devis').update({
     statut:              body.decision,   // 'accepte' ou 'refuse'
     approuve_par_client: body.decision === 'accepte',
@@ -1837,7 +1821,7 @@ publicDevisRouter.post('/devis/approuver/:token', async (c) => {
     actionType: 'DEVIS_VALIDATION_CLIENT', module: 'COMMERCIAL',
     resourceType: 'devis', resourceId: d.id,
     payloadBefore: { statut: d.statut },
-    payloadAfter:  { statut: body.decision, commentaire: body.commentaire ?? null, decideur: 'client (lien public)' },
+    payloadAfter:  { statut: body.decision, commentaire: body.commentaire ?? null, decideur },
   })
 
   const isAccepted = body.decision === 'accepte'
@@ -1910,6 +1894,36 @@ publicDevisRouter.post('/devis/approuver/:token', async (c) => {
       commentaire: body.commentaire ?? null,
     },
   })
+
+}
+
+publicDevisRouter.post('/devis/approuver/:token', async (c) => {
+  const { token } = c.req.param()
+  const body = await c.req.json<{ decision: 'accepte' | 'refuse'; commentaire?: string }>()
+
+  if (!['accepte', 'refuse'].includes(body.decision)) {
+    return c.json({ error: 'Décision invalide — accepte ou refuse', code: 'INVALID_DECISION' }, 422)
+  }
+
+  const { data } = await db
+    .from('devis')
+    .select('id, numero, client_nom, statut, token_expires_at')
+    .eq('token_approbation', token)
+    .single()
+
+  if (!data) return c.json({ error: 'Lien invalide', code: 'INVALID_TOKEN' }, 404)
+
+  const d = data as { id: string; numero: string; client_nom: string; statut: string; token_expires_at: string }
+
+  if (new Date(d.token_expires_at) < new Date()) {
+    return c.json({ error: 'Ce lien d\'approbation a expiré', code: 'TOKEN_EXPIRED' }, 410)
+  }
+
+  if (['transforme', 'expire'].includes(d.statut)) {
+    return c.json({ error: 'Ce devis n\'est plus en attente d\'approbation', code: 'INVALID_STATUS' }, 410)
+  }
+
+  await appliquerDecisionClient(d, body, 'client (lien public)')
 
   return c.json({ succes: true, decision: body.decision })
 })
@@ -3317,4 +3331,4 @@ router.post(
   },
 )
 
-export { router as commerceRouter, publicRouter as publicCommandesRouter, publicDevisRouter }
+export { router as commerceRouter, publicRouter as publicCommandesRouter, publicDevisRouter, appliquerDecisionClient, checkExpireDevis, chargerDevisPdf }
