@@ -52,6 +52,17 @@ export const SHOP_COMMANDE_STATUS_MAP: StatusMap = {
   annulee:        { label: 'Annulée',        color: '#dc2626', bgColor: '#fee2e2' },
 }
 
+// Statuts des devis (table devis) — absents auparavant : la colonne Statut de
+// la page Devis affichait « Inconnu » pour tous les devis.
+export const DEVIS_STATUS_MAP: StatusMap = {
+  brouillon:  { label: 'Brouillon',       color: '#6b7280', bgColor: '#f3f4f6' },
+  envoye:     { label: 'Envoyé',          color: '#1d4ed8', bgColor: '#dbeafe' },
+  accepte:    { label: 'Accepté',         color: '#15803d', bgColor: '#dcfce7' },
+  refuse:     { label: 'Refusé',          color: '#dc2626', bgColor: '#fee2e2' },
+  expire:     { label: 'Expiré',          color: '#d97706', bgColor: '#fef3c7' },
+  transforme: { label: 'Commande créée',  color: '#7c3aed', bgColor: '#ede9fe' },
+}
+
 const DEFAULT_STATUS: StatusConfig = { label: 'Inconnu', color: '#6b7280', bgColor: '#f3f4f6' }
 
 const COMBINED_MAP: StatusMap = {
@@ -60,6 +71,7 @@ const COMBINED_MAP: StatusMap = {
   ...CREDIT_STATUS_MAP,
   ...ORDER_STATUS_MAP,
   ...SHOP_COMMANDE_STATUS_MAP,
+  ...DEVIS_STATUS_MAP,
 }
 
 export function StatusBadge({ status, map }: StatusBadgeProps) {
