@@ -10,6 +10,7 @@ import { SyncManager } from './ipc/sync-handler'
 import { registerSessionHandlers } from '../auth/session'
 import { registerOfflinePermissionsHandlers } from '../auth/offlinePermissions'
 import { registerAutoLockHandlers } from '../auth/autoLock'
+import { setupAutoUpdate, checkForUpdatesManually } from './updater'
 
 // Set app name before anything else so userData path uses "FORGE by TAFDIL"
 app.setName('FORGE by TAFDIL')
@@ -78,9 +79,9 @@ function startApiServer(): Promise<void> {
       NODE_ENV:                  isDev ? 'development' : 'production',
       SUPABASE_URL:              process.env.SUPABASE_URL              ?? '',
       SUPABASE_ANON_KEY:         process.env.SUPABASE_ANON_KEY         ?? '',
-      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY ?? '',
-      SUPABASE_JWT_SECRET:       process.env.SUPABASE_JWT_SECRET       ?? '',
-      VITE_SUPABASE_URL:         process.env.SUPABASE_URL              ?? '',
+      // SUPABASE_SERVICE_ROLE_KEY / SUPABASE_JWT_SECRET viennent de dotenvVars
+      // (apps/api/.env, dev uniquement) — jamais embarqués dans l'installateur.
+      VITE_SUPABASE_URL:        process.env.SUPABASE_URL              ?? '',
       VITE_SUPABASE_ANON_KEY:    process.env.SUPABASE_ANON_KEY         ?? '',
       // Chemin SQLite local pour le fallback offline de l'API embarquée
       SQLITE_PATH:               join(app.getPath('userData'), 'forge.db'),
@@ -184,6 +185,9 @@ function buildMenu(window: BrowserWindow) {
             })
           },
         },
+        ...( !isDev ? [
+          { label: 'Rechercher les mises à jour', click: () => checkForUpdatesManually() },
+        ] : []),
         { type: 'separator' },
         { label: 'Rapport de bugs', click: () => shell.openExternal('mailto:tafdilsarl@gmail.com?subject=Bug+FORGE') },
       ],
@@ -341,9 +345,10 @@ app.whenReady().then(async () => {
   const sqlite = getDb()
   if (sqlite) registerOfflinePermissionsHandlers(sqlite)
 
-  // 3. Démarrer le serveur API embarqué (Hono → port 3001)
-  //    Tous les hooks React appellent http://localhost:3001/api/*
-  await startApiServer()
+  // 3. Dev uniquement : serveur API embarqué (Hono → port 3001).
+  //    En prod, le renderer et la synchro appellent l'API hébergée (VITE_API_URL)
+  //    et l'installateur ne contient pas les secrets dont l'API aurait besoin.
+  if (isDev) await startApiServer()
 
   // 4. Gestionnaire de synchronisation Supabase
   syncMgr = new SyncManager(() => win)
@@ -354,6 +359,9 @@ app.whenReady().then(async () => {
 
   // 6. Auto-lock (timeout depuis security_settings, défaut 60 min)
   if (win) registerAutoLockHandlers(win, 60)
+
+  // 7. Mises à jour automatiques (GitHub Releases) — prod uniquement
+  if (!isDev) setupAutoUpdate(() => win)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
