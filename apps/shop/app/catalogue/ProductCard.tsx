@@ -40,7 +40,7 @@ export function ProductCard({ produit }: Props) {
   const configurable = produit.commercial_mode === 'CONFIGURABLE'
   const hasPromo = Boolean(produit.promotion && produit.prix_barre_xaf && produit.prix_public)
 
-  const whatsappUrl = `https://wa.me/237695884528?text=${encodeURIComponent(
+  const whatsappUrl = `https://wa.me/237688227397?text=${encodeURIComponent(
     `Bonjour TAFDIL, je souhaite un devis pour : ${produit.nom} (Réf. ${produit.ref})`
   )}`
 

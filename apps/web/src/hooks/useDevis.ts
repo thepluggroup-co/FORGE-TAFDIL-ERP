@@ -218,6 +218,22 @@ export function useUpdateStatutDevis() {
   })
 }
 
+export type CanalDecisionClient = 'telephone' | 'presence' | 'whatsapp' | 'email' | 'autre'
+
+/** Enregistre l'accord (ou le refus) du client, donné hors plateforme, au nom du client. */
+export function useDecisionClientDevis() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string; decision: 'accepte' | 'refuse'; canal: CanalDecisionClient; commentaire?: string }) =>
+      apiClient.post<{ success: boolean; statut: string }>(`/api/devis/${id}/decision-client`, body),
+    onSuccess: (_d, v) => {
+      void qc.invalidateQueries({ queryKey: ['devis'] })
+      toast.success(v.decision === 'accepte' ? 'Devis validé pour le client' : 'Refus du client enregistré')
+    },
+    onError: (err: Error) => toast.error(err.message),
+  })
+}
+
 export function useEnvoyerApprobation() {
   const qc = useQueryClient()
   return useMutation({

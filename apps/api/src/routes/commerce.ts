@@ -1388,12 +1388,11 @@ router.delete('/devis/:id', requirePermission('COMMERCIAL', 'DELETE'), async (c)
 })
 
 /**
- * POST /devis/:id/envoyer-approbation
- * Génère un token 30 jours, envoie email avec PDF joint + WhatsApp immédiat.
+ * Charge un devis, résout les coordonnées du client (fiche liée, sinon même
+ * nom) et génère son PDF avec le gabarit du moment. Partagé par l'envoi pour
+ * approbation et le téléchargement (GET /devis/:id/pdf).
  */
-router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'UPDATE'), async (c) => {
-  const { id } = c.req.param()
-
+async function chargerDevisPdf(id: string) {
   // Fetch full devis data (needed for PDF and professional email)
   const { data: devis } = await db
     .from('devis')
@@ -1408,7 +1407,7 @@ router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'U
     .eq('id', id)
     .single()
 
-  if (!devis) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
+  if (!devis) return null
 
   type LigneRow = { designation: string; unite: string; quantite: number; prix_unitaire_ht_xaf: number; total_ht_xaf: number; ordre: number; configuration?: Record<string, unknown> | null }
   const d = devis as {
@@ -1418,10 +1417,6 @@ router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'U
     total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number
     notes: string | null; ressources_snapshot: PdfRessourcesSnapshot | null
     devis_lignes: LigneRow[]
-  }
-
-  if (['transforme', 'expire'].includes(d.statut)) {
-    return c.json({ error: `Devis "${d.statut}" — envoi d'approbation impossible`, code: 'INVALID_STATUS' }, 422)
   }
 
   // Récupérer les détails du client pour le PDF et l'email
@@ -1459,13 +1454,6 @@ router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'U
     clientType      = clientType ?? cliRow?.type ?? null
   }
 
-  if (!clientEmail) {
-    return c.json({
-      error: 'Impossible d envoyer le devis : le client n a pas d adresse email enregistree.',
-      code:  'CLIENT_EMAIL_REQUIRED',
-    }, 422)
-  }
-
   // Générer le PDF pour la pièce jointe
   const lignesSorted = [...d.devis_lignes].sort((a, b) => (a.ordre ?? 0) - (b.ordre ?? 0))
   let pdfBuffer: Buffer | null = null
@@ -1487,6 +1475,113 @@ router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'U
     )
   } catch (e) {
     console.error('[commerce] Erreur génération PDF pour email:', e)
+  }
+
+  return {
+    d,
+    lignesSorted,
+    client: { email: clientEmail, adresse: clientAdresse, telephone: clientTelephone, niu: clientNiu, type: clientType },
+    pdfBuffer,
+  }
+}
+
+// ── GET /devis/:id/pdf — PDF du devis, régénéré à la demande ─────────────────
+// Le lien signé stocké à la création expire après 7 jours ; l'ouvrir donnait
+// « InvalidJWT: "exp" claim timestamp check failed » (recette).
+router.get('/devis/:id/pdf', requirePermission('COMMERCIAL', 'READ'), async (c) => {
+  const charge = await chargerDevisPdf(c.req.param('id'))
+  if (!charge) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
+  if (!charge.pdfBuffer) return c.json({ error: 'Le PDF du devis n a pas pu etre genere', code: 'PDF_GENERATION_FAILED' }, 500)
+
+  c.header('Content-Type', 'application/pdf')
+  c.header('Content-Disposition', `inline; filename="${charge.d.numero}.pdf"`)
+  c.header('Cache-Control', 'no-store')
+  return c.body(charge.pdfBuffer.buffer as ArrayBuffer)
+})
+
+// ── GET /devis/:id/lien-pdf — lien signé frais (7 jours) à partager ──────────
+// Pour le message WhatsApp : le PDF est régénéré, redéposé dans Storage, et le
+// lien renvoyé est valable 7 jours à partir de maintenant (pas de la création).
+router.get('/devis/:id/lien-pdf', requirePermission('COMMERCIAL', 'READ'), async (c) => {
+  const charge = await chargerDevisPdf(c.req.param('id'))
+  if (!charge) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
+  if (!charge.pdfBuffer) return c.json({ error: 'Le PDF du devis n a pas pu etre genere', code: 'PDF_GENERATION_FAILED' }, 500)
+
+  const url = await uploadPDF(charge.pdfBuffer, 'devis', `${charge.d.numero}.pdf`)
+  await db.from('devis').update({ pdf_url: url }).eq('id', c.req.param('id'))
+  return c.json({ url })
+})
+
+// ── POST /devis/:id/decision-client — décision saisie AU NOM du client ───────
+// Le client donne son accord (ou son refus) par téléphone, en boutique, par
+// WhatsApp… : un utilisateur habilité (COMMERCIAL:VALIDATE) l'enregistre dans
+// l'ERP. Mêmes effets que le lien public d'approbation, mais l'auteur réel et
+// le canal sont tracés (audit + commentaire visible sur le devis).
+const CANAUX_DECISION = { telephone: 'par téléphone', presence: 'en présence du client', whatsapp: 'par WhatsApp', email: 'par email', autre: 'autre canal' } as const
+const decisionClientSchema = z.object({
+  decision:    z.enum(['accepte', 'refuse']),
+  canal:       z.enum(Object.keys(CANAUX_DECISION) as [keyof typeof CANAUX_DECISION, ...Array<keyof typeof CANAUX_DECISION>]),
+  commentaire: z.string().trim().max(1000).optional(),
+})
+
+router.post('/devis/:id/decision-client', requirePermission('COMMERCIAL', 'VALIDATE'), zValidator('json', decisionClientSchema), async (c) => {
+  const { id } = c.req.param()
+  const user   = c.get('user')
+  const body   = c.req.valid('json')
+
+  const { data } = await db.from('devis').select('id, numero, statut, date_validite').eq('id', id).maybeSingle()
+  if (!data) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
+  const d = data as { id: string; numero: string; statut: string; date_validite: string }
+
+  const statut = await checkExpireDevis(d.id, d.date_validite, d.statut)
+  if (['transforme', 'expire'].includes(statut)) {
+    return c.json({ error: `Devis « ${statut} » — la décision du client ne peut plus être enregistrée`, code: 'INVALID_STATUS' }, 422)
+  }
+
+  const trace = `Décision enregistrée ${CANAUX_DECISION[body.canal]} par ${user.email}`
+  const maintenant = new Date().toISOString()
+  const { error } = await db.from('devis').update({
+    statut:              body.decision,
+    approuve_par_client: body.decision === 'accepte',
+    approuve_at:         maintenant,
+    commentaire_client:  body.commentaire ? `${body.commentaire}\n— ${trace}` : trace,
+    token_approbation:   null,   // le lien public n'a plus lieu d'être
+    updated_at:          maintenant,
+  }).eq('id', d.id)
+  if (error) return c.json({ error: error.message }, 500)
+  await synchroniserDemandeDepuisDevis(d.id, body.decision)
+
+  writeAuditLog({
+    userId: user.id, actionType: 'DEVIS_VALIDATION_CLIENT', module: 'COMMERCIAL',
+    resourceType: 'devis', resourceId: d.id,
+    payloadBefore: { statut },
+    payloadAfter:  { statut: body.decision, commentaire: body.commentaire ?? null, decideur: `personnel pour le client (${body.canal})` },
+  })
+
+  return c.json({ success: true, statut: body.decision })
+})
+
+/**
+ * POST /devis/:id/envoyer-approbation
+ * Génère un token 30 jours, envoie email avec PDF joint + WhatsApp immédiat.
+ */
+router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'UPDATE'), async (c) => {
+  const { id } = c.req.param()
+
+  const charge = await chargerDevisPdf(id)
+  if (!charge) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
+  const { d, pdfBuffer, lignesSorted } = charge
+  const clientEmail = charge.client.email
+
+  if (['transforme', 'expire'].includes(d.statut)) {
+    return c.json({ error: `Devis "${d.statut}" — envoi d'approbation impossible`, code: 'INVALID_STATUS' }, 422)
+  }
+
+  if (!clientEmail) {
+    return c.json({
+      error: 'Impossible d envoyer le devis : le client n a pas d adresse email enregistree.',
+      code:  'CLIENT_EMAIL_REQUIRED',
+    }, 422)
   }
 
   if (!pdfBuffer) {

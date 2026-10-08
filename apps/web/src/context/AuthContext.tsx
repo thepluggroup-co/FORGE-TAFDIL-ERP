@@ -244,8 +244,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { error: body.error ?? 'Numéro ou code PIN incorrect' }
       }
 
+      // token_hash + type UNIQUEMENT : Supabase Auth refuse désormais l'appel si
+      // l'email est aussi fourni (« Only the token_hash and type should be
+      // provided ») — c'est ce qui faisait échouer toute connexion par PIN.
       const { error } = await supabase.auth.verifyOtp({
-        email: body.email,
         token_hash: body.hashedToken,
         type: 'magiclink',
       })

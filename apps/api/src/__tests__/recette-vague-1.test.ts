@@ -5,6 +5,7 @@
  *  AD-06  désactivation depuis l'onglet RBAC = compte bloqué partout
  *  AD-12  PDF facture toujours régénéré, avec les coordonnées du client
  *  AD-14  envoi WhatsApp d'une facture, soldée comprise
+ *  Devis  PDF régénéré (lien signé expiré), décision du client saisie en interne
  *
  * Mock Supabase piloté par table + filtres (le vrai rbacService interroge aussi
  * supabase.from() et décalerait une file mockReturnValueOnce).
@@ -60,11 +61,11 @@ vi.mock('../services/sms.service', async (orig) => ({
   ...(await orig<typeof import('../services/sms.service')>()),
   sendSms: vi.fn().mockResolvedValue({ ok: true }),
 }))
-vi.mock('../services/email-queue.service', () => ({ notifyWhatsApp: vi.fn() }))
+vi.mock('../services/email-queue.service', () => ({ notifyWhatsApp: vi.fn(), enqueueEmail: vi.fn(), sendEmailDirect: vi.fn() }))
 vi.mock('../services/pdf.service', () => ({
   generateFacturePDF: vi.fn().mockResolvedValue(Buffer.from('%PDF-1.4 facture')),
   generateRecuPDF:    vi.fn(),
-  generateDevisPDF:   vi.fn(),
+  generateDevisPDF:   vi.fn().mockResolvedValue(Buffer.from('%PDF-1.4 devis')),
   generateAttestationPDF: vi.fn(),
   uploadPDF: vi.fn().mockResolvedValue('https://supabase.test/storage/v1/object/sign/factures/FAC-2026-0042.pdf?token=abc'),
 }))
@@ -223,5 +224,62 @@ describe('AD-14 — envoi WhatsApp d\'une facture', () => {
     etat.resolver = facture('annule', 0)
     const res = await app.request(`/api/factures/${FACT_ID}/envoi-whatsapp`, { method: 'POST', headers: admin(), body: '{}' })
     expect(res.status).toBe(422)
+  })
+})
+
+// ── Devis : PDF à la demande et décision saisie au nom du client ────────────
+
+const DEVIS_ID = '00000000-0000-4000-8000-0000000000d1'
+const demain   = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)
+const hier     = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
+
+function devis(statut: string, dateValidite = demain) {
+  return (t: string, f: Record<string, unknown>) => {
+    if (t === 'devis' && f.id === DEVIS_ID) return { data: {
+      id: DEVIS_ID, numero: 'DEV-2026-0007', statut, date_validite: dateValidite, client_nom: 'Société Test', client_id: null,
+      date_emission: '2026-10-01', validite_jours: 30, total_ht_xaf: 100000, tva_xaf: 19250, total_ttc_xaf: 119250,
+      notes: null, ressources_snapshot: null, cp: null, devis_lignes: [],
+    }, error: null }
+    return { data: null, error: null }
+  }
+}
+
+describe('Devis — PDF régénéré à la demande', () => {
+  it('GET /devis/:id/pdf renvoie un PDF sans passer par le lien stocké', async () => {
+    etat.resolver = devis('envoye')
+    const res = await app.request(`/api/devis/${DEVIS_ID}/pdf`, { headers: admin() })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('application/pdf')
+  })
+})
+
+describe('Devis — décision du client saisie par le personnel', () => {
+  const decider = (body: unknown, role: 'admin' | 'operateur' | 'apprenant' = 'admin') =>
+    app.request(`/api/devis/${DEVIS_ID}/decision-client`, {
+      method: 'POST', headers: authHeaders(role, role === 'admin' ? ADMIN_ID : CIBLE_ID), body: JSON.stringify(body),
+    })
+
+  it('accepte : même effet que le lien public, auteur et canal tracés', async () => {
+    etat.resolver = devis('envoye')
+    const res = await decider({ decision: 'accepte', canal: 'telephone', commentaire: 'Accord de M. Ngono' })
+    expect(res.status).toBe(200)
+    const maj = etat.ecritures.find(e => e.table === 'devis' && e.op === 'update')
+    expect(maj?.payload).toMatchObject({ statut: 'accepte', approuve_par_client: true, token_approbation: null })
+    const commentaire = (maj?.payload as { commentaire_client: string }).commentaire_client
+    expect(commentaire).toContain('Accord de M. Ngono')
+    expect(commentaire).toContain('par téléphone')
+    expect(commentaire).toContain('test@tafdil.cm')
+  })
+
+  it('devis expiré : refusé', async () => {
+    etat.resolver = devis('envoye', hier)
+    const res = await decider({ decision: 'accepte', canal: 'presence' })
+    expect(res.status).toBe(422)
+  })
+
+  it('technicien (lecture seule) : 403', async () => {
+    etat.resolver = devis('envoye')
+    const res = await decider({ decision: 'accepte', canal: 'telephone' }, 'apprenant')
+    expect(res.status).toBe(403)
   })
 })

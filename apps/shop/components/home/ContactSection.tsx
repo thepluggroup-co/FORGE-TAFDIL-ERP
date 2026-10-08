@@ -272,14 +272,14 @@ export function ContactSection() {
                 <li className="flex items-start gap-3">
                   <Phone size={16} className="mt-0.5 shrink-0 text-forge-red" />
                   <div>
-                    <p className="text-sm font-medium text-forge-dark">Téléphone / WhatsApp</p>
+                    <p className="text-sm font-medium text-forge-dark">WhatsApp</p>
                     <a
-                      href="https://wa.me/237695884528"
+                      href="https://wa.me/237688227397"
                       className="text-sm text-forge-red hover:underline"
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      +237 695884528
+                      +237 6 88 22 73 97
                     </a>
                   </div>
                 </li>

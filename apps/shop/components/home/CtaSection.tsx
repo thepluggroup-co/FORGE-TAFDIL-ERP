@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { MessageCircle, ArrowRight } from 'lucide-react'
 
 export function CtaSection() {
-  const whatsapp = '+237695884528'
+  const whatsapp = '+237688227397'
   const waUrl = `https://wa.me/${whatsapp.replace(/\D/g, '')}?text=${encodeURIComponent('Bonjour TAFDIL, je souhaite un devis pour mon projet.')}`
 
   return (
