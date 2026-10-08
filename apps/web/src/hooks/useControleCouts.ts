@@ -54,6 +54,32 @@ export interface SyntheseControleCouts {
   periode_jours: number
 }
 
+export interface ConsommationCommande {
+  type: 'materiau' | 'consommable'
+  designation: string
+  unite: string
+  produit_id: string | null
+  quantite_prevue: number
+  quantite_reelle: number | null
+  quantite_sortie_stock: number
+  ofs: string[]
+}
+
+export interface ConsommationsCommande {
+  commande: { id: string; numero: string; client_nom: string | null }
+  source: 'ordres_fabrication' | 'devis' | 'aucune'
+  data: ConsommationCommande[]
+}
+
+export function useConsommationsCommande(commandeId: string | null) {
+  return useQuery({
+    queryKey: ['jobs', commandeId, 'consommations-commande'],
+    queryFn: () => apiClient.get<ConsommationsCommande>(`/api/production/commandes/${commandeId}/consommations`),
+    enabled: !!commandeId,
+    staleTime: 0,
+  })
+}
+
 export function useSyntheseControleCouts(jours: number, enabled: boolean) {
   return useQuery({
     queryKey: ['jobs', 'controle-couts', jours],

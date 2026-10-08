@@ -510,7 +510,7 @@ async function creerJobsProductionCommande(
 
   const { data: lignes, error: lignesErr } = await db
     .from('commandes_lignes')
-    .select('produit_id, designation, unite, quantite, prix_unitaire_ht_xaf, ordre')
+    .select('produit_id, modele_id, designation, unite, quantite, prix_unitaire_ht_xaf, ordre')
     .eq('commande_id', commandeId)
     .order('ordre', { ascending: true })
 
@@ -521,6 +521,7 @@ async function creerJobsProductionCommande(
 
   type LigneCommande = {
     produit_id: string | null
+    modele_id?: string | null
     designation: string
     unite: string | null
     quantite: number
@@ -575,17 +576,26 @@ async function creerJobsProductionCommande(
     return false
   }
 
-  // Phase 7 — l'OF reprend la gamme de la fiche figée au devis (étapes, temps
-  // prévus, matières). Même règle que ressources_besoin : un seul OF, sinon la
-  // gamme se charge depuis l'écran Production. Un échec n'annule pas l'OF.
-  const jobCree = Array.isArray(crees) && crees.length === 1 ? (crees[0] as { id: string }) : null
-  if (jobCree) {
-    const source = await ficheDepuisCommande(commandeId).catch(() => null)
-    if (source) {
-      const chargement = await chargerGammeDansOF(jobCree.id, source.ficheTechniqueId, source.quantiteFacturable)
-        .catch((e: Error) => ({ ok: false as const, code: 'ERREUR_DB' as const, message: e.message }))
-      if (!chargement.ok) console.error(`[commerce] gamme non chargée pour ${jobs[0].numero} :`, chargement.message)
+  // Charger la nomenclature dans chaque OF : fiche figée du devis en priorité,
+  // puis fiche active du modèle si la ligne provient du catalogue produits finis.
+  const sourceDevis = lignesValides.length === 1
+    ? await ficheDepuisCommande(commandeId).catch(() => null)
+    : null
+  for (const [index, job] of ((crees ?? []) as Array<{ id: string }>).entries()) {
+    const ligne = lignesValides[index]
+    let source = sourceDevis
+    if (!source && ligne?.modele_id) {
+      const { data: fiche } = await db.from('fiche_technique')
+        .select('id')
+        .eq('modele_id', ligne.modele_id)
+        .eq('statut', 'active')
+        .maybeSingle()
+      if (fiche) source = { ficheTechniqueId: (fiche as { id: string }).id, quantiteFacturable: Number(ligne.quantite) }
     }
+    if (!source) continue
+    const chargement = await chargerGammeDansOF(job.id, source.ficheTechniqueId, source.quantiteFacturable)
+      .catch((e: Error) => ({ ok: false as const, code: 'ERREUR_DB' as const, message: e.message }))
+    if (!chargement.ok) console.error(`[commerce] gamme non chargée pour ${jobs[index]?.numero ?? job.id} :`, chargement.message)
   }
 
   return true

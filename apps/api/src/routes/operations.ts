@@ -495,6 +495,107 @@ router.get('/production/jobs/:id/fabrication', requirePermission('PRODUCTION', '
   })
 })
 
+/** Liste consolidée des matières/consommables d'une commande, issue des OF ou du devis figé. */
+router.get('/production/commandes/:commande_id/consommations', requirePermission('PRODUCTION', 'READ'), async (c) => {
+  const { commande_id: commandeId } = c.req.param()
+  const { data: commande, error: commandeError } = await db.from('commandes')
+    .select('id, numero, client_nom, devis_id')
+    .eq('id', commandeId)
+    .maybeSingle()
+  if (commandeError) return c.json({ error: commandeError.message, code: 'DB_ERROR' }, 500)
+  if (!commande) return c.json({ error: 'Commande introuvable', code: 'NOT_FOUND' }, 404)
+
+  const { data: jobs, error: jobsError } = await db.from('jobs_production')
+    .select('id, numero')
+    .eq('commande_id', commandeId)
+  if (jobsError) return c.json({ error: jobsError.message, code: 'DB_ERROR' }, 500)
+
+  const jobRows = (jobs ?? []) as Array<{ id: string; numero: string }>
+  const jobIds = jobRows.map((job) => job.id)
+  const { data: consommations, error: consommationsError } = jobIds.length
+    ? await db.from('of_consommations')
+        .select('type, designation, unite, produit_id, quantite_prevue, quantite_reelle, quantite_sortie_stock, job_id')
+        .in('job_id', jobIds)
+    : { data: [], error: null }
+  if (consommationsError) return c.json({ error: consommationsError.message, code: 'DB_ERROR' }, 500)
+
+  const numeroParJob = new Map(jobRows.map((job) => [job.id, job.numero]))
+  const rows = (consommations ?? []) as Array<{
+    type: 'materiau' | 'consommable'; designation: string; unite: string; produit_id: string | null
+    quantite_prevue: number; quantite_reelle: number | null; quantite_sortie_stock: number; job_id: string
+  }>
+
+  if (rows.length > 0) {
+    const groupes = new Map<string, {
+      type: 'materiau' | 'consommable'; designation: string; unite: string; produit_id: string | null
+      quantite_prevue: number; quantite_reelle: number; quantite_sortie_stock: number
+      saisies_reelles: number; ofs: Set<string>
+    }>()
+    for (const row of rows) {
+      const cle = `${row.type}|${row.designation.trim().toLocaleLowerCase()}|${row.unite}|${row.produit_id ?? ''}`
+      const groupe = groupes.get(cle) ?? {
+        type: row.type, designation: row.designation, unite: row.unite, produit_id: row.produit_id,
+        quantite_prevue: 0, quantite_reelle: 0, quantite_sortie_stock: 0, saisies_reelles: 0, ofs: new Set<string>(),
+      }
+      groupe.quantite_prevue += Number(row.quantite_prevue ?? 0)
+      if (row.quantite_reelle != null) {
+        groupe.quantite_reelle += Number(row.quantite_reelle)
+        groupe.saisies_reelles += 1
+      }
+      groupe.quantite_sortie_stock += Number(row.quantite_sortie_stock ?? 0)
+      const numeroOf = numeroParJob.get(row.job_id)
+      if (numeroOf) groupe.ofs.add(numeroOf)
+      groupes.set(cle, groupe)
+    }
+    return c.json({
+      commande: { id: commandeId, numero: commande.numero, client_nom: commande.client_nom },
+      source: 'ordres_fabrication',
+      data: [...groupes.values()].map((g) => ({
+        type: g.type, designation: g.designation, unite: g.unite, produit_id: g.produit_id,
+        quantite_prevue: g.quantite_prevue,
+        quantite_reelle: g.saisies_reelles > 0 ? g.quantite_reelle : null,
+        quantite_sortie_stock: g.quantite_sortie_stock,
+        ofs: [...g.ofs],
+      })),
+    })
+  }
+
+  // Une commande issue d'un devis multi-lignes peut ne pas avoir de gamme par OF.
+  // Afficher sa nomenclature chiffrée figée comme quantité prévue.
+  const devisId = (commande as { devis_id?: string | null }).devis_id
+  if (devisId) {
+    const { data: devis, error: devisError } = await db.from('devis')
+      .select('ressources_snapshot')
+      .eq('id', devisId)
+      .maybeSingle()
+    if (devisError) return c.json({ error: devisError.message, code: 'DB_ERROR' }, 500)
+    const snapshot = (devis as { ressources_snapshot?: { lignes?: Array<Record<string, unknown>> } | null } | null)?.ressources_snapshot
+    const lignes = (snapshot?.lignes ?? []).filter((ligne) =>
+      ['materiau', 'consommable'].includes(String(ligne.type)) && String(ligne.designation ?? '').trim(),
+    )
+    return c.json({
+      commande: { id: commandeId, numero: commande.numero, client_nom: commande.client_nom },
+      source: lignes.length > 0 ? 'devis' : 'aucune',
+      data: lignes.map((ligne) => ({
+        type: ligne.type,
+        designation: ligne.designation,
+        unite: ligne.unite ?? '',
+        produit_id: null,
+        quantite_prevue: Number(ligne.quantiteCalculee ?? 0),
+        quantite_reelle: null,
+        quantite_sortie_stock: 0,
+        ofs: [],
+      })),
+    })
+  }
+
+  return c.json({
+    commande: { id: commandeId, numero: commande.numero, client_nom: commande.client_nom },
+    source: 'aucune',
+    data: [],
+  })
+})
+
 const chargerGammeSchema = z.object({
   fiche_technique_id:  z.string().uuid().optional(),
   modele_id:           z.string().uuid().optional(),

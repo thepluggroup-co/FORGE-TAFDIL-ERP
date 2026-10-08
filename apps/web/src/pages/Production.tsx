@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Wrench, Gauge, AlertTriangle, Clock, Plus, Play, CheckCircle2, Package, ListChecks } from 'lucide-react'
+import { Wrench, Gauge, AlertTriangle, Clock, Plus, Play, CheckCircle2, Package, ListChecks, Download, Loader2 } from 'lucide-react'
 import { FabricationOFPanel } from '@/components/production/FabricationOF'
 import { ControleCouts } from '@/components/production/ControleCouts'
 import { useIndicateursProduction } from '@/hooks/useControleCouts'
@@ -13,6 +13,7 @@ import { useJobs, useCreateJob, useUpdateJobStatut } from '@/hooks/useOperations
 import type { Job } from '@/hooks/useOperations'
 import { useStocks } from '@/hooks/useStocks'
 import { useEquipements, useTechniciens, STATUTS_EQUIPEMENT_INDISPONIBLE } from '@/hooks/useEquipements'
+import { useConsommationsCommande } from '@/hooks/useControleCouts'
 
 type JobRecord = Job & Record<string, unknown>
 
@@ -102,10 +103,91 @@ const BASE_COLUMNS: Column<JobRecord>[] = [
   { id: 'statut', header: 'Statut', accessor: 'statut', render: (v) => <StatusBadge status={v as string} /> },
 ]
 
+function ConsommationsCommandePanel({ commandeId, onClose }: { commandeId: string; onClose: () => void }) {
+  const { data, isLoading, error } = useConsommationsCommande(commandeId)
+  const exporter = () => {
+    if (!data) return
+    const lignes = [
+      ['Type', 'Désignation', 'Unité', 'Quantité prévue', 'Quantité réelle', 'Sortie stock', 'OF'],
+      ...data.data.map((ligne) => [
+        ligne.type === 'materiau' ? 'Matière' : 'Consommable',
+        ligne.designation,
+        ligne.unite,
+        String(ligne.quantite_prevue),
+        ligne.quantite_reelle == null ? '' : String(ligne.quantite_reelle),
+        String(ligne.quantite_sortie_stock),
+        ligne.ofs.join(', '),
+      ]),
+    ]
+    const csv = lignes.map((ligne) => ligne.map((cellule) => `"${cellule.replace(/"/g, '""')}"`).join(';')).join('\r\n')
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }))
+    const lien = document.createElement('a')
+    lien.href = url
+    lien.download = `matieres-${data.commande.numero}.csv`
+    lien.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <SlideOver isOpen onClose={onClose} title={`Matières — ${data?.commande.numero ?? 'Commande'}`} width="lg">
+      {isLoading ? (
+        <div className="flex items-center justify-center gap-2 py-12 text-sm text-gray-500"><Loader2 className="h-4 w-4 animate-spin" /> Extraction des matières…</div>
+      ) : error || !data ? (
+        <p className="py-8 text-sm text-red-600">Impossible de charger la liste : {(error as Error)?.message ?? 'erreur inconnue'}</p>
+      ) : (
+        <div className="space-y-4">
+          <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm">
+            <p className="font-semibold text-gray-800">{data.commande.numero} · {data.commande.client_nom ?? 'Client non renseigné'}</p>
+            <p className="text-xs text-gray-500">
+              {data.source === 'ordres_fabrication'
+                ? 'Liste consolidée des OF · prévu, réel et quantités sorties du stock'
+                : data.source === 'devis'
+                  ? 'Nomenclature prévue extraite du devis · les consommations réelles seront saisies dans les OF'
+                  : 'Aucune nomenclature disponible · chargez les gammes des OF ou saisissez les consommations'}
+            </p>
+          </div>
+          {data.data.length === 0 ? (
+            <p className="py-8 text-center text-sm text-gray-500">Aucune matière ni aucun consommable enregistré pour cette commande.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-gray-100">
+              <table className="w-full min-w-[640px] text-sm">
+                <thead className="bg-gray-50 text-left text-xs text-gray-500">
+                  <tr>
+                    <th className="px-3 py-2">Type / article</th><th className="px-3 py-2 text-right">Prévu</th>
+                    <th className="px-3 py-2 text-right">Réel</th><th className="px-3 py-2 text-right">Sorti du stock</th>
+                    <th className="px-3 py-2">Ordres de fabrication</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {data.data.map((ligne, index) => (
+                    <tr key={`${ligne.type}-${ligne.designation}-${ligne.unite}-${index}`}>
+                      <td className="px-3 py-2"><span className="mb-0.5 block text-[10px] uppercase text-gray-400">{ligne.type === 'materiau' ? 'Matière' : 'Consommable'}</span>{ligne.designation}</td>
+                      <td className="px-3 py-2 text-right">{ligne.quantite_prevue.toLocaleString('fr-FR')} {ligne.unite}</td>
+                      <td className="px-3 py-2 text-right">{ligne.quantite_reelle == null ? 'À saisir' : `${ligne.quantite_reelle.toLocaleString('fr-FR')} ${ligne.unite}`}</td>
+                      <td className="px-3 py-2 text-right">{ligne.quantite_sortie_stock.toLocaleString('fr-FR')} {ligne.unite}</td>
+                      <td className="px-3 py-2 text-xs text-gray-500">{ligne.ofs.join(', ') || 'Devis'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="flex justify-end border-t border-gray-100 pt-3">
+            <Button size="sm" variant="secondary" disabled={data.data.length === 0} onClick={exporter}>
+              <Download className="h-3.5 w-3.5" /> Exporter la liste CSV
+            </Button>
+          </div>
+        </div>
+      )}
+    </SlideOver>
+  )
+}
+
 export default function Production() {
   const [slideOpen, setSlideOpen] = useState(false)
   const [form, setForm] = useState<JobForm>(DEFAULT_FORM)
   const [jobFabrication, setJobFabrication] = useState<JobRecord | null>(null)
+  const [consommationsCommandeId, setConsommationsCommandeId] = useState<string | null>(null)
 
   const { data, isLoading } = useJobs()
   const { data: stocksData } = useStocks()
@@ -143,6 +225,11 @@ export default function Production() {
       accessor: 'id',
       render: (_, row) => (
         <div className="flex items-center justify-end gap-2">
+          {row.commande_id && (
+            <Button size="sm" variant="ghost" onClick={() => setConsommationsCommandeId(row.commande_id!)}>
+              <Package className="h-3.5 w-3.5" /> Matières
+            </Button>
+          )}
           <Button size="sm" variant="ghost" onClick={() => setJobFabrication(row)}>
             <ListChecks className="h-3.5 w-3.5" /> Étapes
           </Button>
@@ -451,6 +538,12 @@ export default function Production() {
           aCommande={!!jobFabrication.commande_id}
           voitCouts={voitCouts}
           onClose={() => setJobFabrication(null)}
+        />
+      )}
+      {consommationsCommandeId && (
+        <ConsommationsCommandePanel
+          commandeId={consommationsCommandeId}
+          onClose={() => setConsommationsCommandeId(null)}
         />
       )}
     </motion.div>
