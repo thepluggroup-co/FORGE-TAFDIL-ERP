@@ -10,9 +10,11 @@ import { getSession } from '../../auth/session'
 const SYNC_INTERVAL_MS = 5 * 60 * 1000  // 5 minutes
 const BATCH_SIZE       = 500
 
-// API Hono embarquée (forkée par main/index.ts) — même port que celui que le
-// renderer web utilise pour tous ses appels /api/*.
-const LOCAL_API_BASE = 'http://localhost:3001'
+// Même API que celle du renderer web : l'API hébergée (Railway) en production,
+// l'API embarquée localhost:3001 en dev. Injectée au build par electron-vite
+// depuis apps/web/.env.local (VITE_API_URL). Le push ne s'exécute qu'en ligne,
+// donc l'API distante est toujours joignable à ce moment-là.
+const API_BASE = (process.env.FORGE_API_URL || 'http://localhost:3001').replace(/\/$/, '')
 
 // Tables à synchroniser depuis Supabase (pull)
 const SYNC_TABLES: Array<{
@@ -263,7 +265,7 @@ export class SyncManager {
       throw new Error('Aucune session utilisateur locale — reconnectez-vous pour synchroniser les ventes caisse')
     }
 
-    const res = await fetch(`${LOCAL_API_BASE}/api/caisse/tickets`, {
+    const res = await fetch(`${API_BASE}/api/caisse/tickets`, {
       method:  'POST',
       headers: {
         'Content-Type': 'application/json',

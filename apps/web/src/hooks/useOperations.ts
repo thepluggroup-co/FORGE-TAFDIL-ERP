@@ -8,6 +8,8 @@ import { apiClient } from '@/lib/api-client'
 
 export interface Job {
   id: string; numero: string; produit_designation: string
+  commande_id?: string | null
+  commandes?: { numero: string; client_nom: string | null } | null
   type_job?: 'commande' | 'stock'
   produit_id?: string | null; produit_ref?: string | null
   categorie?: string | null; unite?: string | null

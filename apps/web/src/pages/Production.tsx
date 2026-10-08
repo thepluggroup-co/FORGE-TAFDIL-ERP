@@ -62,6 +62,19 @@ const BASE_COLUMNS: Column<JobRecord>[] = [
     ),
   },
   {
+    id: 'commande', header: 'Commande liée', accessor: 'commande_id',
+    render: (_, row) => {
+      const commande = row.commandes as { numero?: string; client_nom?: string | null } | null | undefined
+      if (!row.commande_id) return <span className="text-xs text-gray-300">—</span>
+      return (
+        <div>
+          <p className="font-mono text-xs font-semibold text-[#C62828]">{commande?.numero ?? row.commande_id}</p>
+          {commande?.client_nom && <p className="text-xs text-gray-400">{commande.client_nom}</p>}
+        </div>
+      )
+    },
+  },
+  {
     id: 'quantite', header: 'Qte', accessor: 'quantite_prevue',
     render: (_, row) => {
       const qte = row.quantite_produite ?? row.quantite_prevue

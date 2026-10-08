@@ -591,6 +591,59 @@ async function creerJobsProductionCommande(
   return true
 }
 
+async function lancerJobsProductionCommande(commandeId: string): Promise<boolean> {
+  const { error } = await db.from('jobs_production')
+    .update({ statut: 'in_production', updated_at: new Date().toISOString() })
+    .eq('commande_id', commandeId)
+    .eq('statut', 'confirmed')
+  if (error) {
+    console.error('[commerce] lancement des OF de la commande:', error.message)
+    return false
+  }
+  return true
+}
+
+/** Engage la production dès qu'une commande validée porte une condition de paiement acceptée. */
+async function engagerProductionSiConditionAcceptee(
+  commandeId: string,
+  commandeNumero: string,
+  conditionPaiementId: string | null | undefined,
+  userId: string,
+): Promise<boolean> {
+  if (!conditionPaiementId) return false
+
+  const { data: commande } = await db.from('commandes')
+    .select('statut')
+    .eq('id', commandeId)
+    .maybeSingle()
+  if (!commande || (commande as { statut: string }).statut !== 'confirmed') return false
+
+  const jobsCrees = await creerJobsProductionCommande(commandeId, commandeNumero, userId)
+  if (!jobsCrees) return false
+  if (!(await lancerJobsProductionCommande(commandeId))) return false
+
+  await creerBonSortieCommande(commandeId, commandeNumero, userId)
+    .catch((e) => console.error('[commerce] auto-bon-sortie:', e))
+
+  const { error } = await db.from('commandes')
+    .update({ statut: 'in_production', updated_at: new Date().toISOString() })
+    .eq('id', commandeId)
+    .eq('statut', 'confirmed')
+  if (error) {
+    console.error('[commerce] engagement production commande:', error.message)
+    return false
+  }
+
+  await db.from('historique_commandes').insert({
+    commande_id: commandeId,
+    ancien_statut: 'confirmed',
+    nouveau_statut: 'in_production',
+    commentaire: 'Production engagée automatiquement après validation de la commande et de ses conditions de paiement.',
+    changed_by: userId,
+  })
+  return true
+}
+
 /**
  * Verifie si un client est bloque pour de nouvelles commandes.
  */
@@ -2118,6 +2171,13 @@ router.post('/devis/:id/transformer-commande', requirePermission('COMMERCIAL', '
 
   await syncCreditForCommande(cmd.id, user.id)
 
+  const productionEngagee = await engagerProductionSiConditionAcceptee(
+    cmd.id,
+    cmd.numero,
+    conditionPaiementIdFinal,
+    user.id,
+  )
+
   // §39 — audit métier : conversion devis → commande, point sensible car
   // irréversible (§23) et déjà protégé par le verrou atomique (§37, Phase 3).
   writeAuditLog({
@@ -2128,7 +2188,11 @@ router.post('/devis/:id/transformer-commande', requirePermission('COMMERCIAL', '
   })
   await synchroniserDemandeDepuisDevis(d.id, 'transforme', user.id)
 
-  return c.json({ commande, devis_numero: d.numero, commande_numero: cmd.numero }, 201)
+  return c.json({
+    commande: productionEngagee ? { ...commande, statut: 'in_production' } : commande,
+    devis_numero: d.numero,
+    commande_numero: cmd.numero,
+  }, 201)
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2482,6 +2546,13 @@ router.post('/commandes', requirePermission('COMMERCIAL', 'CREATE'), zValidator(
 
       await syncCreditForCommande(cmd.id, user.id)
 
+      await engagerProductionSiConditionAcceptee(
+        cmd.id,
+        numero,
+        body.condition_paiement_id,
+        user.id,
+      )
+
       const { data: full, error: fullErr } = await db.from('commandes')
         .select('*, commandes_lignes(*), historique_commandes(nouveau_statut, commentaire, changed_at), clients(id, nom, telephone), conditions_paiement(code, libelle, acompte_pct, delai_solde_jours)')
         .eq('id', cmd.id).single()
@@ -2567,6 +2638,18 @@ router.patch(
       }
     }
 
+    // Préparer les OF avant le changement de statut : une commande ne passe pas
+    // en production si ses lignes n'ont pas pu être transmises au module.
+    if (body.statut === 'in_production') {
+      const jobsCrees = await creerJobsProductionCommande(id, ex.numero, user.id).catch((e) => {
+        console.error('[commerce] préparation des OF:', e)
+        return false
+      })
+      if (!jobsCrees) {
+        return c.json({ error: 'Impossible de créer les ordres de fabrication pour cette commande.', code: 'PRODUCTION_JOBS_FAILED' }, 500)
+      }
+    }
+
     const { error: updateErr } = await db
       .from('commandes')
       .update({
@@ -2594,9 +2677,10 @@ router.patch(
 
     // ── Auto-création bon de sortie sur passage en production ──────────────────
     if (body.statut === 'in_production') {
-      await creerJobsProductionCommande(id, ex.numero, user.id).catch((e) =>
-        console.error('[commerce] auto-jobs-production:', e)
-      )
+      const jobsLances = await lancerJobsProductionCommande(id)
+      if (!jobsLances) {
+        return c.json({ error: 'La commande est validée, mais le lancement des OF a échoué.', code: 'PRODUCTION_JOBS_START_FAILED' }, 500)
+      }
       await creerBonSortieCommande(id, ex.numero, user.id).catch((e) =>
         console.error('[commerce] auto-bon-sortie:', e)
       )

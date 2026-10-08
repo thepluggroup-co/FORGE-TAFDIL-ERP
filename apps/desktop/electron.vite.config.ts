@@ -18,12 +18,15 @@ function loadEnvFile(path: string): Record<string, string> {
   } catch { return {} }
 }
 const env = loadEnvFile(resolve(__dirname, '.env'))
+// Même fichier que celui lu par `vite build` du renderer en production
+const webEnv = loadEnvFile(resolve(__dirname, '../web/.env.local'))
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   main: {
     plugins: [externalizeDepsPlugin({
       exclude: [
         'electron-log',
+        'electron-updater',
         // Supabase + ws are bundled inline: not direct desktop deps and not
         // accessible via pnpm's non-flat node_modules at runtime.
         'ws',
@@ -40,8 +43,11 @@ export default defineConfig({
       'process.env.VITE_SUPABASE_URL':         JSON.stringify(env.SUPABASE_URL              ?? ''),
       'process.env.SUPABASE_ANON_KEY':         JSON.stringify(env.SUPABASE_ANON_KEY         ?? ''),
       'process.env.VITE_SUPABASE_ANON_KEY':    JSON.stringify(env.SUPABASE_ANON_KEY         ?? ''),
-      'process.env.SUPABASE_SERVICE_ROLE_KEY': JSON.stringify(env.SUPABASE_SERVICE_ROLE_KEY ?? ''),
-      'process.env.SUPABASE_JWT_SECRET':       JSON.stringify(env.SUPABASE_JWT_SECRET       ?? ''),
+      // Ne JAMAIS baker SERVICE_ROLE_KEY / JWT_SECRET ici : l'installateur est
+      // distribué publiquement (GitHub Releases) et ses fichiers sont lisibles.
+      // En dev, l'API embarquée les reçoit depuis apps/api/.env (main/index.ts).
+      // En prod, la synchro passe par l'API hébergée (pas de secrets requis).
+      'process.env.FORGE_API_URL': JSON.stringify(command === 'build' ? (webEnv.VITE_API_URL ?? '') : ''),
     },
     resolve: {
       alias: (() => {
@@ -77,4 +83,4 @@ export default defineConfig({
       outDir: 'out/preload',
     },
   },
-})
+}))
