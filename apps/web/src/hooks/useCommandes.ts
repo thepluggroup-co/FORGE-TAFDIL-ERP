@@ -68,7 +68,11 @@ export function useCreateCommande() {
     // userId n'est plus passé côté client : l'API le tire du JWT (c.get('user')).
     mutationFn: (payload: CreateCommandePayload) =>
       apiClient.post<Commande>('/api/commandes', payload),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['commandes'] }); toast.success('Commande créée') },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['commandes'] })
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
+      toast.success('Commande créée')
+    },
     onError:   (err: Error) => toast.error(err.message),
   })
 }
@@ -107,6 +111,9 @@ export function useStatutCommande() {
       apiClient.patch(`/api/commandes/${id}/statut`, { statut, commentaire }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['commandes'] })
+      // Le passage en production crée/démarre les OF liés : rafraîchir les listes,
+      // indicateurs et contrôles du module Production au retour dans cet onglet.
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
       void qc.invalidateQueries({ queryKey: ['logistique', 'commandes-pretes'] })
     },
     onError:   (err: Error) => toast.error(err.message),

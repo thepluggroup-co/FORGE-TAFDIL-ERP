@@ -4,7 +4,7 @@ import {
   LayoutGrid, Table2, Plus, GripVertical, Globe,
   Truck, Package, CheckCircle, XCircle, Wrench,
   Search, Trash2, BookOpen, CalendarDays, ChevronRight,
-  Info, BadgePercent, OctagonX, CreditCard, Clock, AlertTriangle,
+  Info, BadgePercent, OctagonX, CreditCard, Clock, AlertTriangle, Loader2,
 } from 'lucide-react'
 import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
 import type { Column } from '@forge/ui'
@@ -380,6 +380,7 @@ const STATUT_PAIEMENT_CONFIG: Record<string, { label: string; color: string; bg:
 }
 
 function OrderDetail({ order, onClose }: { order: CommandeRecord; onClose: () => void }) {
+  const statutMutation = useStatutCommande()
   const lignes    = (order.lignes as CommandeLigne[]) ?? []
   const historique = (order.historique as CommandeHistorique[]) ?? []
   const totalHT   = lignes.reduce((s, l) => s + l.quantite * l.prix_unitaire_ht_xaf, 0)
@@ -400,6 +401,23 @@ function OrderDetail({ order, onClose }: { order: CommandeRecord; onClose: () =>
           <h3 className="mb-3 text-xs font-semibold uppercase text-gray-400">Progression</h3>
           <PipelineStepper statut={order.statut} />
         </div>
+
+        {order.statut === 'confirmed' && (
+          <Button
+            className="w-full justify-center gap-2"
+            disabled={statutMutation.isPending}
+            onClick={() => statutMutation.mutate(
+              { id: order.id, statut: 'in_production', commentaire: 'Commande validée et production lancée depuis son détail.' },
+              { onSuccess: () => { toast.success('Commande validée, production lancée'); onClose() } },
+            )}
+          >
+            {statutMutation.isPending
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <Wrench className="h-4 w-4" />
+            }
+            Valider et lancer la production
+          </Button>
+        )}
 
         {/* Condition de paiement */}
         {cp && (

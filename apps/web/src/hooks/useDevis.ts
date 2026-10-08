@@ -261,6 +261,7 @@ export function useTransformerDevis() {
     onSuccess: (data) => {
       void qc.invalidateQueries({ queryKey: ['devis'] })
       void qc.invalidateQueries({ queryKey: ['commandes'] })
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
       toast.success(`Commande ${data.commande_numero} créée`)
     },
     onError: (err: Error) => toast.error(err.message),

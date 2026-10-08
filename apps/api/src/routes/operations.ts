@@ -290,7 +290,7 @@ router.get('/production/jobs', requirePermission('PRODUCTION', 'READ'), async (c
   const perPage = Math.min(100, parseInt(c.req.query('per_page') ?? '20'))
   const from    = (page - 1) * perPage
 
-  let q = db.from('jobs_production').select('*', { count: 'exact' })
+  let q = db.from('jobs_production').select('*, commandes(numero, client_nom)', { count: 'exact' })
   if (statut)      q = q.eq('statut', statut)
   if (commande_id) q = q.eq('commande_id', commande_id)
   if (search)      q = q.ilike('produit_designation', `%${search}%`)
