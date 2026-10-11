@@ -123,13 +123,28 @@ async function request<T>(
     }
 
     if (res.status === 403) {
-      const data = await res.json().catch(() => ({})) as { details?: string; error?: string }
+      const data = await res.json().catch(() => ({})) as { details?: string; error?: string; code?: string }
+
+      // Refus de permission RBAC (requirePermission / requireRole) : plus de
+      // toast « Accès refusé — Permission requise : MODULE:ACTION. Rôle actuel… ».
+      // Ces messages techniques s'affichaient à chaque écran qui charge en
+      // arrière-plan une donnée hors du périmètre du profil (tableau de bord,
+      // listes liées…) — du bruit pour l'utilisateur, pas une information.
+      //  - lecture (GET) : silencieux, l'écran affiche simplement ce qu'il peut ;
+      //  - action (POST/PUT/PATCH/DELETE) : l'erreur porte un message simple,
+      //    affiché une seule fois par le onError de l'appelant.
+      const refusRbac = data.code === 'FORBIDDEN'
+        && /^(Permission requise|Rôle requis)/.test(data.details ?? '')
+      if (refusRbac) {
+        throw new Error('Action non autorisée pour votre profil')
+      }
+
+      // Autres 403 = règles métier (remise plafonnée, session d'un autre
+      // caissier, livraison d'un autre livreur…) : le message reste affiché.
+      // toast.warning (ambre) plutôt que toast.error (rouge) — une règle
+      // métier n'est pas une panne ; le rouge reste réservé aux 5xx / réseau.
       const detail = data.details ?? data.error ?? 'Droits insuffisants'
-      // toast.warning (ambre) plutôt que toast.error (rouge) — un refus de
-      // permission est une règle métier normale, pas un bug. Le rouge doit
-      // rester réservé aux vraies pannes (5xx, réseau) pour que l'utilisateur
-      // puisse distinguer "je n'ai pas le droit" de "quelque chose est cassé".
-      toast.warning(`Accès refusé — ${detail}`)
+      toast.warning(detail)
       throw new Error(detail)
     }
 
