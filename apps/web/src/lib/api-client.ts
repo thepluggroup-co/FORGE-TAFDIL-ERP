@@ -4,7 +4,7 @@ import { supabase } from './supabase'
 const _raw = import.meta.env.VITE_API_URL as string | undefined
 export const API_BASE = _raw?.startsWith('http')
   ? _raw.replace(/\/$/, '')
-  : 'https://forge-tafdil-erp-tafdil.up.railway.app'
+  : 'https://shimmering-balance-forge-tafdil.up.railway.app'
 
 const REQUEST_TIMEOUT_MS = 15_000
 

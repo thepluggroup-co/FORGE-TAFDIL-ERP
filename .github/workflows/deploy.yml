@@ -45,7 +45,7 @@ jobs:
         run: npm install -g @railway/cli
 
       - name: Deploy API sur Railway
-        run: railway up --service forge-tafdil-api --detach
+        run: railway up --service "${{ vars.RAILWAY_SERVICE_NAME || 'forge-tafdil-api' }}" --detach
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
