@@ -6,7 +6,7 @@ Nouvelle URL publique de l'API (service Railway « shimmering-balance ») :
 https://shimmering-balance-forge-tafdil.up.railway.app
 ```
 
-Ancienne URL (à ne plus utiliser) : `https://forge-tafdil-erp-tafdil.up.railway.app`
+Ancienne URL (abonnement expiré, hors service) : `https://forge-tafdil-erp-tafdil.up.railway.app`
 
 Dans le code, l'URL de repli a été mise à jour dans `apps/web/src/lib/api-client.ts`
 et `apps/shop/lib/forge-api.ts`. Les variables d'environnement restent prioritaires
@@ -46,7 +46,7 @@ SITE_URL=https://shop.tafdil.cm
 SHOP_API_SECRET=<même valeur que dans le projet Vercel du shop>
 ```
 
-**Fonctionnelles** — à copier depuis l'ancien service si elles y étaient :
+**Fonctionnelles** — à renseigner si la fonctionnalité est utilisée :
 
 ```env
 ANTHROPIC_API_KEY=
@@ -78,15 +78,21 @@ UPSTASH_REDIS_REST_TOKEN=
 MOBILE_APP_URL=
 ```
 
-Astuce : dans l'ancien service Railway, *Variables → Raw Editor* → tout copier, puis
-coller dans « shimmering-balance » et corriger uniquement `NOKASH_CALLBACK_URL`.
+Où retrouver les valeurs (l'ancien service est expiré) :
+- Si l'ancien projet est encore visible dans Railway, ses *Variables* restent souvent
+  consultables même service arrêté : *Raw Editor* → tout copier → coller ici, puis
+  corriger `NOKASH_CALLBACK_URL`.
+- Sinon : clés Supabase dans *Supabase → Project Settings → API* ; `SHOP_API_SECRET`
+  dans *Vercel → projet Shop → Environment Variables* ; clés NOKASH, Africa's Talking,
+  CallMeBot, Resend/Brevo, Anthropic dans leurs tableaux de bord respectifs
+  (ou en régénérer de nouvelles).
 
 ### Vérification
 
 1. Ouvrir `https://shimmering-balance-forge-tafdil.up.railway.app/health` → doit répondre 200.
 2. Dans *Deploy Logs*, la ligne `[boot] SERVICE_ROLE_KEY : SET` doit apparaître.
-3. Une fois validé : supprimer (ou mettre en pause) l'ancien service pour éviter
-   deux API actives (doubles crons de relances/rapports WhatsApp).
+3. L'ancien service est expiré : rien à couper, mais ne pas le réactiver plus tard
+   sans l'arrêter, sinon deux API tourneraient (doubles relances/rapports WhatsApp).
 
 ---
 
@@ -142,7 +148,11 @@ VITE_API_URL=https://shimmering-balance-forge-tafdil.up.railway.app
 ```
 
 L'app desktop reprend cette valeur au build : les installateurs déjà distribués
-continuent d'appeler l'ancienne URL jusqu'à la prochaine mise à jour.
+appellent l'ancienne URL, désormais hors service → **ils sont en panne**. La mise
+à jour automatique passe par GitHub Releases (pas par l'API) : publier une nouvelle
+version (`pnpm --filter @forge/desktop release:win`, voir `docs/desktop-release.md`)
+construite avec la nouvelle `VITE_API_URL` corrige les postes au prochain lancement.
+Idem pour l'app mobile : rebâtir et redistribuer.
 
 ## 6. Services externes
 
