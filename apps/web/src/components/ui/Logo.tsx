@@ -1,3 +1,4 @@
+import { publicAsset } from '@/lib/public-asset'
 import type { CSSProperties } from 'react'
 
 interface IconProps {
@@ -24,7 +25,7 @@ function logoStyle(size: number, variant: IconProps['variant'] = 'color'): CSSPr
 export function TafdilIcon({ size = 40, variant = 'color', className }: IconProps) {
   return (
     <img
-      src="/tafdil-logo.png"
+      src={publicAsset('tafdil-logo.png')}
       alt="TAFDIL"
       className={className}
       style={logoStyle(size, variant)}
@@ -36,7 +37,7 @@ export function TafdilLogo({ size = 36, variant = 'color', subtitle, className }
   return (
     <span className={`inline-flex items-center gap-2.5 ${className ?? ''}`}>
       <img
-        src="/tafdil-logo.png"
+        src={publicAsset('tafdil-logo.png')}
         alt={subtitle ? `TAFDIL ${subtitle}` : 'TAFDIL'}
         style={logoStyle(size, variant)}
       />
@@ -48,7 +49,7 @@ export function TafdilLogoHero({ variant = 'white' }: Pick<IconProps, 'variant'>
   return (
     <div className="flex flex-col items-center gap-3">
       <img
-        src="/tafdil-logo.png"
+        src={publicAsset('tafdil-logo.png')}
         alt="TAFDIL"
         style={logoStyle(72, variant)}
       />
