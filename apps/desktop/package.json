@@ -1,7 +1,7 @@
 {
   "name": "@forge/desktop",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "FORGE ERP — TAFDIL SARL",
   "author": "TAFDIL SARL",
   "main": "out/main/index.js",
