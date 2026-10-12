@@ -340,13 +340,29 @@ paiementsRouter.post('/webhook', async (c) => {
   if (status === 'complete') {
     const { data: commande, error: errFetch } = await db
       .from('commandes_shop')
-      .select('id, ref, montant_ttc, mode_paiement, client_nom, client_telephone, client_adresse, lignes, erp_commande_id')
+      .select('id, ref, montant_ttc, mode_paiement, statut_paiement, client_nom, client_telephone, client_adresse, lignes, erp_commande_id')
       .eq('payment_reference', reference)
       .single()
 
     if (errFetch || !commande) {
       console.error('[webhook] commande introuvable pour payment_reference:', reference)
       return c.json({ received: true }) // 200 pour éviter les retries NOKASH
+    }
+
+    // Idempotence : cette route est publique et NOKASH peut rejouer un appel.
+    // Un paiement déjà pris en compte ne doit ni être réenregistré en finance,
+    // ni redéclencher les messages au client.
+    if (commande.statut_paiement === 'paye') {
+      return c.json({ received: true })
+    }
+    const { data: dejaEnregistre } = await db
+      .from('paiements_commande')
+      .select('id')
+      .eq('reference_ext', reference)
+      .limit(1)
+      .maybeSingle()
+    if (dejaEnregistre) {
+      return c.json({ received: true })
     }
 
     const totalCommande = Number(commande.montant_ttc)

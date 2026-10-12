@@ -175,7 +175,14 @@ const chatSchema = z.object({
   history: z.array(z.object({
     role:    z.enum(['user', 'assistant']),
     content: z.string(),
-  })).default([]),
+  })).default([])
+    // Historique borné côté serveur (coût par requête) : les 20 derniers
+    // messages, 8 000 caractères chacun — tronqué plutôt que refusé.
+    .transform((h) => {
+      const recents = h.slice(-20)
+      while (recents[0]?.role === 'assistant') recents.shift() // la conversation doit commencer par l'utilisateur
+      return recents.map((m) => ({ ...m, content: m.content.slice(0, 8000) }))
+    }),
 })
 
 // ══════════════════════════════════════════════════════════════════════════════

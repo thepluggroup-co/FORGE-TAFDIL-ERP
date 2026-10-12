@@ -58,7 +58,7 @@ export default defineConfig(({ command }) => ({
           ({ [`@supabase/${pkg}`]: `${store}/@supabase+${pkg}@${ver}/node_modules/@supabase/${pkg}/${entry}` })
         return {
           '@forge/shared': resolve(__dirname, '../../packages/shared/src/index.ts'),
-          'ws': `${store}/ws@8.20.1/node_modules/ws/index.js`,
+          'ws': `${store}/ws@8.22.0/node_modules/ws/index.js`,
           ...sup('supabase-js',  '2.105.4', 'dist/index.cjs'),
           ...sup('realtime-js',  '2.105.4', 'dist/main/index.js'),
           ...sup('postgrest-js', '2.105.4', 'dist/index.cjs'),

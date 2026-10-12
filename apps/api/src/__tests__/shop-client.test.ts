@@ -102,6 +102,20 @@ describe('Connexion par code email', () => {
   })
 })
 
+describe('Email : les jokers ilike ne désignent pas un autre compte', () => {
+  it('« _ » est échappé dans toutes les recherches par email', async () => {
+    const motifs: unknown[] = []
+    etat.resolver = (t, f) => {
+      if (f.email !== undefined && (t === 'shop_email_codes' || t === 'clients_shop')) motifs.push(f.email)
+      return undefined
+    }
+    await post('/auth/email/code', { email: 'a_c@test.cm' })
+    await post('/auth/email/verifier', { email: 'a_c@test.cm', code: '123456' })
+    expect(motifs.length).toBeGreaterThan(0)
+    for (const m of motifs) expect(m).toBe('a\\_c@test.cm')
+  })
+})
+
 describe('Connexion Google / Facebook', () => {
   it('email vérifié : rattache le compte existant', async () => {
     etat.resolver = (t, f, op) => {

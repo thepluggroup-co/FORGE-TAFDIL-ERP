@@ -44,9 +44,13 @@ interface ClientShop {
 
 const chiffres = (t?: string | null) => (t ?? '').replace(/\D/g, '')
 const emailNormalise = (e: string) => e.trim().toLowerCase()
+// ilike compare sans tenir compte de la casse, mais « _ » et « % » y sont des
+// jokers : sans échappement, a_c@x.cm désignerait aussi abc@x.cm, et le code
+// envoyé à la première adresse ouvrirait le compte de la seconde.
+const emailExact = (e: string) => emailNormalise(e).replace(/[\\%_]/g, '\\$&')
 
 async function clientParEmail(email: string): Promise<ClientShop | null> {
-  const { data } = await db.from('clients_shop').select(CHAMPS_CLIENT).ilike('email', emailNormalise(email)).maybeSingle()
+  const { data } = await db.from('clients_shop').select(CHAMPS_CLIENT).ilike('email', emailExact(email)).maybeSingle()
   return data as ClientShop | null
 }
 
@@ -68,7 +72,7 @@ shopClientRouter.post('/auth/email/code', zValidator('json', z.object({ email: z
   const email = emailNormalise(c.req.valid('json').email)
 
   const { data: recent } = await db.from('shop_email_codes').select('created_at')
-    .ilike('email', email).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    .ilike('email', emailExact(email)).order('created_at', { ascending: false }).limit(1).maybeSingle()
   const dernier = (recent as { created_at: string } | null)?.created_at
   if (dernier && Date.now() - new Date(dernier).getTime() < 60_000) {
     return c.json({ error: 'Un code vient d\'être envoyé. Patientez une minute avant d\'en demander un autre.', code: 'TROP_TOT' }, 429)
@@ -109,7 +113,7 @@ shopClientRouter.post('/auth/email/verifier', zValidator('json', z.object({
   const email = emailNormalise(body.email)
 
   const { data } = await db.from('shop_email_codes').select('id, code_hash, salt, tentatives, expires_at')
-    .ilike('email', email).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    .ilike('email', emailExact(email)).order('created_at', { ascending: false }).limit(1).maybeSingle()
   const ligne = data as { id: string; code_hash: string; salt: string; tentatives: number; expires_at: string } | null
   if (!ligne || new Date(ligne.expires_at).getTime() < Date.now()) {
     return c.json({ error: 'Code expiré. Demandez un nouveau code.', code: 'CODE_EXPIRE' }, 401)
@@ -121,7 +125,7 @@ shopClientRouter.post('/auth/email/verifier', zValidator('json', z.object({
     await db.from('shop_email_codes').update({ tentatives: ligne.tentatives + 1 }).eq('id', ligne.id)
     return c.json({ error: 'Code incorrect', code: 'CODE_INCORRECT' }, 401)
   }
-  await db.from('shop_email_codes').delete().ilike('email', email)
+  await db.from('shop_email_codes').delete().ilike('email', emailExact(email))
 
   const existant = await clientParEmail(email)
   if (existant) return c.json({ client: await majConnexion(existant.id, { email_verifie: true }) })
@@ -191,7 +195,7 @@ async function chargerClient(id: string): Promise<ClientShop | null> {
 async function clientsErpDuCompte(client: ClientShop): Promise<string[]> {
   const ids = new Set<string>()
   if (client.email && client.email_verifie) {
-    const { data } = await db.from('clients').select('id').ilike('email', client.email)
+    const { data } = await db.from('clients').select('id').ilike('email', emailExact(client.email))
     for (const r of (data ?? []) as Array<{ id: string }>) ids.add(r.id)
   }
   const tel = chiffres(client.telephone).slice(-9)
