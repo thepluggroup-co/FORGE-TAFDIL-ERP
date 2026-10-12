@@ -37,7 +37,7 @@ const DASHBOARD_ITEM: NavItem = { path: '/dashboard', label: 'Dashboard', icon: 
 // RBAC quand le backend ne distingue pas plus finement (ex: Projets/Équipements/
 // IoT → PRODUCTION, Marketing → COMMERCIAL, Sécurité/HSE → HR — aucun de ces
 // domaines n'a de module RBAC dédié, cf. plan de migration RBAC).
-const NAV_GROUPS: NavGroup[] = [
+export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'activite',
     label: 'Activité',

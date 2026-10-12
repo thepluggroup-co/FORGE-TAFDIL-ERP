@@ -62,3 +62,7 @@ ios/
  
 # Caches de compilation TypeScript (incremental) 
 *.tsbuildinfo 
+
+# Sorties Playwright (captures, traces)
+apps/web/test-results/
+apps/web/playwright-report/
