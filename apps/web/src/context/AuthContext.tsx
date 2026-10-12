@@ -3,7 +3,7 @@ import type { User, Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import { createOfflineAuth, localOfflineAuthStorage, OFFLINE_AUTH_MESSAGES } from '@forge/shared'
 import type { OfflineCredentialKind } from '@forge/shared'
-import { setApiToken, refreshOfflineCache, API_BASE } from '@/lib/api-client'
+import { setApiToken, refreshOfflineCache, syncOfflineWrites, API_BASE } from '@/lib/api-client'
 import { setOfflineCacheUser } from '@/lib/offline-cache'
 
 export type AppRole = 'admin' | 'superviseur' | 'operateur' | 'technicien' | 'caissier'
@@ -229,7 +229,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const jwtRole = normalizeRole(session.user.app_metadata?.role as string | undefined)
         if (jwtRole) setRole(jwtRole)
         syncElectronSession(session, jwtRole)
-        void refreshOfflineCache()
+        // D'abord les écritures en attente, ensuite seulement la relecture :
+        // sinon le cache serait rafraîchi sans les actions faites hors ligne.
+        void syncOfflineWrites().then(refreshOfflineCache)
         // Confirm role + nom from DB in background
         resolveProfile(session)
           .then(({ role: r, nom: n, passwordMustChange: pmc, pinMustChange: pinmc }) => {
@@ -293,7 +295,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })
 
     // Réseau revenu : on remet à jour les données consultées habituellement.
-    const onOnline = () => { void refreshOfflineCache() }
+    const onOnline = () => { void syncOfflineWrites().then(refreshOfflineCache) }
     window.addEventListener('online', onOnline)
 
     return () => {

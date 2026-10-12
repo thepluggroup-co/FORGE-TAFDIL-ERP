@@ -4,6 +4,7 @@ import { logger } from 'hono/logger'
 import { supabaseAdmin } from '@forge/db'
 import type { HonoVariables } from './types'
 import { authMiddleware } from './middleware/auth'
+import { idempotencyMiddleware } from './middleware/idempotency'
 import { auditMiddleware } from './middleware/audit'
 import { rateLimitMiddleware } from './middleware/rateLimit'
 import { stocksRouter } from './routes/stocks'
@@ -87,7 +88,7 @@ app.use('*', cors({
     return null
   },
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'Idempotency-Key'],
   exposeHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset', 'Retry-After'],
   credentials: true,
   maxAge: 86400,
@@ -136,6 +137,9 @@ app.get('/health/db', async (c) => {
 const api = new Hono<{ Variables: HonoVariables }>()
 
 api.use('*', authMiddleware)
+// Avant l'audit : une action rejouée (réponse déjà enregistrée) ne doit ni
+// s'exécuter ni être journalisée une seconde fois.
+api.use('*', idempotencyMiddleware)
 api.use('*', auditMiddleware)
 
 api.route('/stocks',      stocksRouter)

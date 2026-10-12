@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useOnlineStatus } from '../lib/offline/network'
-import { subscribeQueue, processQueue, type QueuedMutation } from '../lib/offline/queue'
+import { subscribeQueue, retryFailed, discardFailed, type QueuedMutation } from '../lib/offline/queue'
 
 export function OfflineBanner() {
   const online = useOnlineStatus()
@@ -8,8 +8,17 @@ export function OfflineBanner() {
 
   useEffect(() => subscribeQueue(setItems), [])
 
-  const pending = items.filter(i => i.status !== 'syncing')
+  const pending = items.filter(i => i.status === 'pending')
   const failed = items.filter(i => i.status === 'failed')
+
+  // Rien ne disparaît en silence : l'utilisateur voit ce que le serveur a
+  // refusé (et pourquoi) avant de décider d'abandonner.
+  const abandonner = () => {
+    const detail = failed.map(i => `• ${i.label}${i.error ? ` — ${i.error}` : ''}`).join('\n')
+    if (window.confirm(`Abandonner définitivement ces actions ?\n\n${detail}\n\nElles ne seront jamais envoyées au serveur.`)) {
+      void discardFailed()
+    }
+  }
 
   if (online && items.length === 0) return null
 
@@ -21,18 +30,21 @@ export function OfflineBanner() {
     >
       <span>
         {!online && '📡 Hors ligne'}
-        {online && items.length > 0 && '🔄 Synchronisation…'}
+        {online && items.length > failed.length && '🔄 Synchronisation…'}
         {pending.length > 0 && ` — ${pending.length} action${pending.length > 1 ? 's' : ''} en attente`}
-        {failed.length > 0 && ` (${failed.length} échouée${failed.length > 1 ? 's' : ''})`}
+        {failed.length > 0 && ` ${failed.length} action${failed.length > 1 ? 's' : ''} refusée${failed.length > 1 ? 's' : ''} : ${failed[0].error ?? 'à vérifier'}`}
       </span>
-      {online && failed.length > 0 && (
-        <button
-          type="button"
-          onClick={() => void processQueue()}
-          className="underline font-semibold shrink-0"
-        >
-          Réessayer
-        </button>
+      {failed.length > 0 && (
+        <span className="flex gap-3 shrink-0">
+          {online && (
+            <button type="button" onClick={() => void retryFailed()} className="underline font-semibold">
+              Réessayer
+            </button>
+          )}
+          <button type="button" onClick={abandonner} className="underline font-semibold">
+            Abandonner
+          </button>
+        </span>
       )}
     </div>
   )

@@ -5,6 +5,7 @@ import { AnimatePresence } from 'framer-motion'
 import { Toaster } from 'sonner'
 import { AuthProvider, useAuth } from '@/context/AuthContext'
 import { AppShell } from '@/components/layout/AppShell'
+import { OutboxPanel } from '@/components/OutboxPanel'
 import { usePermissions } from '@/hooks/useRbac'
 import type { RbacModule } from '@/hooks/useRbac'
 
@@ -130,7 +131,7 @@ function OfflineBanner() {
     >
       {offline
         ? isDesktopApp
-          ? '⚠️ Mode hors-ligne — Affichage des dernières données enregistrées. Les ventes en caisse sont synchronisées à la reconnexion ; les autres modifications nécessitent Internet.'
+          ? '⚠️ Mode hors-ligne — Affichage des dernières données enregistrées. Vos saisies sont mises en attente et envoyées à la reconnexion ; validations et paiements mobile nécessitent Internet.'
           : '⚠️ Mode hors-ligne — Connexion Internet requise.'
         : '✅ Connexion rétablie — Synchronisation en cours…'}
     </div>
@@ -287,6 +288,7 @@ export default function App() {
       <AuthProvider>
         <OfflineBanner />
         <AppRoutes />
+        <OutboxPanel />
         <Toaster richColors position="top-right" expand closeButton />
       </AuthProvider>
     </AppErrorBoundary>

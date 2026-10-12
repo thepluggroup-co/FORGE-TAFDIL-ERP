@@ -333,7 +333,7 @@ function installCorsProxy() {
   const CORS_HEADERS: Record<string, string> = {
     'Access-Control-Allow-Origin':   '*',
     'Access-Control-Allow-Methods':  'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers':  'Content-Type, Authorization, X-Request-ID',
+    'Access-Control-Allow-Headers':  'Content-Type, Authorization, X-Request-ID, Idempotency-Key',
     'Access-Control-Expose-Headers': 'X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After, Content-Disposition',
     'Access-Control-Max-Age':        '86400',
   }

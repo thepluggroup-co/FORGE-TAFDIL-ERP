@@ -1,6 +1,9 @@
 import { toast } from 'sonner'
 import { supabase } from './supabase'
-import { listStaleCachedPaths, readCachedResponse, saveCachedResponse } from './offline-cache'
+import { canQueueOffline, describeOfflineAction, OFFLINE_QUEUED } from '@forge/shared'
+import { getOfflineCacheUser, listStaleCachedPaths, readCachedResponse, saveCachedResponse } from './offline-cache'
+import { enqueueOutbox, flushOutbox, outboxEnabled } from './outbox'
+import type { OutboxAction, SendOutcome } from './outbox'
 
 const _raw = import.meta.env.VITE_API_URL as string | undefined
 export const API_BASE = _raw?.startsWith('http')
@@ -131,14 +134,24 @@ async function request<T>(
   body?: unknown,
   _retried = false,
   timeoutMs = REQUEST_TIMEOUT_MS,
+  idempotencyKey?: string,
 ): Promise<T> {
   const url = `${API_BASE}${path}`
+
+  // Desktop : chaque écriture porte une clé unique, conservée d'un renvoi à
+  // l'autre (rafraîchissement de jeton, file hors ligne) — le serveur ne
+  // l'exécute qu'une fois (apps/api/src/middleware/idempotency.ts).
+  // Pas dans un navigateur : sans file hors ligne la clé n'y sert pas, et un
+  // en-tête que l'API déployée n'autorise pas encore en CORS bloquerait
+  // toutes les écritures du site web.
+  const key = method === 'GET' || !outboxEnabled() ? undefined : (idempotencyKey ?? crypto.randomUUID())
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
     const headers = await getAuthHeaders()
+    if (key) headers['Idempotency-Key'] = key
 
     const res = await fetch(url, {
       method,
@@ -153,7 +166,7 @@ async function request<T>(
         // Token may have just expired — try a silent refresh once before giving up
         clearTimeout(timer)
         const refreshed = await tryRefreshToken()
-        if (refreshed) return request<T>(method, path, body, true, timeoutMs)
+        if (refreshed) return request<T>(method, path, body, true, timeoutMs, key)
       }
       handleSessionExpired()
       throw new Error('Session expirée')
@@ -230,6 +243,27 @@ async function request<T>(
       if (cached) return cached.data
     }
 
+    // Écriture autorisée hors ligne (desktop) : mise en file, rejouée à la
+    // reconnexion avec la même clé. L'appelant reçoit le marqueur
+    // OFFLINE_QUEUED à la place de la réponse serveur (isQueuedOffline()).
+    // Un délai dépassé est traité pareil : la requête a peut-être abouti,
+    // et la clé garantit qu'un renvoi ne créera pas de doublon.
+    const owner = getOfflineCacheUser()
+    if (unreachable && key && owner && outboxEnabled() && canQueueOffline(method, path)) {
+      try {
+        await enqueueOutbox({ key, userId: owner, method, path, body, label: describeOfflineAction(method, path) })
+        _queuedAt = Date.now()
+        toast.info('Hors ligne — action mise en attente', {
+          description: 'Elle sera envoyée automatiquement au retour de la connexion.',
+        })
+        return OFFLINE_QUEUED as unknown as T
+      } catch (queueErr) {
+        // Disque plein / IndexedDB indisponible : ne surtout pas annoncer
+        // « enregistré » — on retombe sur l'erreur réseau normale.
+        console.warn('[api-client] mise en file impossible:', queueErr)
+      }
+    }
+
     // TypeError conservé : useCaisse.ts s'en sert pour basculer sur SQLite.
     if (err instanceof TypeError && method !== 'GET') {
       throw new TypeError('Serveur injoignable — cette action nécessite une connexion Internet')
@@ -244,6 +278,68 @@ async function request<T>(
   } finally {
     clearTimeout(timer)
   }
+}
+
+// ── Pas de « Client créé » pour une action seulement mise en attente ─────────
+// Les ~150 hooks de mutation affichent leur toast de succès dès que la
+// requête « réussit » — y compris quand elle vient d'être mise en file. Plutôt
+// que de modifier chaque hook, on retient ici le toast de succès qui suit
+// immédiatement une mise en file : seul reste « action mise en attente ».
+let _queuedAt = 0
+const QUEUED_SUCCESS_MUTE_MS = 1_500
+if (outboxEnabled()) {
+  const success = toast.success
+  toast.success = ((...args: Parameters<typeof success>) =>
+    Date.now() - _queuedAt < QUEUED_SUCCESS_MUTE_MS ? '' : success(...args)) as typeof success
+}
+
+// ── Envoi des écritures en attente (desktop) ───────────────────────────────
+async function sendQueuedAction(action: OutboxAction): Promise<SendOutcome> {
+  const token = _cachedToken
+  if (!token) return { kind: 'retry-later' }   // connexion hors ligne : pas encore de session
+
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}${action.path}`, {
+      method:  action.method,
+      headers: {
+        'Content-Type':    'application/json',
+        Authorization:     `Bearer ${token}`,
+        'Idempotency-Key': action.key,
+      },
+      body:   action.body !== undefined ? JSON.stringify(action.body) : undefined,
+      signal: AbortSignal.timeout(30_000),
+    })
+  } catch {
+    return { kind: 'retry-later' }
+  }
+
+  if (res.ok) return { kind: 'done' }
+
+  if (res.status === 401) {
+    await tryRefreshToken()
+    return { kind: 'retry-later' }
+  }
+
+  const data = await res.json().catch(() => ({})) as { error?: unknown; details?: string; code?: string }
+  // Indisponibilité passagère : limite de débit, passerelle, ou la même action
+  // encore en cours de traitement côté serveur.
+  if (res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504
+    || data.code === 'IDEMPOTENCY_IN_PROGRESS') {
+    return { kind: 'retry-later' }
+  }
+
+  // Même simplification que pour une action en ligne (cf. le 403 de request()).
+  if (data.code === 'FORBIDDEN' && /^(Permission requise|Rôle requis)/.test(data.details ?? '')) {
+    return { kind: 'rejected', message: 'Action non autorisée pour votre profil' }
+  }
+  const message = data.details ?? (typeof data.error === 'string' ? data.error : null) ?? `Refusé par le serveur (erreur ${res.status})`
+  return { kind: 'rejected', message }
+}
+
+/** Rejoue les écritures faites hors ligne. Sans effet hors desktop ou sans session. */
+export function syncOfflineWrites(): Promise<void> {
+  return flushOutbox(getOfflineCacheUser(), sendQueuedAction)
 }
 
 // ── Upload multipart/form-data ─────────────────────────────────────────────

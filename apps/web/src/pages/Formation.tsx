@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react'
+import { isQueuedOffline } from '@forge/shared'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   GraduationCap, Star, Clock, Award, UserPlus,
@@ -471,6 +472,14 @@ export default function Formation() {
       { nom: newNom.trim(), specialite: newSpec.trim(), niveau: 1, duree_mois: 0 },
       {
         onSuccess: (newApp) => {
+          // Hors ligne : l'apprenant n'a pas encore d'identifiant, l'inscription
+          // à la session devra être faite une fois la création synchronisée.
+          if (isQueuedOffline(newApp)) {
+            if (selectedSessionId) toast.warning('Apprenant mis en attente — inscrivez-le à la session après la synchronisation')
+            setAddSlide(false)
+            resetAddForm()
+            return
+          }
           if (selectedSessionId) {
             inscrireApprenant.mutate(
               { id: newApp.id, session_id: selectedSessionId, disponibilites },

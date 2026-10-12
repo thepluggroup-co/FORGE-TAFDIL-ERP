@@ -38,6 +38,11 @@ export function setOfflineCacheUser(id: string | null): void {
   userId = id
 }
 
+/** Utilisateur courant de l'app (session en ligne OU connexion hors ligne). */
+export function getOfflineCacheUser(): string | null {
+  return userId
+}
+
 function openDb(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise
   dbPromise = new Promise((resolve, reject) => {
