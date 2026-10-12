@@ -1,5 +1,6 @@
 import { toast } from 'sonner'
 import { supabase } from './supabase'
+import { listStaleCachedPaths, readCachedResponse, saveCachedResponse } from './offline-cache'
 
 const _raw = import.meta.env.VITE_API_URL as string | undefined
 export const API_BASE = _raw?.startsWith('http')
@@ -16,6 +17,42 @@ let _cachedToken: string | null = null
 
 export function setApiToken(token: string | null) {
   _cachedToken = token
+}
+
+// ── Rafraîchissement du cache hors ligne (desktop) ─────────────────────────────
+// À la connexion et au retour du réseau, on recharge en arrière-plan les
+// données que l'utilisateur consulte habituellement : si la connexion tombe
+// ensuite, il retrouve des listes fraîches même sur les écrans qu'il n'a pas
+// rouverts aujourd'hui. Volontairement lent et silencieux (aucun toast, aucune
+// redirection) pour ne gêner ni l'utilisateur ni le rate-limit de l'API.
+const REFRESH_OLDER_THAN_MS = 30 * 60 * 1000
+const REFRESH_MAX_PATHS     = 60
+const REFRESH_PAUSE_MS      = 400
+let _refreshingCache = false
+
+export async function refreshOfflineCache(): Promise<void> {
+  if (_refreshingCache || !_cachedToken) return
+  _refreshingCache = true
+  try {
+    const paths = await listStaleCachedPaths(REFRESH_OLDER_THAN_MS, REFRESH_MAX_PATHS)
+    for (const path of paths) {
+      const token = _cachedToken
+      if (!token) break
+      try {
+        const res = await fetch(`${API_BASE}${path}`, {
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          signal:  AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        })
+        if (res.status === 401 || res.status === 429) break
+        if (res.ok && res.status !== 204) saveCachedResponse(path, await res.json(), false)
+      } catch {
+        break   // réseau retombé — on réessaiera à la prochaine reconnexion
+      }
+      await new Promise((r) => setTimeout(r, REFRESH_PAUSE_MS))
+    }
+  } finally {
+    _refreshingCache = false
+  }
 }
 
 // ── Deduplicated 401 handler ───────────────────────────────────────────────
@@ -178,9 +215,26 @@ async function request<T>(
     // 204 No Content — pas de corps JSON
     if (res.status === 204) return undefined as unknown as T
 
-    return res.json() as Promise<T>
+    const data = await res.json() as T
+    if (method === 'GET') saveCachedResponse(path, data)
+    return data
 
   } catch (err) {
+    // Serveur injoignable (pas de réseau, ou délai dépassé) — jamais une vraie
+    // réponse 4xx/5xx, qui est levée plus haut sous forme d'Error classique.
+    const unreachable = err instanceof TypeError
+      || (err instanceof DOMException && err.name === 'AbortError')
+
+    if (unreachable && method === 'GET') {
+      const cached = await readCachedResponse<T>(path)
+      if (cached) return cached.data
+    }
+
+    // TypeError conservé : useCaisse.ts s'en sert pour basculer sur SQLite.
+    if (err instanceof TypeError && method !== 'GET') {
+      throw new TypeError('Serveur injoignable — cette action nécessite une connexion Internet')
+    }
+
     if (err instanceof DOMException && err.name === 'AbortError') {
       const msg = `Délai dépassé — ${method} ${path} (serveur API non disponible ?)`
       toast.error(msg)

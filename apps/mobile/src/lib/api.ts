@@ -1,4 +1,4 @@
-import { cachedGet } from './offline/cache'
+import { readCached, saveCached, setCacheUser } from './offline/cache'
 import { enqueueMutation, registerProcessor } from './offline/queue'
 import { isOnline } from './offline/network'
 
@@ -128,6 +128,11 @@ export function setApiToken(token: string | null) {
   _token = token
 }
 
+/** Propriétaire du cache hors ligne — à tenir à jour avec la session. */
+export function setApiUser(userId: string | null) {
+  setCacheUser(userId)
+}
+
 function buildQuery(params: Record<string, string | number | boolean | undefined>) {
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
@@ -145,12 +150,28 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   }
   if (_token) headers['Authorization'] = `Bearer ${_token}`
 
-  const res = await fetch(`${BASE}${path}`, { ...options, headers })
+  // Toute lecture (GET) réussie est copiée sur l'appareil ; si le serveur est
+  // injoignable, on ressert la dernière copie. Une vraie réponse d'erreur
+  // (401/403/500…) n'est jamais masquée par le cache.
+  const isRead = !options?.method || options.method === 'GET'
+
+  let res: Response
+  try {
+    res = await fetch(`${BASE}${path}`, { ...options, headers })
+  } catch (err) {
+    if (isRead) {
+      const cached = await readCached<T>(path)
+      if (cached) return cached.data
+    }
+    throw err
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
   }
-  return res.json() as Promise<T>
+  const data = await res.json() as T
+  if (isRead) saveCached(path, data)
+  return data
 }
 
 export async function registerPushToken(token: string, platform: 'android' | 'ios', appVersion?: string) {
@@ -182,7 +203,7 @@ export async function fetchStocks(opts?: { search?: string; page?: number; per_p
     categorie: opts?.categorie,
     statut: opts?.statut,
   })
-  return cachedGet(`stocks${query}`, () => apiFetch<FetchStocksResult>(`/api/stocks${query}`))
+  return apiFetch<FetchStocksResult>(`/api/stocks${query}`)
 }
 
 export async function fetchCommandes(opts?: { statut?: string; client_id?: string; search?: string; page?: number; per_page?: number }) {
@@ -193,7 +214,7 @@ export async function fetchCommandes(opts?: { statut?: string; client_id?: strin
     page: opts?.page ?? 1,
     per_page: opts?.per_page ?? 100,
   })
-  return cachedGet(`commandes${query}`, () => apiFetch<FetchCommandesResult>(`/api/commandes${query}`))
+  return apiFetch<FetchCommandesResult>(`/api/commandes${query}`)
 }
 
 export async function fetchShopCommandes(opts?: { statut_commande?: string; statut_paiement?: string; search?: string; page?: number; per_page?: number }) {

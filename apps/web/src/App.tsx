@@ -99,6 +99,9 @@ function PageLoader() {
 
 // ── Bannière mode hors-ligne ───────────────────────────────────────────────────
 
+// Seule l'app desktop garde une copie locale des données (lib/offline-cache.ts).
+const isDesktopApp = typeof window !== 'undefined' && 'forge' in window
+
 function OfflineBanner() {
   const [offline, setOffline] = useState(!navigator.onLine)
   const [justBack, setJustBack] = useState(false)
@@ -126,7 +129,9 @@ function OfflineBanner() {
       style={{ backgroundColor: offline ? '#dc2626' : '#15803d' }}
     >
       {offline
-        ? '⚠️ Mode hors-ligne — Les données sont enregistrées localement et synchronisées à la reconnexion.'
+        ? isDesktopApp
+          ? '⚠️ Mode hors-ligne — Affichage des dernières données enregistrées. Les ventes en caisse sont synchronisées à la reconnexion ; les autres modifications nécessitent Internet.'
+          : '⚠️ Mode hors-ligne — Connexion Internet requise.'
         : '✅ Connexion rétablie — Synchronisation en cours…'}
     </div>
   )

@@ -36,3 +36,10 @@ L'installation se fait par utilisateur (aucun droit administrateur requis). Wind
 - `Cannot create symbolic link` pendant le build : extraire manuellement l'archive `winCodeSign` dans
   `%LOCALAPPDATA%\electron-builder\Cache\winCodeSign\winCodeSign-2.6.0` en excluant les `*.dylib`, ou activer le mode développeur Windows.
 - Lancer l'exe depuis le terminal de VS Code ne fait rien : VS Code définit `ELECTRON_RUN_AS_NODE=1`. Lancer depuis l'Explorateur ou supprimer la variable.
+
+## Mode hors ligne (desktop et mobile)
+
+- **Lecture** : chaque réponse de l'API consultée en ligne est copiée sur l'appareil, par utilisateur. Sans réseau, les écrans affichent la dernière copie. Un écran jamais ouvert en ligne sur cet appareil reste vide. Sur desktop, les données consultées habituellement sont rafraîchies en arrière-plan à la connexion et au retour du réseau.
+- **Connexion** : après une connexion en ligne réussie, une empreinte (PBKDF2) des identifiants est gardée sur l'appareil. Sans réseau, les mêmes identifiants (email + mot de passe, ou téléphone + PIN sur desktop) ouvrent l'app. Refusé pour un compte jamais connecté sur l'appareil, après 7 jours sans connexion en ligne, ou 5 minutes après 5 échecs. Code : `packages/shared/src/offline-auth.ts`.
+- **Écriture** : seule la Caisse desktop enregistre hors ligne (et les mouvements de stock sur mobile). Toute autre modification affiche « Serveur injoignable ».
+- Dans un navigateur web, rien n'est conservé (poste potentiellement partagé).
