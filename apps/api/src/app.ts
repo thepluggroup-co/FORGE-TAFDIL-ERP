@@ -1,11 +1,13 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
+import { secureHeaders } from 'hono/secure-headers'
 import { supabaseAdmin } from '@forge/db'
 import type { HonoVariables } from './types'
 import { authMiddleware } from './middleware/auth'
+import { idempotencyMiddleware } from './middleware/idempotency'
 import { auditMiddleware } from './middleware/audit'
-import { rateLimitMiddleware } from './middleware/rateLimit'
+import { rateLimitMiddleware, authRateLimitMiddleware, aiRateLimitMiddleware } from './middleware/rateLimit'
 import { stocksRouter } from './routes/stocks'
 import { bonsRouter } from './routes/bons'
 import { commerceRouter, publicCommandesRouter, publicDevisRouter } from './routes/commerce'
@@ -64,12 +66,14 @@ const ALLOWED_ORIGINS = [...new Set([...DEFAULT_ALLOWED_ORIGINS, ...EXTRA_ALLOWE
 
 app.use('*', logger())
 
-//Log de debug — AVANT le CORS
-app.use('*', async (c, next) => {
-  console.log('Origin reçue:', c.req.header('origin'))
-  console.log('ALLOWED_ORIGINS:', ALLOWED_ORIGINS)
-  await next()
-})
+// En-têtes de sécurité de base. Les politiques cross-origin (CORP/COOP) restent
+// désactivées : l'API est appelée depuis d'autres origines (web, shop, apps).
+app.use('*', secureHeaders({
+  xFrameOptions:             'DENY',
+  crossOriginResourcePolicy: false,
+  crossOriginOpenerPolicy:   false,
+  originAgentCluster:        false,
+}))
 
 app.use('*', cors({
   origin: (origin) => {
@@ -87,7 +91,7 @@ app.use('*', cors({
     return null
   },
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'Idempotency-Key'],
   exposeHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset', 'Retry-After'],
   credentials: true,
   maxAge: 86400,
@@ -97,6 +101,7 @@ app.use('*', rateLimitMiddleware)
 
 app.route('/', publicCommandesRouter)
 app.route('/', publicDevisRouter)
+app.use('/api/auth/*', authRateLimitMiddleware)
 app.route('/api/auth', authPhonePinRouter)
 app.route('/api/shop/configurateur', configurateurRouter)   // avant shopRouter : chemin plus spécifique
 app.route('/api/shop-client', shopClientRouter)            // serveur du shop uniquement (x-shop-secret)
@@ -136,7 +141,14 @@ app.get('/health/db', async (c) => {
 const api = new Hono<{ Variables: HonoVariables }>()
 
 api.use('*', authMiddleware)
+// Avant l'audit : une action rejouée (réponse déjà enregistrée) ne doit ni
+// s'exécuter ni être journalisée une seconde fois.
+api.use('*', idempotencyMiddleware)
 api.use('*', auditMiddleware)
+// Routes qui appellent le modèle IA (coût par requête) : 10 req/min par utilisateur
+for (const chemin of ['/ai/chat', '/ai/recommandations/stock', '/ai/rapport-hebdo']) {
+  api.use(chemin, aiRateLimitMiddleware)
+}
 
 api.route('/stocks',      stocksRouter)
 api.route('/bons',        bonsRouter)

@@ -5,10 +5,16 @@ import type { MiddlewareHandler } from 'hono'
 // ── IP extraction ─────────────────────────────────────────────────────────────
 // Prefer headers set by trusted reverse proxies over x-forwarded-for,
 // which clients can spoof by prepending values.
+//
+// cf-connecting-ip is only trustworthy when the API really sits behind
+// Cloudflare. Anywhere else (Railway today) the client can send it with a
+// different value on every request and get a fresh rate-limit bucket each
+// time — so it is ignored unless TRUST_CLOUDFLARE_IP=true.
+const TRUST_CLOUDFLARE_IP = process.env.TRUST_CLOUDFLARE_IP === 'true'
 
-function getClientIp(c: Parameters<MiddlewareHandler>[0]): string {
+export function getClientIp(c: Parameters<MiddlewareHandler>[0]): string {
   return (
-    c.req.header('cf-connecting-ip') ??
+    (TRUST_CLOUDFLARE_IP ? c.req.header('cf-connecting-ip') : undefined) ??
     c.req.header('x-real-ip') ??
     c.req.header('x-forwarded-for')?.split(',').at(-1)?.trim() ??
     'unknown'
@@ -61,7 +67,7 @@ if (!USE_REDIS) {
   )
 }
 
-type Limiters = { global: Ratelimit; ai: Ratelimit }
+type Limiters = { global: Ratelimit; ai: Ratelimit; auth: Ratelimit }
 let _limiters: Limiters | undefined
 
 function getLimiters(): Limiters {
@@ -79,6 +85,13 @@ function getLimiters(): Limiters {
       redis,
       limiter:        Ratelimit.slidingWindow(10, '1 m'),
       prefix:         'forge:rl:ai',
+      analytics:      false,
+      ephemeralCache: new Map(),
+    }),
+    auth: new Ratelimit({
+      redis,
+      limiter:        Ratelimit.slidingWindow(20, '1 m'),
+      prefix:         'forge:rl:auth',
       analytics:      false,
       ephemeralCache: new Map(),
     }),
@@ -119,6 +132,7 @@ function makeMemLimiter(max: number, windowMs: number) {
 
 const memGlobal = makeMemLimiter(100, 60_000)
 const memAi     = makeMemLimiter(10,  60_000)
+const memAuth   = makeMemLimiter(20,  60_000)
 
 // ── Exported middlewares ──────────────────────────────────────────────────────
 
@@ -133,6 +147,28 @@ export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
     if (!success) return rejectRateLimit(c, limit, resetSec)
   } else {
     const { success, limit, remaining, resetSec } = memGlobal(ip)
+    setRateLimitHeaders(c, limit, remaining, resetSec)
+    if (!success) return rejectRateLimit(c, limit, resetSec)
+  }
+
+  return next()
+}
+
+/**
+ * Unauthenticated login endpoints: 20 req/min per IP, on top of the global
+ * limit. The 4-digit PIN login is the main target — the per-account lockout
+ * protects one account, this slows a sweep across many accounts.
+ */
+export const authRateLimitMiddleware: MiddlewareHandler = async (c, next) => {
+  const ip = getClientIp(c)
+
+  if (USE_REDIS) {
+    const { success, limit, remaining, reset } = await getLimiters().auth.limit(ip)
+    const resetSec = Math.ceil(reset / 1000)
+    setRateLimitHeaders(c, limit, remaining, resetSec)
+    if (!success) return rejectRateLimit(c, limit, resetSec)
+  } else {
+    const { success, limit, remaining, resetSec } = memAuth(ip)
     setRateLimitHeaders(c, limit, remaining, resetSec)
     if (!success) return rejectRateLimit(c, limit, resetSec)
   }

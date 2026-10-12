@@ -7,7 +7,7 @@
  * vraie session Supabase via un lien magique généré côté serveur
  * (auth.admin.generateLink) — voir verifyPinAndIssueSession().
  */
-import { createHash, randomBytes, randomInt } from 'node:crypto'
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
 import { supabaseAdmin } from '@forge/db'
 import { sendSms, normalizePhone } from './sms.service'
 import { notifyWhatsApp } from './email-queue.service'
@@ -119,23 +119,49 @@ export async function verifyPinAndIssueSession(phone: string, pin: string): Prom
     return { ok: false, code: 'LOCKED', error: `Trop de tentatives — réessayez après ${new Date(row.locked_until).toLocaleTimeString('fr-CM')}` }
   }
 
-  if (hashPin(pin, row.salt) !== row.pin_hash) {
-    const attempts = row.failed_attempts + 1
-    const update: Record<string, unknown> = { failed_attempts: attempts }
-    if (attempts >= MAX_FAILED_ATTEMPTS) {
-      update.locked_until = new Date(Date.now() + LOCKOUT_MINUTES * 60_000).toISOString()
-      update.failed_attempts = 0
-    }
-    await db.from('user_pins').update(update).eq('user_id', p.id)
+  // La tentative est décomptée AVANT de comparer le PIN, par une mise à jour
+  // conditionnelle (failed_attempts doit encore valoir ce qu'on vient de lire).
+  // Sans ça, des requêtes lancées en parallèle lisent toutes le même compteur
+  // et testent chacune un PIN : les 10 000 combinaisons passent en une rafale,
+  // le verrouillage n'ayant jamais le temps de se déclencher.
+  const attempts = row.failed_attempts + 1
+  const reservation: Record<string, unknown> = attempts >= MAX_FAILED_ATTEMPTS
+    ? { failed_attempts: 0, locked_until: new Date(Date.now() + LOCKOUT_MINUTES * 60_000).toISOString() }
+    : { failed_attempts: attempts }
+  const { data: reserve, error: reserveErr } = await db
+    .from('user_pins')
+    .update(reservation)
+    .eq('user_id', p.id)
+    .eq('failed_attempts', row.failed_attempts)
+    .select('user_id')
+
+  if (reserveErr) return { ok: false, error: reserveErr.message }
+  if (!reserve || (reserve as unknown[]).length === 0) {
+    return { ok: false, code: 'LOCKED', error: 'Plusieurs tentatives en même temps — réessayez dans un instant' }
+  }
+
+  const attendu = Buffer.from(row.pin_hash, 'hex')
+  const recu    = Buffer.from(hashPin(pin, row.salt), 'hex')
+  if (attendu.length !== recu.length || !timingSafeEqual(attendu, recu)) {
     return { ok: false, code: 'INVALID_PIN', error: 'Code PIN incorrect' }
   }
 
   // PIN correct — reset des compteurs et émission du jeton de session.
   await db.from('user_pins').update({ failed_attempts: 0, locked_until: null }).eq('user_id', p.id)
 
+  // L'email de la session vient du compte Supabase Auth lui-même (retrouvé par
+  // son identifiant), jamais de profiles.email : cette colonne n'est qu'une
+  // copie, et celui qui parviendrait à la modifier obtiendrait sinon une
+  // session au nom du compte dont il a recopié l'adresse.
+  const { data: compte, error: compteErr } = await db.auth.admin.getUserById(p.id)
+  const email = compte?.user?.email
+  if (compteErr || !email) {
+    return { ok: false, code: 'GENERATE_LINK_FAILED', error: compteErr?.message ?? 'Compte introuvable' }
+  }
+
   const { data: linkData, error: linkErr } = await db.auth.admin.generateLink({
     type: 'magiclink',
-    email: p.email,
+    email,
   })
   if (linkErr || !linkData?.properties?.hashed_token) {
     return { ok: false, code: 'GENERATE_LINK_FAILED', error: linkErr?.message ?? 'Échec de génération de la session' }
@@ -144,7 +170,7 @@ export async function verifyPinAndIssueSession(phone: string, pin: string): Prom
   return {
     ok: true,
     userId: p.id,
-    email: p.email,
+    email,
     hashedToken: linkData.properties.hashed_token,
     mustChangePin: row.must_change,
   }

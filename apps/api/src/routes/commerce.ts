@@ -16,6 +16,7 @@ import { notifyStatutChange } from '../services/notifications'
 import { notifyCommandeSms } from '../services/sms.service'
 import { enregistrerPaiementCommande, ensureFactureForCommande, solderCreditsForCommande, syncCreditForCommande } from '../services/finance-core.service'
 import { enqueueEmail, notifyWhatsApp, sendEmailDirect } from '../services/email-queue.service'
+import { escapeHtml } from '../services/email.service'
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
 import { ensureClient } from '../services/client-sync.service'
 import { resolveCommandeContext, chargerJobsProductionCommande } from '../services/commande-workflow.service'
@@ -1893,6 +1894,10 @@ async function appliquerDecisionClient(
   if (directeurEmail) {
     const accentColor = isAccepted ? '#15803d' : '#C62828'
     const decisionLabel = isAccepted ? '✅ APPROUVÉ' : '❌ REFUSÉ'
+    // Le commentaire vient d'un lien public : jamais de HTML brut dans l'email
+    const clientNomHtml   = escapeHtml(d.client_nom ?? '')
+    const numeroHtml      = escapeHtml(d.numero ?? '')
+    const commentaireHtml = body.commentaire ? escapeHtml(body.commentaire) : ''
     await enqueueEmail({
       destinataire:   directeurEmail,
       sujet:          `${decisionLabel} — Devis ${d.numero} par ${d.client_nom}`,
@@ -1902,17 +1907,17 @@ async function appliquerDecisionClient(
 <table width="560" cellpadding="0" cellspacing="0" style="margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 8px rgba(0,0,0,.08);">
   <tr><td style="background:${accentColor};padding:22px 28px;">
     <p style="margin:0;color:#ffffff;font-size:20px;font-weight:bold;">${decisionLabel}</p>
-    <p style="margin:6px 0 0;color:rgba(255,255,255,.8);font-size:13px;">Devis ${d.numero} — ${decisionDate}</p>
+    <p style="margin:6px 0 0;color:rgba(255,255,255,.8);font-size:13px;">Devis ${numeroHtml} — ${decisionDate}</p>
   </td></tr>
   <tr><td style="padding:26px 28px;">
     <p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.7;">
-      Le client <strong>${d.client_nom}</strong> a <strong>${isAccepted ? 'approuvé' : 'refusé'}</strong>
-      le devis <strong>${d.numero}</strong> le ${decisionDate}.
+      Le client <strong>${clientNomHtml}</strong> a <strong>${isAccepted ? 'approuvé' : 'refusé'}</strong>
+      le devis <strong>${numeroHtml}</strong> le ${decisionDate}.
     </p>
-    ${body.commentaire ? `
+    ${commentaireHtml ? `
     <div style="background:#F9FAFB;border-left:4px solid #E5E7EB;border-radius:4px;padding:12px 16px;margin-bottom:18px;">
       <p style="margin:0 0 4px;color:#6B7280;font-size:12px;font-weight:600;">Commentaire du client :</p>
-      <p style="margin:0;color:#374151;font-size:13px;font-style:italic;">"${body.commentaire}"</p>
+      <p style="margin:0;color:#374151;font-size:13px;font-style:italic;">"${commentaireHtml}"</p>
     </div>` : ''}
     ${isAccepted
       ? '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;padding:14px 18px;"><p style="margin:0;color:#15803d;font-size:14px;font-weight:600;">Action commerciale requise : contactez le client pour enclencher le paiement/acompte, puis transformez le devis en commande dans l\'ERP.</p></div>'
@@ -1950,13 +1955,19 @@ async function appliquerDecisionClient(
 
 }
 
+const decisionLienPublicSchema = z.object({
+  decision:    z.enum(['accepte', 'refuse']),
+  commentaire: z.string().trim().max(1000).nullish(),
+})
+
 publicDevisRouter.post('/devis/approuver/:token', async (c) => {
   const { token } = c.req.param()
-  const body = await c.req.json<{ decision: 'accepte' | 'refuse'; commentaire?: string }>()
-
-  if (!['accepte', 'refuse'].includes(body.decision)) {
+  // Route publique : le corps est validé (type et longueur) avant tout usage
+  const saisie = decisionLienPublicSchema.safeParse(await c.req.json().catch(() => null))
+  if (!saisie.success) {
     return c.json({ error: 'Décision invalide — accepte ou refuse', code: 'INVALID_DECISION' }, 422)
   }
+  const body = saisie.data
 
   const { data } = await db
     .from('devis')

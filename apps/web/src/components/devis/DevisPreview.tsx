@@ -1,5 +1,6 @@
 import { FileText } from 'lucide-react'
 import { formatDate, formatXAF } from '@/lib/utils'
+import { publicAsset } from '@/lib/public-asset'
 
 export interface DevisPreviewLine {
   id?: string | number
@@ -72,7 +73,7 @@ export function DevisPreview({ devis, compact = false }: DevisPreviewProps) {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex gap-3">
             <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white">
-              <img src="/tafdil-logo.jpeg" alt="Logo TAFDIL" className="h-full w-full object-contain" />
+              <img src={publicAsset('tafdil-logo.jpeg')} alt="Logo TAFDIL" className="h-full w-full object-contain" />
             </div>
             <div>
               <p className="text-lg font-black leading-tight">TAFDIL SARL</p>

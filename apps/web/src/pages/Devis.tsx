@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react'
+import { isQueuedOffline } from '@forge/shared'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plus, Trash2, MessageCircle, Mail, ArrowRightLeft, Send,
@@ -921,6 +922,8 @@ function DevisFormPanel({
       updateDevis.mutate({ id: editingDevis.id as string, payload }, { onSuccess: onClose })
     } else {
       const result = await createDevis.mutateAsync(payload)
+      // Hors ligne : ni référence ni PDF tant que le serveur n'a pas reçu le devis.
+      if (isQueuedOffline(result)) { onClose(); return }
       setCreated({ reference: result.reference, pdf_url: result.pdf_url, montantTTC: result.montant_ttc_xaf })
     }
   }

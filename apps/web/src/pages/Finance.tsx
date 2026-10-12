@@ -34,6 +34,7 @@ import { CreditDashboard, CreditLimitForm, PaymentPlanDetail, PaymentPlanWizard 
 import type { Commande } from '@/hooks/useCommandes'
 import { useAllCreditLimits, usePaymentPlans } from '@/hooks/useCredit'
 import type { CreditLimitWithClient, PaymentPlan } from '@/hooks/useCredit'
+import { publicAsset } from '@/lib/public-asset'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -136,7 +137,7 @@ function InvoicePreview({ facture }: { facture: PreviewableFacture }) {
         {/* Coordonnées : packages/shared/src/entreprise.ts, identiques au PDF */}
         <div className="flex justify-between items-start mb-8">
           <div className="flex items-start gap-3">
-            <img src="/tafdil-logo.png" alt="TAFDIL" className="h-16 w-16 object-contain shrink-0" />
+            <img src={publicAsset('tafdil-logo.png')} alt="TAFDIL" className="h-16 w-16 object-contain shrink-0" />
             <div>
               <div className="text-forge-dark text-base font-sans font-bold">{TAFDIL_ENTREPRISE.nom}</div>
               <div className="text-gray-400 text-xs font-sans mt-0.5">{TAFDIL_ENTREPRISE.adresse}</div>

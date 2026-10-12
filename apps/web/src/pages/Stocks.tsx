@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react'
+import { isQueuedOffline } from '@forge/shared'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Minus, RotateCcw, FileOutput, ShoppingCart, Pencil, Upload, CheckCircle2 } from 'lucide-react'
@@ -796,7 +797,11 @@ export default function Stocks() {
                   if (!newProduit.ref || !newProduit.designation || !newProduit.categorie) return
                   setCreateError(null)
                   createProduit.mutate(newProduit, {
-                    onSuccess: (data) => { setCreatedProduit(data); setUploadedImages([]); setCreateDone(true) },
+                    onSuccess: (data) => {
+                      // Hors ligne : pas encore de produit côté serveur, donc pas d'étape photos.
+                      if (isQueuedOffline(data)) { closeNewProduit(); return }
+                      setCreatedProduit(data); setUploadedImages([]); setCreateDone(true)
+                    },
                     onError: (err: Error) => setCreateError(err.message || 'Erreur serveur — réessayez'),
                   })
                 }}
