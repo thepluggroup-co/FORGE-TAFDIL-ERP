@@ -606,7 +606,7 @@ router.get('/finance/dashboard', requirePermission('FINANCE', 'READ'), async (c)
   }
   const brouillons = factures.filter((f) => f.statut === 'brouillon')
   const banqueCaisse = ecritures
-    .filter((e) => ['521', '571', '5521', '5522'].includes(e.compte_syscohada))
+    .filter((e) => ['521', '571', '552', '5521', '5522'].includes(e.compte_syscohada))
     .reduce((s, e) => s + Number(e.debit_xaf ?? 0) - Number(e.credit_xaf ?? 0), 0)
 
   return c.json({
@@ -1353,6 +1353,9 @@ router.post(
     genererEcritureEncaissement({
       facture_id:  id,
       reference:   f.numero,
+      // Pas d'enregistrement de règlement sur cette route : l'horodatage
+      // distingue les paiements successifs d'une même facture.
+      piece_id:    Date.now().toString(36),
       date:        body.date_paiement,
       montant_xaf: body.montant_xaf,
       client_nom:  f.client_nom,
@@ -2311,6 +2314,8 @@ router.post('/credits/:id/rembourser', requireRole(['admin']), zValidator('json'
       }
 
       genererEcritureEncaissement({ credit_id: id, reference: cr.numero,
+        piece_id: String((remb as { id?: string } | null)?.id ?? Date.now().toString(36)),
+        facture_id: cr.facture_id ?? undefined,
         date: body.date_paiement, montant_xaf: body.montant_xaf,
         client_nom: cr.client_nom, created_by: user.id,
       }).catch(e => console.error('[compta] encaissement:', e))

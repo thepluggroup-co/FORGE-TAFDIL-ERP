@@ -2944,14 +2944,13 @@ router.patch(
 
     if (body.statut_commande === 'livree' && cmd.statut_commande === 'expediee') {
       if (cmd.erp_commande_id) {
-        const dejaPayeXaf = (body.statut_paiement ?? cmd.statut_paiement) === 'paye'
-          ? Math.round(cmd.montant_ttc ?? 0)
-          : 0
+        // Le règlement est enregistré par enregistrerPaiementCommande (ci-dessous
+        // ou lors de la confirmation du paiement) : ne jamais inscrire un montant
+        // payé sur la facture sans paiement associé.
         try {
           await ensureFactureForCommande({
             commandeId:       cmd.erp_commande_id,
             statut:           'valide',
-            montantPayeXaf:   dejaPayeXaf,
             userId:           user.id,
             notes:            'Facture generee automatiquement apres livraison de la commande web.',
           })
@@ -2984,6 +2983,7 @@ router.patch(
         commandeId:     context.commandeId,
         montantXaf:     Math.round(cmd.montant_ttc ?? 0),
         methode:        methodeMap[cmd.mode_paiement] ?? 'mobile_money',
+        modeComptable:  cmd.mode_paiement === 'mtn_momo' || cmd.mode_paiement === 'orange_money' ? cmd.mode_paiement : undefined,
         referenceExt:   body.payment_reference ?? null,
         datePaiement:   new Date().toISOString().split('T')[0],
         notes:          `Paiement confirmé commande web ${cmd.ref}`,
