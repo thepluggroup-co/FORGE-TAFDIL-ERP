@@ -2,6 +2,7 @@ import { supabaseAdmin } from '@forge/db'
 import {
   ensureFactureForCommande,
   getFactureActiveByCommande,
+  reglerSoldeCommandePayee,
   syncCreditForCommande,
 } from './finance-core.service'
 import { notifyWorkflow } from './workflow-notifications.service'
@@ -193,7 +194,9 @@ async function createCommandeErpFromShop(shop: ShopCommandeRow, userId?: string 
       frais_livraison_xaf:   fraisLivraison,
       total_ttc_xaf:         totalTtc,
       condition_paiement_id: conditionPaiementId,
-      montant_paye_xaf:      shop.statut_paiement === 'paye' ? totalTtc : 0,
+      // Le règlement d'une commande web payée est enregistré par le workflow
+      // (reglerSoldeCommandePayee), jamais inscrit ici sans paiement associé.
+      montant_paye_xaf:      0,
       notes:                 `[SOURCE WEB - RECONSTRUIT] ${shop.ref}`,
       created_by:            userId ?? null,
       sync_status:           'synced',
@@ -485,40 +488,11 @@ export async function ensureWorkflowApresExecutionBon(
     return { commandeId: null, facture: null, livraison: null, livraisonCreated: false }
   }
 
-  const shopPaid = context.shopCommande?.statut_paiement === 'paye'
-  const montantPaye = shopPaid
-    ? Math.round(Number(context.shopCommande?.montant_ttc ?? context.commande.total_ttc_xaf ?? 0))
-    : undefined
-
-  let ensured = await ensureFactureForCommande({
-    commandeId:     context.commandeId,
-    statut:         shopPaid ? 'paye' : 'valide',
-    montantPayeXaf: montantPaye,
-    userId:         input.userId ?? undefined,
-    notes:          'Facture verifiee automatiquement apres execution du bon de sortie.',
-  })
-
-  if (shopPaid) {
-    const factureId = (ensured.facture as { id?: string } | null)?.id ?? null
-    if (factureId) {
-      const { data: updatedFacture } = await db
-        .from('factures')
-        .update({
-          statut:            'paye',
-          montant_paye_xaf:  montantPaye ?? 0,
-          updated_at:        new Date().toISOString(),
-        })
-        .eq('id', factureId)
-        .select('*, factures_lignes(*)')
-        .single()
-      if (updatedFacture) ensured = { ...ensured, facture: updatedFacture }
-    }
-    await db.from('commandes')
-      .update({ montant_paye_xaf: montantPaye ?? 0, updated_at: new Date().toISOString() })
-      .eq('id', context.commandeId)
-  }
-
-  await syncCreditForCommande(context.commandeId, input.userId ?? null)
+  const ensured = await ensureFacturePourContext(
+    context,
+    input.userId,
+    'Facture verifiee automatiquement apres execution du bon de sortie.',
+  )
 
   if (context.commande.statut !== 'pret' && context.commande.statut !== 'delivered') {
     await db.from('commandes')
@@ -557,38 +531,11 @@ export async function ensureWorkflowApresPreparationBon(
     return { commandeId: null, facture: null, livraison: null, livraisonCreated: false }
   }
 
-  const shopPaid = context.shopCommande?.statut_paiement === 'paye'
-  const montantPaye = shopPaid
-    ? Math.round(Number(context.shopCommande?.montant_ttc ?? context.commande.total_ttc_xaf ?? 0))
-    : undefined
-
-  let ensured = await ensureFactureForCommande({
-    commandeId:     context.commandeId,
-    statut:         shopPaid ? 'paye' : 'valide',
-    montantPayeXaf: montantPaye,
-    userId:         input.userId ?? undefined,
-    notes:          'Facture validee automatiquement apres preparation du bon de sortie.',
-  })
-
-  if (shopPaid) {
-    const factureId = (ensured.facture as { id?: string } | null)?.id ?? null
-    if (factureId) {
-      const { data: updatedFacture } = await db
-        .from('factures')
-        .update({
-          statut:           'paye',
-          montant_paye_xaf: montantPaye ?? 0,
-          updated_at:       new Date().toISOString(),
-        })
-        .eq('id', factureId)
-        .select('*, factures_lignes(*)')
-        .single()
-      if (updatedFacture) ensured = { ...ensured, facture: updatedFacture }
-    }
-    await db.from('commandes')
-      .update({ montant_paye_xaf: montantPaye ?? 0, updated_at: new Date().toISOString() })
-      .eq('id', context.commandeId)
-  }
+  const ensured = await ensureFacturePourContext(
+    context,
+    input.userId,
+    'Facture validee automatiquement apres preparation du bon de sortie.',
+  )
 
   if (context.commande.statut !== 'pret' && context.commande.statut !== 'delivered') {
     await db.from('commandes')
@@ -640,38 +587,26 @@ export type SynchronisationWorkflowResult = {
 async function ensureFacturePourContext(
   context: CommandeWorkflowContext,
   userId?: string | null,
+  notes = 'Facture synchronisee automatiquement par le workflow commande.',
 ) {
-  const shopPaid = context.shopCommande?.statut_paiement === 'paye'
-  const montantPaye = shopPaid
-    ? Math.round(Number(context.shopCommande?.montant_ttc ?? context.commande.total_ttc_xaf ?? 0))
-    : undefined
-
   let ensured = await ensureFactureForCommande({
-    commandeId:     context.commandeId,
-    statut:         shopPaid ? 'paye' : 'valide',
-    montantPayeXaf: montantPaye,
-    userId:         userId ?? undefined,
-    notes:          'Facture synchronisee automatiquement par le workflow commande.',
+    commandeId: context.commandeId,
+    statut:     'valide',
+    userId:     userId ?? undefined,
+    notes,
   })
 
-  if (shopPaid) {
-    const factureId = (ensured.facture as { id?: string } | null)?.id ?? null
-    if (factureId) {
-      const { data: updatedFacture } = await db
-        .from('factures')
-        .update({
-          statut:           'paye',
-          montant_paye_xaf: montantPaye ?? 0,
-          updated_at:       new Date().toISOString(),
-        })
-        .eq('id', factureId)
-        .select('*, factures_lignes(*)')
-        .single()
-      if (updatedFacture) ensured = { ...ensured, facture: updatedFacture }
-    }
-    await db.from('commandes')
-      .update({ montant_paye_xaf: montantPaye ?? 0, updated_at: new Date().toISOString() })
-      .eq('id', context.commandeId)
+  // Commande web déjà payée en boutique : on enregistre un vrai paiement (trace
+  // + écriture d'encaissement) au lieu de forcer la facture à « payée » — ce
+  // qui laissait des factures soldées sans aucun règlement ni écriture.
+  if (context.shopCommande?.statut_paiement === 'paye') {
+    const reglement = await reglerSoldeCommandePayee({
+      commandeId:       context.commandeId,
+      modePaiementShop: context.shopCommande.mode_paiement ?? null,
+      notes:            `Paiement commande web ${context.ref ?? context.commande.numero} constate par le workflow.`,
+      userId:           userId ?? undefined,
+    })
+    if (reglement?.facture) ensured = { ...ensured, facture: reglement.facture }
   }
 
   await syncCreditForCommande(context.commandeId, userId ?? null)

@@ -153,6 +153,7 @@ export type ModeEncaissementComptable =
   | 'especes'
   | 'mtn_momo'
   | 'orange_money'
+  | 'mobile_money'
   | 'cheque'
   | 'autre'
 
@@ -160,6 +161,8 @@ export function compteEncaissement(mode: ModeEncaissementComptable = 'banque'): 
   if (mode === 'caisse' || mode === 'especes') return '571'
   if (mode === 'mtn_momo') return '5521'
   if (mode === 'orange_money') return '5522'
+  // Mobile money sans opérateur connu (agrégateur NOKASH, saisie générique)
+  if (mode === 'mobile_money') return '552'
   return '521'
 }
 
@@ -167,13 +170,19 @@ export async function genererEcritureEncaissement(params: {
   facture_id?:  string
   credit_id?:   string
   reference:    string
+  // Identifiant du règlement (paiement, versement, remboursement). Sans lui,
+  // le garde-fou anti-doublon ci-dessous ne laissait passer que le PREMIER
+  // encaissement d'une facture : les suivants n'étaient jamais comptabilisés.
+  piece_id?:    string
   date:         string
   montant_xaf:  number
   client_nom:   string
   mode?:        ModeEncaissementComptable
   created_by?:  string
 }): Promise<ComptaResult> {
-  const ref   = `ENC-${params.reference}`
+  const ref   = params.piece_id
+    ? `ENC-${params.reference}-${params.piece_id.slice(0, 8)}`
+    : `ENC-${params.reference}`
   const dejaFait = await ecrituresExistent('reference_doc', ref)
   if (dejaFait) return { ok: true, inserts: 0 }
 
@@ -203,6 +212,47 @@ export async function genererEcritureEncaissement(params: {
       facture_id:       params.facture_id,
       created_by:       params.created_by,
     },
+  ])
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FRAIS DE LIVRAISON ENCAISSÉS
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Les frais de livraison ne figurent pas sur la facture (elle ne porte que les
+// articles). Quand le client les règle avec sa commande, ils ne soldent donc
+// aucune créance 411 : ils sont constatés en produit au moment de l'encaissement.
+//   Dr 521/571/552x Trésorerie   (frais encaissés)
+//   Cr 706 Services vendus       (frais encaissés)
+
+export async function genererEcritureFraisLivraison(params: {
+  commande_id:  string
+  reference:    string
+  piece_id:     string
+  date:         string
+  montant_xaf:  number
+  client_nom:   string
+  mode?:        ModeEncaissementComptable
+  created_by?:  string
+}): Promise<ComptaResult> {
+  const montant = Math.round(Number(params.montant_xaf ?? 0))
+  if (montant <= 0) return { ok: true, inserts: 0 }
+
+  const ref = `LIV-${params.reference}-${params.piece_id.slice(0, 8)}`
+  if (await ecrituresExistent('reference_doc', ref)) return { ok: true, inserts: 0 }
+
+  const compteTreso = compteEncaissement(params.mode)
+  const common = {
+    date:          params.date.slice(0, 10),
+    libelle:       `Frais de livraison — ${params.reference} — ${params.client_nom}`,
+    reference_doc: ref,
+    commande_id:   params.commande_id,
+    created_by:    params.created_by,
+  }
+
+  return insertEcritures([
+    { ...common, compte_syscohada: compteTreso, compte_label: libelleCompte(compteTreso), debit_xaf: montant, credit_xaf: 0 },
+    { ...common, compte_syscohada: '706', compte_label: libelleCompte('706'), debit_xaf: 0, credit_xaf: montant },
   ])
 }
 

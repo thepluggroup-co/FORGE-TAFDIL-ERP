@@ -563,6 +563,8 @@ describe('💼 COMMERCE — Devis et commandes', () => {
     mockFrom().mockReturnValueOnce(
       mkChain({ data: { statut: 'confirmed', numero: CMD_NUM }, error: null }) as never,
     )
+    // ordres de fabrication déjà préparés pour la commande
+    mockFrom().mockReturnValueOnce(mkChain({ data: [{ id: 'job-existant' }], error: null }) as never)
     // update statut
     mockFrom().mockReturnValueOnce(
       mkChain({ data: { ...COMMANDE, statut: 'in_production' }, error: null }) as never,
