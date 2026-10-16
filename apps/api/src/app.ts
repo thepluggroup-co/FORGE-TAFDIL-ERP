@@ -74,6 +74,10 @@ app.use('*', secureHeaders({
   crossOriginOpenerPolicy:   false,
   originAgentCluster:        false,
 }))
+app.use('*', async (c, next) => {
+  await next()
+  c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+})
 
 app.use('*', cors({
   origin: (origin) => {

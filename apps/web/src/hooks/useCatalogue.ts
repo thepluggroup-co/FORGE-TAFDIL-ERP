@@ -229,6 +229,7 @@ export interface FicheTechniqueRessource {
   ressource_produit_id: string | null
   designation: string
   unite: string
+  gamme_section?: string
   quantite_par_unite: number
   cout_unitaire_reference_xaf: number
   temps_reference_h: number | null
@@ -244,6 +245,7 @@ export interface CreateRessourcePayload {
   ressource_produit_id?: string
   designation: string
   unite: string
+  gamme_section?: string
   quantite_par_unite: number
   cout_unitaire_reference_xaf?: number
   temps_reference_h?: number

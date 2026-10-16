@@ -1,3 +1,4 @@
+import { NumberInput } from '@forge/ui'
 import React, { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { TopBar } from '../components/TopBar'
@@ -133,8 +134,8 @@ export function StockDetailPage() {
               <div className="space-y-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">Quantité</label>
-                  <input
-                    type="number"
+                  <NumberInput
+
                     min={1}
                     value={quantite}
                     onChange={(e) => setQuantite(Math.max(1, Number(e.target.value) || 1))}

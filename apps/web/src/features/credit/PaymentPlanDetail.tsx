@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import { CheckCircle, Clock, AlertTriangle, CreditCard, Loader2, X } from 'lucide-react'
-import { Button, Modal, StatusBadge } from '@forge/ui'
+import { Button, Modal, StatusBadge , NumberInput} from '@forge/ui'
 import { formatXAF, formatDate, formatDateTime } from '@/lib/utils'
 import { usePaymentPlan, useRecordPayment } from '@/hooks/useCredit'
 import type { Installment, PaymentMethod } from '@/hooks/useCredit'
@@ -168,8 +168,8 @@ export function PaymentPlanDetail({ planId, onBack }: Props) {
         <form onSubmit={handlePay} className="space-y-4 p-1">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Montant (FCFA)</label>
-            <input
-              type="number"
+            <NumberInput
+
               min={1}
               max={payModal.installment ? payModal.installment.amount_due - payModal.installment.amount_paid : undefined}
               value={payAmount}

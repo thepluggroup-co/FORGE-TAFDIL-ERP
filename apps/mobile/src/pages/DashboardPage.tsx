@@ -57,7 +57,7 @@ type Section = 'ventes' | 'commandes' | 'approbation' | 'stock' | 'livraisons' |
 
 const ROLE_VIEW: Record<MobileRole, { subtitle: string; sources: Source[]; sections: Section[] }> = {
   admin:       { subtitle: 'Direction',   sources: ['commandes', 'stocks', 'bons'], sections: ['ventes', 'approbation', 'commandes', 'stock'] },
-  superviseur: { subtitle: 'Supervision', sources: ['commandes', 'stocks', 'bons'], sections: ['approbation', 'commandes', 'stock'] },
+  manager: { subtitle: 'Supervision', sources: ['commandes', 'stocks', 'bons'], sections: ['approbation', 'commandes', 'stock'] },
   operateur:   { subtitle: 'Commercial',  sources: ['commandes', 'stocks'],         sections: ['commandes', 'stock'] },
   apprenant:   { subtitle: 'Atelier',     sources: ['commandes', 'stocks'],         sections: ['commandes', 'stock'] },
   caissier:    { subtitle: 'Caisse',      sources: ['caisse', 'stocks'],            sections: ['caisse', 'stock'] },

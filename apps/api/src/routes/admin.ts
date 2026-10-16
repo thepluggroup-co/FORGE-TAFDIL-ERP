@@ -57,17 +57,31 @@ const securitySettingsSchema = z.object({
 })
 
 export const adminRouter = new Hono<{ Variables: HonoVariables }>()
-
-// ── Gestion utilisateurs réservée au Patron (admin) ──────────────────────────
 adminRouter.use('*', requireRole(['admin']))
 
+const societeSchema = z.object({
+  nom: z.string().min(1).max(120), activite: z.string().min(1).max(500), directeur: z.string().min(1).max(120),
+  telephones: z.string().min(1).max(120), site: z.string().min(1).max(200), adresse: z.string().min(1).max(250), email: z.string().email(),
+})
+adminRouter.get('/societe', async (c) => {
+  const { data, error } = await supabaseAdmin!.from('societe_reglages').select('*').eq('id', 1).maybeSingle()
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data })
+})
+adminRouter.put('/societe', zValidator('json', societeSchema), async (c) => {
+  const { data, error } = await supabaseAdmin!.from('societe_reglages').upsert({ id: 1, ...c.req.valid('json'), updated_at: new Date().toISOString() }).select().single()
+  if (error) return c.json({ error: error.message }, 400)
+  return c.json({ data })
+})
+
+// ── Gestion utilisateurs réservée au Patron (admin) ──────────────────────────
 // 'caissier' doit rester dans cette liste — apps/web/src/context/AuthContext.tsx
 // et apps/web/src/components/layout/Sidebar.tsx (CAISSIER_RESPONSABLE) le
 // traitent comme un rôle legacy à part entière, distinct de 'operateur'.
 // Sans lui, un compte RBAC CAISSIER créé via RBAC_TO_LEGACY reçoit le rôle
 // legacy 'operateur' et le module Caisse reste invisible dans la sidebar.
 // 'livreur' : même raison — sans lui, un livreur invité recevait 'operateur'.
-const VALID_ROLES = ['admin', 'superviseur', 'operateur', 'technicien', 'caissier', 'livreur'] as const
+const VALID_ROLES = ['admin', 'manager', 'operateur', 'technicien', 'caissier', 'livreur'] as const
 type ForgeRole = typeof VALID_ROLES[number]
 
 /**
@@ -165,7 +179,7 @@ adminRouter.patch('/users/:id', async (c) => {
 // Mapping rôle RBAC → rôle legacy profiles.role
 const RBAC_TO_LEGACY: Record<string, ForgeRole> = {
   SUPER_ADMIN: 'admin',
-  MANAGER:     'superviseur',
+  MANAGER:     'manager',
   COMMERCIAL:  'operateur',
   CAISSIER:    'caissier',
   LIVREUR:     'livreur',

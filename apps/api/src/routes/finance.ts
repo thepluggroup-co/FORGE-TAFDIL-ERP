@@ -34,8 +34,8 @@ const chargeSchema = z.object({
   compte_charge:       z.string().min(2),
   date_charge:         z.string(),
   date_echeance:       z.string().optional(),
-  montant_ht_xaf:      z.number().min(0),
-  tva_xaf:             z.number().min(0).default(0),
+  montant_ht_xaf:      z.number().int().min(0),
+  tva_xaf:             z.number().int().min(0).default(0),
   mode_paiement:       z.enum(['caisse', 'banque', 'mobile_money', 'credit_fournisseur']).optional(),
   compte_tresorerie:   z.string().optional(),
   reference_paiement:  z.string().optional(),
@@ -56,7 +56,7 @@ const sortieTresorerieSchema = z.object({
   date_sortie:         z.string(),
   beneficiaire:        z.string().min(1),
   motif:               z.string().min(1),
-  montant_xaf:         z.number().positive(),
+  montant_xaf:         z.number().int().positive(),
   mode_paiement:       z.enum(['caisse', 'banque', 'mobile_money']),
   compte_tresorerie:   z.string().min(2),
   reference_paiement:  z.string().optional(),
@@ -99,15 +99,15 @@ const factureSchema = z.object({
   commande_id:          z.string().optional(),
   date_emission:        z.string(),
   date_echeance:        z.string(),
-  acompte_recu_xaf:     z.number().min(0).optional(),
-  remise_globale_xaf:   z.number().min(0).default(0),
+  acompte_recu_xaf:     z.number().int().min(0).nullable().optional(),
+  remise_globale_xaf:   z.number().int().min(0).default(0),
   remise_globale_motif: z.string().optional(),
   notes:                z.string().optional(),
   lignes: z.array(z.object({
     designation:          z.string().min(1),
     unite:                z.string().default('unité'),
     quantite:             z.number().positive(),
-    prix_unitaire_ht_xaf: z.number().min(0),
+    prix_unitaire_ht_xaf: z.number().int().min(0),
     remise_type:          z.enum(['pct', 'forfait']).optional(),
     remise_valeur:        z.number().min(0).optional(),
     remise_motif:         z.string().optional(),
@@ -119,14 +119,14 @@ const creditSchema = z.object({
   client_id:   z.string().optional(),
   client_nom:  z.string().min(1),
   commande_id: z.string().optional(),
-  montant_xaf: z.number().positive(),
+  montant_xaf: z.number().int().positive(),
   date_debut:  z.string(),
   echeance:    z.string(),
   notes:       z.string().optional(),
 })
 
 const rembourserSchema = z.object({
-  montant_xaf:   z.number().positive(),
+  montant_xaf:   z.number().int().positive(),
   date_paiement: z.string(),
   type:          z.enum(['total', 'partiel']),
   notes:         z.string().optional(),
@@ -137,8 +137,8 @@ const ecritureSchema = z.object({
   libelle:          z.string().min(1),
   compte_syscohada: z.string().min(2),
   compte_label:     z.string().min(1),
-  debit_xaf:        z.number().min(0).default(0),
-  credit_xaf:       z.number().min(0).default(0),
+  debit_xaf:        z.number().int().min(0).default(0),
+  credit_xaf:       z.number().int().min(0).default(0),
   reference_doc:    z.string().optional(),
   facture_id:       z.string().optional(),
   commande_id:      z.string().optional(),
@@ -153,8 +153,8 @@ const journalSchema = z.object({
   commande_id:   z.string().optional(),
   lignes: z.array(z.object({
     compte_syscohada: z.string().min(2),
-    debit_xaf:        z.number().min(0).default(0),
-    credit_xaf:       z.number().min(0).default(0),
+    debit_xaf:        z.number().int().min(0).default(0),
+    credit_xaf:       z.number().int().min(0).default(0),
   })).min(2),
 })
 
@@ -1185,7 +1185,7 @@ router.patch(
   requireRole(['admin']),
   zValidator('json', z.object({
     statut: z.enum(['brouillon', 'valide', 'envoye', 'paye', 'annule']),
-    montant_paye_xaf: z.number().min(0).optional(),
+    montant_paye_xaf: z.number().int().min(0).nullable().optional(),
   })),
   async (c) => {
     const { id }  = c.req.param()
@@ -1282,7 +1282,7 @@ router.post(
   '/factures/:id/paiement',
   requireRole(['admin']),
   zValidator('json', z.object({
-    montant_xaf:   z.number().positive(),
+    montant_xaf:   z.number().int().positive(),
     date_paiement: z.string(),
     mode:          z.enum(['banque', 'caisse', 'virement', 'especes', 'mtn_momo', 'orange_money']).default('banque'),
     notes:         z.string().optional(),

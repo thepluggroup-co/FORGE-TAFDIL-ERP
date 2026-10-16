@@ -299,7 +299,7 @@ describe('L4 — POST /api/logistique/livraisons : création', () => {
     expect(body.code).toBe('COMMANDE_NOT_FOUND')
   })
 
-  it('retourne 403 si rôle operateur (admin/superviseur requis)', async () => {
+  it('retourne 403 si rôle operateur (admin/manager requis)', async () => {
     // Pas de DB calls — bloqué par requirePermission avant même d'arriver au handler
     vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: false, roleName: 'COMMERCIAL' } as never)
 
@@ -524,7 +524,7 @@ describe('L6 — PATCH /api/logistique/livraisons/:id/assigner : attribution liv
 
   it('assigne un livreur 200 — admin (SUPER_ADMIN via mock service)', async () => {
     // checkPermission est mocké au niveau service → pas de mocks DB pour le RBAC
-    // checkPermission n'est appelé qu'une fois (middleware) ; le handler vérifie ensuite le rôle admin/superviseur
+    // checkPermission n'est appelé qu'une fois (middleware) ; le handler vérifie ensuite le rôle admin/manager
     // Séquence DB (4 appels) : livraisons fetch → profiles livreur → livraisons update → historique
     vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' } as never)
 

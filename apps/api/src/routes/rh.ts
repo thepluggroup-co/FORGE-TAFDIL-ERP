@@ -353,7 +353,7 @@ const employeSchema = z.object({
   type_contrat:    z.enum(['CDI', 'CDD', 'stage', 'freelance']),
   date_entree:     z.string(),
   date_sortie:     z.string().optional(),
-  salaire_base_xaf: z.number().min(0),
+  salaire_base_xaf: z.number().int().min(0),
   telephone:       z.string().optional(),
   email:           z.string().email().optional(),
   cin:             z.string().optional(),
@@ -416,7 +416,7 @@ const recruterSchema = z.object({
   departement:      z.string().min(1),
   type_contrat:     z.enum(['CDI', 'CDD', 'stage', 'freelance']),
   date_entree:      z.string(),
-  salaire_base_xaf: z.number().min(0),
+  salaire_base_xaf: z.number().int().min(0),
   commentaire:      z.string().optional(),
 })
 
@@ -657,7 +657,7 @@ const avanceSalaireSchema = z.object({
   employe_id:         z.string().uuid(),
   date_avance:        z.string().min(1),
   mois_deduction:     z.string().regex(/^\d{4}-\d{2}$/, 'Format requis : YYYY-MM'),
-  montant_xaf:        z.number().positive(),
+  montant_xaf:        z.number().int().positive(),
   mode_paiement:      z.enum(['caisse', 'banque', 'mobile_money']).default('caisse'),
   compte_tresorerie:  z.enum(['571', '521']).optional(),
   reference_paiement: z.string().optional(),
@@ -670,7 +670,7 @@ const retenueSalaireSchema = z.object({
   mois_deduction: z.string().regex(/^\d{4}-\d{2}$/, 'Format requis : YYYY-MM'),
   type:           z.enum(['absence', 'materiel', 'pret_interne', 'discipline', 'autre']).default('autre'),
   libelle:        z.string().min(1),
-  montant_xaf:    z.number().positive(),
+  montant_xaf:    z.number().int().positive(),
   notes:          z.string().optional(),
 })
 

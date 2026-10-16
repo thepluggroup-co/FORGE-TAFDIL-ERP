@@ -110,7 +110,7 @@ export async function signerBonLivraison(input: SignerBLInput): Promise<SignerBL
 
   // 2. RBAC localité : si user est un livreur, il doit être l'assigné
   if (lv.livreur_id && lv.livreur_id !== input.user_id) {
-    // Un admin/superviseur peut signer à la place (cas back-office / vol de matériel)
+    // Un admin/manager peut signer à la place (cas back-office / vol de matériel)
     // Le contrôle fin du rôle est fait en amont dans la route via requireRole.
     // Ici on est permissif pour les rôles avancés : on revérifie le rôle plus haut.
   }

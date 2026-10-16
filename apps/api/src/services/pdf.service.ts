@@ -85,6 +85,63 @@ export interface PdfLigne {
   configuration?:       Record<string, unknown> | null
 }
 
+export interface PdfFicheTechniqueInput {
+  company: { nom: string; activite: string; directeur: string; telephones: string; site: string; adresse: string; email: string }
+  modele: string
+  version: number
+  devis: string
+  date: string
+  client: string
+  notes?: string | null
+  ressources: Array<{ designation: string; quantite: number; unite: string; gamme?: string | null; type: string }>
+}
+
+/** Impression A4 d'une fiche technique, avec les références commerciales du devis. */
+export async function generateFicheTechniquePDF(input: PdfFicheTechniqueInput): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true })
+    const chunks: Buffer[] = []
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk))
+    doc.on('end', () => resolve(Buffer.concat(chunks)))
+    doc.on('error', reject)
+    const width = 515
+    doc.rect(0, 0, 595, 118).fill('#FFFFFF')
+    doc.rect(0, 112, 595, 6).fill('#C62828')
+    doc.font('Helvetica-Bold').fontSize(17).fillColor('#111827').text(input.company.nom, 40, 28, { width: 390 })
+    doc.font('Helvetica').fontSize(8).fillColor('#374151').text(input.company.activite, 40, 52, { width: 390 })
+    doc.text(`Directeur Général : ${input.company.directeur}`, 40, 70)
+    doc.text(`Tél. ${input.company.telephones}  |  ${input.company.email}`, 40, 83)
+    doc.text(`${input.company.adresse}  |  Site : ${input.company.site}`, 40, 96)
+    doc.font('Helvetica-Bold').fontSize(15).fillColor('#C62828').text('FICHE TECHNIQUE', 40, 138)
+    doc.font('Helvetica').fontSize(10).fillColor('#111827')
+      .text(`Modèle : ${input.modele} (version ${input.version})`, 40, 166)
+      .text(`Devis : ${input.devis}`, 40, 184)
+      .text(`Date : ${input.date}`, 330, 184)
+      .text(`Client : ${input.client}`, 40, 202)
+    let y = 236
+    const row = (label: string, x: number, w: number) => doc.font('Helvetica-Bold').fontSize(8).fillColor('#FFFFFF').text(label, x + 5, y + 6, { width: w - 10 })
+    doc.rect(40, y, width, 22).fill('#C62828')
+    row('DÉSIGNATION', 40, 240); row('QTÉ', 280, 55); row('UNITÉ', 335, 60); row('GAMME / SECTION', 395, 160)
+    y += 22
+    input.ressources.forEach((r, i) => {
+      if (y > 710) { doc.addPage(); y = 45 }
+      doc.rect(40, y, width, 22).fill(i % 2 ? '#FFFFFF' : '#F9FAFB')
+      doc.font('Helvetica').fontSize(8).fillColor('#111827')
+      doc.text(r.designation, 45, y + 6, { width: 230, ellipsis: true })
+      doc.text(String(r.quantite), 285, y + 6, { width: 45 })
+      doc.text(r.unite, 340, y + 6, { width: 50 })
+      doc.text(r.gamme ?? '', 400, y + 6, { width: 150, ellipsis: true })
+      y += 22
+    })
+    if (input.notes) {
+      y += 14
+      doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827').text('Notes techniques', 40, y)
+      doc.font('Helvetica').fontSize(9).text(input.notes, 40, y + 15, { width })
+    }
+    doc.end()
+  })
+}
+
 export interface PdfRessourceLigne {
   type:             TypeRessource   // Phase 4 : + consommable, sous_traitance
   designation:      string
@@ -128,6 +185,9 @@ export interface PdfDevis {
   date_emission:   string
   date_validite:   string
   validite_jours?: number
+  conditions_paiement?: string | null
+  note_client?: string | null
+  acompte_pct?: number
   total_ht_xaf:    number
   tva_xaf:         number
   total_ttc_xaf:   number
@@ -683,8 +743,8 @@ function drawDevisHeaderTafdil(doc: InstanceType<typeof PDFDocument>) {
   doc.polygon([0, H - 112], [268, H - 22], [300, H], [0, H - 92]).fill('#1A1A1A')
 
   try {
-    // Logo fond transparent — chevauche légèrement le bandeau, comme sur le gabarit.
-    doc.image(LOGO_TRANSPARENT_PATH, ML - 4, 10, { width: 70, height: 78 })
+    // Logo à droite, sur le fond blanc de l'en-tête.
+    doc.image(LOGO_TRANSPARENT_PATH, PW - ML - 66, 14, { width: 62, height: 68 })
   } catch { /* logo optionnel — le reste du gabarit reste correct sans lui */ }
 
   doc.font('Helvetica-Bold').fontSize(18).fillColor(C.dark)
@@ -847,7 +907,7 @@ function drawDevisRessourcesRow(doc: InstanceType<typeof PDFDocument>, r: PdfRes
     ce devis, en tableau bordé centré sur les mêmes marges que le tableau principal. */
 function drawDevisRessourcesDetail(doc: InstanceType<typeof PDFDocument>, y: number, snapshot: PdfRessourcesSnapshot): number {
   doc.font('Helvetica-Bold').fontSize(9).fillColor(C.dark)
-    .text('DÉTAIL DES RESSOURCES (produits catalogue — calcul automatique)', ML, y, { width: W, align: 'center' })
+    .text('DÉTAIL DES RESSOURCES', ML, y, { width: W, align: 'center' })
   y += 16
   y = drawDevisRessourcesTableHeader(doc, y)
 
@@ -912,9 +972,22 @@ export async function generateDevisPDF(
 
     if (y + DEVIS_ROW_H * 3 > DEVIS_PAGE_END) { doc.addPage(); drawDevisWatermark(doc); y = 40 }
     y = drawDevisSummaryRow(doc, 'CONSOMMABLE',   totalMateriaux,     y)
-    y = drawDevisSummaryRow(doc, "MAIN D'ŒUVRE",  totalMainOeuvre,    y)
+    if (totalMainOeuvre > 0) y = drawDevisSummaryRow(doc, "MAIN D'ŒUVRE", totalMainOeuvre, y)
     y = drawDevisSummaryRow(doc, 'MONTANT TOTAL', devis.total_ht_xaf, y, true)
     y += 16
+
+    const expiration = devis.date_validite || (() => { const d = new Date(`${devis.date_emission}T00:00:00`); d.setDate(d.getDate() + (devis.validite_jours ?? 30)); return d.toISOString().slice(0, 10) })()
+    doc.font('Helvetica').fontSize(8.5).fillColor(C.dark)
+      .text(`Validité : ${devis.validite_jours ?? 30} jours — expiration le ${expiration}`, ML, y, { width: W })
+    y += 13
+    if (devis.conditions_paiement) {
+      doc.text(`Conditions de paiement : ${devis.conditions_paiement}`, ML, y, { width: W })
+      y += 13
+    }
+    if ((devis.acompte_pct ?? 0) > 0) {
+      doc.text(`Avance à verser (${devis.acompte_pct} %) : ${montantPdf(Math.round(devis.total_ttc_xaf * (devis.acompte_pct! / 100)))} XAF`, ML, y, { width: W })
+      y += 13
+    }
 
     if (devis.ressources_snapshot && devis.ressources_snapshot.lignes.length > 0) {
       if (y + 100 > DEVIS_PAGE_END) { doc.addPage(); drawDevisWatermark(doc); y = 40 }
@@ -930,6 +1003,13 @@ export async function generateDevisPDF(
     y += 20
 
     if (y + 55 > DEVIS_PAGE_END) { doc.addPage(); drawDevisWatermark(doc); y = 40 }
+    if (devis.note_client?.trim()) {
+      doc.font('Helvetica').fontSize(8)
+      const noteH = Math.min(52, Math.max(28, doc.heightOfString(devis.note_client, { width: 230 }) + 22))
+      doc.rect(ML, y, 240, noteH).strokeColor(C.border).lineWidth(0.5).stroke()
+      doc.font('Helvetica-Bold').fontSize(8).fillColor(C.dark).text('Note au client', ML + 7, y + 5)
+      doc.font('Helvetica').fontSize(8).fillColor(C.mid).text(devis.note_client, ML + 7, y + 16, { width: 226, height: noteH - 20, ellipsis: true })
+    }
     drawDevisSignatureAndFooter(doc, y)
 
     doc.end()

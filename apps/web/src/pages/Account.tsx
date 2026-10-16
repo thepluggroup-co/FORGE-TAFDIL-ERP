@@ -6,6 +6,7 @@ import {
   Phone, Save, Loader2, Globe, MapPin,
 } from 'lucide-react'
 import { Button } from '@forge/ui'
+import { ROLE_LABELS } from '@forge/shared'
 import { useAuth } from '@/context/AuthContext'
 import { supabase } from '@/lib/supabase'
 import { apiClient } from '@/lib/api-client'
@@ -17,10 +18,13 @@ import { usePermissions } from '@/hooks/useRbac'
 // ── Role config ───────────────────────────────────────────────────────────────
 
 const ROLE_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  admin:       { label: 'Admin',       color: '#C62828', bg: '#FFEBEE' },
-  superviseur: { label: 'Superviseur', color: '#1d4ed8', bg: '#dbeafe' },
-  operateur:   { label: 'Opérateur',   color: '#15803d', bg: '#dcfce7' },
-  technicien:  { label: 'Technicien',  color: '#6b7280', bg: '#f3f4f6' },
+  admin:       { label: ROLE_LABELS.admin,       color: '#C62828', bg: '#FFEBEE' },
+  manager:     { label: ROLE_LABELS.manager,     color: '#1d4ed8', bg: '#dbeafe' },
+  operateur:   { label: ROLE_LABELS.operateur,   color: '#15803d', bg: '#dcfce7' },
+  technicien:  { label: ROLE_LABELS.technicien,  color: '#6b7280', bg: '#f3f4f6' },
+  caissier:    { label: ROLE_LABELS.caissier,    color: '#0891b2', bg: '#cffafe' },
+  livreur:     { label: ROLE_LABELS.livreur,     color: '#ea580c', bg: '#ffedd5' },
+  apprenant:   { label: ROLE_LABELS.apprenant,   color: '#6b7280', bg: '#f3f4f6' },
 }
 
 // ── Shared field ──────────────────────────────────────────────────────────────
@@ -399,14 +403,14 @@ function TabSecurite() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 const PERMS_LIST = [
-  { label: 'Stocks & Inventaire',    roles: ['admin', 'superviseur', 'operateur'] },
-  { label: 'Commandes & Devis',       roles: ['admin', 'superviseur', 'operateur'] },
-  { label: 'Finance & Comptabilité',  roles: ['admin', 'superviseur'] },
-  { label: 'Ressources Humaines',     roles: ['admin', 'superviseur'] },
-  { label: 'Intelligence IA',         roles: ['admin', 'superviseur'] },
-  { label: 'Rapports & Exports',      roles: ['admin', 'superviseur'] },
-  { label: 'Production',              roles: ['admin', 'superviseur', 'operateur'] },
-  { label: 'Logistique & Livraisons', roles: ['admin', 'superviseur', 'operateur'] },
+  { label: 'Stocks & Inventaire',    roles: ['admin', 'manager', 'operateur'] },
+  { label: 'Commandes & Devis',       roles: ['admin', 'manager', 'operateur'] },
+  { label: 'Finance & Comptabilité',  roles: ['admin', 'manager'] },
+  { label: 'Ressources Humaines',     roles: ['admin', 'manager'] },
+  { label: 'Intelligence IA',         roles: ['admin', 'manager'] },
+  { label: 'Rapports & Exports',      roles: ['admin', 'manager'] },
+  { label: 'Production',              roles: ['admin', 'manager', 'operateur'] },
+  { label: 'Logistique & Livraisons', roles: ['admin', 'manager', 'operateur'] },
   { label: 'Paramètres système',      roles: ['admin'] },
   { label: 'Gestion utilisateurs',    roles: ['admin'] },
 ]

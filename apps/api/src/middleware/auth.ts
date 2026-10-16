@@ -172,7 +172,8 @@ export async function verifierBearer(authHeader: string | undefined): Promise<Ve
   // Normalize legacy role names (after rename: directeur→admin, apprenant→technicien)
   const ROLE_MAP: Record<string, HonoVariables['user']['role']> = {
     admin:       'admin',
-    superviseur: 'superviseur',
+    manager: 'manager',
+    superviseur: 'manager', // compatibilité des JWT émis avant la migration
     operateur:   'operateur',
     technicien:  'technicien',
     livreur:     'livreur',

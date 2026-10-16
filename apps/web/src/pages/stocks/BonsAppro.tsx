@@ -11,7 +11,7 @@ import {
   Save,
   ShoppingCart,
 } from 'lucide-react'
-import { Button, DataTable, EmptyState, Modal, PageHeader } from '@forge/ui'
+import { Button, DataTable, EmptyState, Modal, PageHeader , NumberInput} from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatDateTime } from '@/lib/utils'
 import {
@@ -286,8 +286,8 @@ function BonDetail({
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-semibold text-gray-500 mb-1">Quantite a approvisionner</label>
-                      <input
-                        type="number"
+                      <NumberInput
+
                         min={1}
                         value={quantites[ligne.id] ?? ligne.quantite_a_commander}
                         onChange={(e) => setQuantites(prev => ({ ...prev, [ligne.id]: Math.max(1, Number(e.target.value)) }))}
@@ -297,8 +297,8 @@ function BonDetail({
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-gray-500 mb-1">Quantite recue</label>
-                      <input
-                        type="number"
+                      <NumberInput
+
                         min={n(ligne.quantite_recue)}
                         value={quantitesRecues[ligne.id] ?? n(ligne.quantite_recue)}
                         onChange={(e) => setQuantitesRecues(prev => ({
@@ -618,8 +618,8 @@ export default function BonsAppro() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Quantite a commander *</label>
-            <input
-              type="number"
+            <NumberInput
+
               min={1}
               value={approForm.quantite}
               onChange={(e) => setApproForm(f => ({ ...f, quantite: Math.max(1, Number(e.target.value)) }))}

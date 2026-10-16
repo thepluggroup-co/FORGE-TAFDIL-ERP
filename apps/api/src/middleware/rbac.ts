@@ -21,11 +21,11 @@ export const refuserLectureSeule: MiddlewareHandler<{ Variables: HonoVariables }
  *
  * Plusieurs routes (factures, écritures, paie, gestion des utilisateurs…) sont
  * volontairement réservées à `admin` par requireRole, même si la matrice RBAC
- * donne au MANAGER (superviseur) le droit correspondant : décision métier
+ * donne au MANAGER (manager) le droit correspondant : décision métier
  * confirmée le 2026-10-05, ne pas migrer ces routes vers requirePermission.
  *
  * @example
- * app.post('/api/produits', authMiddleware, requireRole(['admin', 'superviseur']), handler)
+ * app.post('/api/produits', authMiddleware, requireRole(['admin', 'manager']), handler)
  */
 export function requireRole(roles: ForgeRole[]): MiddlewareHandler<{ Variables: HonoVariables }> {
   return async (c, next) => {

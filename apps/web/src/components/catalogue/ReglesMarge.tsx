@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Percent, Ban } from 'lucide-react'
-import { Modal, Button } from '@forge/ui'
+import { Modal, Button , NumberInput} from '@forge/ui'
 import {
   useReglesMarge, useCreerRegleMarge, useDesactiverRegleMarge,
   type Famille, type Modele, type RegleMarge,
@@ -63,7 +63,7 @@ export function ReglesMargeModal({ isOpen, onClose, familles, modeles }: {
             {portee === 'modele' && modeles.map((m) => <option key={m.id} value={m.id}>{m.reference} — {m.designation}</option>)}
           </select>
           <div className="col-span-2 flex items-center gap-1">
-            <input type="number" min={0} max={500} step={0.5} value={taux} onChange={(e) => setTaux(e.target.value)}
+            <NumberInput mode="decimal" min={0} max={500} step={0.5} value={taux} onChange={(e) => setTaux(e.target.value)}
               placeholder="taux" className="w-full rounded-lg border border-gray-200 px-2.5 py-2 text-xs" />
             <Percent className="h-3.5 w-3.5 text-gray-400" />
           </div>

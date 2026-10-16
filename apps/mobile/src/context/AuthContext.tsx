@@ -5,12 +5,13 @@ import { createOfflineAuth, localOfflineAuthStorage, OFFLINE_AUTH_MESSAGES } fro
 import { setApiToken, setApiUser } from '../lib/api'
 import { initPushNotifications, teardownPushNotifications } from '../lib/push'
 
-export type MobileRole = 'admin' | 'superviseur' | 'operateur' | 'apprenant' | 'livreur' | 'caissier'
+export type MobileRole = 'admin' | 'manager' | 'operateur' | 'apprenant' | 'livreur' | 'caissier'
 
-const VALID_ROLES: MobileRole[] = ['admin', 'superviseur', 'operateur', 'apprenant', 'livreur', 'caissier']
+const VALID_ROLES: MobileRole[] = ['admin', 'manager', 'operateur', 'apprenant', 'livreur', 'caissier']
 
 const LEGACY_ROLE_MAP: Record<string, MobileRole> = {
   directeur: 'admin',
+  superviseur: 'manager', // compatibilité session jusqu'au renouvellement du JWT
   viewer:    'apprenant',
 }
 

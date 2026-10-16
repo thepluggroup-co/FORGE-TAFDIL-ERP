@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react'
 import { Factory, ImagePlus, X } from 'lucide-react'
-import { Button, EmptyState } from '@forge/ui'
+import { Button, EmptyState , NumberInput} from '@forge/ui'
 import {
   useModelesShop, useUpdateVitrineModele, useUploadImagesModele,
   type ModeleShopErp, type VitrineModelePayload,
@@ -103,8 +103,8 @@ function LigneModele({ modele }: { modele: ModeleShopErp }) {
           <p className="text-[11px] text-gray-500">Prix calculé par le configurateur<br />(Catalogue → Configurateur, Taux de marge)</p>
         ) : (
           <>
-            <input
-              type="number" min={0} step={1} value={prix} onChange={(e) => setPrix(e.target.value)}
+            <NumberInput
+              min={0} step={1} value={prix} onChange={(e) => setPrix(e.target.value)}
               className="w-32 rounded-lg border border-gray-200 px-2 py-1 text-right"
               aria-label={`Prix public de ${modele.designation}`}
             />
@@ -113,15 +113,15 @@ function LigneModele({ modele }: { modele: ModeleShopErp }) {
         )}
       </td>
       <td className="px-4 py-3">
-        <input
-          type="number" min={0} step={1} value={delai} onChange={(e) => setDelai(e.target.value)}
+        <NumberInput
+          min={0} step={1} value={delai} onChange={(e) => setDelai(e.target.value)}
           className="w-20 rounded-lg border border-gray-200 px-2 py-1 text-right"
           aria-label={`Délai de fabrication de ${modele.designation}`}
         />
       </td>
       <td className="px-4 py-3">
-        <input
-          type="number" min={1} step={1} value={min} onChange={(e) => setMin(e.target.value)}
+        <NumberInput
+          min={1} step={1} value={min} onChange={(e) => setMin(e.target.value)}
           className="w-16 rounded-lg border border-gray-200 px-2 py-1 text-right"
           aria-label={`Quantité minimale de ${modele.designation}`}
         />

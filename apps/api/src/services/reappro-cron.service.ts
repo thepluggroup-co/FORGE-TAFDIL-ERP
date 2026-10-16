@@ -157,7 +157,7 @@ export async function lancerCronReappro(): Promise<ReapproResult> {
   const { data: adminRow } = await db
     .from('profiles')
     .select('id')
-    .in('role', ['admin', 'superviseur'])
+    .in('role', ['admin', 'manager'])
     .eq('actif', true)
     .limit(1)
     .single()

@@ -52,7 +52,7 @@ describe('resolveDashboardLayout', () => {
   })
 
   it('sans rôle RBAC : retombe sur le rôle legacy', () => {
-    expect(resolveDashboardLayout(null, 'superviseur', tout).label).toBe(ROLE_LAYOUTS.MANAGER.label)
+    expect(resolveDashboardLayout(null, 'manager', tout).label).toBe(ROLE_LAYOUTS.MANAGER.label)
     expect(resolveDashboardLayout(undefined, 'admin', tout).label).toBe(ROLE_LAYOUTS.SUPER_ADMIN.label)
   })
 

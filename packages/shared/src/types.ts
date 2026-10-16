@@ -2,8 +2,26 @@ import { z } from 'zod'
 
 // --- Core domain types for FORGE ERP ---
 
-export const UserRoleSchema = z.enum(['admin', 'superviseur', 'operateur', 'technicien', 'caissier', 'livreur'])
+export const UserRoleSchema = z.enum(['admin', 'manager', 'operateur', 'technicien', 'caissier', 'livreur', 'apprenant'])
 export type UserRole = z.infer<typeof UserRoleSchema>
+
+/** Libellés canoniques des rôles legacy et RBAC affichés dans les interfaces. */
+export const ROLE_LABELS: Record<string, string> = {
+  admin: 'Administrateur',
+  manager: 'Manager',
+  operateur: 'Opérateur',
+  technicien: 'Technicien',
+  caissier: 'Caissier',
+  livreur: 'Livreur',
+  apprenant: 'Apprenant',
+  SUPER_ADMIN: 'Administrateur',
+  MANAGER: 'Manager',
+  COMMERCIAL: 'Commercial',
+  CAISSIER: 'Caissier',
+  MAGASINIER: 'Magasinier',
+  FORMATEUR: 'Formateur',
+  READONLY: 'Lecture seule',
+}
 
 export const UserSchema = z.object({
   id: z.string().uuid(),

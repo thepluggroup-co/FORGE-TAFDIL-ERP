@@ -27,7 +27,7 @@ export const profiles = sqliteTable('profiles', {
   id:        text('id').primaryKey(), // Supabase Auth UUID
   email:     text('email').notNull().unique(),
   nom:       text('nom').notNull(),
-  role:      text('role', { enum: ['directeur', 'admin', 'operateur', 'viewer'] }).notNull().default('operateur'),
+  role:      text('role', { enum: ['admin', 'manager', 'operateur', 'technicien', 'caissier', 'livreur', 'apprenant', 'directeur', 'viewer'] }).notNull().default('operateur'),
   telephone: text('telephone'),
   avatarUrl: text('avatar_url'),
   actif:     integer('actif', { mode: 'boolean' }).notNull().default(true),
@@ -164,7 +164,8 @@ export const devis = sqliteTable('devis', {
   dateValidite:        text('date_validite').notNull(),
   validitJours:        integer('validite_jours').notNull().default(30),
   acomptePct:          real('acompte_pct').notNull().default(0),
-  conditionsPaiement:  text('conditions_paiement').notNull().default('Virement bancaire'),
+  conditionsPaiement:  text('conditions_paiement').notNull().default(''),
+  noteClient:          text('note_client'),
   totalHtXaf:          real('total_ht_xaf').notNull().default(0),
   tvaXaf:              real('tva_xaf').notNull().default(0),
   fraisLivraisonXaf:   real('frais_livraison_xaf').notNull().default(0),

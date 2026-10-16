@@ -89,7 +89,7 @@ cron.schedule('0 6 28 * *', async () => {
     const { data: admin } = await db
       .from('profiles')
       .select('id')
-      .in('role', ['admin', 'superviseur'])
+      .in('role', ['admin', 'manager'])
       .eq('actif', true)
       .limit(1)
       .single()

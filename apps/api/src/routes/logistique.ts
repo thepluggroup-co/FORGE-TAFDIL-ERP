@@ -144,7 +144,7 @@ const patchStatutSchema = z.object({
   date_livraison_prevue: z.string().optional(),
   date_livraison_reelle: z.string().optional(),
   paiement_livraison: z.object({
-    montant_xaf:   z.number().min(0),
+    montant_xaf:   z.number().int().min(0),
     methode:       z.enum(['mobile_money', 'especes']),
     reference_ext: z.string().optional(),
   }).optional(),
@@ -830,7 +830,7 @@ logistiqueRouter.patch(
 
     // MANAGER ou SUPER_ADMIN uniquement : LOGISTICS:UPDATE seul ne suffit pas,
     // LIVREUR et COMMERCIAL le possèdent aussi (statut, signature).
-    if (user.role !== 'admin' && user.role !== 'superviseur') {
+    if (user.role !== 'admin' && user.role !== 'manager') {
       writeAuditLog({
         userId:       user.id,
         actionType:   'ACCESS_DENIED',
@@ -930,7 +930,7 @@ logistiqueRouter.post(
 
     const lvRow = lv as { id: string; statut: string; livreur_id: string | null; created_by: string | null }
 
-    // RBAC livreur : doit être l'assigné (ou admin/superviseur via requireRole)
+    // RBAC livreur : doit être l'assigné (ou admin/manager via requireRole)
     if (user.role === 'livreur' || user.role === 'operateur') {
       const isOwner = lvRow.livreur_id === user.id || lvRow.created_by === user.id
       if (!isOwner) {
