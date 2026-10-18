@@ -430,18 +430,15 @@ describe('C8 — PATCH /api/commandes/:id/statut : transitions commande', () => 
   beforeEach(() => vi.clearAllMocks())
 
   it('passe confirmed → in_production', async () => {
-    // fetch commande
-    vi.mocked(supabase.from).mockReturnValueOnce(
-      mkChain({ data: { ...COMMANDE, statut: 'confirmed', total_ttc_xaf: 596_250 }, error: null }) as never,
-    )
-    // fetch conditions eligibles (si credit)
-    vi.mocked(supabase.from).mockReturnValueOnce(
-      mkChain({ data: [], error: null }) as never,
-    )
-    // update statut
-    vi.mocked(supabase.from).mockReturnValueOnce(
-      mkChain({ data: { ...COMMANDE, statut: 'in_production' }, error: null }) as never,
-    )
+    // Mock routé par table : l'ordre des appels dépend des contrôles métier
+    // (blocage client, ordres de fabrication déjà préparés…).
+    vi.mocked(supabase.from).mockImplementation(((table: string) => {
+      if (table === 'commandes') {
+        return mkChain({ data: { ...COMMANDE, statut: 'confirmed', total_ttc_xaf: 596_250 }, error: null }) as never
+      }
+      if (table === 'jobs_production') return mkChain({ data: [{ id: 'job-existant' }], error: null }) as never
+      return mkChain({ data: null, count: 0, error: null }) as never
+    }) as never)
 
     const res = await app.request(`/api/commandes/${COMMANDE_ID}/statut`, {
       method:  'PATCH',

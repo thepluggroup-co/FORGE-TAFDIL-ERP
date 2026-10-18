@@ -1,5 +1,11 @@
 import { supabaseAdmin } from '@forge/db'
-import { genererEcritureEncaissement, genererEcritureVente } from './comptabilite.service'
+import {
+  annulerEcrituresReference,
+  genererEcritureEncaissement,
+  genererEcritureFraisLivraison,
+  genererEcritureVente,
+  type ModeEncaissementComptable,
+} from './comptabilite.service'
 
 const db = supabaseAdmin!
 
@@ -88,12 +94,60 @@ export interface EnregistrerPaiementCommandeOptions {
   commandeId: string
   montantXaf: number
   methode: PaiementMethode
+  // Compte de trésorerie à mouvementer quand la méthode ne suffit pas à le
+  // déterminer (ex. 'mobile_money' : MTN → 5521, Orange → 5522).
+  modeComptable?: ModeEncaissementComptable
   referenceExt?: string | null
   datePaiement: string
   notes?: string | null
   userId?: string
   ensureFacture?: boolean
   factureStatutSiCreation?: FactureStatut
+}
+
+function modeComptableDepuisMethode(methode: PaiementMethode): ModeEncaissementComptable {
+  if (methode === 'especes') return 'caisse'
+  if (methode === 'mobile_money' || methode === 'NOKASH') return 'mobile_money'
+  if (methode === 'cheque') return 'cheque'
+  return 'banque'
+}
+
+/**
+ * Ce qu'il reste à encaisser sur une commande, ventilé entre la facture
+ * (articles + TVA) et les frais de livraison. La facture ne porte pas les frais
+ * de livraison alors que la commande — et ce que paie le client — les inclut :
+ * sans cette ventilation, un paiement du total commande dépassait le solde de
+ * la facture et était rejeté, ou la facture se retrouvait « payée » au-delà de
+ * son montant.
+ */
+export function repartitionReglementCommande(
+  commande: { total_ttc_xaf?: number | null; frais_livraison_xaf?: number | null; montant_paye_xaf?: number | null },
+  facture: { total_ttc_xaf?: number | null; montant_paye_xaf?: number | null } | null,
+) {
+  if (!facture) {
+    const total = Math.round(Number(commande.total_ttc_xaf ?? 0))
+    const dejaPaye = Math.min(total, Math.round(Number(commande.montant_paye_xaf ?? 0)))
+    return {
+      totalFacture: total, dejaPayeFacture: dejaPaye, soldeFacture: Math.max(0, total - dejaPaye),
+      fraisLivraison: 0, fraisDejaPayes: 0, fraisRestants: 0,
+    }
+  }
+
+  const totalFacture = Math.round(Number(facture.total_ttc_xaf ?? 0))
+  const dejaPayeFacture = Math.min(totalFacture, Math.round(Number(facture.montant_paye_xaf ?? 0)))
+  const fraisLivraison = Math.max(0, Math.round(Number(commande.frais_livraison_xaf ?? 0)))
+  const fraisDejaPayes = Math.min(
+    fraisLivraison,
+    Math.max(0, Math.round(Number(commande.montant_paye_xaf ?? 0)) - dejaPayeFacture),
+  )
+  return {
+    totalFacture,
+    dejaPayeFacture,
+    soldeFacture: Math.max(0, totalFacture - dejaPayeFacture),
+    fraisLivraison,
+    fraisDejaPayes,
+    fraisRestants: fraisLivraison - fraisDejaPayes,
+  }
 }
 
 export function enrichirFactureSolde<T extends { total_ttc_xaf?: number; montant_paye_xaf?: number }>(facture: T) {
@@ -446,7 +500,10 @@ export async function syncCreditForCommande(commandeId: string, userId?: string 
 
 export async function solderCreditsForCommande(commandeId: string, userId?: string | null) {
   const facture = await getFactureActiveByCommande(commandeId).catch(() => null)
-  if (facture) await syncCreditForFacture({ ...(facture as FactureCreditRow), statut: 'annule', montant_paye_xaf: facture.total_ttc_xaf }, userId)
+  if (facture) {
+    await syncCreditForFacture({ ...(facture as FactureCreditRow), statut: 'annule', montant_paye_xaf: facture.total_ttc_xaf }, userId)
+    await annulerFactureImpayee(facture as FactureCreditRow, userId)
+  }
 
   const { data: credits, error } = await db
     .from('credits')
@@ -473,6 +530,31 @@ export async function solderCreditsForCommande(commandeId: string, userId?: stri
   if (updateError) throw new Error(updateError.message)
   await Promise.all([...new Set(rows.map(row => row.client_id).filter(Boolean) as string[])].map(syncEncoursCreditClient))
   return { count: rows.length }
+}
+
+/**
+ * Commande annulée : sa facture ne doit plus rester « à encaisser ». Si rien
+ * n'a été payé, la facture est annulée et son écriture de vente contre-passée.
+ * Une facture déjà (partiellement) payée est laissée telle quelle : l'argent
+ * reçu doit être remboursé ou réaffecté par la Finance, pas effacé.
+ */
+async function annulerFactureImpayee(facture: FactureCreditRow, userId?: string | null) {
+  if (!facture.id || Number(facture.montant_paye_xaf ?? 0) > 0) return
+
+  const etaitEngagee = factureEngageante(facture.statut)
+  const { error } = await db
+    .from('factures')
+    .update({ statut: 'annule', updated_at: new Date().toISOString() })
+    .eq('id', facture.id)
+  if (error) throw new Error(error.message)
+
+  if (etaitEngagee && facture.numero) {
+    await annulerEcrituresReference({
+      reference_doc: facture.numero,
+      date:          new Date().toISOString(),
+      created_by:    userId ?? undefined,
+    }).catch(e => console.error('[compta] annulation vente:', e))
+  }
 }
 
 export async function backfillCreditsClients(userId?: string | null) {
@@ -653,7 +735,7 @@ export async function enregistrerPaiementCommande(options: EnregistrerPaiementCo
 
   const { data: commande, error } = await db
     .from('commandes')
-    .select('id, numero, client_id, client_nom, total_ttc_xaf, montant_paye_xaf')
+    .select('id, numero, client_id, client_nom, total_ttc_xaf, frais_livraison_xaf, montant_paye_xaf')
     .eq('id', options.commandeId)
     .single()
 
@@ -661,7 +743,7 @@ export async function enregistrerPaiementCommande(options: EnregistrerPaiementCo
 
   const cmd = commande as {
     id: string; numero: string; client_id: string | null; client_nom: string
-    total_ttc_xaf: number; montant_paye_xaf: number | null
+    total_ttc_xaf: number; frais_livraison_xaf?: number | null; montant_paye_xaf: number | null
   }
   const { facture } = options.ensureFacture === false
     ? { facture: await getFactureActiveByCommande(options.commandeId) }
@@ -678,17 +760,22 @@ export async function enregistrerPaiementCommande(options: EnregistrerPaiementCo
     montant_paye_xaf?: number | null
   } | null
   const factureId = factureCourante?.id ?? null
-  const totalReference = Number(factureCourante?.total_ttc_xaf ?? cmd.total_ttc_xaf ?? 0)
-  const dejaPaye = Number(factureCourante?.montant_paye_xaf ?? cmd.montant_paye_xaf ?? 0)
-  const solde = Math.max(0, totalReference - dejaPaye)
-  if (options.montantXaf > solde + 1) {
-    throw Object.assign(new Error(`Montant depasse le solde restant (${Math.round(solde).toLocaleString('fr-CM')} XAF)`), {
+  const etat = repartitionReglementCommande(cmd, factureCourante)
+  const resteDu = etat.soldeFacture + etat.fraisRestants
+  if (options.montantXaf > resteDu + 1) {
+    throw Object.assign(new Error(`Montant depasse le solde restant (${Math.round(resteDu).toLocaleString('fr-CM')} XAF)`), {
       code: 'AMOUNT_EXCEEDED',
       httpStatus: 422,
     })
   }
 
-  const nouveauPaye = Math.min(totalReference, Math.round(dejaPaye + options.montantXaf))
+  // Le paiement solde d'abord la facture ; l'excédent règle les frais de livraison.
+  const montant = Math.round(options.montantXaf)
+  const partFacture = Math.min(montant, etat.soldeFacture)
+  const partLivraison = Math.min(montant - partFacture, etat.fraisRestants)
+  const totalReference = etat.totalFacture
+  const nouveauPaye = Math.min(totalReference, etat.dejaPayeFacture + partFacture)
+  const nouveauPayeCommande = nouveauPaye + etat.fraisDejaPayes + partLivraison
 
   const { data: paiement, error: paiementError } = await db
     .from('paiements_commande')
@@ -716,11 +803,14 @@ export async function enregistrerPaiementCommande(options: EnregistrerPaiementCo
 
   await db.from('commandes')
     .update({
-      montant_paye_xaf: nouveauPaye,
+      montant_paye_xaf: nouveauPayeCommande,
       statut_paiement:  statutPaiementCommande,
       updated_at:       new Date().toISOString(),
     })
     .eq('id', options.commandeId)
+
+  const pieceId = String((paiement as { id?: string } | null)?.id ?? Date.now().toString(36))
+  const mode = options.modeComptable ?? modeComptableDepuisMethode(options.methode)
 
   let factureUpdate = facture
   if (factureId) {
@@ -735,15 +825,31 @@ export async function enregistrerPaiementCommande(options: EnregistrerPaiementCo
     factureUpdate = updatedFacture
     await syncCreditForFacture(updatedFacture as FactureCreditRow, options.userId)
 
-    genererEcritureEncaissement({
-      facture_id:  factureId,
-      reference:   (factureUpdate as { numero?: string })?.numero ?? cmd.numero,
+    if (partFacture > 0) {
+      await genererEcritureEncaissement({
+        facture_id:  factureId,
+        reference:   (factureUpdate as { numero?: string })?.numero ?? cmd.numero,
+        piece_id:    pieceId,
+        date:        options.datePaiement,
+        montant_xaf: partFacture,
+        client_nom:  cmd.client_nom,
+        mode,
+        created_by:  options.userId,
+      }).catch(e => console.error('[compta] encaissement commande:', e))
+    }
+  }
+
+  if (partLivraison > 0) {
+    await genererEcritureFraisLivraison({
+      commande_id: cmd.id,
+      reference:   cmd.numero,
+      piece_id:    pieceId,
       date:        options.datePaiement,
-      montant_xaf: options.montantXaf,
+      montant_xaf: partLivraison,
       client_nom:  cmd.client_nom,
-      mode:        options.methode === 'especes' ? 'caisse' : 'banque',
+      mode,
       created_by:  options.userId,
-    }).catch(e => console.error('[compta] encaissement commande:', e))
+    }).catch(e => console.error('[compta] frais livraison commande:', e))
   }
 
   const soldeApres = Math.max(0, totalReference - nouveauPaye)
@@ -751,6 +857,54 @@ export async function enregistrerPaiementCommande(options: EnregistrerPaiementCo
     paiement,
     facture: factureUpdate ? enrichirFactureSolde(factureUpdate as { total_ttc_xaf?: number; montant_paye_xaf?: number }) : null,
     montant_paye_xaf: nouveauPaye,
+    frais_livraison_encaisses_xaf: partLivraison,
     solde_restant_xaf: Math.round(soldeApres),
   }
+}
+
+/**
+ * Commande web déclarée « payée » côté boutique : enregistre comme un vrai
+ * paiement (trace + écriture comptable) ce qui n'a pas encore été encaissé dans
+ * l'ERP. Sans effet si tout est déjà réglé — peut donc être rappelé sans risque.
+ */
+export async function reglerSoldeCommandePayee(options: {
+  commandeId: string
+  modePaiementShop?: string | null
+  referenceExt?: string | null
+  notes?: string | null
+  userId?: string
+}) {
+  const { data: commande, error } = await db
+    .from('commandes')
+    .select('id, total_ttc_xaf, frais_livraison_xaf, montant_paye_xaf')
+    .eq('id', options.commandeId)
+    .single()
+  if (error || !commande) throw new Error(error?.message ?? 'Commande introuvable')
+
+  const { facture } = await ensureFactureForCommande({
+    commandeId: options.commandeId,
+    statut:     'envoye',
+    userId:     options.userId,
+  })
+  const etat = repartitionReglementCommande(
+    commande as { total_ttc_xaf?: number | null; frais_livraison_xaf?: number | null; montant_paye_xaf?: number | null },
+    facture as { total_ttc_xaf?: number | null; montant_paye_xaf?: number | null } | null,
+  )
+  const resteDu = etat.soldeFacture + etat.fraisRestants
+  if (resteDu <= 0) return null
+
+  const mode = String(options.modePaiementShop ?? '')
+  const especes = mode === 'livraison' || mode === 'especes'
+  return enregistrerPaiementCommande({
+    commandeId:    options.commandeId,
+    montantXaf:    resteDu,
+    methode:       especes ? 'especes' : 'mobile_money',
+    modeComptable: mode === 'mtn_momo' || mode === 'orange_money' ? mode : undefined,
+    referenceExt:  options.referenceExt ?? null,
+    datePaiement:  new Date().toISOString().slice(0, 10),
+    notes:         options.notes ?? null,
+    userId:        options.userId,
+    ensureFacture: true,
+    factureStatutSiCreation: 'envoye',
+  })
 }

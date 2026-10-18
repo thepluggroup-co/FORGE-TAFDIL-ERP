@@ -866,8 +866,11 @@ router.put(
         }, 500)
       }
 
-      // Écriture comptable selon la nature de la transaction
-      if (b.nature_transaction && b.montant_total_xaf && b.montant_total_xaf > 0) {
+      // Écriture comptable selon la nature de la transaction. Un bon rattaché à
+      // une commande n'en génère pas : la vente est déjà comptabilisée par la
+      // facture de la commande, l'écrire ici doublait le chiffre d'affaires.
+      const commandeLiee = workflow.commandeId ?? b.commande_id ?? null
+      if (!commandeLiee && b.nature_transaction && b.montant_total_xaf && b.montant_total_xaf > 0) {
         genererEcritureBonSortieInterne({
           numero:             b.numero,
           date:               new Date().toISOString(),

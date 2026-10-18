@@ -1903,7 +1903,7 @@ export default function Finance() {
     const creditsOuverts = credits.filter((c) => c.statut !== 'rembourse')
     const creditsSolde = creditsOuverts.reduce((s, c) => s + Number(c.solde_restant_xaf ?? 0), 0)
     const banqueCaisse = dashboardEcritures
-      .filter((e) => ['521', '571', '5521', '5522'].includes(String(e.compte_syscohada ?? e.compte ?? '')))
+      .filter((e) => ['521', '571', '552', '5521', '5522'].includes(String(e.compte_syscohada ?? e.compte ?? '')))
       .reduce((s, e) => s + Number(e.debit_xaf ?? 0) - Number(e.credit_xaf ?? 0), 0)
     const tauxEncaissement = caFacture > 0 ? Math.round((encaisse / caFacture) * 100) : 0
 
