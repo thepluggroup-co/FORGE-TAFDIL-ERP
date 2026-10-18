@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Shield, Clock, Lock, AlertTriangle, TrendingDown, Users, CheckCircle } from 'lucide-react'
-import { Button } from '@forge/ui'
+import { Button , NumberInput} from '@forge/ui'
 import { useSecuritySettings, useLoginStats } from '@/hooks/useRbac'
 
 // ── NumberInput ───────────────────────────────────────────────────────────────
 
-function NumberInput({
+function NumberField({
   label, value, onChange, min, max, unit,
 }: {
   label: string
@@ -20,8 +20,8 @@ function NumberInput({
     <label className="flex items-center justify-between gap-4">
       <span className="text-sm text-gray-700">{label}</span>
       <div className="flex items-center gap-1">
-        <input
-          type="number"
+        <NumberInput
+
           min={min}
           max={max}
           value={value}
@@ -183,13 +183,13 @@ export function SecuritySettings() {
           </div>
 
           <div className="space-y-3">
-            <NumberInput
+            <NumberField
               label="Longueur minimale"
               value={form.password_min_length}
               onChange={v => setForm(f => ({ ...f, password_min_length: v }))}
               min={6} max={64} unit="car."
             />
-            <NumberInput
+            <NumberField
               label="Expiration"
               value={form.password_expiration_days}
               onChange={v => setForm(f => ({ ...f, password_expiration_days: v }))}
@@ -226,19 +226,19 @@ export function SecuritySettings() {
           </div>
 
           <div className="space-y-3">
-            <NumberInput
+            <NumberField
               label="Tentatives max. avant blocage"
               value={form.max_login_attempts}
               onChange={v => setForm(f => ({ ...f, max_login_attempts: v }))}
               min={1} max={20}
             />
-            <NumberInput
+            <NumberField
               label="Durée blocage"
               value={form.lockout_duration_minutes}
               onChange={v => setForm(f => ({ ...f, lockout_duration_minutes: v }))}
               min={5} max={1440} unit="min"
             />
-            <NumberInput
+            <NumberField
               label="Timeout session"
               value={form.session_timeout_minutes}
               onChange={v => setForm(f => ({ ...f, session_timeout_minutes: v }))}

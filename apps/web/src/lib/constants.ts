@@ -1,22 +1,16 @@
-import type { OrderStatus, UserRole } from '@forge/shared'
+import { ROLE_LABELS, type OrderStatus, type UserRole } from '@forge/shared'
 
 // --- Roles utilisateurs ---
-export const USER_ROLE_LABELS: Record<UserRole, string> = {
-  admin:       'Admin (Patron)',
-  superviseur: 'Superviseur',
-  operateur:   'Opérateur',
-  technicien:  'Technicien',
-  caissier:    'Caissier',
-  livreur:     'Livreur',
-}
+export const USER_ROLE_LABELS: Record<UserRole, string> = ROLE_LABELS as Record<UserRole, string>
 
 export const USER_ROLE_COLORS: Record<UserRole, string> = {
   admin:       'text-forge-red bg-forge-red-light',
-  superviseur: 'text-blue-700 bg-blue-50',
+  manager:      'text-blue-700 bg-blue-50',
   operateur:   'text-green-700 bg-green-50',
   technicien:  'text-gray-600 bg-gray-100',
   caissier:    'text-amber-700 bg-amber-50',
   livreur:     'text-purple-700 bg-purple-50',
+  apprenant:   'text-gray-600 bg-gray-100',
 }
 
 // --- Statuts commandes ---

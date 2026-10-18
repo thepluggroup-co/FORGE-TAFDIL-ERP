@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Megaphone, Users, TrendingUp, Target, Plus, ExternalLink, MessageCircle, Share2, Package, Trash2 } from 'lucide-react'
-import { PageHeader, KpiCard, DataTable, SlideOver, Button } from '@forge/ui'
+import { PageHeader, KpiCard, DataTable, SlideOver, Button , NumberInput} from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatNombre, formatDate } from '@/lib/utils'
 import { useAjouterProduitCampagne, useCampagneProduits, useCampagnes, useCreateCampagne, useRetirerProduitCampagne } from '@/hooks/useOperations'
@@ -181,12 +181,12 @@ function CampagneProduitsPanel({
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase text-gray-500 mb-1.5">Valeur remise</label>
-              <input type="number" min="0" value={remiseValeur} onChange={(e) => setRemiseValeur(Number(e.target.value))}
+              <NumberInput min="0" value={remiseValeur} onChange={(e) => setRemiseValeur(Number(e.target.value))}
                 className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase text-gray-500 mb-1.5">Prix promo force</label>
-              <input type="number" min="0" value={prixPromo} onChange={(e) => setPrixPromo(e.target.value)}
+              <NumberInput min="0" value={prixPromo} onChange={(e) => setPrixPromo(e.target.value)}
                 placeholder="Optionnel" className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
             </div>
             <div className="flex items-end justify-between gap-3">
@@ -399,7 +399,7 @@ export default function Marketing() {
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Budget (FCFA)</label>
-            <input type="number" min="0" value={form.budget} onChange={(e) => setForm((f) => ({ ...f, budget: Number(e.target.value) }))}
+            <NumberInput min="0" value={form.budget} onChange={(e) => setForm((f) => ({ ...f, budget: Number(e.target.value) }))}
               placeholder="0 = Gratuit" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
           </div>
           <div className="grid grid-cols-2 gap-3">

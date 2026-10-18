@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { Plus, Check, RefreshCw, AlertTriangle, CheckCircle2, Minus } from 'lucide-react'
 import { toast } from 'sonner'
-import { PageHeader, DataTable, StatusBadge, SlideOver, Modal, Button } from '@forge/ui'
+import { PageHeader, DataTable, StatusBadge, SlideOver, Modal, Button , NumberInput} from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDateTime } from '@/lib/utils'
 import {
@@ -903,8 +903,8 @@ function NouveauBonSlideOver({ open, onClose }: { open: boolean; onClose: () => 
                       ))}
                     </select>
                     <div className="flex gap-2 items-center">
-                      <input
-                        type="number"
+                      <NumberInput
+
                         min="1"
                         max={produit?.stock_actuel}
                         value={ligne.quantite}

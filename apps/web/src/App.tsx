@@ -8,6 +8,7 @@ import { AppShell } from '@/components/layout/AppShell'
 import { OutboxPanel } from '@/components/OutboxPanel'
 import { usePermissions } from '@/hooks/useRbac'
 import type { RbacModule } from '@/hooks/useRbac'
+import { disabledModuleRedirect, type AppModuleId } from '@forge/shared'
 
 // ── Error Boundary global ──────────────────────────────────────────────────────
 // Attrape les erreurs non gérées dans l'arbre React et affiche un message
@@ -195,6 +196,11 @@ function Shell({ children, requiredModule }: { children: React.ReactNode; requir
   )
 }
 
+function EnabledFeatureRoute({ module, children }: { module: AppModuleId; children: React.ReactNode }) {
+  const redirectTo = disabledModuleRedirect(module)
+  return redirectTo ? <Navigate to={redirectTo} replace /> : <>{children}</>
+}
+
 const PLACEHOLDER_MODULES = [] as const
 
 const MODULE_LABELS: Record<string, string> = {}
@@ -242,13 +248,13 @@ function AppRoutes() {
           {/* Modules réels */}
           <Route path="/finance" element={<Shell requiredModule="FINANCE"><Finance /></Shell>} />
           <Route path="/rh" element={<Shell requiredModule="HR"><RH /></Shell>} />
-          <Route path="/intelligence" element={<Shell requiredModule="REPORTS"><Intelligence /></Shell>} />
+          <Route path="/intelligence/*" element={<EnabledFeatureRoute module="intelligence"><Shell requiredModule="REPORTS"><Intelligence /></Shell></EnabledFeatureRoute>} />
           <Route path="/production" element={<Shell requiredModule="PRODUCTION"><Production /></Shell>} />
-          <Route path="/projets" element={<Shell requiredModule="PRODUCTION"><Projets /></Shell>} />
+          <Route path="/projets/*" element={<EnabledFeatureRoute module="projets"><Shell requiredModule="PRODUCTION"><Projets /></Shell></EnabledFeatureRoute>} />
           <Route path="/logistique" element={<Shell requiredModule="LOGISTICS"><Logistique /></Shell>} />
-          <Route path="/marketing" element={<Shell requiredModule="COMMERCIAL"><Marketing /></Shell>} />
-          <Route path="/securite" element={<Shell requiredModule="HR"><Securite /></Shell>} />
-          <Route path="/iot" element={<Shell requiredModule="PRODUCTION"><IoT /></Shell>} />
+          <Route path="/marketing/*" element={<EnabledFeatureRoute module="marketing"><Shell requiredModule="COMMERCIAL"><Marketing /></Shell></EnabledFeatureRoute>} />
+          <Route path="/securite/*" element={<EnabledFeatureRoute module="securite"><Shell requiredModule="HR"><Securite /></Shell></EnabledFeatureRoute>} />
+          <Route path="/iot/*" element={<EnabledFeatureRoute module="iot"><Shell requiredModule="PRODUCTION"><IoT /></Shell></EnabledFeatureRoute>} />
           <Route path="/formation" element={<Shell><FormationRoute /></Shell>} />
           <Route path="/boutique" element={<Shell requiredModule="COMMERCIAL"><Boutique /></Shell>} />
           <Route path="/catalogue" element={<Shell requiredModule="PRODUCTION"><Catalogue /></Shell>} />

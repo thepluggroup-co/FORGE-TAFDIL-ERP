@@ -3,7 +3,7 @@ import { isQueuedOffline } from '@forge/shared'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Minus, RotateCcw, FileOutput, ShoppingCart, Pencil, Upload, CheckCircle2 } from 'lucide-react'
-import { PageHeader, DataTable, StatusBadge, StockLevel, SlideOver, Button, Modal } from '@forge/ui'
+import { PageHeader, DataTable, StatusBadge, StockLevel, SlideOver, Button, Modal , NumberInput} from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatNombre, formatDateTime } from '@/lib/utils'
 import { UNITES } from '@/lib/constants'
@@ -214,26 +214,26 @@ function ProduitFormFields({
       <div className="grid grid-cols-3 gap-3">
         <div>
           <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Stock initial</label>
-          <input type="number" min="0" value={value.stock_actuel}
+          <NumberInput min="0" value={value.stock_actuel}
             onChange={(e) => onChange({ stock_actuel: Number(e.target.value) })}
             className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
         </div>
         <div>
           <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Seuil alerte</label>
-          <input type="number" min="0" value={value.stock_min}
+          <NumberInput min="0" value={value.stock_min}
             onChange={(e) => onChange({ stock_min: Number(e.target.value) })}
             className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
         </div>
         <div>
           <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Seuil critique</label>
-          <input type="number" min="0" value={value.stock_critique}
+          <NumberInput min="0" value={value.stock_critique}
             onChange={(e) => onChange({ stock_critique: Number(e.target.value) })}
             className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
         </div>
       </div>
       <div>
         <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Prix unitaire (FCFA)</label>
-        <input type="number" min="0" value={value.prix_unitaire_xaf}
+        <NumberInput min="0" value={value.prix_unitaire_xaf}
           onChange={(e) => onChange({ prix_unitaire_xaf: Number(e.target.value) })}
           className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
       </div>
@@ -944,8 +944,8 @@ export default function Stocks() {
               >
                 <Minus className="h-4 w-4" />
               </button>
-              <input
-                type="number"
+              <NumberInput
+
                 min="1"
                 value={form.quantite}
                 onChange={(e) => setForm((f) => ({ ...f, quantite: Math.max(1, Number(e.target.value)) }))}
@@ -1062,8 +1062,8 @@ export default function Stocks() {
           {/* Quantité */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Quantité à commander *</label>
-            <input
-              type="number"
+            <NumberInput
+
               min={1}
               value={approForm.quantite}
               onChange={(e) => setApproForm(f => ({ ...f, quantite: Math.max(1, Number(e.target.value)) }))}

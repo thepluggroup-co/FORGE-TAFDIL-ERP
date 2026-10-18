@@ -360,7 +360,7 @@ describe('C5 — POST /api/devis : création devis avec PDF', () => {
 describe('C6 — PATCH /api/devis/:id/statut : transition devis', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('passe brouillon → envoye avec rôle superviseur', async () => {
+  it('passe brouillon → envoye avec rôle manager', async () => {
     vi.mocked(supabase.from).mockReturnValueOnce(
       mkChain({ data: { ...DEVIS, statut: 'brouillon', client_id: null }, error: null }) as never,
     )
@@ -370,7 +370,7 @@ describe('C6 — PATCH /api/devis/:id/statut : transition devis', () => {
 
     const res = await app.request(`/api/devis/${DEVIS_ID}/statut`, {
       method:  'PATCH',
-      headers: new Headers(authHeaders('superviseur')),
+      headers: new Headers(authHeaders('manager')),
       body:    JSON.stringify({ statut: 'envoye' }),
     })
     expect(res.status).toBe(200)
@@ -383,7 +383,7 @@ describe('C6 — PATCH /api/devis/:id/statut : transition devis', () => {
 
     const res = await app.request(`/api/devis/${DEVIS_ID}/statut`, {
       method:  'PATCH',
-      headers: new Headers(authHeaders('superviseur')),
+      headers: new Headers(authHeaders('manager')),
       body:    JSON.stringify({ statut: 'envoye' }),
     })
     expect(res.status).toBe(422)
@@ -391,7 +391,7 @@ describe('C6 — PATCH /api/devis/:id/statut : transition devis', () => {
     expect(body.code).toBe('INVALID_TRANSITION')
   })
 
-  it('retourne 403 si rôle operateur (superviseur requis)', async () => {
+  it('retourne 403 si rôle operateur (manager requis)', async () => {
     // userId dédié : évite d'hériter du cache RBAC SUPER_ADMIN partagé (voir C1 et
     // docs/DETTE-TESTS-2026-09-26.md) — sans ça, ce test hérite du rôle mis en cache
     // par un test 'admin' antérieur pour l'userId par défaut, et le 403 n'arrive jamais.

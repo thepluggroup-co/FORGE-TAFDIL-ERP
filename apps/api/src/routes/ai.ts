@@ -227,7 +227,7 @@ router.post('/ai/chat', requirePermission('REPORTS', 'READ'), zValidator('json',
 // GET /ai/recommandations/stock
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/ai/recommandations/stock', requirePermission('REPORTS', 'READ'), async (c) => { // superviseur : voir rapports IA
+router.get('/ai/recommandations/stock', requirePermission('REPORTS', 'READ'), async (c) => { // manager : voir rapports IA
   const since90j = new Date(Date.now() - 90 * 86400000).toISOString()
 
   const [produitsRes, mouvRes] = await Promise.all([

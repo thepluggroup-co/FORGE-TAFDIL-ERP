@@ -47,7 +47,7 @@ const ROLES: RoleCase[] = [
     absent: ['Ma session de caisse', 'Mon niveau de formation'],
   },
   {
-    rbac: 'MANAGER', legacy: 'superviseur', nom: 'Bruno Superviseur',
+    rbac: 'MANAGER', legacy: 'manager', nom: 'Bruno Manager',
     permissions: ALL_MODULES.filter((m) => m !== 'ADMIN')
       .flatMap((module) => ALL_ACTIONS.filter((a) => a !== 'CONFIGURE').map((action) => ({ module, action }))),
     visible: ['Commandes en cours', 'OF en retard', 'Bons de sortie en attente', 'Stocks critiques'],

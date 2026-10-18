@@ -40,7 +40,7 @@ const createProduitSchema = z.object({
   stock_actuel:     z.number().min(0).default(0),
   stock_min:        z.number().min(0).default(5),
   stock_critique:   z.number().min(0).default(2),
-  prix_unitaire_xaf: z.number().min(0).default(0),
+  prix_unitaire_xaf: z.number().int().min(0).default(0),
   emplacement:      z.string().optional(),
   fournisseur:      z.string().optional(),
 })

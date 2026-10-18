@@ -1,29 +1,33 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   Users, UserPlus, Shield, CheckCircle, XCircle,
   Mail, Crown, ChevronDown, Loader2, Search, Phone, KeyRound,
 } from 'lucide-react'
 import { PageHeader, Button, SlideOver } from '@forge/ui'
+import { ROLE_LABELS } from '@forge/shared'
 import { useAuth } from '@/context/AuthContext'
 import { useAdminUsers, useUpdateUser, useInviteUser, useGeneratePin } from '@/hooks/useAdmin'
 import type { ForgeRole, UserProfile, ResultatPin } from '@/hooks/useAdmin'
 import { toast } from 'sonner'
+import { apiClient } from '@/lib/api-client'
 import { UserManagement, PermissionsMatrix, AuditLogViewer, SecuritySettings } from '@/features/admin'
 import type { RbacRoleName } from '@/hooks/useRbac'
 
-type AdminTab = 'Utilisateurs' | 'RBAC' | 'Permissions' | 'Audit' | 'Sécurité'
-const ADMIN_TABS: AdminTab[] = ['Utilisateurs', 'RBAC', 'Permissions', 'Audit', 'Sécurité']
+type AdminTab = 'Utilisateurs' | 'RBAC' | 'Permissions' | 'Audit' | 'Sécurité' | 'Société'
+const ADMIN_TABS: AdminTab[] = ['Utilisateurs', 'RBAC', 'Permissions', 'Audit', 'Sécurité', 'Société']
+
+const SOCIETE_INITIAL = { nom: 'TAFDIL SARL', activite: 'Étude, conception, réalisation, conseil, formation, entretien, menuiserie métallique et aluminium, vente de matériel et accessoires', directeur: 'Carmel TANEKEU', telephones: '+237 695 88 45 28 / +237 676 39 76 91', site: 'www.tafdil.com', adresse: 'Kotto, face école Mauryvanas', email: 'tafdilsarl@gmail.com' }
 
 // ── Role config ────────────────────────────────────────────────────────────────
 
 const ROLES: { value: ForgeRole; label: string; color: string; bg: string; desc: string }[] = [
-  { value: 'admin',       label: 'Admin (Patron)',  color: '#C62828', bg: '#FFEBEE', desc: 'Accès complet + gestion utilisateurs' },
-  { value: 'superviseur', label: 'Superviseur',     color: '#1d4ed8', bg: '#dbeafe', desc: 'Validation, stocks, rapports, formation' },
-  { value: 'operateur',   label: 'Opérateur',       color: '#15803d', bg: '#dcfce7', desc: 'Stocks, commandes, bons, production' },
-  { value: 'technicien',  label: 'Technicien',      color: '#6b7280', bg: '#f3f4f6', desc: 'Lecture seule + son parcours de formation' },
-  { value: 'caissier',    label: 'Caissier',        color: '#0891b2', bg: '#cffafe', desc: 'Vente comptoir, encaissement, sessions caisse' },
-  { value: 'livreur',     label: 'Livreur',         color: '#ea580c', bg: '#ffedd5', desc: 'Ses livraisons et leurs bons de livraison' },
+  { value: 'admin',       label: ROLE_LABELS.admin,       color: '#C62828', bg: '#FFEBEE', desc: 'Accès complet + gestion utilisateurs' },
+  { value: 'manager',     label: ROLE_LABELS.manager,     color: '#1d4ed8', bg: '#dbeafe', desc: 'Validation, stocks, rapports, formation' },
+  { value: 'operateur',   label: ROLE_LABELS.operateur,   color: '#15803d', bg: '#dcfce7', desc: 'Stocks, commandes, bons, production' },
+  { value: 'technicien',  label: ROLE_LABELS.technicien,      color: '#6b7280', bg: '#f3f4f6', desc: 'Lecture seule + son parcours de formation' },
+  { value: 'caissier',    label: ROLE_LABELS.CAISSIER,        color: '#0891b2', bg: '#cffafe', desc: 'Vente comptoir, encaissement, sessions caisse' },
+  { value: 'livreur',     label: ROLE_LABELS.LIVREUR,         color: '#ea580c', bg: '#ffedd5', desc: 'Ses livraisons et leurs bons de livraison' },
 ]
 
 function RoleBadge({ role }: { role: ForgeRole }) {
@@ -275,14 +279,14 @@ function UserRow({ user, isSelf, onPin }: { user: UserProfile; isSelf: boolean; 
 const FORGE_ROLES: Array<{
   name: RbacRoleName; label: string; desc: string; color: string; bg: string; icon?: string
 }> = [
-  { name: 'SUPER_ADMIN', label: 'Admin (Patron)',  desc: 'Accès complet + gestion utilisateurs',       color: '#C62828', bg: '#FFEBEE', icon: '👑' },
-  { name: 'MANAGER',     label: 'Superviseur',     desc: 'Validation, stocks, rapports, formation',    color: '#1d4ed8', bg: '#dbeafe' },
-  { name: 'COMMERCIAL',  label: 'Opérateur',       desc: 'Stocks, commandes, bons, production',        color: '#15803d', bg: '#dcfce7' },
-  { name: 'CAISSIER',    label: 'Caissier',        desc: 'Vente comptoir, encaissement, sessions caisse', color: '#0891b2', bg: '#cffafe' },
-  { name: 'MAGASINIER',  label: 'Magasinier',      desc: 'Stocks, approvisionnement, logistique',      color: '#d97706', bg: '#fef3c7' },
-  { name: 'FORMATEUR',   label: 'Formateur',       desc: 'RH, formation, apprenants',                  color: '#4f46e5', bg: '#e0e7ff' },
-  { name: 'LIVREUR',     label: 'Livreur',         desc: 'Livraisons, bons de sortie assignés',        color: '#ea580c', bg: '#ffedd5' },
-  { name: 'READONLY',    label: 'Apprenant',       desc: 'Lecture tâches, stock et formation',         color: '#6b7280', bg: '#f3f4f6' },
+  { name: 'SUPER_ADMIN', label: ROLE_LABELS.SUPER_ADMIN,  desc: 'Accès complet + gestion utilisateurs',       color: '#C62828', bg: '#FFEBEE', icon: '👑' },
+  { name: 'MANAGER',     label: ROLE_LABELS.MANAGER,     desc: 'Validation, stocks, rapports, formation',    color: '#1d4ed8', bg: '#dbeafe' },
+  { name: 'COMMERCIAL',  label: ROLE_LABELS.COMMERCIAL,  desc: 'Stocks, commandes, bons, production',        color: '#15803d', bg: '#dcfce7' },
+  { name: 'CAISSIER',    label: ROLE_LABELS.CAISSIER,        desc: 'Vente comptoir, encaissement, sessions caisse', color: '#0891b2', bg: '#cffafe' },
+  { name: 'MAGASINIER',  label: ROLE_LABELS.MAGASINIER,      desc: 'Stocks, approvisionnement, logistique',      color: '#d97706', bg: '#fef3c7' },
+  { name: 'FORMATEUR',   label: ROLE_LABELS.FORMATEUR,       desc: 'RH, formation, apprenants',                  color: '#4f46e5', bg: '#e0e7ff' },
+  { name: 'LIVREUR',     label: ROLE_LABELS.LIVREUR,         desc: 'Livraisons, bons de sortie assignés',        color: '#ea580c', bg: '#ffedd5' },
+  { name: 'READONLY',    label: ROLE_LABELS.READONLY,       desc: 'Lecture tâches, stock et formation',         color: '#6b7280', bg: '#f3f4f6' },
 ]
 
 // ── Invite slide-over ──────────────────────────────────────────────────────────
@@ -455,6 +459,9 @@ export default function AdminSettings() {
   const [adminTab, setAdminTab]       = useState<AdminTab>('Utilisateurs')
   const [permRoleIdx, setPermRoleIdx] = useState(0)
   const [pinUser, setPinUser]         = useState<UserProfile | null>(null)
+  const [societe, setSociete] = useState(SOCIETE_INITIAL)
+  useEffect(() => { void apiClient.get<{ data: typeof SOCIETE_INITIAL }>('/api/admin/societe').then((r) => { if (r.data) setSociete(r.data) }).catch(() => undefined) }, [])
+  const saveSociete = async () => { try { const r = await apiClient.put<{ data: typeof SOCIETE_INITIAL }>('/api/admin/societe', societe); setSociete(r.data); toast.success('Réglages société enregistrés') } catch (e) { toast.error(e instanceof Error ? e.message : 'Erreur de sauvegarde') } }
 
   const users: UserProfile[] = data?.data ?? []
 
@@ -468,7 +475,7 @@ export default function AdminSettings() {
   const counts = {
     total:       users.length,
     admin:       users.filter((u) => u.role === 'admin').length,
-    superviseur: users.filter((u) => u.role === 'superviseur').length,
+    manager: users.filter((u) => u.role === 'manager').length,
     operateur:   users.filter((u) => u.role === 'operateur').length,
     technicien:  users.filter((u) => u.role === 'technicien').length,
     inactif:     users.filter((u) => !u.actif).length,
@@ -523,10 +530,10 @@ export default function AdminSettings() {
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
           { label: 'Total',         value: counts.total,       color: '#212121', bg: '#f5f5f5' },
-          { label: 'Admins',        value: counts.admin,       color: '#C62828', bg: '#FFEBEE' },
-          { label: 'Superviseurs',  value: counts.superviseur, color: '#1d4ed8', bg: '#dbeafe' },
-          { label: 'Opérateurs',    value: counts.operateur,   color: '#15803d', bg: '#dcfce7' },
-          { label: 'Techniciens',   value: counts.technicien,  color: '#6b7280', bg: '#f3f4f6' },
+          { label: ROLE_LABELS.admin,       value: counts.admin,       color: '#C62828', bg: '#FFEBEE' },
+          { label: ROLE_LABELS.manager,     value: counts.manager,     color: '#1d4ed8', bg: '#dbeafe' },
+          { label: ROLE_LABELS.operateur,   value: counts.operateur,   color: '#15803d', bg: '#dcfce7' },
+          { label: ROLE_LABELS.technicien,  value: counts.technicien,  color: '#6b7280', bg: '#f3f4f6' },
           { label: 'Inactifs',      value: counts.inactif,     color: '#9ca3af', bg: '#f9fafb' },
         ].map(({ label, value, color, bg }) => (
           <div
@@ -661,6 +668,16 @@ export default function AdminSettings() {
       {/* ── Onglet : Paramètres de sécurité ── */}
       {adminTab === 'Sécurité' && (
         <SecuritySettings />
+      )}
+      {adminTab === 'Société' && (
+        <div className="max-w-3xl space-y-3 rounded-xl border border-gray-200 bg-white p-5">
+          <p className="text-sm text-gray-600">Ces coordonnées alimentent les fiches techniques imprimées et les documents société.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {([['nom','Raison sociale'],['directeur','Directeur général'],['telephones','Téléphones'],['site','Site web'],['adresse','Adresse'],['email','Email']] as const).map(([key,label]) => <label key={key} className="text-xs font-medium text-gray-600">{label}<input value={societe[key]} onChange={(e) => setSociete((s) => ({ ...s, [key]: e.target.value }))} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900" /></label>)}
+            <label className="text-xs font-medium text-gray-600 sm:col-span-2">Activité<input value={societe.activite} onChange={(e) => setSociete((s) => ({ ...s, activite: e.target.value }))} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900" /></label>
+          </div>
+          <Button onClick={() => void saveSociete()}>Enregistrer les réglages société</Button>
+        </div>
       )}
 
     </motion.div>

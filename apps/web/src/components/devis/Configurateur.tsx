@@ -20,7 +20,7 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { Calculator, Loader2, AlertTriangle, Check, X } from 'lucide-react'
-import { Modal, Button } from '@forge/ui'
+import { Modal, Button , NumberInput} from '@forge/ui'
 import { formatXAF } from '@/lib/utils'
 import { useCalculerDevis, type PropositionDevis, type DimensionsInput } from '@/hooks/useDevis'
 import { useModeleConfiguration, type Modele } from '@/hooks/useCatalogue'
@@ -103,8 +103,8 @@ export function Configurateur({ isOpen, onClose, modele, onApply }: Configurateu
                   {champsDimensions.map(({ cle, label, unite }) => (
                     <div key={cle}>
                       <label className="block text-[10px] text-gray-400 mb-0.5">{label} ({unite})</label>
-                      <input
-                        type="number" min="0" step="0.01"
+                      <NumberInput mode="dimension"
+                        min="0" step="0.01"
                         value={dimensions[cle] ?? ''}
                         onChange={(e) => setDimensions((d) => ({
                           ...d, [cle]: e.target.value === '' ? undefined : Number(e.target.value),
@@ -120,8 +120,8 @@ export function Configurateur({ isOpen, onClose, modele, onApply }: Configurateu
             {/* ── Quantité ── */}
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Quantité (nombre de pièces)</label>
-              <input
-                type="number" min="1" step="1" value={quantite}
+              <NumberInput
+                min="1" step="1" value={quantite}
                 onChange={(e) => setQuantite(Number(e.target.value))}
                 className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
               />

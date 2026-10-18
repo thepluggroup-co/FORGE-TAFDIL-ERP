@@ -140,12 +140,7 @@ function NotificationsPanel({ onClose }: { onClose: () => void }) {
 
 // ── User dropdown ──────────────────────────────────────────────────────────────
 
-const ROLE_LABELS: Record<string, string> = {
-  admin:       'Admin (Patron)',
-  superviseur: 'Superviseur',
-  operateur:   'Opérateur',
-  apprenant:   'Apprenant',
-}
+import { ROLE_LABELS } from '@forge/shared'
 
 function UserDropdown({ email, displayName, initial, onClose }: { email: string; displayName: string; initial: string; onClose: () => void }) {
   const navigate  = useNavigate()

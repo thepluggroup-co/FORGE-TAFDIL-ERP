@@ -318,7 +318,7 @@ describe('GET /api/projets', () => {
 })
 
 describe('POST /api/projets', () => {
-  it('retourne 403 pour un opérateur (admin/superviseur requis)', async () => {
+  it('retourne 403 pour un opérateur (admin/manager requis)', async () => {
     deny('COMMERCIAL')
     const res = await app.request('/api/projets', {
       method: 'POST', headers: new Headers(authHeaders('operateur')),
@@ -399,7 +399,7 @@ describe('POST /api/logistique/livraisons', () => {
   it('retourne 400 si commande_id manquant (Zod)', async () => {
     allow('MANAGER')
     const res = await app.request('/api/logistique/livraisons', {
-      method: 'POST', headers: new Headers(authHeaders('superviseur')),
+      method: 'POST', headers: new Headers(authHeaders('manager')),
       body: JSON.stringify({ client_nom: 'X', destination: 'Douala' }),
     })
     expect(res.status).toBe(400)
@@ -409,7 +409,7 @@ describe('POST /api/logistique/livraisons', () => {
     allow('MANAGER')
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: { code: 'PGRST116' } }) as never)
     const res = await app.request('/api/logistique/livraisons', {
-      method: 'POST', headers: new Headers(authHeaders('superviseur')),
+      method: 'POST', headers: new Headers(authHeaders('manager')),
       body: JSON.stringify({ client_nom: 'X', destination: 'Douala', commande_id: CMD_UUID }),
     })
     expect(res.status).toBe(422)

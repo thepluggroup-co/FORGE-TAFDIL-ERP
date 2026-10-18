@@ -126,6 +126,10 @@ function runMigrations(database: InstanceType<typeof Database>) {
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
           attempts   INTEGER DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS devis_brouillons (
+          user_id TEXT PRIMARY KEY, statut TEXT NOT NULL DEFAULT 'brouillon',
+          contenu TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
       `)
     },
 
@@ -191,6 +195,7 @@ function runMigrations(database: InstanceType<typeof Database>) {
           statut       TEXT DEFAULT 'brouillon',
           date_emission TEXT,
           date_validite TEXT,
+          note_client TEXT,
           total_ttc_xaf REAL DEFAULT 0,
           sync_status  TEXT DEFAULT 'pending',
           updated_at   TEXT
@@ -297,6 +302,10 @@ function runMigrations(database: InstanceType<typeof Database>) {
           sync_status      TEXT DEFAULT 'pending',
           updated_at       TEXT
         );
+        CREATE TABLE IF NOT EXISTS devis_brouillons (
+          user_id TEXT PRIMARY KEY, statut TEXT NOT NULL DEFAULT 'brouillon',
+          contenu TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
       `)
     },
 
@@ -347,7 +356,7 @@ function runMigrations(database: InstanceType<typeof Database>) {
         CREATE TABLE IF NOT EXISTS devis (
           id TEXT PRIMARY KEY, numero TEXT NOT NULL, client_id TEXT,
           client_nom TEXT NOT NULL, statut TEXT DEFAULT 'brouillon',
-          date_emission TEXT, date_validite TEXT,
+          date_emission TEXT, date_validite TEXT, note_client TEXT,
           total_ttc_xaf REAL DEFAULT 0,
           sync_status TEXT DEFAULT 'pending', updated_at TEXT
         );
@@ -401,6 +410,11 @@ function runMigrations(database: InstanceType<typeof Database>) {
       `)
 
       // ── livraisons : colonne client_id manquante (nouvelle colonne) ────────
+      safeAddColumn(db, 'devis', 'validite_jours', 'INTEGER DEFAULT 30')
+      safeAddColumn(db, 'devis', 'acompte_pct', 'REAL DEFAULT 0')
+      safeAddColumn(db, 'devis', 'conditions_paiement', 'TEXT')
+      safeAddColumn(db, 'devis', 'notes', 'TEXT')
+      safeAddColumn(db, 'devis', 'note_client', 'TEXT')
       safeAddColumn(db, 'livraisons', 'client_id', 'TEXT')
       safeAddColumn(db, 'livraisons', 'created_at', 'TEXT')
 

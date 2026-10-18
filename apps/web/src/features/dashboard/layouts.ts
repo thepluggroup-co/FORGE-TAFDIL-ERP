@@ -226,7 +226,7 @@ const DEFAULT_LAYOUT: DashboardLayout = {
 // Même correspondance que LEGACY_ROLE_MAP (apps/api/src/services/rbacService.ts) —
 // sert uniquement quand le profil n'a pas encore de rôle RBAC explicite.
 const LEGACY_TO_RBAC: Record<string, RoleName> = {
-  admin: 'SUPER_ADMIN', directeur: 'SUPER_ADMIN', superviseur: 'MANAGER', operateur: 'COMMERCIAL',
+  admin: 'SUPER_ADMIN', directeur: 'SUPER_ADMIN', manager: 'MANAGER', operateur: 'COMMERCIAL',
   technicien: 'READONLY', apprenant: 'READONLY', caissier: 'CAISSIER', livreur: 'LIVREUR',
 }
 

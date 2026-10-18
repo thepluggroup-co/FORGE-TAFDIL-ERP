@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CheckCircle, Clock, FileText, Paperclip, History, ExternalLink } from 'lucide-react'
-import { DataTable, SlideOver, Button } from '@forge/ui'
+import { DataTable, SlideOver, Button , NumberInput} from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { toast } from 'sonner'
 import {
@@ -109,7 +109,7 @@ function FormulaireQualification({ demande }: { demande: DevisWeb }) {
         </div>
         <div>
           <label className="mb-1 block text-xs font-semibold text-gray-600">Quantité</label>
-          <input className={inputCls} type="number" min="0" step="any" value={f.quantite} onChange={set('quantite')} />
+          <NumberInput className={inputCls} min="0" step="any" value={f.quantite} onChange={set('quantite')} />
         </div>
         <div>
           <label className="mb-1 block text-xs font-semibold text-gray-600">Dimensions</label>
@@ -172,7 +172,7 @@ function CreationDevis({ demande, onCree }: { demande: DevisWeb; onCree: (numero
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="mb-1 block text-xs font-semibold text-gray-600">Montant estimé (FCFA)</label>
-          <input className={inputCls} type="number" min="0" value={montantHt} onChange={(e) => setMontantHt(e.target.value)} placeholder="Optionnel" />
+          <NumberInput className={inputCls} min="0" value={montantHt} onChange={(e) => setMontantHt(e.target.value)} placeholder="Optionnel" />
         </div>
         <div>
           <label className="mb-1 block text-xs font-semibold text-gray-600">Date de validité</label>

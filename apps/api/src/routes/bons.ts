@@ -679,7 +679,7 @@ router.patch(
   },
 )
 
-/** Marquer un bon comme prêt (préparateur ou superviseur) */
+/** Marquer un bon comme prêt (préparateur ou manager) */
 router.patch(
   '/:id/preparation',
   requirePermission('STOCK', 'UPDATE'),

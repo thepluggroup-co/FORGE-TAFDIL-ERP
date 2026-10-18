@@ -49,13 +49,4 @@ export const RBAC_ACTION_LABELS: Record<typeof RBAC_ACTIONS[number], string> = {
   EXPORT:    'Exporter',
 }
 
-export const RBAC_ROLE_LABELS: Record<typeof RBAC_ROLE_NAMES[number], string> = {
-  SUPER_ADMIN: 'Super Admin',
-  MANAGER:     'Manager',
-  COMMERCIAL:  'Commercial',
-  CAISSIER:    'Caissier',
-  MAGASINIER:  'Magasinier',
-  FORMATEUR:   'Formateur',
-  READONLY:    'Lecture seule',
-  LIVREUR:     'Livreur',
-}
+export { ROLE_LABELS as RBAC_ROLE_LABELS } from '@forge/shared'

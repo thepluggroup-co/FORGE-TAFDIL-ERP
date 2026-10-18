@@ -26,17 +26,25 @@ export function setApiToken(token: string | null) {
 // À la connexion et au retour du réseau, on recharge en arrière-plan les
 // données que l'utilisateur consulte habituellement : si la connexion tombe
 // ensuite, il retrouve des listes fraîches même sur les écrans qu'il n'a pas
-// rouverts aujourd'hui. Volontairement lent et silencieux (aucun toast, aucune
-// redirection) pour ne gêner ni l'utilisateur ni le rate-limit de l'API.
-const REFRESH_OLDER_THAN_MS = 30 * 60 * 1000
-const REFRESH_MAX_PATHS     = 60
-const REFRESH_PAUSE_MS      = 400
+// rouverts aujourd'hui. Silencieux (aucun toast, aucune redirection).
+//
+// L'API limite à 100 requêtes/minute PAR ADRESSE IP — donc pour tous les
+// postes de l'atelier réunis derrière la même box. Ce rafraîchissement ne
+// doit jamais entamer le budget des écrans : il attend que l'app ait fini de
+// charger, avance lentement (≤ 20 req/min), et s'arrête dès que le budget
+// restant de l'IP descend sous la moitié.
+const REFRESH_OLDER_THAN_MS  = 30 * 60 * 1000
+const REFRESH_MAX_PATHS      = 30
+const REFRESH_PAUSE_MS       = 3_000
+const REFRESH_START_DELAY_MS = 20_000
+const REFRESH_MIN_REMAINING  = 50
 let _refreshingCache = false
 
 export async function refreshOfflineCache(): Promise<void> {
   if (_refreshingCache || !_cachedToken) return
   _refreshingCache = true
   try {
+    await new Promise((r) => setTimeout(r, REFRESH_START_DELAY_MS))
     const paths = await listStaleCachedPaths(REFRESH_OLDER_THAN_MS, REFRESH_MAX_PATHS)
     for (const path of paths) {
       const token = _cachedToken
@@ -48,6 +56,8 @@ export async function refreshOfflineCache(): Promise<void> {
         })
         if (res.status === 401 || res.status === 429) break
         if (res.ok && res.status !== 204) saveCachedResponse(path, await res.json(), false)
+        const remaining = Number(res.headers.get('X-RateLimit-Remaining'))
+        if (Number.isFinite(remaining) && remaining < REFRESH_MIN_REMAINING) break
       } catch {
         break   // réseau retombé — on réessaiera à la prochaine reconnexion
       }
@@ -196,6 +206,17 @@ async function request<T>(
       const detail = data.details ?? data.error ?? 'Droits insuffisants'
       toast.warning(detail)
       throw new Error(detail)
+    }
+
+    // ── Trop de requêtes (limite par IP, partagée par tout l'atelier) ───────
+    // Lecture : la dernière copie connue vaut mieux qu'un écran d'erreur
+    // (desktop). Sinon un message qui dit quoi faire, au lieu de « Erreur 429 ».
+    if (res.status === 429) {
+      if (method === 'GET') {
+        const cached = await readCachedResponse<T>(path)
+        if (cached) return cached.data
+      }
+      throw new Error('Trop de requêtes en même temps — patientez une minute puis réessayez')
     }
 
     // ── Server errors ──────────────────────────────────────────────────────

@@ -68,7 +68,7 @@ export function invalidateAllPermissionCaches(): void {
 }
 
 // ── Caisse — plafond de remise caissier ───────────────────────────────────────
-// Au-delà de ce seuil, seuls superviseur/admin (MANAGER/SUPER_ADMIN) peuvent
+// Au-delà de ce seuil, seuls manager/admin (MANAGER/SUPER_ADMIN) peuvent
 // valider une remise. Consommé par les futures routes du module Caisse
 // (création de ticket / application d'une remise) — pas encore de table
 // tickets_vente/remise en base, donc rien à vérifier ici pour l'instant.
@@ -101,7 +101,7 @@ function checkImmutableRules(
 
   // CAISSIER : jamais d'accès RH / Finance (paie, marges, prix d'achat) —
   // même si une permission DB existait par erreur, ce garde-fou prévaut.
-  // Le rôle "responsable" (MANAGER/SUPER_ADMIN via superviseur/admin) garde
+  // Le rôle "responsable" (MANAGER/SUPER_ADMIN via manager/admin) garde
   // l'accès complet, plus les remises fortes, annulations, avoirs et le
   // rapport Z (gérés au niveau des futures routes Caisse, pas ici).
   if (roleName === 'CAISSIER' && (module === 'HR' || module === 'FINANCE')) {
@@ -128,7 +128,7 @@ function checkImmutableRules(
 const LEGACY_ROLE_MAP: Record<string, string> = {
   admin:       'SUPER_ADMIN',
   directeur:   'SUPER_ADMIN',
-  superviseur: 'MANAGER',
+  manager: 'MANAGER',
   operateur:   'COMMERCIAL',
   technicien:  'READONLY',
   apprenant:   'READONLY',   // legacy alias

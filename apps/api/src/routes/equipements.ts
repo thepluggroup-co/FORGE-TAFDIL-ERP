@@ -32,8 +32,8 @@ const equipementSchema = z.object({
   date_acquisition:       z.string().optional(),
   date_fin_garantie:      z.string().optional(),
   date_remplacement_prevue: z.string().optional(),
-  valeur_achat_xaf:       z.number().min(0).default(0),
-  valeur_residuelle_xaf:  z.number().min(0).default(0),
+  valeur_achat_xaf:       z.number().int().min(0).default(0),
+  valeur_residuelle_xaf:  z.number().int().min(0).default(0),
   criticite:              z.enum(['faible', 'moyenne', 'haute', 'critique']).default('moyenne'),
   emplacement:            z.string().optional(),
   responsable_id:         z.string().optional(),
@@ -41,7 +41,7 @@ const equipementSchema = z.object({
   intervalle_revision_j:  z.number().int().min(1).default(365),
   notes:                  z.string().optional(),
   // Phase 5 (§16) : coût horaire machine utilisé par la gamme opératoire (null = non renseigné)
-  cout_horaire_xaf:       z.number().min(0).nullable().optional(),
+  cout_horaire_xaf:       z.number().int().min(0).nullable().optional(),
 })
 
 const equipementStatutSchema = z.object({
@@ -53,14 +53,14 @@ const maintenanceSchema = z.object({
   type:             z.enum(['preventive', 'corrective', 'calibrage', 'remplacement', 'panne', 'reparation', 'installation', 'audit']).default('preventive'),
   date_maintenance: z.string(),
   technicien_id:    z.string().optional(),
-  cout_xaf:         z.number().min(0).default(0),
+  cout_xaf:         z.number().int().min(0).default(0),
   description:      z.string().optional(),
   prochaine_date:   z.string().optional(),
   statut:           z.enum(['planifie', 'en_cours', 'fait', 'annule']).default('planifie'),
   creer_charge:     z.boolean().optional(),
   fournisseur_nom:  z.string().optional(),
   compte_charge:    z.string().optional(),
-  tva_xaf:          z.number().min(0).default(0),
+  tva_xaf:          z.number().int().min(0).default(0),
   mode_paiement:    z.enum(['caisse', 'banque', 'mobile_money', 'credit_fournisseur']).optional(),
   compte_tresorerie:z.string().optional(),
   reference_paiement:z.string().optional(),

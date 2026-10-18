@@ -5,7 +5,7 @@
 
 import React, { useState } from 'react'
 import { Play, CheckCircle2, SkipForward, RotateCcw, Layers, Plus } from 'lucide-react'
-import { SlideOver, Button } from '@forge/ui'
+import { SlideOver, Button , NumberInput} from '@forge/ui'
 import { toast } from 'sonner'
 import { LIBELLES_STATUT_OPERATION, type StatutOperationOF } from '@forge/shared'
 import {
@@ -60,7 +60,7 @@ function ChargerGamme({ jobId, depuisCommande }: { jobId: string; depuisCommande
           <option value="">Modèle (fiche active)…</option>
           {(modelesData?.data ?? []).map((m) => <option key={m.id} value={m.id}>{m.reference} — {m.designation}</option>)}
         </select>
-        <input className={inputCls} type="number" min="0" step="any" placeholder="Qté facturable" value={quantite} onChange={(e) => setQuantite(e.target.value)} />
+        <NumberInput className={inputCls} min="0" step="any" placeholder="Qté facturable" value={quantite} onChange={(e) => setQuantite(e.target.value)} />
       </div>
       <Button size="sm" disabled={charger.isPending} onClick={chargerModele}>
         {charger.isPending ? 'Chargement…' : 'Charger la gamme du modèle'}
@@ -103,7 +103,7 @@ function LigneOperation({ jobId, op, ouvert }: { jobId: string; op: OperationOF;
         <div>
           <p className="text-gray-400">Réel (h)</p>
           {ouvert && op.statut !== 'sautee'
-            ? <input className={inputCls} type="number" min="0" step="0.25" value={temps} onChange={(e) => setTemps(e.target.value)}
+            ? <NumberInput mode="decimal" className={inputCls} min="0" step="0.25" value={temps} onChange={(e) => setTemps(e.target.value)}
                 onBlur={() => { if (temps.trim() && Number(temps) !== op.temps_reel_h) maj.mutate({ opId: op.id, temps_reel_h: Number(temps) }) }} />
             : <p className="font-semibold text-gray-700">{h(op.temps_reel_h)}</p>}
         </div>
@@ -178,7 +178,7 @@ function LigneConsommation({ jobId, conso, ouvert }: { jobId: string; conso: Con
       <td className="py-2 pr-2">
         {ouvert ? (
           <div className="space-y-1">
-            <input className={inputCls} type="number" min="0" step="any" value={reel} onChange={(e) => setReel(e.target.value)} />
+            <NumberInput className={inputCls} min="0" step="any" value={reel} onChange={(e) => setReel(e.target.value)} />
             {conso.produit_id && (
               <label className="flex items-center gap-1 text-xs text-gray-500">
                 <input type="checkbox" checked={sortir} onChange={(e) => setSortir(e.target.checked)} /> sortir du stock
@@ -216,7 +216,7 @@ function AjoutConsommation({ jobId }: { jobId: string }) {
       </select>
       <input className={`${inputCls} col-span-4`} placeholder="Désignation" value={f.designation} onChange={(e) => setF({ ...f, designation: e.target.value })} />
       <input className={`${inputCls} col-span-2`} placeholder="Unité" value={f.unite} onChange={(e) => setF({ ...f, unite: e.target.value })} />
-      <input className={`${inputCls} col-span-2`} type="number" min="0" step="any" placeholder="Qté" value={f.quantite} onChange={(e) => setF({ ...f, quantite: e.target.value })} />
+      <NumberInput className={`${inputCls} col-span-2`} min="0" step="any" placeholder="Qté" value={f.quantite} onChange={(e) => setF({ ...f, quantite: e.target.value })} />
       <Button size="sm" variant="ghost" className="col-span-1" disabled={ajouter.isPending} onClick={valider}><Plus className="h-3.5 w-3.5" /></Button>
     </div>
   )

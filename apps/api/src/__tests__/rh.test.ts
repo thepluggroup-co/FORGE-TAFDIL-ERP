@@ -215,14 +215,14 @@ describe('RH4 — GET /api/rh/presences : liste présences', () => {
       mkChain({ data: [{ id: 'pre-001', employe_id: EMPLOYE_ID, date: '2026-06-01', statut: 'present' }], count: 1, error: null }) as never,
     )
 
-    const res  = await app.request('/api/rh/presences', { headers: new Headers(authHeaders('superviseur')) })
+    const res  = await app.request('/api/rh/presences', { headers: new Headers(authHeaders('manager')) })
     expect(res.status).toBe(200)
     const body = await res.json() as { data: unknown[] }
     expect(Array.isArray(body.data)).toBe(true)
   })
 
   it('couvre branches filtres employe_id/date/statut', async () => {
-    const res = await app.request(`/api/rh/presences?employe_id=${EMPLOYE_ID}&date=2026-06-01&statut=present`, { headers: new Headers(authHeaders('superviseur')) })
+    const res = await app.request(`/api/rh/presences?employe_id=${EMPLOYE_ID}&date=2026-06-01&statut=present`, { headers: new Headers(authHeaders('manager')) })
     expect(res.status).toBe(200)
   })
 })
@@ -294,13 +294,13 @@ describe('RH7 — POST /api/rh/apprenants : créer apprenant', () => {
 
     const res = await app.request('/api/rh/apprenants', {
       method:  'POST',
-      headers: new Headers(authHeaders('superviseur')),
+      headers: new Headers(authHeaders('manager')),
       body:    JSON.stringify(CREATE_APPRENANT),
     })
     expect(res.status).toBe(201)
   })
 
-  it('retourne 403 si rôle operateur (superviseur requis)', async () => {
+  it('retourne 403 si rôle operateur (manager requis)', async () => {
     // userId dédié : évite d'hériter du cache RBAC SUPER_ADMIN partagé (voir
     // note en tête de fichier) — sans ça, ce test se voit accorder l'accès
     // par un test 'admin' antérieur qui a mis en cache ce rôle pour l'userId
@@ -316,7 +316,7 @@ describe('RH7 — POST /api/rh/apprenants : créer apprenant', () => {
   it('retourne 400 si spécialité manquante (Zod)', async () => {
     const res = await app.request('/api/rh/apprenants', {
       method:  'POST',
-      headers: new Headers(authHeaders('superviseur')),
+      headers: new Headers(authHeaders('manager')),
       body:    JSON.stringify({ nom: 'Test', niveau: 1 }),
     })
     expect(res.status).toBe(400)
@@ -381,7 +381,7 @@ describe('RH8 — POST /api/rh/avances-salaire : avance sur salaire', () => {
   it('retourne 403 si rôle non-admin', async () => {
     const res = await app.request('/api/rh/avances-salaire', {
       method:  'POST',
-      headers: new Headers(authHeaders('superviseur')),
+      headers: new Headers(authHeaders('manager')),
       body:    JSON.stringify(AVANCE_BODY),
     })
     expect(res.status).toBe(403)
@@ -441,7 +441,7 @@ describe('RH10 — POST /api/rh/paie/:mois/valider : validation paie', () => {
   it('retourne 403 si rôle non-admin', async () => {
     const res = await app.request('/api/rh/paie/2026-06/valider', {
       method:  'POST',
-      headers: new Headers(authHeaders('superviseur')),
+      headers: new Headers(authHeaders('manager')),
       body:    '{}',
     })
     expect(res.status).toBe(403)
@@ -470,7 +470,7 @@ describe('RH11 — POST /api/rh/paie : générer bulletins', () => {
   it('retourne 403 si rôle non-admin', async () => {
     const res = await app.request('/api/rh/paie', {
       method:  'POST',
-      headers: new Headers(authHeaders('superviseur')),
+      headers: new Headers(authHeaders('manager')),
       body:    JSON.stringify({ mois: '2026-06' }),
     })
     expect(res.status).toBe(403)
@@ -510,7 +510,7 @@ describe('RH12 — GET /api/rh/avances-salaire : liste avances', () => {
     expect(typeof body.total_xaf).toBe('number')
   })
 
-  it('retourne 403 si rôle operateur (superviseur+ requis)', async () => {
+  it('retourne 403 si rôle operateur (manager+ requis)', async () => {
     // userId dédié : évite le cache RBAC SUPER_ADMIN partagé (voir note en tête de fichier)
     const res = await app.request('/api/rh/avances-salaire', { headers: new Headers(authHeaders('operateur', 'test-uid-rh12-deny')) })
     expect(res.status).toBe(403)
@@ -578,7 +578,7 @@ describe('RH15 — PUT /api/rh/presences/:id : mise à jour présence', () => {
   it('retourne 404 quand présence introuvable', async () => {
     const res = await app.request(`/api/rh/presences/${PRES_ID}`, {
       method: 'PUT',
-      headers: new Headers({ ...authHeaders('superviseur'), 'Content-Type': 'application/json' }),
+      headers: new Headers({ ...authHeaders('manager'), 'Content-Type': 'application/json' }),
       body: JSON.stringify({ heures: 9 }),
     })
     expect(res.status).toBe(404)
@@ -863,7 +863,7 @@ describe('RH33 — PUT /api/rh/formation/sessions/:id : MAJ session', () => {
   it('retourne 404 si session introuvable', async () => {
     const res = await app.request(`/api/rh/formation/sessions/${SESSION_ID}`, {
       method: 'PUT',
-      headers: new Headers({ ...authHeaders('superviseur'), 'Content-Type': 'application/json' }),
+      headers: new Headers({ ...authHeaders('manager'), 'Content-Type': 'application/json' }),
       body: JSON.stringify({ module: 'Soudure avancée modifiée' }),
     })
     expect(res.status).toBe(404)

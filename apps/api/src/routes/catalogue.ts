@@ -8,12 +8,16 @@ import {
   type TypeGamme, type ArbreFamilles,
 } from '@forge/shared'
 import { requirePermission } from '../middleware/permission.middleware'
+import { generateFicheTechniquePDF } from '../services/pdf.service'
+import { TAFDIL_ENTREPRISE } from '@forge/shared'
 import { writeAuditLog } from '../services/rbacService'
 import { chargerModele, chargerParametres, evaluerConfiguration } from '../services/configuration.service'
 import type { HonoVariables } from '../types'
 
 // auth middleware already rejects requests when supabaseAdmin is null
 const db = supabaseAdmin!
+
+const fichePdfSchema = z.object({ devis: z.string().min(1).max(120), date: z.string().min(1).max(30), client: z.string().min(1).max(200) })
 
 const router = new Hono<{ Variables: HonoVariables }>()
 
@@ -423,8 +427,9 @@ const createRessourceSchema = z.object({
   delai_jours:                 z.number().int().min(0).optional(),
   designation:                 z.string().min(1).max(200),
   unite:                       z.string().min(1).max(30),
+  gamme_section:               z.string().max(100).optional(),
   quantite_par_unite:          z.number().positive(),
-  cout_unitaire_reference_xaf: z.number().min(0).default(0),
+  cout_unitaire_reference_xaf: z.number().int().min(0).default(0),
   temps_reference_h:           z.number().min(0).optional(),
   ordre:                       z.number().int().min(0).default(0),
   actif:                       z.boolean().default(true),
@@ -440,8 +445,9 @@ const updateRessourceSchema = z.object({
   ressource_produit_id:        z.string().uuid().nullable().optional(),
   designation:                 z.string().min(1).max(200).optional(),
   unite:                       z.string().min(1).max(30).optional(),
+  gamme_section:               z.string().max(100).nullable().optional(),
   quantite_par_unite:          z.number().positive().optional(),
-  cout_unitaire_reference_xaf: z.number().min(0).optional(),
+  cout_unitaire_reference_xaf: z.number().int().min(0).nullable().optional(),
   temps_reference_h:           z.number().min(0).nullable().optional(),
   // sous_traitance uniquement : la contrainte DB ressource_coherente refuse ailleurs
   ressource_fournisseur_id:    z.string().uuid().nullable().optional(),
@@ -622,6 +628,46 @@ router.get('/fiche-technique/:id/ressources', requirePermission('PRODUCTION', 'R
   return c.json({ data, total: data?.length ?? 0 })
 })
 
+router.post('/fiche-technique/:id/pdf', requirePermission('PRODUCTION', 'READ'), zValidator('json', fichePdfSchema), async (c) => {
+  const { id } = c.req.param()
+  const form = c.req.valid('json')
+  const { data: fiche, error } = await db.from('fiche_technique').select('id, version, notes, modele_id, modeles(designation)').eq('id', id).maybeSingle()
+  if (error) return c.json({ error: error.message }, 500)
+  if (!fiche) return c.json({ error: 'Fiche technique introuvable' }, 404)
+  const { data: ressources, error: resErr } = await db.from('fiche_technique_ressources').select('designation, unite, quantite_par_unite, gamme_section, type').eq('fiche_technique_id', id).eq('actif', true).order('ordre')
+  if (resErr) return c.json({ error: resErr.message }, 500)
+  const { data: variantes } = await db.from('fiche_technique_variantes').select('variante, designation, unite, quantite_par_unite, gamme_section').eq('fiche_technique_id', id).eq('actif', true).order('ordre')
+  const { data: settings } = await db.from('societe_reglages').select('*').eq('id', 1).maybeSingle()
+  const company = {
+    nom: settings?.nom ?? TAFDIL_ENTREPRISE.nom,
+    activite: settings?.activite ?? 'Étude, conception, réalisation, conseil, formation, entretien, menuiserie métallique et aluminium, vente de matériel et accessoires',
+    directeur: settings?.directeur ?? 'Carmel TANEKEU',
+    telephones: settings?.telephones ?? TAFDIL_ENTREPRISE.telephones.join(' / '),
+    site: settings?.site ?? 'www.tafdil.com',
+    adresse: settings?.adresse ?? 'Kotto, face école Mauryvanas',
+    email: settings?.email ?? 'tafdilsarl@gmail.com',
+  }
+  const model = fiche.modeles as unknown as { designation: string } | null
+  const pdf = await generateFicheTechniquePDF({ company, modele: model?.designation ?? 'Modèle', version: fiche.version, devis: form.devis, date: form.date, client: form.client, notes: fiche.notes, ressources: [...(ressources ?? []).map((r: any) => ({ designation: r.designation, quantite: r.quantite_par_unite, unite: r.unite, gamme: r.gamme_section, type: r.type })), ...(variantes ?? []).map((r: any) => ({ designation: `${r.variante} — ${r.designation}`, quantite: r.quantite_par_unite, unite: r.unite, gamme: r.gamme_section, type: 'materiau' }))] })
+  return c.json({ filename: `fiche-technique-${fiche.version}.pdf`, data: pdf.toString('base64') })
+})
+
+router.get('/fiche-technique/:id/variantes', requirePermission('PRODUCTION', 'READ'), async (c) => {
+  const { data, error } = await db.from('fiche_technique_variantes').select('*, produits(prix_unitaire_xaf)').eq('fiche_technique_id', c.req.param('id')).order('ordre')
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json({ data })
+})
+router.post('/fiche-technique/:id/variantes', requirePermission('PRODUCTION', 'CREATE'), zValidator('json', z.object({ variante: z.string().min(1).max(100), ressource_produit_id: z.string().uuid(), designation: z.string().min(1).max(200), unite: z.string().min(1).max(30), quantite_par_unite: z.number().positive(), gamme_section: z.string().max(100).optional() })), async (c) => {
+  const { data, error } = await db.from('fiche_technique_variantes').insert({ ...c.req.valid('json'), fiche_technique_id: c.req.param('id') }).select().single()
+  if (error) return c.json({ error: error.message }, 400)
+  return c.json(data, 201)
+})
+router.delete('/fiche-technique/variantes/:variantId', requirePermission('PRODUCTION', 'DELETE'), async (c) => {
+  const { error } = await db.from('fiche_technique_variantes').delete().eq('id', c.req.param('variantId'))
+  if (error) return c.json({ error: error.message }, 400)
+  return c.body(null, 204)
+})
+
 router.post(
   '/fiche-technique/:id/ressources',
   requirePermission('PRODUCTION', 'CREATE'),
@@ -684,7 +730,7 @@ router.delete(
 const valeurParametreSchema = z.object({
   code:                    z.string().regex(/^[a-z0-9][a-z0-9_]{0,39}$/),
   libelle:                 z.string().min(1).max(100),
-  cout_supplementaire_xaf: z.number().min(0).default(0),
+  cout_supplementaire_xaf: z.number().int().min(0).default(0),
   validation_requise:      z.boolean().default(false),
   categorie_cout:          z.enum(['option', 'transport', 'installation']).default('option'),
   cout_par_commande:       z.boolean().default(false),
@@ -700,7 +746,7 @@ const parametreSchema = z.object({
   max:             z.number().nullable().optional(),
   pas:             z.number().positive().nullable().optional(),
   role_calcul:     z.enum(['largeur', 'hauteur', 'longueur', 'epaisseur', 'diametre', 'poids']).nullable().optional(),
-  cout_si_oui_xaf: z.number().min(0).default(0),
+  cout_si_oui_xaf: z.number().int().min(0).default(0),
   categorie_cout:  z.enum(['option', 'transport', 'installation']).default('option'),
   cout_par_commande: z.boolean().default(false),
   valeurs:         z.array(valeurParametreSchema).max(50).default([]),
@@ -1017,7 +1063,7 @@ router.delete('/frais-indirects/:id', requirePermission('COMMERCIAL', 'CONFIGURE
 const posteTravailSchema = z.object({
   code:             z.string().trim().toUpperCase().regex(/^[A-Z0-9][A-Z0-9_-]{0,19}$/, 'code : majuscules, chiffres, - ou _ (20 max.)'),
   libelle:          z.string().trim().min(1).max(100),
-  cout_horaire_xaf: z.number().min(0),
+  cout_horaire_xaf: z.number().int().min(0),
   actif:            z.boolean().default(true),
   notes:            z.string().max(500).nullable().optional(),
 })

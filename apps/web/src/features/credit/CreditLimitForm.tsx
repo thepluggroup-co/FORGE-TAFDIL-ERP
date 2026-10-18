@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { X } from 'lucide-react'
-import { Button, Modal } from '@forge/ui'
+import { Button, Modal , NumberInput} from '@forge/ui'
 import { formatXAF } from '@/lib/utils'
 import { useClients } from '@/hooks/useClients'
 import { useCreditLimit, useCreateCreditLimit } from '@/hooks/useCredit'
@@ -124,8 +124,8 @@ export function CreditLimitForm({ open, customerId: initCustomerId, onClose, onS
         {/* Montant plafond */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Plafond crédit (FCFA) *</label>
-          <input
-            type="number"
+          <NumberInput
+
             min={0}
             step={10000}
             value={form.max_credit_amount}
@@ -156,16 +156,16 @@ export function CreditLimitForm({ open, customerId: initCustomerId, onClose, onS
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Ancienneté min. (mois)</label>
-            <input
-              type="number" min={0} value={form.min_order_history_months}
+            <NumberInput
+              min={0} value={form.min_order_history_months}
               onChange={e => setForm(f => ({ ...f, min_order_history_months: parseInt(e.target.value) || 0 }))}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Commandes min.</label>
-            <input
-              type="number" min={0} value={form.min_past_orders_count}
+            <NumberInput
+              min={0} value={form.min_past_orders_count}
               onChange={e => setForm(f => ({ ...f, min_past_orders_count: parseInt(e.target.value) || 0 }))}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />

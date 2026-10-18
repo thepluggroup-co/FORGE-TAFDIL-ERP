@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { AlertTriangle, CheckCircle, Cpu, Hammer, Laptop, Plus, ReceiptText, Settings, Wrench } from 'lucide-react'
-import { PageHeader, Button, SlideOver } from '@forge/ui'
+import { PageHeader, Button, SlideOver , NumberInput} from '@forge/ui'
 import { formatXAF } from '@/lib/utils'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '@/lib/api-client'
@@ -505,8 +505,8 @@ export default function Equipements() {
             <Field label="Remplacement prévu"><input type="date" value={form.date_remplacement_prevue} onChange={e => setForm(f => ({ ...f, date_remplacement_prevue: e.target.value }))} className={INPUT_CLASS} /></Field>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Valeur achat XAF"><input type="number" min="0" value={form.valeur_achat_xaf || ''} onChange={e => setForm(f => ({ ...f, valeur_achat_xaf: Number(e.target.value) }))} className={INPUT_CLASS} /></Field>
-            <Field label="Intervalle révision (j)"><input type="number" min="1" value={form.intervalle_revision_j} onChange={e => setForm(f => ({ ...f, intervalle_revision_j: Number(e.target.value) }))} className={INPUT_CLASS} /></Field>
+            <Field label="Valeur achat XAF"><NumberInput min="0" value={form.valeur_achat_xaf || ''} onChange={e => setForm(f => ({ ...f, valeur_achat_xaf: Number(e.target.value) }))} className={INPUT_CLASS} /></Field>
+            <Field label="Intervalle révision (j)"><NumberInput min="1" value={form.intervalle_revision_j} onChange={e => setForm(f => ({ ...f, intervalle_revision_j: Number(e.target.value) }))} className={INPUT_CLASS} /></Field>
           </div>
           <Field label="Notes"><textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} className={`${INPUT_CLASS} resize-none`} /></Field>
           {formError && <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">{formError}</div>}
@@ -530,8 +530,8 @@ export default function Equipements() {
               <Info label="Fournisseur" value={detail.fournisseur ?? '-'} />
               <Info label="Coût maintenance" value={formatXAF(detail.cout_maintenance_total ?? 0)} />
               <Info label="Coût horaire (gamme)" value={canEdit ? (
-                <input
-                  key={detail.id} type="number" min={0} step={50} defaultValue={detail.cout_horaire_xaf ?? ''} placeholder="non renseigné"
+                <NumberInput
+                  key={detail.id} min={0} step={50} defaultValue={detail.cout_horaire_xaf ?? ''} placeholder="non renseigné"
                   onBlur={(e) => {
                     const v = e.target.value === '' ? null : Number(e.target.value)
                     if (v !== (detail.cout_horaire_xaf ?? null) && (v === null || v >= 0)) updateCoutHoraire.mutate({ id: detail.id, cout_horaire_xaf: v })
@@ -608,8 +608,8 @@ export default function Equipements() {
           </div>
           <Field label="Description"><textarea rows={3} value={intervention.description} onChange={e => setIntervention(f => ({ ...f, description: e.target.value }))} className={`${INPUT_CLASS} resize-none`} /></Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Coût HT XAF"><input type="number" min="0" value={intervention.cout_xaf || ''} onChange={e => setIntervention(f => ({ ...f, cout_xaf: Number(e.target.value) }))} className={INPUT_CLASS} /></Field>
-            <Field label="TVA XAF"><input type="number" min="0" value={intervention.tva_xaf || ''} onChange={e => setIntervention(f => ({ ...f, tva_xaf: Number(e.target.value) }))} className={INPUT_CLASS} /></Field>
+            <Field label="Coût HT XAF"><NumberInput min="0" value={intervention.cout_xaf || ''} onChange={e => setIntervention(f => ({ ...f, cout_xaf: Number(e.target.value) }))} className={INPUT_CLASS} /></Field>
+            <Field label="TVA XAF"><NumberInput min="0" value={intervention.tva_xaf || ''} onChange={e => setIntervention(f => ({ ...f, tva_xaf: Number(e.target.value) }))} className={INPUT_CLASS} /></Field>
           </div>
           <label className="flex items-center gap-2 text-sm text-gray-700">
             <input type="checkbox" checked={intervention.creer_charge} onChange={e => setIntervention(f => ({ ...f, creer_charge: e.target.checked }))} />

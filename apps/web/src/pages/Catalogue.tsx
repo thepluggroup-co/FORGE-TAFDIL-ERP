@@ -4,7 +4,7 @@ import {
   Plus, ChevronRight, ChevronDown, FolderTree, Pencil, Trash2, Layers, Ban, CheckCircle2,
   FileCog, Search, ShieldCheck, Archive, SlidersHorizontal, Percent,
 } from 'lucide-react'
-import { PageHeader, Button, SlideOver, Modal, StatusBadge, EmptyState, DataTable } from '@forge/ui'
+import { PageHeader, Button, SlideOver, Modal, StatusBadge, EmptyState, DataTable , NumberInput} from '@forge/ui'
 import type { Column, StatusMap } from '@forge/ui'
 import {
   useFamilles, useCreateFamille, useUpdateFamille,
@@ -21,6 +21,7 @@ import type {
 import { useStocks } from '@/hooks/useStocks'
 import { useFournisseurs } from '@/hooks/useFournisseurs'
 import { formatXAF } from '@/lib/utils'
+import { apiClient } from '@/lib/api-client'
 import { uniteOptions } from '@/lib/constants'
 import { ParametresConfigurationModal } from '@/components/catalogue/ParametresConfiguration'
 import { ReglesMargeModal } from '@/components/catalogue/ReglesMarge'
@@ -61,6 +62,16 @@ const MODE_CALCUL_LABELS: Record<ModeCalcul, string> = {
   poids:       'Poids (kg)',
   forfait:     'Forfait',
   qualitatif:  'Qualitatif',
+}
+
+const MODE_CALCUL_AIDES: Record<ModeCalcul, string> = {
+  quantitatif: 'Quantité de ressource × quantité saisie',
+  surface:     'Quantité de ressource × surface (largeur × hauteur ou valeur saisie) × quantité commandée',
+  lineaire:    'Quantité de ressource × longueur × quantité commandée',
+  volume:      'Quantité de ressource × volume (L × l × H ou valeur saisie) × quantité commandée',
+  poids:       'Quantité de ressource × poids saisi × quantité commandée',
+  forfait:     'Quantité de ressource × forfait × quantité commandée',
+  qualitatif:  'Quantité de ressource × quantité commandée (sans calcul géométrique)',
 }
 
 const TYPE_RESSOURCE_LABELS: Record<TypeRessource, string> = {
@@ -357,6 +368,20 @@ export default function Catalogue() {
   // cf. stocks.ts) — la recherche retombe sur la pagination par défaut (20).
   const { data: produitsRecherche } = useStocks({ search: produitQueryDebounced || undefined })
   const produitsTrouves = produitQueryDebounced.trim().length >= 2 ? (produitsRecherche?.data ?? []) : []
+  const [varianteNom, setVarianteNom] = useState('')
+  const [varianteQuantite, setVarianteQuantite] = useState(1)
+  const [varianteGamme, setVarianteGamme] = useState('')
+  const [varianteProduit, setVarianteProduit] = useState<{ id: string; designation: string; unite: string; prix_unitaire_xaf: number } | null>(null)
+  const [variantes, setVariantes] = useState<Array<{ id: string; variante: string; designation: string; unite: string; quantite_par_unite: number; gamme_section: string | null }>>([])
+  const chargerVariantes = async () => { if (!selectedFicheId) return; try { const result = await apiClient.get<{ data: typeof variantes }>(`/api/catalogue/fiche-technique/${selectedFicheId}/variantes`); setVariantes(result.data) } catch { setVariantes([]) } }
+  useEffect(() => { void chargerVariantes() }, [selectedFicheId])
+  const ajouterVariante = async () => {
+    if (!selectedFicheId || !varianteNom.trim() || !varianteProduit) return
+    try {
+      await apiClient.post(`/api/catalogue/fiche-technique/${selectedFicheId}/variantes`, { variante: varianteNom.trim(), ressource_produit_id: varianteProduit.id, designation: varianteProduit.designation, unite: varianteProduit.unite || 'unité', quantite_par_unite: varianteQuantite, gamme_section: varianteGamme || varianteProduit.designation })
+      setVarianteNom(''); setVarianteProduit(null); setVarianteQuantite(1); setVarianteGamme(''); setProduitQuery(''); await chargerVariantes()
+    } catch (e) { window.alert(e instanceof Error ? e.message : 'Erreur') }
+  }
 
   const handleCreerNouvelleFiche = () => {
     if (!ficheModeleId) return
@@ -377,6 +402,25 @@ export default function Catalogue() {
         },
       },
     )
+  }
+
+  const imprimerFiche = async () => {
+    if (!selectedFicheId) return
+    const devis = window.prompt('Intitulé ou numéro du devis à afficher')
+    if (!devis) return
+    const client = window.prompt('Nom du client')
+    if (!client) return
+    const date = window.prompt('Date du devis (JJ/MM/AAAA)', new Date().toLocaleDateString('fr-FR'))
+    if (!date) return
+    try {
+      const result = await apiClient.post<{ filename: string; data: string }>(`/api/catalogue/fiche-technique/${selectedFicheId}/pdf`, { devis, date, client })
+      const bytes = Uint8Array.from(atob(result.data), (ch) => ch.charCodeAt(0))
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+      window.open(url, '_blank', 'noopener')
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Impossible de générer le PDF')
+    }
   }
 
   const modeleColumns: Column<Modele>[] = [
@@ -747,6 +791,7 @@ export default function Catalogue() {
                     <option key={m} value={m}>{MODE_CALCUL_LABELS[m]}</option>
                   ))}
                 </select>
+                <p className="mt-1 text-[10px] leading-relaxed text-gray-500">{MODE_CALCUL_AIDES[nouveauModeCalcul]}</p>
               </div>
               <Button size="sm" onClick={handleCreerNouvelleFiche} loading={createFiche.isPending}>
                 Créer (brouillon)
@@ -777,8 +822,10 @@ export default function Catalogue() {
                       <option key={m} value={m}>{MODE_CALCUL_LABELS[m]}</option>
                     ))}
                   </select>
+                  <p className="mt-1 text-[10px] leading-relaxed text-gray-500">{MODE_CALCUL_AIDES[selectedFiche.mode_calcul]}</p>
                 </div>
                 <div className="flex gap-2 shrink-0">
+                  <Button size="sm" variant="secondary" onClick={() => void imprimerFiche()}>Imprimer A4</Button>
                   {selectedFiche.statut !== 'active' && (
                     <Button
                       size="sm"
@@ -824,6 +871,7 @@ export default function Catalogue() {
               {/* ── Ressources ── */}
               <div className="border-t border-gray-100 pt-3 space-y-2">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Ressources (recette par unité facturable)</p>
+                <p className="text-[10px] leading-relaxed text-gray-500">Un même article peut figurer sur plusieurs lignes. Ajoutez une ligne par dimension ou section et précisez-la dans la désignation.</p>
 
                 {ressources.length === 0 && (
                   <p className="text-xs text-gray-400 text-center py-3">Aucune ressource — la fiche ne pourra pas être activée sans au moins une ligne.</p>
@@ -844,8 +892,8 @@ export default function Catalogue() {
                       />
                     </span>
                     <span className="flex-1 truncate font-medium text-[#212121]">{r.designation}</span>
-                    <input
-                      type="number" step="0.001" defaultValue={r.quantite_par_unite}
+                    <NumberInput
+                      step="0.001" value={r.quantite_par_unite}
                       onBlur={(e) => {
                         const v = Number(e.target.value)
                         if (v > 0 && v !== r.quantite_par_unite) {
@@ -856,8 +904,9 @@ export default function Catalogue() {
                       title="Quantité par unité facturable"
                     />
                     <span className="w-14 text-gray-400">{r.unite}</span>
-                    <input
-                      type="number" step="1" defaultValue={r.cout_unitaire_reference_xaf}
+                    <input defaultValue={r.gamme_section ?? ''} placeholder="Gamme/section" aria-label="Gamme ou section" onBlur={(e) => { if (e.target.value !== (r.gamme_section ?? '')) updateRessource.mutate({ id: r.id, ficheTechniqueId: r.fiche_technique_id, payload: { gamme_section: e.target.value } }) }} className="w-28 px-1.5 py-1 text-xs border border-gray-200 rounded bg-white" />
+                    <NumberInput
+                      step="1" value={r.cout_unitaire_reference_xaf}
                       onBlur={(e) => {
                         const v = Number(e.target.value)
                         if (v >= 0 && v !== r.cout_unitaire_reference_xaf) {
@@ -946,8 +995,8 @@ export default function Catalogue() {
                     >
                       {uniteOptions(ressourceForm.unite).map((u) => <option key={u} value={u}>{u}</option>)}
                     </select>
-                    <input
-                      type="number" step="0.001" min="0"
+                    <NumberInput
+                      step="0.001" min="0"
                       value={ressourceForm.quantite_par_unite}
                       onChange={(e) => setRessourceForm((f) => ({ ...f, quantite_par_unite: Number(e.target.value) }))}
                       placeholder="Qté/unité *"
@@ -955,16 +1004,17 @@ export default function Catalogue() {
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-2">
-                    <input
-                      type="number" step="1" min="0"
+                    <input value={ressourceForm.gamme_section ?? ''} onChange={(e) => setRessourceForm((f) => ({ ...f, gamme_section: e.target.value }))} placeholder="Gamme / section (ex. IPE 80)" className="px-2.5 py-2 text-xs border border-gray-200 rounded-lg" />
+                    <NumberInput
+                      step="1" min="0"
                       value={ressourceForm.cout_unitaire_reference_xaf}
                       onChange={(e) => setRessourceForm((f) => ({ ...f, cout_unitaire_reference_xaf: Number(e.target.value) }))}
                       placeholder="Coût unitaire (XAF)"
                       className="px-2.5 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
                     />
                     {(ressourceForm.type === 'main_oeuvre' || ressourceForm.type === 'equipement') && (
-                      <input
-                        type="number" step="0.01" min="0"
+                      <NumberInput
+                        step="0.01" min="0"
                         value={ressourceForm.temps_reference_h ?? ''}
                         onChange={(e) => setRessourceForm((f) => ({ ...f, temps_reference_h: e.target.value === '' ? undefined : Number(e.target.value) }))}
                         placeholder="Temps (h) — optionnel"
@@ -972,8 +1022,8 @@ export default function Catalogue() {
                       />
                     )}
                     {ressourceForm.type === 'sous_traitance' && (
-                      <input
-                        type="number" step="1" min="0"
+                      <NumberInput
+                        step="1" min="0"
                         value={ressourceForm.delai_jours ?? ''}
                         onChange={(e) => setRessourceForm((f) => ({ ...f, delai_jours: e.target.value === '' ? undefined : Number(e.target.value) }))}
                         placeholder="Délai du sous-traitant (jours)"
@@ -995,6 +1045,18 @@ export default function Catalogue() {
                     <Plus className="h-3.5 w-3.5" /> Ajouter la ressource
                   </Button>
                 </div>
+              </div>
+
+              <div className="border-t border-gray-100 pt-3 space-y-2">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">Matériaux par variante (choix technicien)</p>
+                {variantes.map((v) => <div key={v.id} className="flex items-center gap-2 rounded bg-gray-50 px-2 py-1.5 text-xs"><b>{v.variante}</b><span className="flex-1">{v.designation} · {v.gamme_section}</span><button className="text-red-600" onClick={async () => { await apiClient.delete(`/api/catalogue/fiche-technique/variantes/${v.id}`); await chargerVariantes() }}>Retirer</button></div>)}
+                <div className="flex gap-2">
+                  <input value={varianteNom} onChange={(e) => setVarianteNom(e.target.value)} placeholder="Variante (ex. petit modèle)" className="w-1/3 rounded border px-2 py-1.5 text-xs" />
+                  <input value={produitQuery} onChange={(e) => { setProduitQuery(e.target.value); setVarianteProduit(null) }} placeholder="Rechercher le matériau à associer" className="flex-1 rounded border px-2 py-1.5 text-xs" />
+                </div>
+                <div className="flex gap-2"><NumberInput min="0.001" step="0.001" value={varianteQuantite} onChange={(e) => setVarianteQuantite(Number(e.target.value))} className="w-28 rounded border px-2 py-1.5 text-xs" aria-label="Quantité par unité pour cette variante" /><input value={varianteGamme} onChange={(e) => setVarianteGamme(e.target.value)} placeholder="Gamme / section (ex. IPE 80)" className="flex-1 rounded border px-2 py-1.5 text-xs" /><Button size="sm" disabled={!varianteProduit || !varianteNom.trim()} onClick={() => void ajouterVariante()}>Associer</Button></div>
+                {produitsTrouves.length > 0 && <div className="max-h-28 overflow-auto border rounded bg-white">{produitsTrouves.map((p) => <button key={p.id} className="block w-full p-1.5 text-left text-xs hover:bg-gray-50" onClick={() => setVarianteProduit({ id: p.id, designation: p.designation, unite: p.unite, prix_unitaire_xaf: p.prix_unitaire_xaf })}>{p.ref} · {p.designation}</button>)}</div>}
+                {varianteProduit && <p className="text-xs text-green-700">Matériau choisi : {varianteProduit.designation}</p>}
               </div>
               {selectedFicheId && (
                 <GammeOperations ficheTechniqueId={selectedFicheId} uniteFacturation={ficheModele?.unite_facturation} />

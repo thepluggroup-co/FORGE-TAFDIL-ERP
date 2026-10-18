@@ -6,7 +6,7 @@ import {
   Search, Trash2, BookOpen, CalendarDays, ChevronRight,
   Info, BadgePercent, OctagonX, CreditCard, Clock, AlertTriangle, Loader2,
 } from 'lucide-react'
-import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
+import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal , NumberInput} from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import { uniteOptions } from '@/lib/constants'
@@ -1059,8 +1059,8 @@ export default function Commandes() {
                   <div className="grid grid-cols-3 gap-2 pl-7">
                     <div>
                       <label className="block text-[10px] font-medium text-gray-400 mb-1">Qté *</label>
-                      <input
-                        type="number" min="0.001" step="any"
+                      <NumberInput
+                        min="0.001" step="any"
                         value={ligne.quantite}
                         onChange={(e) => updateLigne(idx, { quantite: Number(e.target.value) })}
                         className="w-full px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]"
@@ -1078,8 +1078,8 @@ export default function Commandes() {
                     </div>
                     <div>
                       <label className="block text-[10px] font-medium text-gray-400 mb-1">P.U. HT (FCFA)</label>
-                      <input
-                        type="number" min="0"
+                      <NumberInput
+                        min="0"
                         value={ligne.prix_unitaire_ht_xaf}
                         onChange={(e) => updateLigne(idx, { prix_unitaire_ht_xaf: Number(e.target.value) })}
                         className="w-full px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]"

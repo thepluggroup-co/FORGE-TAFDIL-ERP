@@ -28,8 +28,8 @@ function usePendingBons(canApprove: boolean) {
 export function BottomNav() {
   const { user } = useAuth()
   const isLivreur  = user?.role === 'livreur'
-  const canApprove = user?.role === 'admin' || user?.role === 'superviseur'
-  const canCaisse  = user?.role === 'caissier' || user?.role === 'admin' || user?.role === 'superviseur'
+  const canApprove = user?.role === 'admin' || user?.role === 'manager'
+  const canCaisse  = user?.role === 'caissier' || user?.role === 'admin' || user?.role === 'manager'
   const pendingCount = usePendingBons(canApprove)
 
   const tabs = [

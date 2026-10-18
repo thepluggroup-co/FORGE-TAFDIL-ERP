@@ -1,3 +1,4 @@
+import { NumberInput } from '@forge/ui'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { TopBar } from '../components/TopBar'
@@ -306,8 +307,8 @@ export function StocksPage() {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="space-y-1 text-xs text-gray-600">
                   Stock initial
-                  <input
-                    type="number"
+                  <NumberInput
+
                     min={0}
                     value={newStock.stock_actuel}
                     onChange={e => setNewStock({ ...newStock, stock_actuel: Number(e.target.value) })}
@@ -316,8 +317,8 @@ export function StocksPage() {
                 </label>
                 <label className="space-y-1 text-xs text-gray-600">
                   Prix unitaire
-                  <input
-                    type="number"
+                  <NumberInput
+
                     min={0}
                     value={newStock.prix_unitaire_xaf}
                     onChange={e => setNewStock({ ...newStock, prix_unitaire_xaf: Number(e.target.value) })}
@@ -328,8 +329,8 @@ export function StocksPage() {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="space-y-1 text-xs text-gray-600">
                   Stock minimum
-                  <input
-                    type="number"
+                  <NumberInput
+
                     min={0}
                     value={newStock.stock_min}
                     onChange={e => setNewStock({ ...newStock, stock_min: Number(e.target.value) })}
@@ -338,8 +339,8 @@ export function StocksPage() {
                 </label>
                 <label className="space-y-1 text-xs text-gray-600">
                   Seuil critique
-                  <input
-                    type="number"
+                  <NumberInput
+
                     min={0}
                     value={newStock.stock_critique}
                     onChange={e => setNewStock({ ...newStock, stock_critique: Number(e.target.value) })}

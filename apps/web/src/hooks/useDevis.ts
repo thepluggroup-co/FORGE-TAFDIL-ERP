@@ -39,6 +39,8 @@ export interface Devis {
   montant_ttc_xaf: number
   pdf_url: string | null
   notes: string | null
+  note_client?: string | null
+  conditions_paiement?: string | null
   source_web: boolean
   expire: boolean
   jours_restants: number | null
@@ -63,10 +65,12 @@ export interface CreateDevisPayload {
   client_ville?: string
   date_emission: string
   date_validite: string
-  validite_jours: 15 | 30 | 45
+  validite_jours: number
   acompte_pct: number
   condition_paiement_id: string
   notes?: string
+  note_client?: string
+  conditions_paiement?: string
   // §32 — canal d'origine de la demande (web, whatsapp, telephone, boutique, bureau, commercial…)
   source_demande?: string
   // §21 — snapshot figé, renseigné uniquement quand le devis dérive d'un unique

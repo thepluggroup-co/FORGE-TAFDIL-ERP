@@ -242,7 +242,8 @@ export class SyncManager {
           const { error } = await supabase.from(op.table_name).upsert(payload)
           if (error) throw error
         } else if (op.operation === 'DELETE') {
-          const { error } = await supabase.from(op.table_name).delete().eq('id', op.record_id)
+          const keyColumn = op.table_name === 'devis_brouillons' ? 'user_id' : 'id'
+          const { error } = await supabase.from(op.table_name).delete().eq(keyColumn, op.record_id)
           if (error) throw error
         }
 

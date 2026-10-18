@@ -6,13 +6,14 @@ import type { OfflineCredentialKind } from '@forge/shared'
 import { setApiToken, refreshOfflineCache, syncOfflineWrites, API_BASE } from '@/lib/api-client'
 import { setOfflineCacheUser } from '@/lib/offline-cache'
 
-export type AppRole = 'admin' | 'superviseur' | 'operateur' | 'technicien' | 'caissier'
+export type AppRole = 'admin' | 'manager' | 'operateur' | 'technicien' | 'caissier' | 'livreur' | 'apprenant'
 
-const VALID_ROLES: AppRole[] = ['admin', 'superviseur', 'operateur', 'technicien', 'caissier']
+const VALID_ROLES: AppRole[] = ['admin', 'manager', 'operateur', 'technicien', 'caissier', 'livreur', 'apprenant']
 
 const LEGACY_ROLE_MAP: Record<string, AppRole> = {
   directeur:   'admin',
-  superviseur: 'superviseur',
+  manager: 'manager',
+  superviseur: 'manager', // compatibilité session jusqu'au renouvellement du JWT
   operateur:   'operateur',
   technicien:  'technicien',
   caissier:    'caissier',

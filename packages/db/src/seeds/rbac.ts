@@ -4,17 +4,18 @@
  * Appeler runRbacSeed(supabaseAdmin) après la migration 0013.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { ROLE_LABELS } from '@forge/shared'
 
 // ── Données des rôles ─────────────────────────────────────────────────────────
 
 export const SEED_ROLES = [
-  { name: 'SUPER_ADMIN', label: 'Super Administrateur', description: 'Accès total, non restreint' },
-  { name: 'MANAGER',     label: 'Manager',               description: 'Gestion complète hors ADMIN/CONFIGURE' },
-  { name: 'COMMERCIAL',  label: 'Commercial',             description: 'Ventes, devis, commandes, stock lecture' },
-  { name: 'CAISSIER',    label: 'Caissier',               description: 'Encaissements et créances uniquement' },
-  { name: 'MAGASINIER',  label: 'Magasinier',             description: 'Gestion stocks et logistique' },
-  { name: 'FORMATEUR',   label: 'Formateur',              description: 'Ressources humaines et rapports lecture' },
-  { name: 'READONLY',    label: 'Lecture seule',          description: 'Consultation uniquement, aucune écriture' },
+  { name: 'SUPER_ADMIN', label: ROLE_LABELS.SUPER_ADMIN, description: 'Accès total, non restreint' },
+  { name: 'MANAGER',     label: ROLE_LABELS.MANAGER,     description: 'Gestion complète hors ADMIN/CONFIGURE' },
+  { name: 'COMMERCIAL',  label: ROLE_LABELS.COMMERCIAL,  description: 'Ventes, devis, commandes, stock lecture' },
+  { name: 'CAISSIER',    label: ROLE_LABELS.CAISSIER,    description: 'Encaissements et créances uniquement' },
+  { name: 'MAGASINIER',  label: ROLE_LABELS.MAGASINIER,  description: 'Gestion stocks et logistique' },
+  { name: 'FORMATEUR',   label: ROLE_LABELS.FORMATEUR,   description: 'Ressources humaines et rapports lecture' },
+  { name: 'READONLY',    label: ROLE_LABELS.READONLY,    description: 'Consultation uniquement, aucune écriture' },
 ] as const
 
 // ── Modules et actions ────────────────────────────────────────────────────────
