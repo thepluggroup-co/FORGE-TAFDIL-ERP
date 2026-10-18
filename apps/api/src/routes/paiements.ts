@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { createHmac } from 'crypto'
+import { createHmac, timingSafeEqual } from 'crypto'
 import { supabaseAdmin } from '@forge/db'
 import { enregistrerPaiementCommande } from '../services/finance-core.service'
 import { resolveCommandeContext } from '../services/commande-workflow.service'
@@ -74,13 +74,70 @@ function normalizeStatus(status: unknown): 'complete' | 'failed' | 'pending' {
   return 'pending'
 }
 
+// Sans délai maximal, un NOKASH lent bloque la requête (et le webhook) indéfiniment.
+const NOKASH_TIMEOUT_MS = 15_000
+
 async function nokashStatusRequest(transactionId: string): Promise<NokashApiResponse> {
   const res = await fetch(`${NOKASH_API}${NOKASH_STATUS_PATH}`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ transaction_id: transactionId }),
+    signal:  AbortSignal.timeout(NOKASH_TIMEOUT_MS),
   })
   return await res.json() as NokashApiResponse
+}
+
+// ── Sécurité ───────────────────────────────────────────────────────────────────
+
+// Jeton secret ajouté à l'URL de callback donnée à NOKASH
+// (NOKASH_CALLBACK_URL = https://…/api/paiements/webhook?token=<NOKASH_WEBHOOK_TOKEN>).
+// NOKASH ne signe pas ses callbacks : ce jeton écarte les faux appels avant
+// qu'ils ne déclenchent une revérification (un appel sortant chacun).
+function webhookTokenValid(received: string | undefined): boolean {
+  const expected = process.env.NOKASH_WEBHOOK_TOKEN ?? ''
+  if (!expected) return true   // non configuré : comportement historique
+  if (!received) return false
+  const a = Buffer.from(received)
+  const b = Buffer.from(expected)
+  return a.length === b.length && timingSafeEqual(a, b)
+}
+
+// Une demande de paiement fait sonner le téléphone du client (invite USSD).
+// Sans limite, n'importe qui connaissant une référence de commande pourrait en
+// envoyer en boucle à n'importe quel numéro.
+const TENTATIVES_FENETRE_MS     = 15 * 60 * 1000
+const TENTATIVES_MAX_COMMANDE   = 5
+const TENTATIVES_MAX_TELEPHONE  = 5
+
+let warnedTentatives = false
+function warnTentativesIndisponible(message: string) {
+  if (warnedTentatives) return
+  warnedTentatives = true
+  console.warn(`[paiements] table paiement_tentatives indisponible — ${message} (migration 20261019_paiements_securite.sql appliquée ?)`)
+}
+
+/** Nombre de demandes récentes ; null si la table n'est pas disponible (on laisse passer). */
+async function compterTentatives(colonne: 'commande_id' | 'telephone', valeur: string): Promise<number | null> {
+  const { count, error } = await db
+    .from('paiement_tentatives')
+    .select('transaction_id', { count: 'exact', head: true })
+    .eq(colonne, valeur)
+    .gte('created_at', new Date(Date.now() - TENTATIVES_FENETRE_MS).toISOString())
+  if (error) { warnTentativesIndisponible(error.message); return null }
+  return count ?? 0
+}
+
+interface Tentative { commande_id: string; commande_ref: string; statut: string }
+
+async function trouverTentative(transactionId: string): Promise<Tentative | null> {
+  const { data, error } = await db
+    .from('paiement_tentatives')
+    .select('commande_id, commande_ref, statut')
+    .eq('transaction_id', transactionId)
+    .maybeSingle()
+  if (error) { warnTentativesIndisponible(error.message); return null }
+  const row = data as Partial<Tentative> | null
+  return row?.commande_id ? row as Tentative : null
 }
 
 async function sendWhatsApp(to: string, message: string) {
@@ -168,8 +225,22 @@ paiementsRouter.post('/initier', async (c) => {
     }, 422)
   }
 
-  // callback_url : optionnel côté NOKASH (clés production uniquement). Si absent,
-  // on reste sur le polling client (/statut) qui fonctionne dans tous les cas.
+  // Limite anti-harcèlement : par commande ET par numéro appelé.
+  const [parCommande, parTelephone] = await Promise.all([
+    compterTentatives('commande_id', commande.id as string),
+    compterTentatives('telephone', phone),
+  ])
+  if ((parCommande ?? 0) >= TENTATIVES_MAX_COMMANDE || (parTelephone ?? 0) >= TENTATIVES_MAX_TELEPHONE) {
+    c.header('Retry-After', String(TENTATIVES_FENETRE_MS / 1000))
+    return c.json({
+      error: 'Trop de demandes de paiement — patientez quelques minutes avant de réessayer',
+      code:  'PAYMENT_TOO_MANY_ATTEMPTS',
+    }, 429)
+  }
+
+  // callback_url : c'est elle qui permet de marquer la commande payée — le
+  // polling client (/statut) lit le statut mais ne met pas la base à jour.
+  // Optionnelle côté NOKASH (clés production uniquement).
   const callbackUrl = process.env.NOKASH_CALLBACK_URL || undefined
 
   const body: Record<string, unknown> = {
@@ -193,6 +264,7 @@ paiementsRouter.post('/initier', async (c) => {
         'hmac-signature': nokashSignature(commande_ref, montantPaiement, phone),
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(NOKASH_TIMEOUT_MS),
     })
     nokashJson = await res.json() as NokashApiResponse
   } catch (e) {
@@ -210,6 +282,22 @@ paiementsRouter.post('/initier', async (c) => {
     return c.json({ error: 'Référence paiement absente dans la réponse NOKASH' }, 502)
   }
 
+  // Chaque transaction garde son lien vers la commande : un webhook retrouve
+  // toujours SA commande, même si une autre demande a été lancée entre-temps.
+  const { error: errTentative } = await db
+    .from('paiement_tentatives')
+    .insert({
+      transaction_id: paymentRef,
+      commande_id:    commande.id,
+      commande_ref,
+      montant:        montantPaiement,
+      telephone:      phone,
+      canal:          paymentMethod,
+    })
+  if (errTentative) warnTentativesIndisponible(errTentative.message)
+
+  // Dernière demande en date : affichage (suivi shop) et repli pour les
+  // transactions antérieures à la table paiement_tentatives.
   await db
     .from('commandes_shop')
     .update({ payment_reference: paymentRef, updated_at: new Date().toISOString() })
@@ -304,6 +392,11 @@ paiementsRouter.get('/:reference/statut', async (c) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 paiementsRouter.post('/webhook', async (c) => {
+  if (!webhookTokenValid(c.req.query('token'))) {
+    console.warn('[nokash-webhook] appel rejeté : jeton absent ou invalide')
+    return c.json({ error: 'Non autorisé' }, 401)
+  }
+
   const payload = await c.req.json<{
     id?:      string
     status?:  string
@@ -331,22 +424,43 @@ paiementsRouter.post('/webhook', async (c) => {
 
   const reference = payload.id
   const status    = normalizeStatus(verified.data.status)
-  const amount    = Number(verified.data.amount ?? payload.amount ?? 0)
+  // Montant : UNIQUEMENT celui confirmé par NOKASH — jamais celui du corps
+  // reçu, que n'importe qui peut forger.
+  const amount    = Number(verified.data.amount)
+  const verifiedOrderId = verified.data.order_id ?? verified.data.orderId
+  const verifiedCurrency = verified.data.currency
 
   console.info(`[nokash-webhook] ${reference} → ${status}`)
+
+  // Commande liée à CETTE transaction (et non à la dernière demande lancée).
+  const tentative = await trouverTentative(reference)
 
   // ── Paiement confirmé ────────────────────────────────────────────────────────
 
   if (status === 'complete') {
-    const { data: commande, error: errFetch } = await db
-      .from('commandes_shop')
-      .select('id, ref, montant_ttc, mode_paiement, statut_paiement, client_nom, client_telephone, client_adresse, lignes, erp_commande_id')
-      .eq('payment_reference', reference)
-      .single()
+    if (!Number.isFinite(amount) || amount <= 0) {
+      console.error(`[fraude] ref=${reference} : montant non confirmé par NOKASH`, verified.data)
+      return c.json({ received: true })
+    }
+    if (verifiedCurrency !== undefined && verifiedCurrency !== null && String(verifiedCurrency).toUpperCase() !== 'XAF') {
+      console.error(`[fraude] ref=${reference} : devise inattendue ${String(verifiedCurrency)}`)
+      return c.json({ received: true })
+    }
+
+    const colonnesCommande = 'id, ref, montant_ttc, mode_paiement, statut_paiement, client_nom, client_telephone, client_adresse, lignes, erp_commande_id'
+    const { data: commande, error: errFetch } = tentative
+      ? await db.from('commandes_shop').select(colonnesCommande).eq('id', tentative.commande_id).single()
+      : await db.from('commandes_shop').select(colonnesCommande).eq('payment_reference', reference).single()
 
     if (errFetch || !commande) {
-      console.error('[webhook] commande introuvable pour payment_reference:', reference)
+      console.error('[webhook] commande introuvable pour la transaction:', reference)
       return c.json({ received: true }) // 200 pour éviter les retries NOKASH
+    }
+
+    // La transaction confirmée doit porter la référence de CETTE commande.
+    if (verifiedOrderId !== undefined && verifiedOrderId !== null && String(verifiedOrderId) !== commande.ref) {
+      console.error(`[fraude] ref=${reference} : transaction pour ${String(verifiedOrderId)}, commande ${commande.ref}`)
+      return c.json({ received: true })
     }
 
     // Idempotence : cette route est publique et NOKASH peut rejouer un appel.
@@ -377,19 +491,47 @@ paiementsRouter.post('/webhook', async (c) => {
       return c.json({ received: true })
     }
 
-    const { error: errUpdate } = await db
+    // Verrou anti-doublon : NOKASH rejoue ses callbacks, parfois en même
+    // temps. Les vérifications ci-dessus ne suffisent pas (deux appels
+    // simultanés les passent tous les deux) — seul l'appel qui fait passer
+    // la transaction à « complete » continue.
+    if (tentative) {
+      const { data: verrou, error: errVerrou } = await db
+        .from('paiement_tentatives')
+        .update({ statut: 'complete', updated_at: new Date().toISOString() })
+        .eq('transaction_id', reference)
+        .neq('statut', 'complete')
+        .select('transaction_id')
+      if (errVerrou) {
+        console.error('[webhook] verrou transaction:', errVerrou)
+        return c.json({ error: 'Erreur interne' }, 500)   // NOKASH réessaiera
+      }
+      if (!verrou || verrou.length === 0) return c.json({ received: true })
+    }
+
+    const nouveauStatut = isPaiementTotal ? 'paye' : 'paye_partiel'
+    const { data: misAJour, error: errUpdate } = await db
       .from('commandes_shop')
       .update({
-        statut_paiement: isPaiementTotal ? 'paye' : 'paye_partiel',
+        statut_paiement: nouveauStatut,
         statut_commande: 'confirmee',
         updated_at:      new Date().toISOString(),
       })
       .eq('id', commande.id)
+      // Sans tentative (transaction antérieure à la table) : c'est cette
+      // mise à jour conditionnelle qui sert de verrou.
+      .neq('statut_paiement', nouveauStatut)
+      .select('id')
 
     if (errUpdate) {
       console.error('[webhook] update commande_shop:', errUpdate)
+      if (tentative) {
+        // Libère le verrou pour que le prochain rejeu de NOKASH retente.
+        await db.from('paiement_tentatives').update({ statut: 'pending' }).eq('transaction_id', reference)
+      }
       return c.json({ error: 'Erreur interne' }, 500)
     }
+    if (!tentative && (!misAJour || misAJour.length === 0)) return c.json({ received: true })
 
     const context = await resolveCommandeContext({
       erp_commande_id: (commande as { erp_commande_id?: string | null }).erp_commande_id ?? null,
@@ -487,17 +629,26 @@ paiementsRouter.post('/webhook', async (c) => {
   // ── Paiement échoué / annulé / expiré ───────────────────────────────────────
 
   if (status === 'failed') {
-    const { data: commande } = await db
-      .from('commandes_shop')
-      .select('ref, client_nom, client_telephone')
-      .eq('payment_reference', reference)
-      .single()
+    if (tentative) {
+      await db.from('paiement_tentatives')
+        .update({ statut: 'failed', updated_at: new Date().toISOString() })
+        .eq('transaction_id', reference)
+        .neq('statut', 'complete')
+    }
 
-    if (commande) {
+    const { data: commande } = tentative
+      ? await db.from('commandes_shop').select('id, ref, statut_paiement, client_nom, client_telephone').eq('id', tentative.commande_id).single()
+      : await db.from('commandes_shop').select('id, ref, statut_paiement, client_nom, client_telephone').eq('payment_reference', reference).single()
+
+    // L'échec d'une NOUVELLE tentative ne doit jamais annuler un paiement
+    // (total ou avance) déjà reçu sur la commande.
+    const dejaPaye = commande?.statut_paiement === 'paye' || commande?.statut_paiement === 'paye_partiel'
+
+    if (commande && !dejaPaye) {
       await db
         .from('commandes_shop')
         .update({ statut_paiement: 'echec', updated_at: new Date().toISOString() })
-        .eq('payment_reference', reference)
+        .eq('id', commande.id)
 
       if (commande.client_telephone) {
         await sendWhatsApp(

@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkChain } from './helpers'
+import { mkChain, mkTableRouter } from './helpers'
 
 vi.mock('@forge/db/supabase', () => {
   const safeChain = () => {
@@ -60,7 +60,7 @@ vi.mock('../services/commande-workflow.service', () => ({
 // TOUJOURS le statut réel auprès de NOKASH avant d'agir (le payload du
 // callback n'est jamais fait confiance, cf. commentaire au-dessus de la route).
 // On stub donc global.fetch pour simuler la réponse de cette revérification.
-function mockNokashStatusRequest(data: { status: string; amount?: number } | null) {
+function mockNokashStatusRequest(data: { status: string; amount?: number; order_id?: string; currency?: string } | null) {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
     json: async () => ({ status: data ? 'REQUEST_OK' : 'ERROR', message: 'ok', data }),
   }))
@@ -183,96 +183,249 @@ describe('GET /api/paiements/:reference/statut', () => {
 })
 
 // ── POST /api/paiements/webhook ──────────────────────────────────────────────
+//
+// Les réponses de la base sont routées PAR TABLE (mkTableRouter) : le webhook
+// lit paiement_tentatives, commandes_shop et paiements_commande dans un ordre
+// qui ne doit pas rendre ces tests fragiles.
+
+const COMMANDE_WEB = {
+  id: 'c1', ref: 'WEB-2026-AAAAAA', montant_ttc: 50000, mode_paiement: 'integral', statut_paiement: 'en_attente',
+  client_nom: 'Test', client_telephone: null, client_adresse: null, lignes: [], erp_commande_id: null,
+}
+const TENTATIVE = { commande_id: 'c1', commande_ref: 'WEB-2026-AAAAAA', statut: 'pending' }
+
+function webhook(body: Record<string, unknown> | string, query = '') {
+  return app.request(`/api/paiements/webhook${query}`, {
+    method: 'POST', headers: JSON_HEADERS, body: typeof body === 'string' ? body : JSON.stringify(body),
+  })
+}
+
+/** Appels .update(...) faits sur une table, avec leur contenu. */
+function updatesOn(table: string): unknown[] {
+  return vi.mocked(supabase.from).mock.calls
+    .map((call, i) => ({ table: call[0], chain: vi.mocked(supabase.from).mock.results[i]?.value as Record<string, ReturnType<typeof vi.fn>> }))
+    .filter((x) => x.table === table)
+    .flatMap((x) => x.chain.update.mock.calls.map((u) => u[0]))
+}
 
 describe('POST /api/paiements/webhook', () => {
   it('retourne 400 si payload JSON invalide', async () => {
-    const res = await app.request('/api/paiements/webhook', {
-      method: 'POST', headers: JSON_HEADERS, body: 'not-json{',
-    })
+    const res = await webhook('not-json{')
     expect(res.status).toBe(400)
   })
 
-  it('retourne 200 received:true pour un statut re-vérifié non final (pending)', async () => {
+  it('statut revérifié non final (pending) → received:true, rien modifié', async () => {
     mockNokashStatusRequest({ status: 'PENDING', amount: 1000 })
-    const res = await app.request('/api/paiements/webhook', {
-      method: 'POST', headers: JSON_HEADERS,
-      body: JSON.stringify({ id: 'REF-UNK', status: 'PENDING', amount: 1000, phone: '699000000', orderId: 'REF-UNK' }),
-    })
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({}) as never)
+    const res = await webhook({ id: 'REF-UNK', status: 'PENDING' })
     expect(res.status).toBe(200)
-    const body = await res.json() as { received: boolean }
-    expect(body.received).toBe(true)
+    expect(updatesOn('commandes_shop')).toHaveLength(0)
   })
 
-  it('payment.complete : commande introuvable → received:true (évite retries)', async () => {
-    mockNokashStatusRequest({ status: 'SUCCESS', amount: 10000 })
-    vi.mocked(supabase.from).mockReturnValueOnce(
-      mkChain({ data: null, error: { message: 'not found' } }) as never,
-    )
-    const res = await app.request('/api/paiements/webhook', {
-      method: 'POST', headers: JSON_HEADERS,
-      body: JSON.stringify({ id: 'REF-X', status: 'SUCCESS', amount: 10000, phone: '699000000', orderId: 'REF-X' }),
+  describe('jeton secret (NOKASH_WEBHOOK_TOKEN)', () => {
+    afterEach(() => vi.unstubAllEnvs())
+
+    it('rejette un appel sans jeton ou avec un mauvais jeton, sans interroger NOKASH', async () => {
+      vi.stubEnv('NOKASH_WEBHOOK_TOKEN', 'jeton-secret-de-test-123')
+      mockNokashStatusRequest({ status: 'SUCCESS', amount: 50000 })
+
+      expect((await webhook({ id: 'REF-OK' })).status).toBe(401)
+      expect((await webhook({ id: 'REF-OK' }, '?token=mauvais')).status).toBe(401)
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled()
     })
-    expect(res.status).toBe(200)
-    const body = await res.json() as { received: boolean }
-    expect(body.received).toBe(true)
+
+    it('accepte le bon jeton', async () => {
+      vi.stubEnv('NOKASH_WEBHOOK_TOKEN', 'jeton-secret-de-test-123')
+      mockNokashStatusRequest({ status: 'PENDING' })
+      vi.mocked(supabase.from).mockImplementation(mkTableRouter({}) as never)
+      expect((await webhook({ id: 'REF-OK' }, '?token=jeton-secret-de-test-123')).status).toBe(200)
+    })
   })
 
-  it('payment.complete : montant ne correspond pas → anti-fraude → received:true sans update', async () => {
-    mockNokashStatusRequest({ status: 'SUCCESS', amount: 999 })
-    vi.mocked(supabase.from).mockReturnValueOnce(
-      mkChain({
-        data: { id: 'c1', ref: 'CMD-009', montant_ttc: 50000, mode_paiement: 'integral', lignes: [], erp_commande_id: null },
-        error: null,
-      }) as never,
-    )
-    const res = await app.request('/api/paiements/webhook', {
-      method: 'POST', headers: JSON_HEADERS,
-      body: JSON.stringify({ id: 'REF-FRAUDE', status: 'SUCCESS', amount: 999, phone: '699000000', orderId: 'REF-FRAUDE' }),
-    })
-    expect(res.status).toBe(200)
-    const body = await res.json() as { received: boolean }
-    expect(body.received).toBe(true)
-  })
-
-  it('payment.complete : paiement total correct → update + received:true', async () => {
+  it('paiement confirmé : commande retrouvée par SA transaction, même si une autre demande a été lancée depuis', async () => {
     mockNokashStatusRequest({ status: 'SUCCESS', amount: 50000 })
-    // fetch commande
-    vi.mocked(supabase.from).mockReturnValueOnce(
-      mkChain({
-        data: { id: 'c1', ref: 'CMD-010', montant_ttc: 50000, mode_paiement: 'integral',
-                client_nom: 'Test', client_telephone: null, client_adresse: null, lignes: [], erp_commande_id: null },
-        error: null,
-      }) as never,
-    )
-    // update commande_shop
-    vi.mocked(supabase.from).mockReturnValueOnce(
-      mkChain({ data: null, error: null }) as never,
-    )
-    const res = await app.request('/api/paiements/webhook', {
-      method: 'POST', headers: JSON_HEADERS,
-      body: JSON.stringify({ id: 'REF-OK', status: 'SUCCESS', amount: 50000, phone: '699000000', orderId: 'REF-OK' }),
-    })
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({
+      paiement_tentatives: [
+        { data: TENTATIVE, error: null },                          // trouverTentative
+        { data: [{ transaction_id: 'TX-1' }], error: null },       // verrou
+      ],
+      commandes_shop: [
+        { data: COMMANDE_WEB, error: null },                       // lecture par id
+        { data: [{ id: 'c1' }], error: null },                     // passage à « payé »
+      ],
+    }) as never)
+
+    const res = await webhook({ id: 'TX-1', status: 'SUCCESS' })
     expect(res.status).toBe(200)
-    const body = await res.json() as { received: boolean }
-    expect(body.received).toBe(true)
+    expect(updatesOn('commandes_shop')).toEqual([expect.objectContaining({ statut_paiement: 'paye' })])
+    expect(vi.mocked(supabase.channel)).toHaveBeenCalledWith('erp-notifications')
   })
 
-  it('payment.failed : marque la commande en échec → received:true', async () => {
-    mockNokashStatusRequest({ status: 'FAILED' })
-    // fetch commande
-    vi.mocked(supabase.from).mockReturnValueOnce(
-      mkChain({ data: { ref: 'CMD-011', client_nom: 'Test', client_telephone: null }, error: null }) as never,
-    )
-    // update commande_shop → echec
-    vi.mocked(supabase.from).mockReturnValueOnce(
-      mkChain({ data: null, error: null }) as never,
-    )
-    const res = await app.request('/api/paiements/webhook', {
-      method: 'POST', headers: JSON_HEADERS,
-      body: JSON.stringify({ id: 'REF-FAIL', status: 'FAILED', phone: '699000000', orderId: 'REF-FAIL' }),
-    })
+  it('webhook rejoué en même temps : seul le premier verrouille, le second ne refait rien', async () => {
+    mockNokashStatusRequest({ status: 'SUCCESS', amount: 50000 })
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({
+      paiement_tentatives: [
+        { data: TENTATIVE, error: null },
+        { data: [], error: null },                                 // verrou déjà pris
+      ],
+      commandes_shop: [{ data: COMMANDE_WEB, error: null }],
+    }) as never)
+
+    const res = await webhook({ id: 'TX-1', status: 'SUCCESS' })
     expect(res.status).toBe(200)
-    const body = await res.json() as { received: boolean }
-    expect(body.received).toBe(true)
+    expect(updatesOn('commandes_shop')).toHaveLength(0)
+    expect(vi.mocked(supabase.channel)).not.toHaveBeenCalled()
+  })
+
+  it('le montant vient de NOKASH seulement : sans montant confirmé, rien n\'est validé (même si le corps en annonce un)', async () => {
+    mockNokashStatusRequest({ status: 'SUCCESS' })                 // pas de montant
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({
+      paiement_tentatives: [{ data: TENTATIVE, error: null }],
+      commandes_shop: [{ data: COMMANDE_WEB, error: null }],
+    }) as never)
+
+    const res = await webhook({ id: 'TX-1', status: 'SUCCESS', amount: 50000 })
+    expect(res.status).toBe(200)
+    expect(updatesOn('commandes_shop')).toHaveLength(0)
+  })
+
+  it('montant ne correspondant pas à la commande → anti-fraude, rien modifié', async () => {
+    mockNokashStatusRequest({ status: 'SUCCESS', amount: 999 })
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({
+      paiement_tentatives: [{ data: TENTATIVE, error: null }],
+      commandes_shop: [{ data: COMMANDE_WEB, error: null }],
+    }) as never)
+
+    await webhook({ id: 'TX-1', status: 'SUCCESS', amount: 50000 })
+    expect(updatesOn('commandes_shop')).toHaveLength(0)
+  })
+
+  it('transaction confirmée pour une AUTRE commande → anti-fraude, rien modifié', async () => {
+    mockNokashStatusRequest({ status: 'SUCCESS', amount: 50000, order_id: 'WEB-2026-ZZZZZZ' } as never)
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({
+      paiement_tentatives: [{ data: TENTATIVE, error: null }],
+      commandes_shop: [{ data: COMMANDE_WEB, error: null }],
+    }) as never)
+
+    await webhook({ id: 'TX-1', status: 'SUCCESS' })
+    expect(updatesOn('commandes_shop')).toHaveLength(0)
+  })
+
+  it('devise autre que XAF → anti-fraude, rien modifié', async () => {
+    mockNokashStatusRequest({ status: 'SUCCESS', amount: 50000, currency: 'EUR' } as never)
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({
+      paiement_tentatives: [{ data: TENTATIVE, error: null }],
+      commandes_shop: [{ data: COMMANDE_WEB, error: null }],
+    }) as never)
+
+    await webhook({ id: 'TX-1', status: 'SUCCESS' })
+    expect(updatesOn('commandes_shop')).toHaveLength(0)
+  })
+
+  it('transaction antérieure à la table des tentatives : repli sur payment_reference, verrou par mise à jour conditionnelle', async () => {
+    mockNokashStatusRequest({ status: 'SUCCESS', amount: 50000 })
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({
+      paiement_tentatives: [{ data: null, error: null }],
+      commandes_shop: [
+        { data: COMMANDE_WEB, error: null },
+        { data: [{ id: 'c1' }], error: null },
+      ],
+    }) as never)
+
+    await webhook({ id: 'TX-ANCIEN', status: 'SUCCESS' })
+    expect(updatesOn('commandes_shop')).toEqual([expect.objectContaining({ statut_paiement: 'paye' })])
+  })
+
+  it('commande introuvable → received:true (évite les rejeux NOKASH)', async () => {
+    mockNokashStatusRequest({ status: 'SUCCESS', amount: 10000 })
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({
+      commandes_shop: [{ data: null, error: { message: 'not found' } }],
+    }) as never)
+    const res = await webhook({ id: 'REF-X', status: 'SUCCESS' })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { received: boolean }).received).toBe(true)
+  })
+
+  it('paiement échoué : commande marquée en échec', async () => {
+    mockNokashStatusRequest({ status: 'FAILED' })
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({
+      paiement_tentatives: [{ data: TENTATIVE, error: null }],
+      commandes_shop: [{ data: { ...COMMANDE_WEB, statut_paiement: 'en_attente' }, error: null }],
+    }) as never)
+
+    await webhook({ id: 'TX-2', status: 'FAILED' })
+    expect(updatesOn('commandes_shop')).toEqual([expect.objectContaining({ statut_paiement: 'echec' })])
+  })
+
+  it('l\'échec d\'une nouvelle tentative n\'annule jamais un paiement déjà reçu', async () => {
+    mockNokashStatusRequest({ status: 'FAILED' })
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({
+      paiement_tentatives: [{ data: TENTATIVE, error: null }],
+      commandes_shop: [{ data: { ...COMMANDE_WEB, statut_paiement: 'paye_partiel' }, error: null }],
+    }) as never)
+
+    await webhook({ id: 'TX-3', status: 'FAILED' })
+    expect(updatesOn('commandes_shop')).toHaveLength(0)
+  })
+})
+
+// ── POST /api/paiements/initier — limite anti-harcèlement ───────────────────
+
+describe('POST /api/paiements/initier — limite de demandes', () => {
+  beforeEach(() => {
+    vi.stubEnv('NOKASH_APPLICATION_KEY', 'test-app-key')
+    vi.stubEnv('NOKASH_INTEGRATION_KEY', 'test-integration-key')
+  })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('refuse (429) au-delà de 5 demandes récentes pour la même commande, sans contacter NOKASH', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({
+      commandes_shop:      [{ data: COMMANDE_WEB, error: null }],
+      paiement_tentatives: [{ count: 5, data: null, error: null }, { count: 0, data: null, error: null }],
+    }) as never)
+
+    const res = await app.request('/api/paiements/initier', {
+      method: 'POST', headers: JSON_HEADERS,
+      body: JSON.stringify({ commande_ref: COMMANDE_WEB.ref, canal: 'cm.mtn', telephone: '690123456' }),
+    })
+    expect(res.status).toBe(429)
+    expect(((await res.json()) as { code: string }).code).toBe('PAYMENT_TOO_MANY_ATTEMPTS')
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+  })
+
+  it('refuse (429) au-delà de 5 demandes récentes vers le même numéro', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({
+      commandes_shop:      [{ data: COMMANDE_WEB, error: null }],
+      paiement_tentatives: [{ count: 0, data: null, error: null }, { count: 7, data: null, error: null }],
+    }) as never)
+
+    const res = await app.request('/api/paiements/initier', {
+      method: 'POST', headers: JSON_HEADERS,
+      body: JSON.stringify({ commande_ref: COMMANDE_WEB.ref, canal: 'cm.mtn', telephone: '690123456' }),
+    })
+    expect(res.status).toBe(429)
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+  })
+
+  it('enregistre la transaction dans paiement_tentatives', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      json: async () => ({ status: 'REQUEST_OK', message: 'ok', data: { id: 'TX-NEW', status: 'PENDING' } }),
+    }))
+    vi.mocked(supabase.from).mockImplementation(mkTableRouter({
+      commandes_shop: [{ data: COMMANDE_WEB, error: null }],
+    }) as never)
+
+    const res = await app.request('/api/paiements/initier', {
+      method: 'POST', headers: JSON_HEADERS,
+      body: JSON.stringify({ commande_ref: COMMANDE_WEB.ref, canal: 'cm.mtn', telephone: '690123456' }),
+    })
+    expect(res.status).toBe(201)
+    const inserts = vi.mocked(supabase.from).mock.calls
+      .map((call, i) => ({ table: call[0], chain: vi.mocked(supabase.from).mock.results[i]?.value as Record<string, ReturnType<typeof vi.fn>> }))
+      .filter((x) => x.table === 'paiement_tentatives')
+      .flatMap((x) => x.chain.insert.mock.calls.map((u) => u[0]))
+    expect(inserts).toEqual([expect.objectContaining({ transaction_id: 'TX-NEW', commande_id: 'c1', montant: 50000, telephone: '690123456' })])
   })
 })

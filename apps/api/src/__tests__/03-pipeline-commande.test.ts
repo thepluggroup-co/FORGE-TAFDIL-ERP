@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkChain } from './helpers'
+import { mkChain, mkTableRouter } from './helpers'
 
 vi.mock('@forge/db/supabase', () => {
   // Chaîne sûre par défaut — ne crashe jamais, retourne data=[] sans erreur
@@ -169,10 +169,15 @@ describe('TEST-03 : Pipeline commande web avec paiement NOKASH', () => {
     const mockFrom    = vi.mocked(supabase.from)
     const mockChannel = vi.mocked(supabase.channel)
 
-    // 1. fetch commande_shop par payment_reference
-    mockFrom.mockReturnValueOnce(mkChain({ data: COMMANDE_SHOP, error: null }) as never)
-    // 2. update statut_paiement/statut_commande (résultat ignoré, error: null)
-    mockFrom.mockReturnValue(mkChain({ data: null, error: null }) as never)
+    // Transaction initiée avant la table paiement_tentatives : repli sur
+    // payment_reference, puis passage conditionnel à « payé » (1 ligne).
+    mockFrom.mockImplementation(mkTableRouter({
+      paiement_tentatives: [{ data: null, error: null }],
+      commandes_shop: [
+        { data: COMMANDE_SHOP, error: null },
+        { data: [{ id: COMMANDE_SHOP.id }], error: null },
+      ],
+    }) as never)
 
     // Le corps du webhook n'est jamais synonyme de confirmation : c'est la
     // revérification NOKASH (status-request) ci-dessous qui fait foi.

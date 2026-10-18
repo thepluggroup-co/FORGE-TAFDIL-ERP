@@ -82,3 +82,17 @@ export function mkChain(response: Record<string, unknown>) {
 }
 
 export type MockChain = ReturnType<typeof mkChain>
+
+/**
+ * Implémentation de supabase.from() qui répond PAR TABLE : chaque appel sur
+ * une table consomme la prochaine réponse prévue pour elle, puis `fallback`.
+ * À préférer à une suite de mockReturnValueOnce quand une route lit plusieurs
+ * tables : le test ne dépend plus de l'ordre exact des requêtes.
+ */
+export function mkTableRouter(
+  responses: Record<string, Array<Record<string, unknown>>>,
+  fallback: Record<string, unknown> = { data: null, error: null },
+) {
+  const queues = new Map(Object.entries(responses).map(([table, list]) => [table, [...list]]))
+  return (table: string) => mkChain(queues.get(table)?.shift() ?? fallback)
+}
