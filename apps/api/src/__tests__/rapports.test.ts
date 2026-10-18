@@ -2,7 +2,7 @@
  * rapports.test.ts — Couverture de apps/api/src/routes/rapports.ts
  *
  * Routeur monté sous /api/rapports avec authMiddleware global puis
- * requireRole(['admin','superviseur']) par endpoint.
+ * requireRole(['admin','manager']) par endpoint.
  *
  * Endpoints couverts (lecture seule, comptabilité SYSCOHADA) :
  *  - GET /grand-livre        (param compte requis, agrégation, 403/401)
@@ -121,7 +121,7 @@ describe('RBAC rapports', () => {
 
 describe('GET /api/rapports/grand-livre', () => {
   it('retourne 400 MISSING_PARAM si compte absent', async () => {
-    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'SUPER_ADMIN' })
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: true, roleName: 'MANAGER' })
     const res = await app.request('/api/rapports/grand-livre', { headers: new Headers(authHeaders('admin')) })
     expect(res.status).toBe(400)
     const body = await res.json() as { code: string }
@@ -155,7 +155,7 @@ describe('GET /api/rapports/balance', () => {
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: ECRITURES, error: null }) as never)
 
     const res = await app.request('/api/rapports/balance?exercice=2026', {
-      headers: new Headers(authHeaders('superviseur')),
+      headers: new Headers(authHeaders('manager')),
     })
     expect(res.status).toBe(200)
     const body = await res.json() as {

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Plus, Minus, Trash2, Star, Search, Printer, Lock, X, MessageCircle, History } from 'lucide-react'
-import { PageHeader, Button, Modal } from '@forge/ui'
+import { PageHeader, Button, Modal , NumberInput} from '@forge/ui'
 import { formatXAF, formatDateTime } from '@/lib/utils'
 import { uniteOptions } from '@/lib/constants'
 import { toast } from 'sonner'
@@ -72,8 +72,8 @@ function OuvertureSession() {
         </div>
         <div>
           <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Fond de caisse (FCFA)</label>
-          <input
-            type="number"
+          <NumberInput
+
             min={0}
             value={fond}
             onChange={(e) => setFond(Math.max(0, Number(e.target.value)))}
@@ -538,8 +538,8 @@ function VenteScreen({ sessionId, isResponsable }: { sessionId: string; isRespon
                     onClick={() => updateLigne(l.key, { quantite: Math.max(0.01, +(l.quantite - 1).toFixed(2)) })}
                     className="w-7 h-7 flex items-center justify-center rounded border border-gray-200 hover:bg-gray-50"
                   ><Minus className="h-3 w-3" /></button>
-                  <input
-                    type="number" min={0.01} step={0.01} value={l.quantite}
+                  <NumberInput
+                    min={0.01} step={0.01} value={l.quantite}
                     onChange={(e) => updateLigne(l.key, { quantite: Math.max(0.01, Number(e.target.value)) })}
                     className="w-14 text-center text-sm border border-gray-200 rounded py-1"
                   />
@@ -555,8 +555,8 @@ function VenteScreen({ sessionId, isResponsable }: { sessionId: string; isRespon
                     {uniteOptions(l.unite).map((u) => <option key={u} value={u}>{u}</option>)}
                   </select>
                   {isResponsable ? (
-                    <input
-                      type="number" min={0} value={l.prix_unitaire_xaf}
+                    <NumberInput
+                      min={0} value={l.prix_unitaire_xaf}
                       onChange={(e) => updateLigne(l.key, { prix_unitaire_xaf: Math.max(0, Number(e.target.value)) })}
                       className="w-20 ml-auto text-right text-sm border border-gray-200 rounded py-1 px-1.5"
                     />
@@ -613,8 +613,8 @@ function VenteScreen({ sessionId, isResponsable }: { sessionId: string; isRespon
           <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">
             Remise (FCFA) {!isResponsable && brutHt > 0 && <span className="normal-case font-normal text-gray-300">— max {formatXAF(remiseMaxXaf)}</span>}
           </label>
-          <input
-            type="number" min={0} value={remiseXaf}
+          <NumberInput
+            min={0} value={remiseXaf}
             onChange={(e) => setRemiseXaf(Math.max(0, Number(e.target.value)))}
             className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
           />
@@ -675,8 +675,8 @@ function VenteScreen({ sessionId, isResponsable }: { sessionId: string; isRespon
                   // Un seul champ : ce que le client tend. Le montant appliqué au
                   // ticket est calculé (plafonné au reste dû) — jamais saisi à part.
                   <>
-                    <input
-                      type="number" min={0} value={p.montant_recu_xaf ?? ''}
+                    <NumberInput
+                      min={0} value={p.montant_recu_xaf ?? ''}
                       onChange={(e) => setPaiements((prev) => prev.map((x, xi) => xi === i ? { ...x, montant_recu_xaf: Math.max(0, Number(e.target.value)) } : x))}
                       className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg"
                       placeholder="Montant reçu du client"
@@ -688,8 +688,8 @@ function VenteScreen({ sessionId, isResponsable }: { sessionId: string; isRespon
                   </>
                 ) : (
                   <div className="flex items-center gap-2">
-                    <input
-                      type="number" min={0} value={p.montant_xaf}
+                    <NumberInput
+                      min={0} value={p.montant_xaf}
                       onChange={(e) => setPaiements((prev) => prev.map((x, xi) => xi === i ? { ...x, montant_xaf: Math.max(0, Number(e.target.value)) } : x))}
                       className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg"
                       placeholder="Montant"
@@ -772,8 +772,8 @@ function FermetureModal({
         <p className="text-sm text-gray-500">Comptez les espèces en caisse et saisissez le montant exact.</p>
         <div>
           <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant compté (FCFA)</label>
-          <input
-            type="number" min={0} value={fondFermeture} autoFocus
+          <NumberInput
+            min={0} value={fondFermeture} autoFocus
             onChange={(e) => setFondFermeture(Math.max(0, Number(e.target.value)))}
             className="w-full px-3 py-3 text-lg font-semibold text-center border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]"
           />

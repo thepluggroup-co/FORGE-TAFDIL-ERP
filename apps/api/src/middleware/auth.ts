@@ -11,6 +11,9 @@ const getJwtSecret = () => process.env.SUPABASE_JWT_SECRET ?? ''
 
 if (!SUPABASE_URL) console.error('[auth] ⚠️  SUPABASE_URL manquant dans .env')
 
+// Algorithmes de signature asymétriques émis par Supabase Auth (clés JWKS)
+const ALGS_ASYMETRIQUES: jwt.Algorithm[] = ['ES256', 'RS256']
+
 // ── JWKS cache (refreshed every hour) ─────────────────────────────────────────
 interface JWK {
   kid:  string
@@ -145,7 +148,11 @@ export async function verifierBearer(authHeader: string | undefined): Promise<Ve
         console.error('[auth] ❌ Could not obtain public key for alg:', alg)
         return { ok: false, status: 500, error: 'Erreur configuration auth', code: 'SERVER_ERROR' }
       }
-      payload = jwt.verify(token, publicKey, { algorithms: [alg as jwt.Algorithm] }) as jwt.JwtPayload
+      // Liste fermée : l'algorithme vient de l'en-tête du jeton, donc de l'appelant
+      if (!ALGS_ASYMETRIQUES.includes(alg as jwt.Algorithm)) {
+        return { ok: false, status: 401, error: 'Token invalide', code: 'INVALID_TOKEN' }
+      }
+      payload = jwt.verify(token, publicKey, { algorithms: ALGS_ASYMETRIQUES }) as jwt.JwtPayload
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -165,7 +172,8 @@ export async function verifierBearer(authHeader: string | undefined): Promise<Ve
   // Normalize legacy role names (after rename: directeur→admin, apprenant→technicien)
   const ROLE_MAP: Record<string, HonoVariables['user']['role']> = {
     admin:       'admin',
-    superviseur: 'superviseur',
+    manager: 'manager',
+    superviseur: 'manager', // compatibilité des JWT émis avant la migration
     operateur:   'operateur',
     technicien:  'technicien',
     livreur:     'livreur',
@@ -175,8 +183,6 @@ export async function verifierBearer(authHeader: string | undefined): Promise<Ve
     viewer:      'technicien',   // legacy
   }
   const role = ROLE_MAP[appMeta.role as string] ?? 'technicien'
-
-  console.log('[auth] ✅', email, '| role:', role, '| jwt_raw:', appMeta.role, '| alg:', alg)
 
   return { ok: true, user: { id: userId, email, role } }
 }

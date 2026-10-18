@@ -5,7 +5,7 @@ import { FabricationOFPanel } from '@/components/production/FabricationOF'
 import { ControleCouts } from '@/components/production/ControleCouts'
 import { useIndicateursProduction } from '@/hooks/useControleCouts'
 import { usePermissions } from '@/hooks/useRbac'
-import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button } from '@forge/ui'
+import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button , NumberInput} from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatDate } from '@/lib/utils'
 import { uniteOptions } from '@/lib/constants'
@@ -308,8 +308,8 @@ export default function Production() {
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Qte prevue *</label>
-            <input
-              type="number"
+            <NumberInput
+
               min="0"
               step="0.01"
               value={form.quantitePrevue}
@@ -352,8 +352,8 @@ export default function Production() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Coût unit.</label>
-                  <input
-                    type="number"
+                  <NumberInput
+
                     min="0"
                     value={form.prixUnitaire}
                     onChange={(e) => setForm((f) => ({ ...f, prixUnitaire: e.target.value }))}
@@ -362,8 +362,8 @@ export default function Production() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Prix shop</label>
-                  <input
-                    type="number"
+                  <NumberInput
+
                     min="0"
                     value={form.prixPublic}
                     onChange={(e) => setForm((f) => ({ ...f, prixPublic: e.target.value }))}

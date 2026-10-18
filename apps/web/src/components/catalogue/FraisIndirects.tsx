@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Ban } from 'lucide-react'
-import { Modal, Button } from '@forge/ui'
+import { Modal, Button , NumberInput} from '@forge/ui'
 import {
   useFraisIndirects, useCreerFraisIndirects, useDesactiverFraisIndirects,
   type Famille, type Modele, type FraisIndirects, type FraisIndirectsPayload,
@@ -72,7 +72,7 @@ export function FraisIndirectsModal({ isOpen, onClose, familles, modeles }: {
             {Object.entries(LIBELLE_MODE).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
 
-          <input className={`${CHAMP} col-span-3`} type="number" min={0} step={form.mode === 'pourcentage' ? 0.5 : 1}
+          <NumberInput mode={form.mode === 'pourcentage' ? 'decimal' : 'integer'} className={`${CHAMP} col-span-3`} min={0} step={form.mode === 'pourcentage' ? 0.5 : 1}
             placeholder={form.mode === 'pourcentage' ? 'taux %' : 'montant FCFA'} value={form.valeur || ''}
             onChange={(e) => maj({ valeur: Number(e.target.value) || 0 })} />
           <select className={`${CHAMP} col-span-4`} value={form.base ?? ''} disabled={form.mode !== 'pourcentage'}

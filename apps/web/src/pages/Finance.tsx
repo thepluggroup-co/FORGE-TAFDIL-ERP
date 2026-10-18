@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   FileText, ReceiptText,
@@ -6,7 +6,7 @@ import {
   AlertCircle, CheckCircle, ChevronLeft, ChevronRight, X,
   Phone, Paperclip, ExternalLink, Loader2, Trash2, RefreshCw,
 } from 'lucide-react'
-import { PageHeader, DataTable, StatusBadge, Button, Modal, SlideOver } from '@forge/ui'
+import { PageHeader, DataTable, StatusBadge, Button, Modal, SlideOver , NumberInput} from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import {
@@ -34,6 +34,7 @@ import { CreditDashboard, CreditLimitForm, PaymentPlanDetail, PaymentPlanWizard 
 import type { Commande } from '@/hooks/useCommandes'
 import { useAllCreditLimits, usePaymentPlans } from '@/hooks/useCredit'
 import type { CreditLimitWithClient, PaymentPlan } from '@/hooks/useCredit'
+import { publicAsset } from '@/lib/public-asset'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -136,7 +137,7 @@ function InvoicePreview({ facture }: { facture: PreviewableFacture }) {
         {/* Coordonnées : packages/shared/src/entreprise.ts, identiques au PDF */}
         <div className="flex justify-between items-start mb-8">
           <div className="flex items-start gap-3">
-            <img src="/tafdil-logo.png" alt="TAFDIL" className="h-16 w-16 object-contain shrink-0" />
+            <img src={publicAsset('tafdil-logo.png')} alt="TAFDIL" className="h-16 w-16 object-contain shrink-0" />
             <div>
               <div className="text-forge-dark text-base font-sans font-bold">{TAFDIL_ENTREPRISE.nom}</div>
               <div className="text-gray-400 text-xs font-sans mt-0.5">{TAFDIL_ENTREPRISE.adresse}</div>
@@ -511,9 +512,9 @@ function NouvelleFactureSlideOver({
                 <input placeholder="Désignation" value={l.designation} onChange={(e) => updateLigne(i, 'designation', e.target.value)}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
               </div>
-              <input type="number" placeholder="Qté" value={l.quantite || ''} onChange={(e) => updateLigne(i, 'quantite', +e.target.value)}
+              <NumberInput placeholder="Qté" value={l.quantite || ''} onChange={(e) => updateLigne(i, 'quantite', +e.target.value)}
                 className="w-16 border border-gray-200 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
-              <input type="number" placeholder="P.U. HT" value={l.prix_unitaire_ht_xaf || ''} onChange={(e) => updateLigne(i, 'prix_unitaire_ht_xaf', +e.target.value)}
+              <NumberInput placeholder="P.U. HT" value={l.prix_unitaire_ht_xaf || ''} onChange={(e) => updateLigne(i, 'prix_unitaire_ht_xaf', +e.target.value)}
                 className="w-32 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
               <div className="w-28 pt-2 text-sm font-semibold text-right text-gray-700 shrink-0">
                 {formatXAF(l.quantite * l.prix_unitaire_ht_xaf)}
@@ -786,7 +787,7 @@ function RemboursementModal({ isOpen, onClose, credit }: { isOpen: boolean; onCl
           {type === 'partiel' && (
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant remboursé (FCFA)</label>
-              <input type="number" value={montant} onChange={(e) => setMontant(e.target.value)}
+              <NumberInput value={montant} onChange={(e) => setMontant(e.target.value)}
                 max={credit.solde_restant_xaf as number}
                 placeholder={`Max : ${formatXAF(credit.solde_restant_xaf as number)}`}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
@@ -868,7 +869,7 @@ function PaiementFactureModal({ isOpen, onClose, facture }: { isOpen: boolean; o
         {type === 'partiel' && (
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant encaisse (FCFA)</label>
-            <input type="number" value={montant} onChange={(e) => setMontant(e.target.value)}
+            <NumberInput value={montant} onChange={(e) => setMontant(e.target.value)}
               max={solde}
               placeholder={`Max : ${formatXAF(solde)}`}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
@@ -1314,8 +1315,8 @@ function NouveauVersementModal({
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant (FCFA)</label>
-            <input
-              type="number"
+            <NumberInput
+
               value={montant}
               onChange={e => setMontant(e.target.value)}
               max={solde}
@@ -1493,12 +1494,12 @@ function NouvelleChargeModal({
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Montant HT</label>
-            <input type="number" min="0" value={form.montant_ht_xaf} onChange={(e) => setForm({ ...form, montant_ht_xaf: e.target.value })}
+            <NumberInput min="0" value={form.montant_ht_xaf} onChange={(e) => setForm({ ...form, montant_ht_xaf: e.target.value })}
               className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">TVA déductible</label>
-            <input type="number" min="0" value={form.tva_xaf} onChange={(e) => setForm({ ...form, tva_xaf: e.target.value })}
+            <NumberInput min="0" value={form.tva_xaf} onChange={(e) => setForm({ ...form, tva_xaf: e.target.value })}
               className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
           </div>
         </div>
@@ -1626,7 +1627,7 @@ function NouvelleSortieModal({
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Montant</label>
-            <input type="number" min="0" value={form.montant_xaf} onChange={(e) => setForm({ ...form, montant_xaf: e.target.value })}
+            <NumberInput min="0" value={form.montant_xaf} onChange={(e) => setForm({ ...form, montant_xaf: e.target.value })}
               className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30" />
           </div>
           <div>
@@ -2813,8 +2814,8 @@ export default function Finance() {
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <input
-                        type="number"
+                      <NumberInput
+
                         value={exerciceCompta}
                         onChange={(e) => setExerciceCompta(e.target.value)}
                         className="w-28 rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#C62828]/30"

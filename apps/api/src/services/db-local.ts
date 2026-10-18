@@ -502,6 +502,7 @@ export function localCreateDevis(opts: {
   validite_jours?:     number
   acompte_pct?:        number
   conditions_paiement?: string
+  note_client?: string
   notes?:              string
   lignes: Array<{ produit_id?: string; designation: string; description?: string; categorie?: string; unite?: string; quantite: number; prix_unitaire_ht_xaf: number }>
   user_id?: string
@@ -523,7 +524,8 @@ export function localCreateDevis(opts: {
     date_validite:       opts.date_validite,
     validite_jours:      opts.validite_jours ?? 30,
     acompte_pct:         opts.acompte_pct ?? 0,
-    conditions_paiement: opts.conditions_paiement ?? 'Virement bancaire',
+    conditions_paiement: opts.conditions_paiement ?? '',
+    note_client:         opts.note_client ?? null,
     notes:               opts.notes ?? null,
     total_ht_xaf:        ht,
     tva_xaf:             tva,
@@ -555,6 +557,29 @@ export function localCreateDevis(opts: {
   })
 
   return { ...devis, lignes, offline: true }
+}
+
+export function localGetDevisBrouillon(userId: string): { contenu: unknown; updated_at: string; statut: string } | null {
+  const row = getDb()?.prepare('SELECT contenu, updated_at, statut FROM devis_brouillons WHERE user_id = ?').get(userId) as { contenu: string; updated_at: string; statut: string } | undefined
+  if (!row) return null
+  try { return { ...row, contenu: JSON.parse(row.contenu) as unknown } } catch { return null }
+}
+
+export function localSaveDevisBrouillon(userId: string, contenu: unknown) {
+  const d = getDb()
+  if (!d) throw new Error('SQLite non disponible')
+  const record = { user_id: userId, statut: 'brouillon', contenu: JSON.stringify(contenu), updated_at: NOW() }
+  d.prepare(`INSERT INTO devis_brouillons (user_id, statut, contenu, updated_at) VALUES (@user_id, @statut, @contenu, @updated_at)
+    ON CONFLICT(user_id) DO UPDATE SET statut=excluded.statut, contenu=excluded.contenu, updated_at=excluded.updated_at`).run(record)
+  enqueueSync('devis_brouillons', 'UPDATE', userId, { ...record, contenu })
+  return { success: true }
+}
+
+export function localDeleteDevisBrouillon(userId: string) {
+  const d = getDb()
+  if (!d) throw new Error('SQLite non disponible')
+  d.prepare('DELETE FROM devis_brouillons WHERE user_id = ?').run(userId)
+  enqueueSync('devis_brouillons', 'DELETE', userId, { user_id: userId })
 }
 
 /** Crée une commande offline. */

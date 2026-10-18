@@ -1,3 +1,4 @@
+import { NumberInput } from '@forge/ui'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { BrowserMultiFormatReader } from '@zxing/browser'
@@ -447,11 +448,11 @@ export function BoutiquePage() {
             <div className="grid grid-cols-2 gap-3">
               <label className="space-y-1 text-xs text-gray-600">
                 Qté
-                <input type="number" min={1} value={qty} onChange={e => setQty(Math.max(1, Number(e.target.value)))} className="w-full rounded-2xl border px-3 py-2" />
+                <NumberInput min={1} value={qty} onChange={e => setQty(Math.max(1, Number(e.target.value)))} className="w-full rounded-2xl border px-3 py-2" />
               </label>
               <label className="space-y-1 text-xs text-gray-600">
                 Prix de vente
-                <input type="number" min={0} value={prixVente ?? 0} onChange={e => setPrixVente(Number(e.target.value))} className="w-full rounded-2xl border px-3 py-2" />
+                <NumberInput min={0} value={prixVente ?? 0} onChange={e => setPrixVente(Number(e.target.value))} className="w-full rounded-2xl border px-3 py-2" />
               </label>
             </div>
 
@@ -548,7 +549,7 @@ export function BoutiquePage() {
 
               <label className="space-y-1 text-xs text-gray-600">
                 Montant payé
-                <input type="number" min={0} value={paid ?? ''} onChange={e => setPaid(e.target.value === '' ? undefined : Number(e.target.value))} className="w-full rounded-2xl border px-3 py-2" />
+                <NumberInput min={0} value={paid ?? ''} onChange={e => setPaid(e.target.value === '' ? undefined : Number(e.target.value))} className="w-full rounded-2xl border px-3 py-2" />
               </label>
               <label className="space-y-1 text-xs text-gray-600">
                 Note paiement

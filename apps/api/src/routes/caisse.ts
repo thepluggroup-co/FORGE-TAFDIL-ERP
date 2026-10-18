@@ -93,7 +93,7 @@ const ligneSchema = z.object({
 const paiementSchema = z.object({
   mode:             z.enum(['espece', 'orange_money', 'mtn_momo', 'credit', 'carte']),
   montant_xaf:      z.number().int().positive(),
-  montant_recu_xaf: z.number().int().min(0).optional(),
+  montant_recu_xaf: z.number().int().min(0).nullable().optional(),
   reference:        z.string().optional(),
 })
 
@@ -111,7 +111,7 @@ const createTicketSchema = z.object({
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function isResponsable(role: HonoVariables['user']['role']): boolean {
-  return role === 'admin' || role === 'superviseur'
+  return role === 'admin' || role === 'manager'
 }
 
 /** Numérotation ticket — même mécanisme que genererNumero() dans finance-core.service.ts. */

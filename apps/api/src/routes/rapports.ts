@@ -474,7 +474,7 @@ router.get('/balance', requirePermission('REPORTS', 'READ'), async (c) => {
 // GET /api/rapports/declarations/tva?mois=2026-05
 // ══════════════════════════════════════════════════════════════════════════════
 
-router.get('/bilan', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/bilan', requireRole(['admin', 'manager']), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
   const { debut, fin } = exercicePlage(exercice)
 
@@ -584,7 +584,7 @@ router.get('/bilan.xls', requirePermission('REPORTS', 'EXPORT'), async (c) => {
   }
 })
 
-router.get('/resultat', requireRole(['admin', 'superviseur']), async (c) => {
+router.get('/resultat', requireRole(['admin', 'manager']), async (c) => {
   const exercice = c.req.query('exercice') ?? String(new Date().getFullYear())
   const { debut, fin } = exercicePlage(exercice)
 

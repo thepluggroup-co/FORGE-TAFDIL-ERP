@@ -10,12 +10,13 @@ import { requireRole } from '../middleware/rbac'
 import { requirePermission } from '../middleware/permission.middleware'
 import { writeAuditLog } from '../services/rbacService'
 import { generateDevisPDF, uploadPDF, type PdfRessourcesSnapshot } from '../services/pdf.service'
-import { localCreateDevis, localCreateCommande, getClientsLocal, getCommandesLocal } from '../services/db-local'
+import { localCreateDevis, localCreateCommande, getClientsLocal, getCommandesLocal, localGetDevisBrouillon, localSaveDevisBrouillon, localDeleteDevisBrouillon } from '../services/db-local'
 import { withOfflineFallback } from '../services/offline-fallback'
 import { notifyStatutChange } from '../services/notifications'
 import { notifyCommandeSms } from '../services/sms.service'
 import { enregistrerPaiementCommande, ensureFactureForCommande, solderCreditsForCommande, syncCreditForCommande } from '../services/finance-core.service'
 import { enqueueEmail, notifyWhatsApp, sendEmailDirect } from '../services/email-queue.service'
+import { escapeHtml } from '../services/email.service'
 import { verifierEligibiliteCredit } from '../services/credit-eligibility.service'
 import { ensureClient } from '../services/client-sync.service'
 import { resolveCommandeContext, chargerJobsProductionCommande } from '../services/commande-workflow.service'
@@ -108,8 +109,8 @@ const devisLigneSchema = z.object({
   description:          z.string().optional(),
   categorie:            z.enum(['materiaux', 'main_oeuvre', 'equipement', 'autre']).default('materiaux'),
   unite:                z.string().default('unité'),
-  quantite:             z.number().positive(),
-  prix_unitaire_ht_xaf: z.number().min(0),
+  quantite:             z.number().int().positive(),
+  prix_unitaire_ht_xaf: z.number().int().min(0),
   remise_type:          z.enum(['pct', 'forfait']).optional(),
   remise_valeur:        z.number().min(0).optional(),
   remise_motif:         z.string().optional(),
@@ -122,7 +123,7 @@ const devisLigneSchema = z.object({
   // est conservée à côté de la valeur retenue (quantite/prix_unitaire_ht_xaf ci-dessus),
   // avec la trace de qui a ajusté, quand, et pourquoi.
   quantite_calculee:      z.number().optional(),
-  cout_calcule_xaf:       z.number().optional(),
+  cout_calcule_xaf:       z.number().int().nullable().optional(),
   ajuste_manuellement:    z.boolean().default(false),
   motif_ajustement:       z.string().optional(),
 })
@@ -139,9 +140,11 @@ const devisSchema = z.object({
   validite_jours:       z.number().int().default(30),
   acompte_pct:          z.number().min(0).max(100).default(0),
   condition_paiement_id: z.string().uuid(),
-  remise_globale_xaf:   z.number().min(0).default(0),
+  remise_globale_xaf:   z.number().int().min(0).default(0),
   remise_globale_motif: z.string().optional(),
   notes:                z.string().optional(),
+  note_client:          z.string().max(1200).optional(),
+  conditions_paiement:  z.string().max(1200).optional(),
   lignes:               z.array(devisLigneSchema).min(1),
   // §21/§32 — optionnels, additifs : un devis créé sans ces champs se comporte
   // exactement comme avant (§46 rétrocompatibilité). Un devis créé depuis
@@ -157,8 +160,8 @@ const commandeLigneSchema = z.object({
   produit_id:           z.string().optional(),
   designation:          z.string().min(1),
   unite:                z.string().default('unité'),
-  quantite:             z.number().positive(),
-  prix_unitaire_ht_xaf: z.number().min(0),
+  quantite:             z.number().int().positive(),
+  prix_unitaire_ht_xaf: z.number().int().min(0),
   remise_type:          z.enum(['pct', 'forfait']).optional(),
   remise_valeur:        z.number().min(0).optional(),
   remise_motif:         z.string().optional(),
@@ -176,9 +179,9 @@ const commandeSchema = z.object({
   date_commande:         z.string(),
   date_livraison_prevue: z.string().optional(),
   notes:                 z.string().optional(),
-  acompte_recu_xaf:      z.number().min(0).default(0),
+  acompte_recu_xaf:      z.number().int().min(0).default(0),
   condition_paiement_id: z.string().uuid().optional(),
-  remise_globale_xaf:    z.number().min(0).default(0),
+  remise_globale_xaf:    z.number().int().min(0).default(0),
   remise_globale_motif:  z.string().optional(),
   lignes:                z.array(commandeLigneSchema).min(1),
 })
@@ -267,6 +270,8 @@ function mapDevis(row: any) {
     montant_ttc_xaf:      row.total_ttc_xaf ?? 0,
     pdf_url:              row.pdf_url ?? null,
     notes:                row.notes ?? null,
+    note_client:          row.note_client ?? null,
+    conditions_paiement:  row.conditions_paiement ?? null,
     source_web:           typeof row.notes === 'string' && row.notes.startsWith('[SOURCE WEB]'),
     expire:               row.date_validite ? row.date_validite < today : false,
     jours_restants,
@@ -709,7 +714,7 @@ async function verifierEligibiliteRemise(
   }
 
   if (userRole === 'operateur') {
-    return { eligible: false, raison: 'Remise > 20% ou > 200 000 XAF — autorisation superviseur ou DG requise.' }
+    return { eligible: false, raison: 'Remise > 20% ou > 200 000 XAF — autorisation manager ou DG requise.' }
   }
   if (!clientId) {
     return { eligible: false, raison: 'Remise > 20% : client enregistré requis (pas de client anonyme).' }
@@ -1023,6 +1028,53 @@ router.get('/devis', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   })
 })
 
+router.get('/devis/reglages', requirePermission('COMMERCIAL', 'READ'), async (c) => {
+  const { data, error } = await db.from('devis_reglages').select('*').eq('id', 'singleton').maybeSingle()
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json(data ?? { validite_jours: 30, conditions_paiement: '', condition_paiement_id: null, acompte_pct: 30 })
+})
+
+router.patch('/devis/reglages', requirePermission('COMMERCIAL', 'UPDATE'), async (c) => {
+  const body = await c.req.json()
+  const validite_jours = Math.max(1, Math.min(365, Math.trunc(Number(body.validite_jours) || 30)))
+  const acompte_pct = Math.max(0, Math.min(100, Number(body.acompte_pct) || 0))
+  const { data, error } = await db.from('devis_reglages').upsert({ id: 'singleton', validite_jours, acompte_pct, condition_paiement_id: body.condition_paiement_id ?? null, conditions_paiement: String(body.conditions_paiement ?? '').slice(0, 1200), updated_at: new Date().toISOString() }).select().single()
+  if (error) return c.json({ error: error.message }, 500)
+  return c.json(data)
+})
+
+router.get('/devis/brouillon-courant', requirePermission('COMMERCIAL', 'READ'), async (c) => {
+  const { data, error } = await db.from('devis_brouillons').select('contenu, updated_at').eq('user_id', c.get('user').id).maybeSingle()
+  if (error) {
+    const local = localGetDevisBrouillon(c.get('user').id)
+    if (local) return c.json(local)
+    return c.json({ error: error.message }, 500)
+  }
+  return c.json(data ?? null)
+})
+
+router.put('/devis/brouillon-courant', requirePermission('COMMERCIAL', 'UPDATE'), async (c) => {
+  const contenu = await c.req.json()
+  const userId = c.get('user').id
+  const result = await withOfflineFallback('PUT /devis/brouillon-courant', async () => {
+    const { error } = await db.from('devis_brouillons').upsert({ user_id: userId, statut: 'brouillon', contenu, updated_at: new Date().toISOString() })
+    if (error) throw Object.assign(new Error(error.message), { code: error.code })
+    return { success: true }
+  }, () => localSaveDevisBrouillon(userId, contenu))
+  return c.json(result)
+})
+
+router.delete('/devis/brouillon-courant', requirePermission('COMMERCIAL', 'UPDATE'), async (c) => {
+  const userId = c.get('user').id
+  try {
+    const { error } = await db.from('devis_brouillons').delete().eq('user_id', userId)
+    if (error) throw Object.assign(new Error(error.message), { code: error.code })
+  } catch {
+    localDeleteDevisBrouillon(userId)
+  }
+  return c.body(null, 204)
+})
+
 router.get('/devis/:id', requirePermission('COMMERCIAL', 'READ'), async (c) => {
   const { id } = c.req.param()
 
@@ -1121,6 +1173,8 @@ router.post('/devis', requirePermission('COMMERCIAL', 'CREATE'), zValidator('jso
           condition_paiement_id: body.condition_paiement_id ?? null,
           remise_globale_motif: body.remise_globale_motif ?? null,
           notes: body.notes ?? null,
+          note_client: body.note_client ?? null,
+          conditions_paiement: body.conditions_paiement ?? null,
           // §21/§32 — additifs, absents en mode manuel classique (§46 rétrocompatibilité)
           fiche_technique_id:  body.fiche_technique_id ?? null,
           config_snapshot:     body.config_snapshot ?? null,
@@ -1181,12 +1235,14 @@ router.post('/devis', requirePermission('COMMERCIAL', 'CREATE'), zValidator('jso
 
       let pdf_url: string | null = null
       try {
+        const { data: conditionPaiement } = await db.from('conditions_paiement').select('libelle').eq('id', body.condition_paiement_id).maybeSingle()
         const dv = devis as { total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number }
         const pdfBuf = await generateDevisPDF(
           { numero, date_emission: body.date_emission, date_validite: body.date_validite,
             validite_jours: body.validite_jours, total_ht_xaf: dv.total_ht_xaf,
             tva_xaf: dv.tva_xaf, total_ttc_xaf: dv.total_ttc_xaf,
-            notes: body.notes ?? null,
+            notes: body.notes ?? null, note_client: body.note_client ?? null,
+            conditions_paiement: body.conditions_paiement || conditionPaiement?.libelle || null, acompte_pct: body.acompte_pct,
             ressources_snapshot: (body.ressources_snapshot ?? null) as PdfRessourcesSnapshot | null },
           {
             nom: body.client_nom,
@@ -1208,7 +1264,7 @@ router.post('/devis', requirePermission('COMMERCIAL', 'CREATE'), zValidator('jso
       client_nom: body.client_nom, client_id: body.client_id,
       date_emission: body.date_emission, date_validite: body.date_validite,
       validite_jours: body.validite_jours, acompte_pct: body.acompte_pct,
-      notes: body.notes,
+      notes: body.notes, note_client: body.note_client, conditions_paiement: body.conditions_paiement,
       lignes: body.lignes, user_id: user.id,
     }),
   )
@@ -1305,6 +1361,8 @@ router.put('/devis/:id', requirePermission('COMMERCIAL', 'UPDATE'), zValidator('
     'date_emission',
     'date_validite',
     'validite_jours',
+    'conditions_paiement',
+    'note_client',
     'acompte_pct',
     'condition_paiement_id',
     'remise_globale_xaf',
@@ -1452,7 +1510,7 @@ async function chargerDevisPdf(id: string) {
     .select(`
       statut, numero, client_nom, client_id,
       date_emission, date_validite, validite_jours,
-      acompte_pct, conditions_paiement, condition_paiement_id,
+      acompte_pct, conditions_paiement, condition_paiement_id, note_client,
       cp:conditions_paiement!condition_paiement_id(libelle),
       total_ht_xaf, tva_xaf, total_ttc_xaf, notes, ressources_snapshot,
       devis_lignes(designation, unite, quantite, prix_unitaire_ht_xaf, total_ht_xaf, ordre, configuration)
@@ -1466,11 +1524,12 @@ async function chargerDevisPdf(id: string) {
   const d = devis as {
     statut: string; numero: string; client_nom: string; client_id: string | null
     date_emission: string; date_validite: string; validite_jours: number; acompte_pct: number
-    conditions_paiement: string | null; cp: { libelle: string } | null
+    conditions_paiement: string | null; cp: { libelle: string } | { libelle: string }[] | null
     total_ht_xaf: number; tva_xaf: number; total_ttc_xaf: number
-    notes: string | null; ressources_snapshot: PdfRessourcesSnapshot | null
+    notes: string | null; note_client: string | null; ressources_snapshot: PdfRessourcesSnapshot | null
     devis_lignes: LigneRow[]
   }
+  const conditionPaiementLibelle = Array.isArray(d.cp) ? d.cp[0]?.libelle : d.cp?.libelle
 
   // Récupérer les détails du client pour le PDF et l'email
   let clientEmail:     string | null = null
@@ -1517,6 +1576,9 @@ async function chargerDevisPdf(id: string) {
         date_emission:  d.date_emission,
         date_validite:  d.date_validite,
         validite_jours: d.validite_jours,
+        conditions_paiement: conditionPaiementLibelle ?? d.conditions_paiement,
+        note_client: d.note_client,
+        acompte_pct: d.acompte_pct,
         total_ht_xaf:   d.total_ht_xaf,
         tva_xaf:        d.tva_xaf,
         total_ttc_xaf:  d.total_ttc_xaf,
@@ -1768,7 +1830,7 @@ router.post('/devis/:id/envoyer-approbation', requirePermission('COMMERCIAL', 'U
   <div style="background:#F9FAFB;border:1px solid #E5E7EB;border-radius:8px;padding:16px 20px;margin-bottom:24px;">
     <p style="margin:0 0 10px;color:#374151;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Conditions de paiement</p>
     <p style="margin:0;color:#6B7280;font-size:12px;line-height:1.85;">
-      ${d.acompte_pct > 0 ? `• Acompte : ${d.acompte_pct}% à la commande — ${acompteXaf.toLocaleString('fr-FR')}&nbsp;XAF<br>` : ''}• Règlement : ${d.cp?.libelle ?? d.conditions_paiement ?? 'À confirmer'}<br>
+      ${d.acompte_pct > 0 ? `• Acompte : ${d.acompte_pct}% à la commande — ${acompteXaf.toLocaleString('fr-FR')}&nbsp;XAF<br>` : ''}• Règlement : ${(Array.isArray(d.cp) ? d.cp[0]?.libelle : d.cp?.libelle) ?? d.conditions_paiement ?? 'À confirmer'}<br>
       • Devis valable ${d.validite_jours} jours à compter de la date d'émission
     </p>
   </div>
@@ -1893,6 +1955,10 @@ async function appliquerDecisionClient(
   if (directeurEmail) {
     const accentColor = isAccepted ? '#15803d' : '#C62828'
     const decisionLabel = isAccepted ? '✅ APPROUVÉ' : '❌ REFUSÉ'
+    // Le commentaire vient d'un lien public : jamais de HTML brut dans l'email
+    const clientNomHtml   = escapeHtml(d.client_nom ?? '')
+    const numeroHtml      = escapeHtml(d.numero ?? '')
+    const commentaireHtml = body.commentaire ? escapeHtml(body.commentaire) : ''
     await enqueueEmail({
       destinataire:   directeurEmail,
       sujet:          `${decisionLabel} — Devis ${d.numero} par ${d.client_nom}`,
@@ -1902,17 +1968,17 @@ async function appliquerDecisionClient(
 <table width="560" cellpadding="0" cellspacing="0" style="margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 8px rgba(0,0,0,.08);">
   <tr><td style="background:${accentColor};padding:22px 28px;">
     <p style="margin:0;color:#ffffff;font-size:20px;font-weight:bold;">${decisionLabel}</p>
-    <p style="margin:6px 0 0;color:rgba(255,255,255,.8);font-size:13px;">Devis ${d.numero} — ${decisionDate}</p>
+    <p style="margin:6px 0 0;color:rgba(255,255,255,.8);font-size:13px;">Devis ${numeroHtml} — ${decisionDate}</p>
   </td></tr>
   <tr><td style="padding:26px 28px;">
     <p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.7;">
-      Le client <strong>${d.client_nom}</strong> a <strong>${isAccepted ? 'approuvé' : 'refusé'}</strong>
-      le devis <strong>${d.numero}</strong> le ${decisionDate}.
+      Le client <strong>${clientNomHtml}</strong> a <strong>${isAccepted ? 'approuvé' : 'refusé'}</strong>
+      le devis <strong>${numeroHtml}</strong> le ${decisionDate}.
     </p>
-    ${body.commentaire ? `
+    ${commentaireHtml ? `
     <div style="background:#F9FAFB;border-left:4px solid #E5E7EB;border-radius:4px;padding:12px 16px;margin-bottom:18px;">
       <p style="margin:0 0 4px;color:#6B7280;font-size:12px;font-weight:600;">Commentaire du client :</p>
-      <p style="margin:0;color:#374151;font-size:13px;font-style:italic;">"${body.commentaire}"</p>
+      <p style="margin:0;color:#374151;font-size:13px;font-style:italic;">"${commentaireHtml}"</p>
     </div>` : ''}
     ${isAccepted
       ? '<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;padding:14px 18px;"><p style="margin:0;color:#15803d;font-size:14px;font-weight:600;">Action commerciale requise : contactez le client pour enclencher le paiement/acompte, puis transformez le devis en commande dans l\'ERP.</p></div>'
@@ -1950,13 +2016,19 @@ async function appliquerDecisionClient(
 
 }
 
+const decisionLienPublicSchema = z.object({
+  decision:    z.enum(['accepte', 'refuse']),
+  commentaire: z.string().trim().max(1000).nullish(),
+})
+
 publicDevisRouter.post('/devis/approuver/:token', async (c) => {
   const { token } = c.req.param()
-  const body = await c.req.json<{ decision: 'accepte' | 'refuse'; commentaire?: string }>()
-
-  if (!['accepte', 'refuse'].includes(body.decision)) {
+  // Route publique : le corps est validé (type et longueur) avant tout usage
+  const saisie = decisionLienPublicSchema.safeParse(await c.req.json().catch(() => null))
+  if (!saisie.success) {
     return c.json({ error: 'Décision invalide — accepte ou refuse', code: 'INVALID_DECISION' }, 422)
   }
+  const body = saisie.data
 
   const { data } = await db
     .from('devis')
@@ -2767,7 +2839,7 @@ router.delete('/commandes/:id', requireRole(['admin']), async (c) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 const paiementCommandeSchema = z.object({
-  montant_xaf:   z.number().positive(),
+  montant_xaf:   z.number().int().positive(),
   methode:       z.enum(['mobile_money', 'virement', 'especes', 'cheque', 'NOKASH']).default('mobile_money'),
   reference_ext: z.string().optional(),
   date_paiement: z.string(),
@@ -3108,7 +3180,7 @@ if (erpStatut) {
           if (lignesJson.length > 0) {
             await db.from('bons_sortie_lignes').insert(lignesJson)
           }
-        } 
+        }
       } else if (!(bonExist as { commande_id?: string | null }).commande_id && cmd.erp_commande_id) {
         await db.from('bons_sortie')
           .update({ commande_id: cmd.erp_commande_id, updated_at: new Date().toISOString() })

@@ -1,3 +1,4 @@
+import { NumberInput } from '@forge/ui'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { BrowserMultiFormatReader } from '@zxing/browser'
 import { NotFoundException } from '@zxing/library'
@@ -60,8 +61,8 @@ function OuvertureSession({ onOuverte }: { onOuverte: (s: CaisseSession) => void
           <h2 className="text-lg font-bold text-gray-900">Ouverture de caisse</h2>
           <p className="text-sm text-gray-500 mt-1">Saisissez le fond de caisse pour commencer.</p>
         </div>
-        <input
-          type="number"
+        <NumberInput
+
           inputMode="numeric"
           value={fond}
           onChange={(e) => setFond(Math.max(0, Number(e.target.value)))}
@@ -198,8 +199,8 @@ function FermetureScreen({ session, onFermee, onCancel }: {
       <div className="w-full bg-white rounded-t-3xl p-5 space-y-4 safe-bottom">
         <h2 className="text-base font-semibold text-center">Fermer la caisse</h2>
         <p className="text-sm text-gray-500 text-center">Comptez les espèces et saisissez le montant exact.</p>
-        <input
-          type="number"
+        <NumberInput
+
           inputMode="numeric"
           value={fond}
           onChange={(e) => setFond(Math.max(0, Number(e.target.value)))}
@@ -576,8 +577,8 @@ function VenteScreen({ session, onFermerCaisse }: { session: CaisseSession; onFe
                   // Un seul champ : ce que le client tend. Le montant appliqué au
                   // ticket est calculé (plafonné au reste dû) — jamais saisi à part.
                   <>
-                    <input
-                      type="number" inputMode="numeric" value={p.montant_recu_xaf ?? ''}
+                    <NumberInput
+                      inputMode="numeric" value={p.montant_recu_xaf ?? ''}
                       onChange={(e) => setPaiements((prev) => prev.map((x, xi) => xi === i ? { ...x, montant_recu_xaf: Math.max(0, Number(e.target.value)) } : x))}
                       className="w-full rounded-xl border border-gray-200 px-3 py-2"
                       placeholder="Montant reçu du client"
@@ -588,8 +589,8 @@ function VenteScreen({ session, onFermerCaisse }: { session: CaisseSession; onFe
                     </div>
                   </>
                 ) : (
-                  <input
-                    type="number" inputMode="numeric" value={p.montant_xaf}
+                  <NumberInput
+                    inputMode="numeric" value={p.montant_xaf}
                     onChange={(e) => setPaiements((prev) => prev.map((x, xi) => xi === i ? { ...x, montant_xaf: Math.max(0, Number(e.target.value)) } : x))}
                     className="w-full rounded-xl border border-gray-200 px-3 py-2"
                     placeholder="Montant"

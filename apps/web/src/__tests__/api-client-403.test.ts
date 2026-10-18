@@ -28,7 +28,7 @@ describe('apiClient — 403', () => {
   })
 
   it('rôle requis (requireRole) : aucun toast, message simple pour l\'appelant', async () => {
-    repondre403({ error: 'Accès refusé', code: 'FORBIDDEN', details: 'Rôle requis : admin. Rôle actuel : superviseur' })
+    repondre403({ error: 'Accès refusé', code: 'FORBIDDEN', details: 'Rôle requis : admin. Rôle actuel : manager' })
     await expect(apiClient.post('/api/factures', {})).rejects.toThrow('Action non autorisée pour votre profil')
     expect(toast.warning).not.toHaveBeenCalled()
   })

@@ -1,15 +1,7 @@
 import React from 'react'
 import { TopBar } from '../components/TopBar'
 import { useAuth } from '../context/AuthContext'
-import { APP_NAME, COMPANY_NAME, COMPANY_LOCATION } from '@forge/shared'
-
-const roleLabel: Record<string, string> = {
-  admin:       'Administrateur',
-  superviseur: 'Superviseur',
-  operateur:   'Opérateur',
-  apprenant:   'Apprenant',
-  livreur:     'Livreur',
-}
+import { APP_NAME, COMPANY_NAME, COMPANY_LOCATION, ROLE_LABELS } from '@forge/shared'
 
 export function ProfilePage() {
   const { user, logout } = useAuth()
@@ -29,7 +21,7 @@ export function ProfilePage() {
           <h2 className="mt-3 text-lg font-bold text-gray-900">{user.name}</h2>
           <p className="text-sm text-gray-500">{user.email}</p>
           <span className="mt-2 inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-[#C62828]/10 text-[#C62828]">
-            {roleLabel[user.role]}
+            {ROLE_LABELS[user.role] ?? user.role}
           </span>
         </div>
 

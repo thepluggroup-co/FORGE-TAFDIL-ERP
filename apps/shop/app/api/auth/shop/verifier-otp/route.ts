@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { signToken, COOKIE_NAME } from '@/lib/auth'
+import { signToken, empreinteOtp, COOKIE_NAME } from '@/lib/auth'
+
+const MAX_ESSAIS = 5
 
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, '')
@@ -20,7 +22,7 @@ export async function POST(req: NextRequest) {
   // Récupérer la session OTP active
   const { data: session, error: errSession } = await db
     .from('otp_sessions')
-    .select('id, code, expires_at')
+    .select('*') // inclut « tentatives » quand la colonne existe (migration 20261017)
     .eq('telephone', phone)
     .gt('expires_at', new Date().toISOString())
     .order('created_at', { ascending: false })
@@ -31,7 +33,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Code expiré ou introuvable. Demandez un nouveau code.' }, { status: 401 })
   }
 
-  if (String(code).trim() !== String(session.code).trim()) {
+  if ((await empreinteOtp(phone, String(code))) !== String(session.code)) {
+    // Essais limités : un code à 6 chiffres sans limite d'essais se devine par
+    // force brute en quelques minutes. Sans la colonne « tentatives » (migration
+    // 20261017 pas encore appliquée), le code est invalidé dès la première erreur.
+    const tentatives = 'tentatives' in session ? Number(session.tentatives ?? 0) + 1 : MAX_ESSAIS
+    if (tentatives >= MAX_ESSAIS) {
+      await db.from('otp_sessions').delete().eq('id', session.id)
+      return NextResponse.json({ error: 'Code incorrect. Demandez un nouveau code.' }, { status: 401 })
+    }
+    await db.from('otp_sessions').update({ tentatives }).eq('id', session.id)
     return NextResponse.json({ error: 'Code incorrect' }, { status: 401 })
   }
 

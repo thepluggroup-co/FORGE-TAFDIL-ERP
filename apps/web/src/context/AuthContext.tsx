@@ -1,15 +1,19 @@
-import React, { createContext, useContext, useEffect, useState } from 'react'
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { User, Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
-import { setApiToken, API_BASE } from '@/lib/api-client'
+import { createOfflineAuth, localOfflineAuthStorage, OFFLINE_AUTH_MESSAGES } from '@forge/shared'
+import type { OfflineCredentialKind } from '@forge/shared'
+import { setApiToken, refreshOfflineCache, syncOfflineWrites, API_BASE } from '@/lib/api-client'
+import { setOfflineCacheUser } from '@/lib/offline-cache'
 
-export type AppRole = 'admin' | 'superviseur' | 'operateur' | 'technicien' | 'caissier'
+export type AppRole = 'admin' | 'manager' | 'operateur' | 'technicien' | 'caissier' | 'livreur' | 'apprenant'
 
-const VALID_ROLES: AppRole[] = ['admin', 'superviseur', 'operateur', 'technicien', 'caissier']
+const VALID_ROLES: AppRole[] = ['admin', 'manager', 'operateur', 'technicien', 'caissier', 'livreur', 'apprenant']
 
 const LEGACY_ROLE_MAP: Record<string, AppRole> = {
   directeur:   'admin',
-  superviseur: 'superviseur',
+  manager: 'manager',
+  superviseur: 'manager', // compatibilité session jusqu'au renouvellement du JWT
   operateur:   'operateur',
   technicien:  'technicien',
   caissier:    'caissier',
@@ -50,7 +54,10 @@ function readCachedSession(): { user: User; access_token: string; role: AppRole 
 
 // Initialize synchronously so there is zero loading flash for returning users.
 const _cached = readCachedSession()
-if (_cached) setApiToken(_cached.access_token)
+if (_cached) {
+  setApiToken(_cached.access_token)
+  setOfflineCacheUser(_cached.user.id)
+}
 
 // ── Pont session → main process Electron (PROMPT 5) ──────────────────────────
 // Le SyncManager (apps/desktop/src/main/ipc/sync-handler.ts) tourne dans le
@@ -80,6 +87,30 @@ function syncElectronSession(session: Session | null, role: AppRole | null) {
   }
 }
 
+// ── Connexion hors ligne (desktop) ────────────────────────────────────────────
+// packages/shared/src/offline-auth.ts : après une connexion en ligne réussie,
+// une empreinte des identifiants et le profil sont gardés sur le poste. Sans
+// réseau, signIn / signInWithPhonePin vérifient contre cette empreinte.
+// Réservé à Electron — dans un navigateur, rien n'est conservé.
+interface OfflineProfile { user: User; role: AppRole | null; nom: string | null }
+
+const offlineAuth = isElectron ? createOfflineAuth<OfflineProfile>(localOfflineAuthStorage()) : null
+
+/** Copie minimale : pas de jetons, seulement de quoi réafficher l'identité. */
+function snapshotUser(user: User): User {
+  return {
+    id: user.id, aud: user.aud, created_at: user.created_at,
+    email: user.email, phone: user.phone,
+    app_metadata: user.app_metadata, user_metadata: user.user_metadata,
+  }
+}
+
+/** Supabase Auth injoignable (≠ identifiants refusés par le serveur). */
+function isAuthNetworkError(error: { name?: string; status?: number; message?: string } | null): boolean {
+  if (!error) return false
+  return error.name === 'AuthRetryableFetchError' || error.status === 0 || /failed to fetch|network/i.test(error.message ?? '')
+}
+
 // Fire a cheap background query to warm up the Supabase database connection pool.
 // Supabase free tier pauses the DB after inactivity; the first real query can take
 // 5-15s. Doing this at module load means the pool is warm by the time the user
@@ -102,6 +133,9 @@ interface AuthContextValue {
    *  juste après PATCH /api/profile/password-changed) sans attendre le prochain
    *  évènement onAuthStateChange. */
   refreshProfile: () => Promise<void>
+  /** Vrai quand l'utilisateur est entré avec la vérification locale (desktop,
+   *  sans réseau) : pas de session Supabase, lecture des données en cache. */
+  isOffline: boolean
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -137,6 +171,18 @@ async function fetchProfileFromDB(userId: string): Promise<ProfileFlags> {
 
 async function resolveProfile(session: Session): Promise<ProfileFlags> {
   const { role, nom, passwordMustChange, pinMustChange } = await fetchProfileFromDB(session.user.id)
+  if (offlineAuth) {
+    if (role || nom) {
+      // Profil confirmé par le serveur : la copie locale suit, et la durée
+      // d'accès hors ligne repart de maintenant.
+      offlineAuth.touch(session.user.id, { user: snapshotUser(session.user), role, nom })
+    } else {
+      // Session encore valide mais base injoignable (démarrage sans réseau) :
+      // dernier profil connu plutôt qu'un utilisateur sans nom ni rôle.
+      const known = offlineAuth.getProfile(session.user.id)
+      if (known) return { role: known.role, nom: known.nom, passwordMustChange: false, pinMustChange: false }
+    }
+  }
   return {
     role: role ?? normalizeRole(session.user.app_metadata?.role as string | undefined),
     nom,
@@ -158,19 +204,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [pinMustChange, setPinMustChange] = useState(false)
   // Only show loading screen when there is genuinely no cached session
   const [loading, setLoading] = useState(_cached === null)
+  const [isOffline, setIsOffline] = useState(false)
+  // Identifiant de l'utilisateur entré hors ligne — lu dans le callback
+  // onAuthStateChange, créé une seule fois (d'où le ref plutôt que le state).
+  const offlineUserId = useRef<string | null>(null)
+
+  function leaveOffline() {
+    offlineUserId.current = null
+    setIsOffline(false)
+  }
 
   useEffect(() => {
     // getSession() verifies/refreshes the token in the background.
     // If we already have cached data the page is already visible — this just
     // keeps the session fresh and syncs any role changes.
     supabase.auth.getSession().then(({ data: { session } }) => {
+      // L'utilisateur a pu entrer hors ligne pendant que cet appel attendait
+      // le réseau : ne pas l'éjecter avec un « pas de session » tardif.
+      if (!session && offlineUserId.current) return
       setSession(session)
       setUser(session?.user ?? null)
       setApiToken(session?.access_token ?? null)
+      setOfflineCacheUser(session?.user?.id ?? null)
       if (session?.user) {
         const jwtRole = normalizeRole(session.user.app_metadata?.role as string | undefined)
         if (jwtRole) setRole(jwtRole)
         syncElectronSession(session, jwtRole)
+        // D'abord les écritures en attente, ensuite seulement la relecture :
+        // sinon le cache serait rafraîchi sans les actions faites hors ligne.
+        void syncOfflineWrites().then(refreshOfflineCache)
         // Confirm role + nom from DB in background
         resolveProfile(session)
           .then(({ role: r, nom: n, passwordMustChange: pmc, pinMustChange: pinmc }) => {
@@ -192,9 +254,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }).catch(() => setLoading(false))
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (offlineUserId.current) {
+        // Hors ligne, seul un vrai retour de session (réseau revenu, jeton
+        // rafraîchi) ou une déconnexion explicite change quelque chose.
+        if (!session && event !== 'SIGNED_OUT') return
+        if (session && session.user.id !== offlineUserId.current) {
+          // La session Supabase restée sur le poste est celle d'un AUTRE
+          // compte : ne jamais basculer silencieusement d'identité.
+          leaveOffline()
+          void signOut()
+          return
+        }
+        leaveOffline()
+      }
       setSession(session)
       setUser(session?.user ?? null)
       setApiToken(session?.access_token ?? null)
+      setOfflineCacheUser(session?.user?.id ?? null)
       if (session?.user) {
         const jwtRole = normalizeRole(session.user.app_metadata?.role as string | undefined)
         if (jwtRole) setRole(jwtRole)
@@ -219,11 +295,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false)
     })
 
-    return () => subscription.unsubscribe()
+    // Réseau revenu : on remet à jour les données consultées habituellement.
+    const onOnline = () => { void syncOfflineWrites().then(refreshOfflineCache) }
+    window.addEventListener('online', onOnline)
+
+    return () => {
+      subscription.unsubscribe()
+      window.removeEventListener('online', onOnline)
+    }
   }, [])
 
+  /** Mémorise les identifiants qui viennent d'être acceptés EN LIGNE. */
+  function rememberForOffline(kind: OfflineCredentialKind, identifier: string, secret: string, session: Session | null) {
+    if (!offlineAuth || !session?.user) return
+    const known = offlineAuth.getProfile(session.user.id)
+    offlineAuth.remember(kind, identifier, secret, session.user.id, {
+      user: snapshotUser(session.user),
+      role: known?.role ?? normalizeRole(session.user.app_metadata?.role as string | undefined),
+      nom:  known?.nom ?? null,
+    }).catch((e) => console.warn('[AuthContext] mémorisation hors ligne impossible:', e))
+  }
+
+  /** Serveur injoignable : vérification locale. null = entré, sinon message d'erreur. */
+  async function signInOffline(kind: OfflineCredentialKind, identifier: string, secret: string): Promise<string | null> {
+    if (!offlineAuth) return 'Connexion impossible — vérifiez votre connexion réseau'
+    const result = await offlineAuth.verify(kind, identifier, secret)
+    if (!result.ok) return OFFLINE_AUTH_MESSAGES[result.reason]
+    offlineUserId.current = result.userId
+    setIsOffline(true)
+    setSession(null)
+    setApiToken(null)
+    setOfflineCacheUser(result.userId)
+    setUser(result.profile.user)
+    setRole(result.profile.role)
+    setNom(result.profile.nom)
+    setPasswordMustChange(false)
+    setPinMustChange(false)
+    setLoading(false)
+    return null
+  }
+
   async function signIn(email: string, password: string) {
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    if (isAuthNetworkError(error)) return { error: await signInOffline('email', email, password) }
+    if (!error) rememberForOffline('email', email, password, data.session)
     return { error: error?.message ?? null }
   }
 
@@ -233,12 +348,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // contre une vraie session — verifyOtp déclenche onAuthStateChange('SIGNED_IN')
   // comme n'importe quelle autre connexion, le reste du contexte suit normalement.
   async function signInWithPhonePin(phone: string, pin: string) {
+    let res: Response
     try {
-      const res = await fetch(`${API_BASE}/api/auth/phone-pin/login`, {
+      res = await fetch(`${API_BASE}/api/auth/phone-pin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone, pin }),
       })
+    } catch {
+      // fetch() n'a pas pu partir : serveur injoignable → vérification locale
+      return { error: await signInOffline('phone', phone, pin) }
+    }
+    try {
       const body = await res.json() as { email?: string; hashedToken?: string; error?: string }
       if (!res.ok || !body.hashedToken || !body.email) {
         return { error: body.error ?? 'Numéro ou code PIN incorrect' }
@@ -247,10 +368,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // token_hash + type UNIQUEMENT : Supabase Auth refuse désormais l'appel si
       // l'email est aussi fourni (« Only the token_hash and type should be
       // provided ») — c'est ce qui faisait échouer toute connexion par PIN.
-      const { error } = await supabase.auth.verifyOtp({
+      const { data, error } = await supabase.auth.verifyOtp({
         token_hash: body.hashedToken,
         type: 'magiclink',
       })
+      if (!error) rememberForOffline('phone', phone, pin, data.session)
       return { error: error?.message ?? null }
     } catch {
       return { error: 'Connexion impossible — vérifiez votre connexion réseau' }
@@ -267,6 +389,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
+    leaveOffline()
+    setOfflineCacheUser(null)
     setUser(null)
     setSession(null)
     setRole(null)
@@ -282,7 +406,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider value={{
       user, session, role, displayName: nom, loading, passwordMustChange, pinMustChange,
-      signIn, signInWithPhonePin, signOut, refreshProfile,
+      signIn, signInWithPhonePin, signOut, refreshProfile, isOffline,
     }}>
       {children}
     </AuthContext.Provider>

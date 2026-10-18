@@ -5,7 +5,7 @@ import {
   Check, X, Clock, Download, AlertCircle, ChevronDown, ChevronUp,
   Eye, Loader2, Pencil,
 } from 'lucide-react'
-import { PageHeader, DataTable, StatusBadge, Button, SlideOver } from '@forge/ui'
+import { PageHeader, DataTable, StatusBadge, Button, SlideOver , NumberInput} from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import {
@@ -604,7 +604,7 @@ function CongesTab({ employes }: { employes: EmployeApi[] }) {
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Nombre de jours ouvrés *</label>
-            <input type="number" min="1" value={form.jours_ouvres} onChange={e => setForm(f => ({ ...f, jours_ouvres: Number(e.target.value) }))}
+            <NumberInput min="1" value={form.jours_ouvres} onChange={e => setForm(f => ({ ...f, jours_ouvres: Number(e.target.value) }))}
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
           </div>
           <div>
@@ -1302,7 +1302,7 @@ export default function RH() {
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Salaire mensuel brut (XAF) *</label>
-            <input type="number" min="0" value={empForm.salaire_base_xaf} onChange={e => setEmpForm(f => ({ ...f, salaire_base_xaf: Number(e.target.value) }))}
+            <NumberInput min="0" value={empForm.salaire_base_xaf} onChange={e => setEmpForm(f => ({ ...f, salaire_base_xaf: Number(e.target.value) }))}
               placeholder="ex. 185 000"
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
           </div>
@@ -1398,8 +1398,8 @@ export default function RH() {
 
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant (XAF) *</label>
-            <input
-              type="number"
+            <NumberInput
+
               min="1"
               value={avanceForm.montant_xaf}
               onChange={e => setAvanceForm(f => ({ ...f, montant_xaf: Number(e.target.value) }))}
@@ -1516,8 +1516,8 @@ export default function RH() {
 
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Montant (XAF) *</label>
-            <input
-              type="number"
+            <NumberInput
+
               min="1"
               value={retenueForm.montant_xaf}
               onChange={e => setRetenueForm(f => ({ ...f, montant_xaf: Number(e.target.value) }))}

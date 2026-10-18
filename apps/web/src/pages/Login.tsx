@@ -3,8 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuth } from '@/context/AuthContext'
 import { TafdilLogoHero } from '@/components/ui/Logo'
+import { OFFLINE_AUTH_MESSAGES } from '@forge/shared'
 
 type LoginMode = 'email' | 'phone'
+
+const OFFLINE_MESSAGES: string[] = Object.values(OFFLINE_AUTH_MESSAGES)
 
 export default function Login() {
   const { signIn, signInWithPhonePin } = useAuth()
@@ -28,7 +31,11 @@ export default function Login() {
 
     if (error) {
       console.error('[Login] Supabase error:', error)
-      setError(mode === 'email' ? 'Email ou mot de passe incorrect' : 'Numéro ou code PIN incorrect')
+      // Vérification hors ligne (desktop sans réseau) : son message dit quoi
+      // faire (se connecter une fois avec Internet, patienter…) — on le garde.
+      setError(OFFLINE_MESSAGES.includes(error)
+        ? error
+        : mode === 'email' ? 'Email ou mot de passe incorrect' : 'Numéro ou code PIN incorrect')
       setLoading(false)
     } else {
       navigate('/dashboard', { replace: true })

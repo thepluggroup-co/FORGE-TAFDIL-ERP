@@ -1,5 +1,5 @@
-import { cachedGet } from './offline/cache'
-import { enqueueMutation, registerProcessor } from './offline/queue'
+import { readCached, saveCached, setCacheUser } from './offline/cache'
+import { enqueueMutation, registerProcessor, RetryLaterError } from './offline/queue'
 import { isOnline } from './offline/network'
 
 const rawApiUrl = import.meta.env.VITE_API_URL as string | undefined
@@ -128,6 +128,11 @@ export function setApiToken(token: string | null) {
   _token = token
 }
 
+/** Propriétaire du cache hors ligne — à tenir à jour avec la session. */
+export function setApiUser(userId: string | null) {
+  setCacheUser(userId)
+}
+
 function buildQuery(params: Record<string, string | number | boolean | undefined>) {
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
@@ -145,12 +150,36 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   }
   if (_token) headers['Authorization'] = `Bearer ${_token}`
 
-  const res = await fetch(`${BASE}${path}`, { ...options, headers })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
+  // Toute lecture (GET) réussie est copiée sur l'appareil ; si le serveur est
+  // injoignable, on ressert la dernière copie. Une vraie réponse d'erreur
+  // (401/403/500…) n'est jamais masquée par le cache.
+  const isRead = !options?.method || options.method === 'GET'
+
+  // Chaque écriture porte une clé unique : renvoyée plusieurs fois (réponse
+  // perdue, file hors ligne), le serveur ne l'exécute qu'une fois —
+  // apps/api/src/middleware/idempotency.ts. Un appelant qui rejoue une action
+  // fournit lui-même la clé d'origine.
+  if (!isRead && !headers['Idempotency-Key']) headers['Idempotency-Key'] = crypto.randomUUID()
+
+  let res: Response
+  try {
+    res = await fetch(`${BASE}${path}`, { ...options, headers })
+  } catch (err) {
+    if (isRead) {
+      const cached = await readCached<T>(path)
+      if (cached) return cached.data
+    }
+    throw err
   }
-  return res.json() as Promise<T>
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string; details?: string; code?: string }
+    // status / code : la file hors ligne distingue un refus définitif d'une
+    // indisponibilité passagère (cf. le processor stock_mouvement).
+    throw Object.assign(new Error(body.details ?? body.error ?? `HTTP ${res.status}`), { status: res.status, code: body.code })
+  }
+  const data = await res.json() as T
+  if (isRead) saveCached(path, data)
+  return data
 }
 
 export async function registerPushToken(token: string, platform: 'android' | 'ios', appVersion?: string) {
@@ -182,7 +211,7 @@ export async function fetchStocks(opts?: { search?: string; page?: number; per_p
     categorie: opts?.categorie,
     statut: opts?.statut,
   })
-  return cachedGet(`stocks${query}`, () => apiFetch<FetchStocksResult>(`/api/stocks${query}`))
+  return apiFetch<FetchStocksResult>(`/api/stocks${query}`)
 }
 
 export async function fetchCommandes(opts?: { statut?: string; client_id?: string; search?: string; page?: number; per_page?: number }) {
@@ -193,7 +222,7 @@ export async function fetchCommandes(opts?: { statut?: string; client_id?: strin
     page: opts?.page ?? 1,
     per_page: opts?.per_page ?? 100,
   })
-  return cachedGet(`commandes${query}`, () => apiFetch<FetchCommandesResult>(`/api/commandes${query}`))
+  return apiFetch<FetchCommandesResult>(`/api/commandes${query}`)
 }
 
 export async function fetchShopCommandes(opts?: { statut_commande?: string; statut_paiement?: string; search?: string; page?: number; per_page?: number }) {
@@ -303,16 +332,29 @@ export async function createShopCommande(payload: {
 export async function createStockMouvement(
   id: string,
   body: { type: 'entree' | 'sortie' | 'ajustement' | 'transfert'; quantite: number; reference?: string; motif?: string },
+  idempotencyKey?: string,
 ): Promise<{ mouvement: StockMouvement; produit: ApiStock }> {
   return apiFetch<{ mouvement: StockMouvement; produit: ApiStock }>(`/api/stocks/${id}/mouvement`, {
     method: 'POST',
     body: JSON.stringify(body),
+    headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
   })
 }
 
 registerProcessor('stock_mouvement', async (payload) => {
-  const { id, body } = payload as { id: string; body: Parameters<typeof createStockMouvement>[1] }
-  await createStockMouvement(id, body)
+  // key absente = action mise en file par une version antérieure de l'app.
+  const { id, body, key } = payload as { id: string; body: Parameters<typeof createStockMouvement>[1]; key?: string }
+  // Connexion hors ligne : pas encore de session — on attend son retour.
+  if (!_token) throw new RetryLaterError('Session non rétablie')
+  try {
+    await createStockMouvement(id, body, key)
+  } catch (err) {
+    const { status, code } = err as { status?: number; code?: string }
+    const passager = status === 401 || status === 429 || status === 502 || status === 503 || status === 504
+      || code === 'IDEMPOTENCY_IN_PROGRESS'
+    if (passager) throw new RetryLaterError(err instanceof Error ? err.message : 'Serveur indisponible')
+    throw err   // TypeError (réseau) ou refus du serveur (stock insuffisant…) : géré par la file
+  }
 })
 
 /**
@@ -326,9 +368,14 @@ export async function createStockMouvementOffline(
   body: { type: 'entree' | 'sortie' | 'ajustement' | 'transfert'; quantite: number; reference?: string; motif?: string },
   label: string,
 ): Promise<{ mouvement: StockMouvement | null; produit: ApiStock; queued: boolean }> {
+  // Même clé pour la tentative en ligne et pour la file : si la requête a
+  // atteint le serveur avant la coupure, le renvoi ne créera pas un second
+  // mouvement de stock.
+  const key = crypto.randomUUID()
+
   if (isOnline()) {
     try {
-      const res = await createStockMouvement(stock.id, body)
+      const res = await createStockMouvement(stock.id, body, key)
       return { ...res, queued: false }
     } catch (err) {
       // Le fetch a échoué malgré isOnline() (ex. coupure pendant la requête) —
@@ -337,7 +384,7 @@ export async function createStockMouvementOffline(
     }
   }
 
-  await enqueueMutation('stock_mouvement', { id: stock.id, body }, label)
+  await enqueueMutation('stock_mouvement', { id: stock.id, body, key }, label)
 
   const delta = body.type === 'entree' ? body.quantite : -body.quantite
   const produit: ApiStock = { ...stock, stock_actuel: Math.max(0, stock.stock_actuel + delta) }

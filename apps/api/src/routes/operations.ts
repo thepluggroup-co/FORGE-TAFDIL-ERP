@@ -1,4 +1,4 @@
-﻿import { Hono } from 'hono'
+import { Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
@@ -235,8 +235,8 @@ const jobSchema = z.object({
   categorie:           z.string().optional(),
   unite:               z.string().optional(),
   quantite_prevue:     z.number().positive().optional(),
-  prix_unitaire_xaf:   z.number().min(0).optional(),
-  prix_public_xaf:     z.number().min(0).optional(),
+  prix_unitaire_xaf:   z.number().int().min(0).nullable().optional(),
+  prix_public_xaf:     z.number().int().min(0).nullable().optional(),
   publier_shop:        z.boolean().optional(),
   description_produit: z.string().optional(),
   machine_id:          z.string().optional(),     // DÉPRÉCIÉ (D5) : résolu vers equipement_id
@@ -1185,7 +1185,7 @@ const projetSchema = z.object({
   client_nom:      z.string().optional(),
   chef_projet_id:  z.string().optional(),
   chef_projet_nom: z.string().optional(),
-  budget_xaf:      z.number().min(0).default(0),
+  budget_xaf:      z.number().int().min(0).default(0),
   date_debut:      z.string().optional(),
   deadline:        z.string().optional(),
 })
@@ -1193,7 +1193,7 @@ const projetSchema = z.object({
 const projetStatutSchema = z.object({
   statut:         z.enum(['planifie', 'en_cours', 'suspendu', 'livre', 'annule']),
   avancement_pct: z.number().int().min(0).max(100).optional(),
-  depense_xaf:    z.number().min(0).optional(),
+  depense_xaf:    z.number().int().min(0).nullable().optional(),
 })
 
 const tacheSchema = z.object({
@@ -1524,7 +1524,7 @@ const campagneSchema = z.object({
   nom:         z.string().min(1),
   description: z.string().optional(),
   canal:       z.string().min(1),
-  budget_xaf:  z.number().min(0).default(0),
+  budget_xaf:  z.number().int().min(0).default(0),
   date_debut:  z.string(),
   date_fin:    z.string(),
 })
@@ -1543,7 +1543,7 @@ const campagneProduitSchema = z.object({
   modele_id:       z.string().uuid().optional(),
   remise_type:     z.enum(['pct', 'forfait']).default('pct'),
   remise_valeur:   z.number().min(0).default(0),
-  prix_promo_xaf:  z.number().min(0).nullable().optional(),
+  prix_promo_xaf:  z.number().int().min(0).nullable().optional(),
   priorite:        z.number().int().min(0).default(0),
 }).refine((p) => Boolean(p.product_id) !== Boolean(p.modele_id), {
   message: 'Indiquer exactement un product_id ou un modele_id',
@@ -1837,7 +1837,7 @@ const ressourceSchema = z.object({
   equipement_id:     z.string().optional(),
   quantite:          z.number().positive().default(1),
   unite:             z.string().default('unité'),
-  cout_unitaire_xaf: z.number().min(0).default(0),
+  cout_unitaire_xaf: z.number().int().min(0).default(0),
   statut:            z.enum(['planifie', 'disponible', 'en_cours', 'utilise', 'manquant']).default('planifie'),
   notes:             z.string().optional(),
 })

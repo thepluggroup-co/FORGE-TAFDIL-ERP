@@ -296,40 +296,63 @@ function createWindow() {
     if (isDevToolsShortcut) _e.preventDefault()
   })
 
+  // ── Navigations hors de l'app (prod) ─────────────────────────────────────────
+  // Le renderer est une SPA en MemoryRouter : son URL reste index.html. Un
+  // `window.location.href = '/login'` hérité du web viserait file:///C:/login
+  // (écran blanc) → on recharge l'app. Un lien http(s) s'ouvre dans le navigateur.
+  if (!isDev) {
+    const mainWin = win
+    mainWin.webContents.on('will-navigate', (e, url) => {
+      e.preventDefault()
+      if (/^https?:/i.test(url)) { shell.openExternal(url); return }
+      mainWin.loadFile(join(process.resourcesPath, 'renderer', 'index.html'))
+        .catch((err) => log.error('[main] rechargement du renderer impossible:', err.message))
+    })
+  }
+
   buildMenu(win)
   return win
 }
 
-// ── CORS pour requêtes file:// → localhost:3001 ───────────────────────────────
+// ── CORS pour requêtes file:// → API hébergée ─────────────────────────────────
 //
 // En mode packagé, le renderer est servi depuis file:// et Chromium envoie
-// Origin: null pour toutes les requêtes fetch vers localhost:3001.
+// Origin: null pour toutes les requêtes fetch vers l'API.
 // L'API Hono rejette ces requêtes (origin null ≠ liste blanche).
 //
-// Solution : intercepter les réponses HTTP sortant de l'API locale et injecter
+// Solution : intercepter les réponses de cette seule API et injecter
 // les headers Access-Control-Allow-* avant que Chromium ne les lise.
-// Cela ne bypass pas la sécurité réseau — uniquement le serveur local.
 
 function installCorsProxy() {
-  if (!isDev) {
-    session.defaultSession.webRequest.onHeadersReceived(
-      { urls: ['http://localhost:3001/*'] },
-      (details, callback) => {
-        const headers = { ...details.responseHeaders }
-        headers['Access-Control-Allow-Origin']      = ['*']
-        headers['Access-Control-Allow-Methods']     = ['GET, POST, PUT, PATCH, DELETE, OPTIONS']
-        headers['Access-Control-Allow-Headers']     = ['Content-Type, Authorization, X-Request-ID']
-        headers['Access-Control-Allow-Credentials'] = ['true']
-        callback({ responseHeaders: headers })
-      },
-    )
-    // Autoriser les requêtes OPTIONS (preflight) sans bloquer
-    session.defaultSession.webRequest.onBeforeRequest(
-      { urls: ['http://localhost:3001/*'] },
-      (details, callback) => callback({ cancel: false }),
-    )
-    log.info('[cors] proxy CORS localhost:3001 installé pour file://')
+  // En prod le renderer appelle l'API hébergée (VITE_API_URL), pas localhost.
+  // Sans ces headers Chromium bloque TOUTES ses réponses et l'app s'affiche
+  // vide. L'accès reste protégé par le token Bearer ; aucun cookie n'est envoyé.
+  const apiBase = (process.env.FORGE_API_URL ?? '').replace(/\/$/, '')
+  if (isDev || !apiBase) return
+
+  const CORS_HEADERS: Record<string, string> = {
+    'Access-Control-Allow-Origin':   '*',
+    'Access-Control-Allow-Methods':  'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers':  'Content-Type, Authorization, X-Request-ID, Idempotency-Key',
+    'Access-Control-Expose-Headers': 'X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After, Content-Disposition',
+    'Access-Control-Max-Age':        '86400',
   }
+  const replaced = new Set([...Object.keys(CORS_HEADERS), 'Access-Control-Allow-Credentials'].map(n => n.toLowerCase()))
+
+  session.defaultSession.webRequest.onHeadersReceived(
+    { urls: [`${apiBase}/*`] },
+    (details, callback) => {
+      // Noms de headers insensibles à la casse : retirer ceux du serveur pour
+      // ne pas envoyer deux valeurs contradictoires à Chromium.
+      const headers: Record<string, string[]> = {}
+      for (const [name, value] of Object.entries(details.responseHeaders ?? {})) {
+        if (!replaced.has(name.toLowerCase())) headers[name] = value
+      }
+      for (const [name, value] of Object.entries(CORS_HEADERS)) headers[name] = [value]
+      callback({ responseHeaders: headers })
+    },
+  )
+  log.info('[cors] headers CORS injectés pour', apiBase)
 }
 
 // ── Cycle de vie app ───────────────────────────────────────────────────────────

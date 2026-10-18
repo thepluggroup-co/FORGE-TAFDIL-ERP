@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Plus, Trash2, Save, Calculator } from 'lucide-react'
-import { Modal, Button } from '@forge/ui'
+import { Modal, Button , NumberInput} from '@forge/ui'
 import {
   useParametresModele, useEnregistrerParametres, useEstimerInterne,
   type Modele, type ParametreConfiguration, type ParametrePayload, type TypeParametre, type RoleCalcul, type EstimationInterne,
@@ -99,13 +99,13 @@ export function ParametresConfigurationModal({ modele, onClose }: { modele: Mode
                         </select>
                       </label>
                       <label className="text-[10px] text-gray-500">Minimum
-                        <input className={CHAMP} type="number" placeholder="min" value={p.min ?? ''} onChange={(e) => maj(i, { min: nombreOuNull(e.target.value) })} />
+                        <NumberInput mode="dimension" className={CHAMP} placeholder="min" value={p.min ?? ''} onChange={(e) => maj(i, { min: nombreOuNull(e.target.value) })} />
                       </label>
                       <label className="text-[10px] text-gray-500">Maximum
-                        <input className={CHAMP} type="number" placeholder="max" value={p.max ?? ''} onChange={(e) => maj(i, { max: nombreOuNull(e.target.value) })} />
+                        <NumberInput mode="dimension" className={CHAMP} placeholder="max" value={p.max ?? ''} onChange={(e) => maj(i, { max: nombreOuNull(e.target.value) })} />
                       </label>
                       <label className="text-[10px] text-gray-500">Pas
-                        <input className={CHAMP} type="number" placeholder="pas" value={p.pas ?? ''} onChange={(e) => maj(i, { pas: nombreOuNull(e.target.value) })} />
+                        <NumberInput mode="dimension" className={CHAMP} placeholder="pas" value={p.pas ?? ''} onChange={(e) => maj(i, { pas: nombreOuNull(e.target.value) })} />
                       </label>
                       <label className="text-[10px] text-gray-500">Dimension calculée
                         <select className={CHAMP} value={p.role_calcul ?? ''} onChange={(e) => maj(i, { role_calcul: (e.target.value || null) as RoleCalcul | null })}
@@ -122,7 +122,7 @@ export function ParametresConfigurationModal({ modele, onClose }: { modele: Mode
                 {p.type === 'booleen' && (
                   <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
                     Coût de revient si coché (FCFA)
-                    <input className={`${CHAMP} w-32`} type="number" min={0} value={p.cout_si_oui_xaf} onChange={(e) => maj(i, { cout_si_oui_xaf: Number(e.target.value) || 0 })} />
+                    <NumberInput className={`${CHAMP} w-32`} min={0} value={p.cout_si_oui_xaf} onChange={(e) => maj(i, { cout_si_oui_xaf: Number(e.target.value) || 0 })} />
                     <NatureCout
                       categorie={p.categorie_cout} parCommande={p.cout_par_commande}
                       onChange={(patch) => maj(i, patch)}
@@ -146,7 +146,7 @@ export function ParametresConfigurationModal({ modele, onClose }: { modele: Mode
                         <input className={`${CHAMP} col-span-2`} placeholder="code" value={v.code}
                           onChange={(e) => majValeur(i, k, { code: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '') })} />
                         <input className={`${CHAMP} col-span-3`} placeholder="Libellé" value={v.libelle} onChange={(e) => majValeur(i, k, { libelle: e.target.value })} />
-                        <input className={`${CHAMP} col-span-2`} type="number" min={0} placeholder="coût +" value={v.cout_supplementaire_xaf}
+                        <NumberInput className={`${CHAMP} col-span-2`} min={0} placeholder="coût +" value={v.cout_supplementaire_xaf}
                           onChange={(e) => majValeur(i, k, { cout_supplementaire_xaf: Number(e.target.value) || 0 })} />
                         <div className="col-span-3">
                           <NatureCout
@@ -226,7 +226,7 @@ function TesteurConfiguration({ modeleId, parametres }: { modeleId: string; para
           <label key={p.code} className="text-[11px] text-gray-600">
             {p.libelle}{p.unite ? ` (${p.unite})` : ''}
             {p.type === 'nombre' && (
-              <input className={CHAMP} type="number" onChange={(e) => setValeurs((v) => ({ ...v, [p.code]: nombreOuNull(e.target.value) }))} />
+              <NumberInput mode="dimension" className={CHAMP} onChange={(e) => setValeurs((v) => ({ ...v, [p.code]: nombreOuNull(e.target.value) }))} />
             )}
             {p.type === 'choix' && (
               <select className={CHAMP} defaultValue="" onChange={(e) => setValeurs((v) => ({ ...v, [p.code]: e.target.value || null }))}>
@@ -240,7 +240,7 @@ function TesteurConfiguration({ modeleId, parametres }: { modeleId: string; para
           </label>
         ))}
         <label className="text-[11px] text-gray-600">Quantité
-          <input className={CHAMP} type="number" min={1} value={quantite} onChange={(e) => setQuantite(Math.max(1, Math.floor(Number(e.target.value) || 1)))} />
+          <NumberInput className={CHAMP} min={1} value={quantite} onChange={(e) => setQuantite(Math.max(1, Math.floor(Number(e.target.value) || 1)))} />
         </label>
       </div>
       <Button size="xs" className="mt-2" loading={estimer.isPending}

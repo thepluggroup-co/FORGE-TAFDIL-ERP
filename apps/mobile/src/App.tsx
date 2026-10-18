@@ -31,7 +31,7 @@ function AuthenticatedApp() {
           {user?.role === 'livreur' && (
             <Route path="/livraisons" element={<LivreurPage />} />
           )}
-          {(user?.role === 'caissier' || user?.role === 'admin' || user?.role === 'superviseur') && (
+          {(user?.role === 'caissier' || user?.role === 'admin' || user?.role === 'manager') && (
             <Route path="/caisse" element={<CaissePage />} />
           )}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

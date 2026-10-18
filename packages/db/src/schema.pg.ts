@@ -16,7 +16,7 @@ const tsN = (col: string) => timestamp(col, { withTimezone: true })
 
 // ── Enums PostgreSQL ───────────────────────────────────────────────────────────
 
-export const roleEnum          = pgEnum('role',           ['admin', 'superviseur', 'operateur', 'apprenant'])
+export const roleEnum          = pgEnum('role',           ['admin', 'manager', 'operateur', 'technicien', 'caissier', 'livreur', 'apprenant'])
 export const syncStatusEnum    = pgEnum('sync_status',    ['synced', 'pending', 'conflict'])
 export const clientTypeEnum    = pgEnum('client_type',    ['entreprise', 'particulier', 'institution'])
 export const clientStatutEnum  = pgEnum('client_statut',  ['actif', 'inactif', 'bloque'])
@@ -349,6 +349,8 @@ export const devisPg = pgTable('devis', {
   dateValidite:        text('date_validite').notNull(),
   validitJours:        integer('validite_jours').notNull().default(30),
   acomptePct:          real('acompte_pct').notNull().default(0),
+  conditionsPaiement:  text('conditions_paiement'),
+  noteClient:          text('note_client'),
   conditionPaiementId: uuid('condition_paiement_id'),
   remiseGlobaleXaf:    real('remise_globale_xaf').default(0),
   remiseGlobaleMotif:  text('remise_globale_motif'),

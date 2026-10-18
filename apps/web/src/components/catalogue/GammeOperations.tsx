@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Plus, Trash2, AlertTriangle } from 'lucide-react'
-import { Button, Modal } from '@forge/ui'
+import { Button, Modal , NumberInput} from '@forge/ui'
 import {
   useGammeOperations, useAjouterOperation, useSupprimerOperation,
   usePostesTravail, useEnregistrerPosteTravail,
@@ -70,7 +70,7 @@ export function GammeOperations({ ficheTechniqueId, uniteFacturation }: { ficheT
       ))}
 
       <div className="grid grid-cols-12 gap-2 rounded-lg bg-gray-50 p-2.5">
-        <input className={`${CHAMP} col-span-2`} type="number" min={1} step={10} value={form.numero || prochainNumero}
+        <NumberInput className={`${CHAMP} col-span-2`} min={1} step={10} value={form.numero || prochainNumero}
           onChange={(e) => setForm((f) => ({ ...f, numero: Number(e.target.value) || 0 }))} title="N° d'opération" />
         <input className={`${CHAMP} col-span-4`} placeholder="Opération * (ex. Soudage)" value={form.libelle}
           onChange={(e) => setForm((f) => ({ ...f, libelle: e.target.value }))} />
@@ -85,11 +85,11 @@ export function GammeOperations({ ficheTechniqueId, uniteFacturation }: { ficheT
           ))}
         </select>
         <label className="col-span-4 text-[11px] text-gray-500">Temps (h) par {unite}
-          <input className={`${CHAMP} w-full`} type="number" min={0} step={0.05} value={form.temps_unitaire_h || ''}
+        <NumberInput mode="decimal" className={`${CHAMP} w-full`} min={0} step={0.05} value={form.temps_unitaire_h || ''}
             onChange={(e) => setForm((f) => ({ ...f, temps_unitaire_h: Number(e.target.value) || 0 }))} />
         </label>
         <label className="col-span-4 text-[11px] text-gray-500">Préparation (h) par commande
-          <input className={`${CHAMP} w-full`} type="number" min={0} step={0.25} value={form.temps_fixe_h || ''}
+        <NumberInput mode="decimal" className={`${CHAMP} w-full`} min={0} step={0.25} value={form.temps_fixe_h || ''}
             onChange={(e) => setForm((f) => ({ ...f, temps_fixe_h: Number(e.target.value) || 0 }))} />
         </label>
         <div className="col-span-4 flex items-end">
@@ -125,8 +125,8 @@ function PostesTravailModal({ isOpen, onClose, postes }: { isOpen: boolean; onCl
             <div key={p.id} className={`flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-xs ${p.actif ? '' : 'opacity-50'}`}>
               <span className="w-20 font-mono text-gray-500">{p.code}</span>
               <span className="flex-1 font-medium text-[#212121]">{p.libelle}</span>
-              <input
-                type="number" min={0} step={50} defaultValue={p.cout_horaire_xaf}
+              <NumberInput
+                min={0} step={50} defaultValue={p.cout_horaire_xaf}
                 onBlur={(e) => {
                   const v = Number(e.target.value)
                   if (e.target.value !== '' && v >= 0 && v !== Number(p.cout_horaire_xaf)) enregistrer.mutate({ id: p.id, payload: { cout_horaire_xaf: v } })
@@ -143,7 +143,7 @@ function PostesTravailModal({ isOpen, onClose, postes }: { isOpen: boolean; onCl
         <div className="grid grid-cols-12 gap-2 border-t border-gray-100 pt-3">
           <input className={`${CHAMP} col-span-3`} placeholder="Code (SOUD)" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />
           <input className={`${CHAMP} col-span-4`} placeholder="Libellé (Soudeur)" value={libelle} onChange={(e) => setLibelle(e.target.value)} />
-          <input className={`${CHAMP} col-span-3`} type="number" min={0} placeholder="FCFA / h" value={taux} onChange={(e) => setTaux(e.target.value)} />
+          <NumberInput className={`${CHAMP} col-span-3`} min={0} placeholder="FCFA / h" value={taux} onChange={(e) => setTaux(e.target.value)} />
           <Button size="sm" className="col-span-2" disabled={!code || !libelle || taux === ''} loading={enregistrer.isPending}
             onClick={() => enregistrer.mutate(
               { payload: { code, libelle, cout_horaire_xaf: Number(taux) } },

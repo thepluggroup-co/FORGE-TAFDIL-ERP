@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
+import { isQueuedOffline } from '@forge/shared'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plus, Trash2, MessageCircle, Mail, ArrowRightLeft, Send,
@@ -6,7 +7,7 @@ import {
   Edit2, Eye, Clock, AlertTriangle, Link, CheckCircle, OctagonX,
   ShieldCheck, Settings2,
 } from 'lucide-react'
-import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
+import { PageHeader, DataTable, StatusBadge, SlideOver, Button, Modal , NumberInput} from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import { uniteOptions } from '@/lib/constants'
@@ -493,7 +494,7 @@ function DevisDetailPanel({
             </button>
           )}
 
-          {/* §41.H — Valider : validation interne (superviseur), distincte de
+          {/* §41.H — Valider : validation interne (manager), distincte de
               l'approbation client (§42, lien public token). Nécessaire pour
               convertir en commande MÊME quand le client a déjà approuvé
               ailleurs (téléphone/comptoir) sans repasser par le lien. */}
@@ -612,13 +613,13 @@ const STEPS = ['Client', 'Lignes', 'Conditions', 'Aperçu']
 interface FormState {
   clientId: string; clientNom: string; clientTel: string; clientEmail: string
   sourceDemande: string
-  lignes: LocalLigne[]; validite: 15 | 30 | 45; acompte: number; conditionPaiementId: string; notes: string
+  lignes: LocalLigne[]; validite: number; acompte: number; conditionPaiementId: string; notes: string; conditionsClient: string; noteClient: string
 }
 
 const DEFAULT_FORM: FormState = {
   clientId: '', clientNom: '', clientTel: '', clientEmail: '', sourceDemande: 'web',
   lignes: [newLine()], validite: 30, acompte: 30,
-  conditionPaiementId: '', notes: '',
+  conditionPaiementId: '', notes: '', conditionsClient: '', noteClient: '',
 }
 
 function StepProgress({ step }: { step: number }) {
@@ -665,6 +666,8 @@ function DevisFormPanel({
   const isMutating  = createDevis.isPending || updateDevis.isPending
   const { data: condData } = useConditionsPaiement()
   const conditionsList = condData?.data ?? []
+  const { data: reglages, isError: reglagesErreur } = useQuery({ queryKey: ['devis-reglages'], queryFn: () => apiClient.get<{ validite_jours: number; acompte_pct: number; conditions_paiement: string; condition_paiement_id: string | null }>('/api/devis/reglages'), staleTime: 60_000 })
+  const { data: brouillonServeur, isFetched: brouillonCharge } = useQuery({ queryKey: ['devis-brouillon-courant'], queryFn: () => apiClient.get<{ contenu: FormState } | null>('/api/devis/brouillon-courant'), staleTime: 0, enabled: !editingDevis })
   const { data: produitsCatalogue = [] } = useProduitsShop()
   // Modèles du catalogue produits finis (Phase 1) actifs, toutes familles — sert
   // uniquement à choisir quel modèle configurer (Phase 2, calcul automatique).
@@ -678,6 +681,8 @@ function DevisFormPanel({
 
   const [step,    setStep]    = useState(0)
   const [created, setCreated] = useState<{ reference: string; pdf_url: string | null; montantTTC: number } | null>(null)
+  const [reprendreBrouillon, setReprendreBrouillon] = useState(false)
+  const draftHydrated = useRef(false)
 
   // Initialiser le formulaire depuis un devis existant si édition
   const [form, setForm] = useState<FormState>(() => {
@@ -718,12 +723,40 @@ function DevisFormPanel({
       clientEmail:        cli.email ?? '',
       sourceDemande:      (editingDevis.source_demande as string | null) ?? 'web',
       lignes:             lignesExist.length > 0 ? lignesExist : [newLine()],
-      validite:           (editingDevis.validite_jours as 15 | 30 | 45) ?? 30,
+      validite:           (editingDevis.validite_jours as number) ?? 30,
       acompte:            (editingDevis.acompte_pct as number) ?? 30,
       conditionPaiementId: (editingDevis.condition_paiement_id as string | null) ?? '',
       notes:              (editingDevis.notes as string | null) ?? '',
+      conditionsClient:   (editingDevis.conditions_paiement as string | null) ?? '',
+      noteClient:         (editingDevis.note_client as string | null) ?? '',
     }
   })
+
+  useEffect(() => {
+    if (editingDevis || (!reglages && !reglagesErreur) || !brouillonCharge || draftHydrated.current) return
+    draftHydrated.current = true
+    let reglagesCourants = reglages
+    if (!reglagesCourants) {
+      try { const raw = localStorage.getItem('forge.devis.reglages'); if (raw) reglagesCourants = JSON.parse(raw) as typeof reglages } catch { /* réglages locaux illisibles */ }
+    }
+    setForm((current) => ({ ...current, validite: reglagesCourants?.validite_jours ?? 30, acompte: reglagesCourants?.acompte_pct ?? 30, conditionPaiementId: reglagesCourants?.condition_paiement_id ?? '', conditionsClient: reglagesCourants?.conditions_paiement || '' }))
+    let brouillon = brouillonServeur?.contenu
+    if (!brouillon) {
+      try { const raw = localStorage.getItem('forge.devis.brouillon'); if (raw) brouillon = JSON.parse(raw) as FormState } catch { /* brouillon local illisible */ }
+    }
+    if (brouillon) setReprendreBrouillon(true)
+  }, [reglages, reglagesErreur, brouillonServeur, brouillonCharge, editingDevis])
+
+  useEffect(() => {
+    if (editingDevis || !draftHydrated.current) return
+    const timer = window.setTimeout(() => {
+      if (!form.clientNom.trim() && !form.lignes.some((l) => l.designation.trim())) return
+      const contenu = JSON.stringify(form)
+      try { localStorage.setItem('forge.devis.brouillon', contenu) } catch { /* stockage local indisponible */ }
+      void apiClient.put('/api/devis/brouillon-courant', form).catch(() => {})
+    }, 2000)
+    return () => window.clearTimeout(timer)
+  }, [form, editingDevis])
 
   // Configurateur (§40) — modal ouverte pour la ligne en cours de configuration
   const [configuringLineId, setConfiguringLineId] = useState<string | null>(null)
@@ -896,6 +929,8 @@ function DevisFormPanel({
       acompte_pct:           form.acompte,
       condition_paiement_id: form.conditionPaiementId,
       notes:               form.notes || undefined,
+      note_client:         form.noteClient || undefined,
+      conditions_paiement: form.conditionsClient || undefined,
       source_demande:      form.sourceDemande || undefined,
       fiche_technique_id:  snapshotUnique?.ficheTechniqueId,
       config_snapshot:     snapshotUnique?.configuration,
@@ -921,6 +956,10 @@ function DevisFormPanel({
       updateDevis.mutate({ id: editingDevis.id as string, payload }, { onSuccess: onClose })
     } else {
       const result = await createDevis.mutateAsync(payload)
+      // Hors ligne : ni référence ni PDF tant que le serveur n'a pas reçu le devis.
+      if (isQueuedOffline(result)) { onClose(); return }
+      void apiClient.delete('/api/devis/brouillon-courant').catch(() => {})
+      try { localStorage.removeItem('forge.devis.brouillon') } catch { /* ignore */ }
       setCreated({ reference: result.reference, pdf_url: result.pdf_url, montantTTC: result.montant_ttc_xaf })
     }
   }
@@ -932,6 +971,15 @@ function DevisFormPanel({
   return (
     <>
     <SlideOver isOpen={true} onClose={onClose} title={title} width="xl">
+      {reprendreBrouillon && !editingDevis && (
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+          <span>Un devis est en cours. Voulez-vous le reprendre ?</span>
+          <div className="flex gap-2">
+            <button className="font-semibold text-gray-500" onClick={() => { setReprendreBrouillon(false); try { localStorage.removeItem('forge.devis.brouillon') } catch { /* ignore */ } void apiClient.delete('/api/devis/brouillon-courant').catch(() => {}) }}>Nouveau</button>
+            <button className="font-bold text-[#C62828]" onClick={() => { let draft = brouillonServeur?.contenu; if (!draft) { try { const raw = localStorage.getItem('forge.devis.brouillon'); if (raw) draft = JSON.parse(raw) as FormState } catch { /* ignore */ } } if (draft) setForm(draft); setReprendreBrouillon(false) }}>Reprendre le devis en cours</button>
+          </div>
+        </div>
+      )}
       {created ? (
         /* ── Écran succès création ── */
         <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
@@ -1158,7 +1206,7 @@ function DevisFormPanel({
                           {ligne.quantiteCalculee === undefined && (
                             <div>
                               <label className="block text-[10px] text-gray-400 mb-0.5">Quantité</label>
-                              <input type="number" min="0.01" step="0.01" value={ligne.quantite}
+                              <NumberInput min="0.01" step="0.01" value={ligne.quantite}
                                 onChange={(e) => updateLine(ligne.id, 'quantite', Number(e.target.value))}
                                 className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
                             </div>
@@ -1177,7 +1225,7 @@ function DevisFormPanel({
                         {ligne.quantiteCalculee === undefined && (
                           <div>
                             <label className="block text-[10px] text-gray-400 mb-0.5">Prix unitaire HT (XAF)</label>
-                            <input type="number" min="0" value={ligne.prixUnitaire}
+                            <NumberInput min="0" value={ligne.prixUnitaire}
                               onChange={(e) => updateLine(ligne.id, 'prixUnitaire', Number(e.target.value))}
                               className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
                           </div>
@@ -1269,13 +1317,13 @@ function DevisFormPanel({
                           <div className="grid grid-cols-2 gap-2">
                             <div>
                               <label className="block text-[10px] text-gray-400 mb-0.5">Quantité retenue</label>
-                              <input type="number" min="0.01" step="0.01" value={ligne.quantite}
+                              <NumberInput min="0.01" step="0.01" value={ligne.quantite}
                                 onChange={(e) => updateLine(ligne.id, 'quantite', Number(e.target.value))}
                                 className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
                             </div>
                             <div>
                               <label className="block text-[10px] text-gray-400 mb-0.5">Prix unitaire retenu HT (XAF)</label>
-                              <input type="number" min="0" value={ligne.prixUnitaire}
+                              <NumberInput min="0" value={ligne.prixUnitaire}
                                 onChange={(e) => updateLine(ligne.id, 'prixUnitaire', Number(e.target.value))}
                                 className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
                             </div>
@@ -1318,25 +1366,21 @@ function DevisFormPanel({
                 <div className="space-y-4">
                   <div>
                     <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">Durée de validité</label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {([15, 30, 45] as const).map((v) => (
-                        <button key={v} onClick={() => setForm((f) => ({ ...f, validite: v }))}
-                          className="py-2.5 rounded-xl border-2 text-sm font-semibold transition-all"
-                          style={{ borderColor: form.validite === v ? '#C62828' : '#e5e7eb', backgroundColor: form.validite === v ? '#FFEBEE' : 'transparent', color: form.validite === v ? '#C62828' : '#6b7280' }}>
-                          {v} jours
-                        </button>
-                      ))}
+                    <div className="flex items-center gap-2">
+                      <NumberInput min="1" max="365" value={form.validite} onChange={(e) => setForm((f) => ({ ...f, validite: Number(e.target.value) }))} className="w-28 px-3 py-2.5 text-sm border border-gray-200 rounded-lg" />
+                      <span className="text-sm text-gray-500">jours à compter de la date du devis</span>
                     </div>
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Acompte (%)</label>
-                    <input type="number" min="0" max="100" value={form.acompte}
+                    <NumberInput min="0" max="100" value={form.acompte}
                       onChange={(e) => setForm((f) => ({ ...f, acompte: Number(e.target.value) }))}
                       className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
                   </div>
+                  <button type="button" onClick={() => { const valeurs = { validite_jours: form.validite, acompte_pct: form.acompte, condition_paiement_id: form.conditionPaiementId || null, conditions_paiement: form.conditionsClient }; try { localStorage.setItem('forge.devis.reglages', JSON.stringify(valeurs)) } catch { /* stockage local indisponible */ } apiClient.patch('/api/devis/reglages', valeurs).then(() => toast.success('Valeurs par défaut enregistrées')).catch((e: Error) => toast.error(e.message)) }} className="text-xs font-semibold text-[#C62828] hover:underline">Enregistrer ces valeurs par défaut dans les réglages</button>
                   <div>
                     <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Conditions de paiement *</label>
-                    <select value={form.conditionPaiementId} onChange={(e) => setForm((f) => ({ ...f, conditionPaiementId: e.target.value }))}
+                    <select value={form.conditionPaiementId} onChange={(e) => { const condition = conditionsList.find((cp) => cp.id === e.target.value); setForm((f) => ({ ...f, conditionPaiementId: e.target.value, acompte: condition?.acompte_pct ?? f.acompte })) }}
                       className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]">
                       <option value="">— Choisir une condition —</option>
                       {conditionsList.map((cp) => (
@@ -1344,11 +1388,20 @@ function DevisFormPanel({
                       ))}
                     </select>
                   </div>
+                  {form.acompte > 0 && <p className="rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-800">Avance à verser selon ce mode : {form.acompte}% soit {formatXAF(Math.round(totalHT * form.acompte / 100))}.</p>}
                   <div>
                     <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Notes internes</label>
                     <textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
                       rows={3} placeholder="Informations complémentaires…"
                       className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828] resize-none" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Précisions de paiement affichées au client</label>
+                    <textarea value={form.conditionsClient} onChange={(e) => setForm((f) => ({ ...f, conditionsClient: e.target.value }))} rows={2} placeholder="Avance à la commande, solde à la livraison…" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg resize-none" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Note ou commentaire au client</label>
+                    <textarea value={form.noteClient} onChange={(e) => setForm((f) => ({ ...f, noteClient: e.target.value }))} rows={2} placeholder="Message affiché en bas à gauche du devis imprimé" className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg resize-none" />
                   </div>
                 </div>
               )}
@@ -1361,6 +1414,14 @@ function DevisFormPanel({
                     <div className="flex justify-between"><span className="text-gray-500">Validité</span><span>{form.validite} jours</span></div>
                     <div className="flex justify-between"><span className="text-gray-500">Acompte</span><span>{form.acompte}%</span></div>
                     <div className="flex justify-between"><span className="text-gray-500">Articles</span><span>{form.lignes.filter((l) => l.designation && l.prixUnitaire > 0).length}</span></div>
+                    <div className="border-t border-gray-200 pt-2">
+                      <p className="mb-2 text-xs font-bold uppercase text-gray-500">Récapitulatif des produits</p>
+                      {form.lignes.filter((l) => l.designation && l.prixUnitaire > 0).map((l) => <div key={l.id} className="grid grid-cols-[1fr_auto_auto] gap-3 border-b border-gray-100 py-1.5 text-xs"><span>{l.designation}</span><span>{l.quantite} {l.unite}</span><span className="text-right">{formatXAF(l.quantite * l.prixUnitaire)}</span></div>)}
+                    </div>
+                    <div className="mt-3 border-t border-gray-200 pt-2">
+                      <p className="mb-2 text-xs font-bold uppercase text-gray-500">Récapitulatif des produits</p>
+                      {form.lignes.filter((l) => l.designation && l.prixUnitaire > 0).map((l) => <div key={l.id} className="grid grid-cols-[1fr_auto_auto] gap-3 border-b border-gray-100 py-1.5 text-xs"><span>{l.designation}</span><span>{l.quantite} {l.unite}</span><span className="text-right">{formatXAF(l.quantite * l.prixUnitaire)}</span></div>)}
+                    </div>
                     <div className="h-px bg-gray-200" />
                     {/* §17-19/§41.G — le devis est un montant brut, sans TVA */}
                     <div className="flex justify-between text-base"><span className="font-bold">Montant brut du devis</span><span className="font-black" style={{ color: '#C62828' }}>{formatXAF(totalHT)}</span></div>

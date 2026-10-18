@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { randomInt } from 'crypto'
 import { createServiceClient } from '@/lib/supabase'
+import { empreinteOtp } from '@/lib/auth'
 
 const PHONE_RE = /^(\+?237\s?)?6\d{8}$/
+const DELAI_ENTRE_ENVOIS_MS = 60_000
 
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, '')
@@ -75,13 +77,30 @@ export async function POST(req: NextRequest) {
   const code  = String(randomInt(100000, 1000000)) // 6 chiffres
   const db    = createServiceClient()
 
+  // Un SMS par minute et par numéro : sans ça, la route sert à inonder un
+  // numéro de SMS (et à faire grimper la facture d'envoi).
+  const { data: recent } = await db
+    .from('otp_sessions')
+    .select('created_at')
+    .eq('telephone', phone)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const dernier = (recent as { created_at: string } | null)?.created_at
+  if (dernier && Date.now() - new Date(dernier).getTime() < DELAI_ENTRE_ENVOIS_MS) {
+    return NextResponse.json(
+      { error: 'Un code vient d\'être envoyé. Patientez une minute avant d\'en demander un autre.' },
+      { status: 429 },
+    )
+  }
+
   // Invalider les OTP précédents pour ce numéro
   await db.from('otp_sessions').delete().eq('telephone', phone)
 
   const expiresAt = new Date(Date.now() + 5 * 60 * 1_000).toISOString()
   const { error } = await db.from('otp_sessions').insert({
     telephone: phone,
-    code,
+    code: await empreinteOtp(phone, code), // jamais le code en clair
     expires_at: expiresAt,
   })
 

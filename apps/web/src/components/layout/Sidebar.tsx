@@ -12,6 +12,7 @@ import { useAuth } from '@/context/AuthContext'
 import { useCommandesShop } from '@/hooks/useCommandesShop'
 import { usePermissions } from '@/hooks/useRbac'
 import type { RbacModule } from '@/hooks/useRbac'
+import { ROLE_LABELS, isAppModuleEnabled } from '@forge/shared'
 
 interface NavItem {
   path: string
@@ -23,6 +24,7 @@ interface NavItem {
   requiredModule?: RbacModule
   /** Rôles legacy qui voient l'entrée même sans la permission (ex: technicien → son propre parcours) */
   alsoForRoles?: string[]
+  featureModule?: 'iot' | 'securite' | 'intelligence' | 'projets' | 'marketing'
 }
 
 interface NavGroup {
@@ -37,7 +39,7 @@ const DASHBOARD_ITEM: NavItem = { path: '/dashboard', label: 'Dashboard', icon: 
 // RBAC quand le backend ne distingue pas plus finement (ex: Projets/Équipements/
 // IoT → PRODUCTION, Marketing → COMMERCIAL, Sécurité/HSE → HR — aucun de ces
 // domaines n'a de module RBAC dédié, cf. plan de migration RBAC).
-const NAV_GROUPS: NavGroup[] = [
+export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'activite',
     label: 'Activité',
@@ -68,20 +70,27 @@ const NAV_GROUPS: NavGroup[] = [
       { path: '/rh',          label: 'RH',          icon: Users,        requiredModule: 'HR' },
       { path: '/formation',   label: 'Formation',   icon: GraduationCap, requiredModule: 'HR', alsoForRoles: ['technicien'] },
       { path: '/equipements', label: 'Équipements', icon: Hammer,       requiredModule: 'PRODUCTION' },
-      { path: '/projets',     label: 'Projets',     icon: Kanban,       requiredModule: 'PRODUCTION' },
+      { path: '/projets',     label: 'Projets',     icon: Kanban,       requiredModule: 'PRODUCTION', featureModule: 'projets' },
     ],
   },
   {
     id: 'pilotage',
     label: 'Pilotage',
     items: [
-      { path: '/intelligence', label: 'Intelligence', icon: Brain,    requiredModule: 'REPORTS' },
-      { path: '/marketing',    label: 'Marketing',    icon: Megaphone, requiredModule: 'COMMERCIAL' },
-      { path: '/iot',          label: 'IoT',          icon: Wifi,     requiredModule: 'PRODUCTION' },
-      { path: '/securite',     label: 'Sécurité',     icon: Shield,   requiredModule: 'HR' },
+      { path: '/intelligence', label: 'Intelligence', icon: Brain,    requiredModule: 'REPORTS', featureModule: 'intelligence' },
+      { path: '/marketing',    label: 'Marketing',    icon: Megaphone, requiredModule: 'COMMERCIAL', featureModule: 'marketing' },
+      { path: '/iot',          label: 'IoT',          icon: Wifi,     requiredModule: 'PRODUCTION', featureModule: 'iot' },
+      { path: '/securite',     label: 'Sécurité',     icon: Shield,   requiredModule: 'HR', featureModule: 'securite' },
     ],
   },
 ]
+
+export function filterEnabledFeatureModules(groups: NavGroup[] = NAV_GROUPS): NavGroup[] {
+  return groups.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !item.featureModule || isAppModuleEnabled(item.featureModule)),
+  })).filter((group) => group.items.length > 0)
+}
 
 const STORAGE_KEY = 'forge-sidebar-groups'
 
@@ -137,16 +146,17 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   // Inject admin item at bottom of Gestion group, then filter by real permission —
   // ADMIN:CONFIGURE mirrors the immutable SUPER_ADMIN-only rule in rbacService.ts.
-  const groups: NavGroup[] = NAV_GROUPS.map(g => {
+  const groups: NavGroup[] = filterEnabledFeatureModules(NAV_GROUPS).map(g => {
     const withAdmin = g.id === 'gestion' && hasPermission('ADMIN', 'CONFIGURE')
       ? { ...g, items: [...g.items, { path: '/admin', label: 'Administration', icon: Crown, requiredModule: 'ADMIN' as const }] }
       : g
     return {
       ...withAdmin,
-      items: withAdmin.items.filter((item: NavItem) =>
-        !item.requiredModule
-        || hasPermission(item.requiredModule, 'READ')
-        || (!!myPermissions?.legacyRole && !!item.alsoForRoles?.includes(myPermissions.legacyRole))),
+      items: withAdmin.items.filter((item: NavItem) => {
+        return !item.requiredModule
+          || hasPermission(item.requiredModule, 'READ')
+          || (!!myPermissions?.legacyRole && !!item.alsoForRoles?.includes(myPermissions.legacyRole))
+      }),
     }
   }).filter(g => g.items.length > 0)
 
@@ -159,14 +169,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const displayName = authName ?? user?.email?.split('@')[0] ?? 'Utilisateur'
   const initial     = displayName.charAt(0).toUpperCase()
 
-  const roleLabels: Record<string, string> = {
-    admin:       'Admin (Patron)',
-    superviseur: 'Superviseur',
-    operateur:   'Opérateur',
-    technicien:  'Technicien',
-    caissier:    'Caissier',
-  }
-  const roleLabel = roleLabels[appRole ?? ''] ?? (appRole ?? 'Utilisateur')
+  const roleLabel = ROLE_LABELS[appRole ?? ''] ?? (appRole ?? 'Utilisateur')
 
   const handleSignOut = async () => {
     await signOut()

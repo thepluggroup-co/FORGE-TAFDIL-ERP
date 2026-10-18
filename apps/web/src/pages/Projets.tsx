@@ -4,7 +4,7 @@ import {
   Kanban, DollarSign, AlertTriangle, TrendingUp, Plus, Users, Package,
   Wrench, Truck, X, Trash2, Check, ChevronRight, UserCheck,
 } from 'lucide-react'
-import { PageHeader, KpiCard, DataTable, SlideOver, Button, Modal } from '@forge/ui'
+import { PageHeader, KpiCard, DataTable, SlideOver, Button, Modal , NumberInput} from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import { uniteOptions } from '@/lib/constants'
@@ -196,7 +196,7 @@ function OngletRessources({ projetId, canEdit }: { projetId: string; canEdit: bo
           <div className="grid grid-cols-3 gap-2">
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Quantité</label>
-              <input type="number" min="0.01" step="0.01" value={form.quantite}
+              <NumberInput min="0.01" step="0.01" value={form.quantite}
                 onChange={(e) => setForm((f) => ({ ...f, quantite: Number(e.target.value) }))}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
             </div>
@@ -210,7 +210,7 @@ function OngletRessources({ projetId, canEdit }: { projetId: string; canEdit: bo
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">P.U. (XAF)</label>
-              <input type="number" min="0" value={form.cout_unitaire_xaf}
+              <NumberInput min="0" value={form.cout_unitaire_xaf}
                 onChange={(e) => setForm((f) => ({ ...f, cout_unitaire_xaf: Number(e.target.value) }))}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
             </div>
@@ -533,7 +533,7 @@ function OngletEquipe({ projetId, canEdit }: { projetId: string; canEdit: boolea
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Heures planifiées</label>
-              <input type="number" min="0" value={heuresPlan} onChange={(e) => setHeuresPlan(Number(e.target.value))}
+              <NumberInput min="0" value={heuresPlan} onChange={(e) => setHeuresPlan(Number(e.target.value))}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
             </div>
           </div>
@@ -792,7 +792,7 @@ function NouveauProjetForm({ onClose }: { onClose: () => void }) {
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Budget (XAF)</label>
-            <input type="number" min="0" value={budget} onChange={(e) => setBudget(Number(e.target.value))}
+            <NumberInput min="0" value={budget} onChange={(e) => setBudget(Number(e.target.value))}
               className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
           </div>
           <div>

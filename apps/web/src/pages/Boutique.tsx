@@ -6,7 +6,7 @@ import {
   Edit2, Image, Upload, Trash2,
   Factory,
 } from 'lucide-react'
-import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button, Modal } from '@forge/ui'
+import { PageHeader, KpiCard, DataTable, StatusBadge, SlideOver, Button, Modal , NumberInput} from '@forge/ui'
 import type { Column } from '@forge/ui'
 import { formatXAF, formatDate } from '@/lib/utils'
 import { VitrineModeles } from '@/components/boutique/VitrineModeles'
@@ -142,8 +142,8 @@ function EditVitrineModal({
         <div className="grid gap-4 sm:grid-cols-3">
           <div>
             <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Prix public</label>
-            <input
-              type="number"
+            <NumberInput
+
               min="0"
               value={prix}
               onChange={(e) => setPrix(Number(e.target.value))}
@@ -152,8 +152,8 @@ function EditVitrineModal({
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Delai fabrication</label>
-            <input
-              type="number"
+            <NumberInput
+
               min="0"
               value={delai}
               onChange={(e) => setDelai(Number(e.target.value))}
@@ -162,8 +162,8 @@ function EditVitrineModal({
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-semibold uppercase text-gray-500">Min. commande</label>
-            <input
-              type="number"
+            <NumberInput
+
               min="1"
               value={minCommande}
               onChange={(e) => setMinCommande(Number(e.target.value))}

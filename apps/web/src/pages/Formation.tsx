@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react'
+import { isQueuedOffline } from '@forge/shared'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   GraduationCap, Star, Clock, Award, UserPlus,
@@ -6,7 +7,7 @@ import {
   Calendar, MapPin, UserCheck, ChevronDown, ChevronUp, Trash2,
   ClipboardList, BarChart2, AlertCircle, Download,
 } from 'lucide-react'
-import { PageHeader, KpiCard, SlideOver, Button, Modal } from '@forge/ui'
+import { PageHeader, KpiCard, SlideOver, Button, Modal , NumberInput} from '@forge/ui'
 import { toast } from 'sonner'
 import {
   useApprenants, useProgressionApprenant, useRecruterApprenant, useCreateApprenant,
@@ -341,7 +342,7 @@ function RecruterModal({ isOpen, onClose, apprenant }: { isOpen: boolean; onClos
         </div>
         <div>
           <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Salaire mensuel brut (FCFA) *</label>
-          <input type="number" min="0" value={form.salaire_base_xaf} onChange={(e) => setForm((f) => ({ ...f, salaire_base_xaf: Number(e.target.value) }))}
+          <NumberInput min="0" value={form.salaire_base_xaf} onChange={(e) => setForm((f) => ({ ...f, salaire_base_xaf: Number(e.target.value) }))}
             placeholder="ex. 185 000"
             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]/30" />
         </div>
@@ -471,6 +472,14 @@ export default function Formation() {
       { nom: newNom.trim(), specialite: newSpec.trim(), niveau: 1, duree_mois: 0 },
       {
         onSuccess: (newApp) => {
+          // Hors ligne : l'apprenant n'a pas encore d'identifiant, l'inscription
+          // à la session devra être faite une fois la création synchronisée.
+          if (isQueuedOffline(newApp)) {
+            if (selectedSessionId) toast.warning('Apprenant mis en attente — inscrivez-le à la session après la synchronisation')
+            setAddSlide(false)
+            resetAddForm()
+            return
+          }
           if (selectedSessionId) {
             inscrireApprenant.mutate(
               { id: newApp.id, session_id: selectedSessionId, disponibilites },
@@ -726,7 +735,7 @@ export default function Formation() {
           {/* Capacité */}
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1.5">Capacité max</label>
-            <input type="number" min="1" value={sessionForm.capacite_max ?? 10} onChange={(e) => setSessionForm(f => ({ ...f, capacite_max: Number(e.target.value) }))}
+            <NumberInput min="1" value={sessionForm.capacite_max ?? 10} onChange={(e) => setSessionForm(f => ({ ...f, capacite_max: Number(e.target.value) }))}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#C62828]" />
           </div>
 

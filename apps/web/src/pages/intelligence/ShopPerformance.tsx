@@ -1,3 +1,4 @@
+import { NumberInput } from '@forge/ui'
 import React, { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -111,9 +112,9 @@ function PrixEditor({ id, prix }: { id: string; prix: number | null }) {
   if (editing) {
     return (
       <div className="flex items-center gap-1">
-        <input
+        <NumberInput
           ref={inputRef}
-          type="number"
+
           value={val}
           onChange={(e) => setVal(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
