@@ -9,20 +9,22 @@ import { OutboxPanel } from '@/components/OutboxPanel'
 import { usePermissions } from '@/hooks/useRbac'
 import type { RbacModule } from '@/hooks/useRbac'
 import { disabledModuleRedirect, type AppModuleId } from '@forge/shared'
+import { recoverFromStaleChunk } from '@/lib/chunk-reload'
 
 // ── Error Boundary global ──────────────────────────────────────────────────────
 // Attrape les erreurs non gérées dans l'arbre React et affiche un message
 // lisible au lieu d'un écran blanc. Sans ça, un import manquant ou une prop
 // undefined plante toute l'app silencieusement.
 
-interface EBState { hasError: boolean; message: string }
+interface EBState { hasError: boolean; message: string; reloading?: boolean }
 
 class AppErrorBoundary extends Component<{ children: ReactNode }, EBState> {
   state: EBState = { hasError: false, message: '' }
 
   static getDerivedStateFromError(err: unknown): EBState {
     const message = err instanceof Error ? err.message : String(err)
-    return { hasError: true, message }
+    // Page d'une version précédente (redéploiement) : rechargement automatique.
+    return { hasError: true, message, reloading: recoverFromStaleChunk(err) }
   }
 
   componentDidCatch(err: unknown, info: ErrorInfo) {
@@ -31,6 +33,16 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, EBState> {
 
   render() {
     if (!this.state.hasError) return this.props.children
+    if (this.state.reloading) {
+      return (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh',
+          color: '#6b7280', fontFamily: 'sans-serif', fontSize: 14,
+        }}>
+          Nouvelle version disponible — rechargement…
+        </div>
+      )
+    }
     return (
       <div style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center',

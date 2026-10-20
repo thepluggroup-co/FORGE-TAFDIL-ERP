@@ -4,7 +4,11 @@ import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/reac
 import { BrowserRouter, MemoryRouter } from 'react-router-dom'
 import App from './App'
 import { setupRealtime } from './lib/realtime'
+import { installChunkReloadHandler } from './lib/chunk-reload'
 import './index.css'
+
+// Onglet ouvert avant un redéploiement : recharge pour prendre la nouvelle version.
+installChunkReloadHandler()
 
 const queryClient = new QueryClient({
   defaultOptions: {
