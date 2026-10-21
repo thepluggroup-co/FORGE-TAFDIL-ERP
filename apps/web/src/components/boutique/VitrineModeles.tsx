@@ -77,6 +77,9 @@ function LigneModele({ modele }: { modele: ModeleShopErp }) {
   const prixValide = prix !== '' && Number.isInteger(prixNombre) && prixNombre >= 0
   // CONFIGURABLE : prix calculé par le configurateur (coût × marge), pas de prix public.
   const configurable = modele.commercial_mode === 'CONFIGURABLE'
+  // QUOTE (sur mesure) : aucun prix, publication sans condition de prix.
+  const surDevis = modele.commercial_mode === 'QUOTE'
+  const prixRequis = !configurable && !surDevis
 
   const enregistrer = () => {
     const payload: VitrineModelePayload = {
@@ -84,7 +87,7 @@ function LigneModele({ modele }: { modele: ModeleShopErp }) {
       min_commande:            Math.max(1, Number(min) || 1),
       delai_fabrication_jours: delai === '' ? null : Math.max(0, Number(delai) || 0),
     }
-    if (prixValide && !configurable) payload.prix_public = prixNombre
+    if (prixValide && prixRequis) payload.prix_public = prixNombre
     update.mutate({ id: modele.id, payload })
   }
 
@@ -92,7 +95,7 @@ function LigneModele({ modele }: { modele: ModeleShopErp }) {
     <tr className="border-t border-gray-100">
       <td className="px-4 py-3">
         <p className="font-semibold text-[#212121]">{modele.designation}</p>
-        <p className="text-xs text-gray-400">{modele.reference} · {modele.unite_facturation ?? 'unite'}{configurable ? ' · configurable' : ''}</p>
+        <p className="text-xs text-gray-400">{modele.reference} · {modele.unite_facturation ?? 'unite'}{configurable ? ' · configurable' : ''}{surDevis ? ' · sur devis' : ''}</p>
       </td>
       <td className="px-4 py-3">
         <ImagesModele modeleId={modele.id} images={v?.images ?? []} />
@@ -101,6 +104,8 @@ function LigneModele({ modele }: { modele: ModeleShopErp }) {
       <td className="px-4 py-3">
         {configurable ? (
           <p className="text-[11px] text-gray-500">Prix calculé par le configurateur<br />(Catalogue → Configurateur, Taux de marge)</p>
+        ) : surDevis ? (
+          <p className="text-[11px] text-gray-500">Sur devis — pas de prix fixe<br />(CTA « Demander un devis » côté boutique)</p>
         ) : (
           <>
             <NumberInput
@@ -133,7 +138,7 @@ function LigneModele({ modele }: { modele: ModeleShopErp }) {
         </label>
       </td>
       <td className="px-4 py-3 text-right">
-        <Button size="sm" onClick={enregistrer} loading={update.isPending} disabled={visible && !configurable && !prixValide}>
+        <Button size="sm" onClick={enregistrer} loading={update.isPending} disabled={visible && prixRequis && !prixValide}>
           Enregistrer
         </Button>
       </td>

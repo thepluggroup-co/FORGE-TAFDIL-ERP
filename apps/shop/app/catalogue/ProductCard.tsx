@@ -38,6 +38,8 @@ export function ProductCard({ produit }: Props) {
   const { addItem } = useCart()
   const indisponible = produit.disponibilite === 'indisponible'
   const configurable = produit.commercial_mode === 'CONFIGURABLE'
+  // QUOTE (sur mesure) : pas de panier (refusé serveur) — le bouton WhatsApp sert de CTA devis.
+  const surDevis = produit.commercial_mode === 'QUOTE'
   const hasPromo = Boolean(produit.promotion && produit.prix_barre_xaf && produit.prix_public)
 
   const whatsappUrl = `https://wa.me/237688227397?text=${encodeURIComponent(
@@ -154,11 +156,11 @@ export function ProductCard({ produit }: Props) {
 
         <button
           onClick={handleAddToCart}
-          disabled={indisponible}
+          disabled={indisponible || surDevis}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-forge-red py-2 text-xs font-semibold text-white transition-all hover:bg-forge-red-dark disabled:cursor-not-allowed disabled:opacity-40"
         >
           <ShoppingCart size={13} />
-          {indisponible ? 'Indisponible' : configurable ? 'Personnaliser' : 'Panier'}
+          {surDevis ? 'Sur devis' : indisponible ? 'Indisponible' : configurable ? 'Personnaliser' : 'Panier'}
         </button>
 
         <a

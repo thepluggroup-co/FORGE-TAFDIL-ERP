@@ -356,7 +356,9 @@ function modeleAffichable(row: ModeleVitrineRow): boolean {
   if (!row.modeles?.actif) return false
   const mode = resoudreModeCommercial(row.modeles, row.modeles.familles)
   if (mode === CommercialMode.STANDARD) return Number(row.prix_public ?? 0) > 0
-  return mode === CommercialMode.CONFIGURABLE
+  // QUOTE (sur mesure) : affichage informatif sans prix ni panier (CTA « Demander un devis »).
+  // Jamais commandable : modeleVendable reste strictement STANDARD.
+  return mode === CommercialMode.CONFIGURABLE || mode === CommercialMode.QUOTE
 }
 
 /** Règles communes de vente en ligne anonyme : visible, prix public, minimum de commande. */
@@ -509,13 +511,14 @@ async function tarifierLignesShop(
  */
 function enrichirModeleVitrine(row: ModeleVitrineRow, promo?: PromoActive) {
   const m = row.modeles
-  const configurable = resoudreModeCommercial(m, m.familles) === CommercialMode.CONFIGURABLE
-  const prixPublic = configurable ? null : Math.round(Number(row.prix_public ?? 0))
+  const mode = resoudreModeCommercial(m, m.familles)
+  // Seul STANDARD porte un prix public ; CONFIGURABLE (configurateur) et QUOTE (sur devis) : null.
+  const prixPublic = mode === CommercialMode.STANDARD ? Math.round(Number(row.prix_public ?? 0)) : null
   const prixRemise = prixPublic === null ? null : prixPromo(prixPublic, promo)
   return {
     id:                      row.modele_id,
     type_article:            'modele' as const,
-    commercial_mode:         configurable ? CommercialMode.CONFIGURABLE : CommercialMode.STANDARD,
+    commercial_mode:         mode,
     ref:                     m.reference,
     nom:                     m.designation,
     description:             m.description,
@@ -1842,7 +1845,7 @@ shopErpRouter.get('/modeles', requirePermission('COMMERCIAL', 'READ'), async (c)
 
   const modeles = ((data ?? []) as unknown as ModeleErpRow[])
     .map((m) => ({ m, mode: resoudreModeCommercial(m, m.familles) }))
-    .filter(({ mode }) => mode === CommercialMode.STANDARD || mode === CommercialMode.CONFIGURABLE)
+    .filter(({ mode }) => mode === CommercialMode.STANDARD || mode === CommercialMode.CONFIGURABLE || mode === CommercialMode.QUOTE)
     .map(({ m, mode }) => {
       const vitrine = Array.isArray(m.modeles_shop) ? (m.modeles_shop[0] ?? null) : m.modeles_shop
       return {
@@ -1894,9 +1897,9 @@ shopErpRouter.put(
     const m = modele as unknown as Omit<ModeleErpRow, 'modeles_shop'> & { modeles_shop: VitrineActuelle | VitrineActuelle[] | null }
     // STANDARD : vendu au panier, prix public obligatoire pour la mise en ligne.
     // CONFIGURABLE : présenté au configurateur, prix calculé (pas de prix public).
-    // SUR DEVIS : jamais en vitrine produit — passe par la demande de devis.
+    // QUOTE (sur devis) : affichage informatif en vitrine, sans prix ni panier (CTA « Demander un devis »).
     const mode = resoudreModeCommercial(m, m.familles)
-    if (mode !== CommercialMode.STANDARD && mode !== CommercialMode.CONFIGURABLE) {
+    if (mode !== CommercialMode.STANDARD && mode !== CommercialMode.CONFIGURABLE && mode !== CommercialMode.QUOTE) {
       return c.json({
         error: 'Un modèle « sur devis » ne se met pas en vitrine : il passe par la demande de devis',
         code:  'MODE_NON_VITRINE',

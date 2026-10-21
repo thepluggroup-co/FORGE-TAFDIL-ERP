@@ -1458,11 +1458,12 @@ router.patch('/devis/:id/statut', requirePermission('COMMERCIAL', 'VALIDATE'), z
 })), async (c) => {
   const { id }     = c.req.param()
   const { statut } = c.req.valid('json')
+  const user       = c.get('user')
 
-  const { data: existing } = await db.from('devis').select('statut, date_validite').eq('id', id).single()
+  const { data: existing } = await db.from('devis').select('statut, date_validite, approuve_par_client').eq('id', id).single()
   if (!existing) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
 
-  const ex = existing as { statut: string; date_validite: string }
+  const ex = existing as { statut: string; date_validite: string; approuve_par_client: boolean | null }
   const allowed = TRANSITIONS_DEVIS[ex.statut] ?? []
 
   if (!allowed.includes(statut)) {
@@ -1473,15 +1474,32 @@ router.patch('/devis/:id/statut', requirePermission('COMMERCIAL', 'VALIDATE'), z
     }, 422)
   }
 
+  // Validation interne (superviseur/admin) : distincte de l'approbation client par lien
+  // token. Passer par CETTE route = le personnel valide sans attendre le clic du client
+  // (accord reçu par téléphone ou au comptoir) → approuve_par_client = true pour débloquer
+  // la conversion en commande (CMD01), avec une trace d'audit du canal utilisé.
+  const updates: Record<string, unknown> = { statut, updated_at: new Date().toISOString() }
+  if (statut === 'accepte') updates.approuve_par_client = true
+
   const { data, error } = await db
     .from('devis')
-    .update({ statut, updated_at: new Date().toISOString() })
+    .update(updates)
     .eq('id', id)
     .select('*, devis_lignes(*), clients(id, nom, telephone, email)')
     .single()
 
   if (error || !data) return c.json({ error: 'Devis introuvable', code: 'NOT_FOUND' }, 404)
-  await synchroniserDemandeDepuisDevis(id, statut, c.get('user')?.id ?? null)
+
+  if (statut === 'accepte') {
+    writeAuditLog({
+      userId: user?.id, actionType: 'DEVIS_VALIDE_INTERNE', module: 'COMMERCIAL',
+      resourceType: 'devis', resourceId: id,
+      payloadBefore: { statut: ex.statut, approuve_par_client: ex.approuve_par_client ?? false },
+      payloadAfter:  { statut: 'accepte', approuve_par_client: true, canal: 'interne_sans_lien' },
+    })
+  }
+
+  await synchroniserDemandeDepuisDevis(id, statut, user?.id ?? null)
   return c.json(mapDevis(data))
 })
 

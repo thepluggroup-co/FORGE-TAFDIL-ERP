@@ -421,6 +421,22 @@ describe('C6 — PATCH /api/devis/:id/statut : transition devis', () => {
     })
     expect(res.status).toBe(403)
   })
+
+  it('validation interne (envoye → accepte) marque approuve_par_client = true, sans attendre le lien client', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({ data: { ...DEVIS, statut: 'envoye', approuve_par_client: false }, error: null }) as never,
+    )
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({ data: { ...DEVIS, statut: 'accepte', approuve_par_client: true }, error: null }) as never,
+    )
+    const res = await app.request(`/api/devis/${DEVIS_ID}/statut`, {
+      method:  'PATCH',
+      headers: new Headers(authHeaders('manager')),
+      body:    JSON.stringify({ statut: 'accepte' }),
+    })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { approuve_par_client: boolean }).approuve_par_client).toBe(true)
+  })
 })
 
 // ── Tests COMMANDES ───────────────────────────────────────────────────────────

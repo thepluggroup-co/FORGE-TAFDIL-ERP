@@ -85,6 +85,8 @@ export function ProductDetailClient({ produit, similaires }: Props) {
     'Facile a installer',
   ]
 
+  // QUOTE (sur mesure) : pas de panier (refusé serveur) — seul « Demander un devis » reste.
+  const surDevis = produit.commercial_mode === 'QUOTE'
   const handleAddToCart = () => {
     void addItem(
       { id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null, type_article: produit.type_article, commercial_mode: produit.commercial_mode },
@@ -199,13 +201,15 @@ export function ProductDetailClient({ produit, similaires }: Props) {
           </div>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_48px]">
-            <button onClick={handleAddToCart} disabled={indisponible} className="inline-flex h-12 items-center justify-center gap-2 rounded-md bg-forge-red px-5 text-sm font-black text-white shadow-sm hover:bg-forge-red-dark disabled:cursor-not-allowed disabled:opacity-40">
-              <ShoppingCart size={17} /> {produit.commercial_mode === 'CONFIGURABLE' ? 'Personnaliser ce produit' : 'Ajouter au panier'}
-            </button>
+            {!surDevis && (
+              <button onClick={handleAddToCart} disabled={indisponible} className="inline-flex h-12 items-center justify-center gap-2 rounded-md bg-forge-red px-5 text-sm font-black text-white shadow-sm hover:bg-forge-red-dark disabled:cursor-not-allowed disabled:opacity-40">
+                <ShoppingCart size={17} /> {produit.commercial_mode === 'CONFIGURABLE' ? 'Personnaliser ce produit' : 'Ajouter au panier'}
+              </button>
+            )}
             <button className="flex h-12 items-center justify-center rounded-md border border-gray-200 text-forge-steel hover:border-forge-red hover:text-forge-red" aria-label="Ajouter aux favoris">
               <Heart size={18} />
             </button>
-            <Link href={devisUrl} className="sm:col-span-2 inline-flex h-12 items-center justify-center gap-2 rounded-md border border-forge-red/30 bg-forge-red/5 px-5 text-sm font-black text-forge-red hover:bg-forge-red-light">
+            <Link href={devisUrl} className={`sm:col-span-2 inline-flex h-12 items-center justify-center gap-2 rounded-md px-5 text-sm font-black ${surDevis ? 'bg-forge-red text-white shadow-sm hover:bg-forge-red-dark' : 'border border-forge-red/30 bg-forge-red/5 text-forge-red hover:bg-forge-red-light'}`}>
               <FileText size={17} /> Demander un devis
             </Link>
           </div>
@@ -401,14 +405,24 @@ function SimilarProductCard({ produit, index }: { produit: Produit; index: numbe
         </p>
         <p className={`mt-1 text-xs font-semibold ${unavailable ? 'text-gray-500' : 'text-green-700'}`}>{unavailable ? 'Sur commande' : 'En stock'}</p>
       </div>
-      <button
-        onClick={() => void addItem({ id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null, type_article: produit.type_article, commercial_mode: produit.commercial_mode }, 1)}
-        disabled={unavailable}
-        className="mx-4 mb-4 flex h-9 w-[calc(100%-2rem)] items-center justify-center rounded-md border border-gray-200 text-forge-steel hover:border-forge-red hover:text-forge-red disabled:cursor-not-allowed disabled:opacity-40"
-        aria-label="Ajouter au panier"
-      >
-        <ShoppingCart size={15} />
-      </button>
+      {produit.commercial_mode === 'QUOTE' ? (
+        <Link
+          href={`/devis?ref=${encodeURIComponent(produit.ref)}&nom=${encodeURIComponent(produit.nom)}`}
+          className="mx-4 mb-4 flex h-9 w-[calc(100%-2rem)] items-center justify-center rounded-md border border-gray-200 text-forge-steel hover:border-forge-red hover:text-forge-red"
+          aria-label="Demander un devis"
+        >
+          <FileText size={15} />
+        </Link>
+      ) : (
+        <button
+          onClick={() => void addItem({ id: produit.id, ref: produit.ref, nom: produit.nom, prix: produit.prix_public, image: produit.images[0] ?? null, type_article: produit.type_article, commercial_mode: produit.commercial_mode }, 1)}
+          disabled={unavailable}
+          className="mx-4 mb-4 flex h-9 w-[calc(100%-2rem)] items-center justify-center rounded-md border border-gray-200 text-forge-steel hover:border-forge-red hover:text-forge-red disabled:cursor-not-allowed disabled:opacity-40"
+          aria-label="Ajouter au panier"
+        >
+          <ShoppingCart size={15} />
+        </button>
+      )}
     </article>
   )
 }

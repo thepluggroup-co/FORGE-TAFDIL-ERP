@@ -8,6 +8,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowRight,
   Eye,
+  FileText,
   Grid3X3,
   Heart,
   List,
@@ -482,6 +483,9 @@ function CatalogueProductCard({ produit, index, viewMode, onAdd }: { produit: Pr
   const image = productImage(produit, index)
   const unavailable = produit.disponibilite === 'indisponible'
   const hasPromo = Boolean(produit.promotion && produit.prix_barre_xaf && produit.prix_public)
+  // QUOTE (sur mesure) : jamais de panier (refusé serveur, modeleVendable strictement STANDARD).
+  const surDevis = produit.commercial_mode === 'QUOTE'
+  const hrefDevis = `/devis?ref=${encodeURIComponent(produit.ref)}&nom=${encodeURIComponent(produit.nom)}`
 
   if (viewMode === 'list') {
     return (
@@ -501,9 +505,15 @@ function CatalogueProductCard({ produit, index, viewMode, onAdd }: { produit: Pr
             <p className="text-xl font-black text-forge-red">{formatXAF(produit.prix_public)} {produit.prix_public ? <span className="text-xs font-semibold text-gray-500">/ {produit.unite}</span> : null}</p>
             {produit.promotion && <p className="mt-1 text-[10px] font-black uppercase text-forge-red">{produit.promotion.nom}</p>}
           </div>
-          <button onClick={onAdd} disabled={unavailable} className="inline-flex items-center justify-center gap-2 rounded-md bg-forge-red px-5 py-3 text-sm font-black text-white hover:bg-forge-red-dark disabled:cursor-not-allowed disabled:opacity-40">
-            <ShoppingCart size={15} /> Panier
-          </button>
+          {surDevis ? (
+            <Link href={hrefDevis} className="inline-flex items-center justify-center gap-2 rounded-md bg-forge-red px-5 py-3 text-sm font-black text-white hover:bg-forge-red-dark">
+              Demander un devis
+            </Link>
+          ) : (
+            <button onClick={onAdd} disabled={unavailable} className="inline-flex items-center justify-center gap-2 rounded-md bg-forge-red px-5 py-3 text-sm font-black text-white hover:bg-forge-red-dark disabled:cursor-not-allowed disabled:opacity-40">
+              <ShoppingCart size={15} /> Panier
+            </button>
+          )}
         </div>
       </article>
     )
@@ -536,9 +546,15 @@ function CatalogueProductCard({ produit, index, viewMode, onAdd }: { produit: Pr
         <button className="flex h-10 items-center justify-center border-x border-gray-100 text-gray-500 hover:text-forge-red" aria-label="Favori">
           <Heart size={15} />
         </button>
-        <button onClick={onAdd} disabled={unavailable} className="flex h-10 items-center justify-center bg-forge-red-light text-forge-red hover:bg-forge-red hover:text-white disabled:cursor-not-allowed disabled:opacity-40" aria-label="Ajouter au panier">
-          <ShoppingCart size={15} />
-        </button>
+        {surDevis ? (
+          <Link href={hrefDevis} className="flex h-10 items-center justify-center bg-forge-red-light text-forge-red hover:bg-forge-red hover:text-white" aria-label="Demander un devis">
+            <FileText size={15} />
+          </Link>
+        ) : (
+          <button onClick={onAdd} disabled={unavailable} className="flex h-10 items-center justify-center bg-forge-red-light text-forge-red hover:bg-forge-red hover:text-white disabled:cursor-not-allowed disabled:opacity-40" aria-label="Ajouter au panier">
+            <ShoppingCart size={15} />
+          </button>
+        )}
       </div>
     </article>
   )

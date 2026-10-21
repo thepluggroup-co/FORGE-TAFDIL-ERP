@@ -36,6 +36,8 @@ export const auditActionEnum = pgEnum('audit_action_type', [
   'PASSWORD_RESET', 'PASSWORD_CHANGED', 'SESSION_EXPIRED',
   'DEVIS_CREATED', 'DEVIS_UPDATED', 'DEVIS_LIGNE_AJUSTEE',
   'DEVIS_VALIDATION_CLIENT', 'DEVIS_CONVERTI_COMMANDE',
+  // Validation interne (admin/superviseur), distincte de DEVIS_VALIDATION_CLIENT (lien token).
+  'DEVIS_VALIDE_INTERNE',
 ])
 
 // ── rbac_roles ────────────────────────────────────────────────────────────────
