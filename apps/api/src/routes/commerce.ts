@@ -109,7 +109,8 @@ const devisLigneSchema = z.object({
   description:          z.string().optional(),
   categorie:            z.enum(['materiaux', 'main_oeuvre', 'equipement', 'autre']).default('materiaux'),
   unite:                z.string().default('unité'),
-  quantite:             z.number().int().positive(),
+  // Décimale autorisée : m², ml, kg, m³ (ex. 3 m × 1,8 m = 5,4 m²). Colonne DB en real.
+  quantite:             z.number().positive(),
   prix_unitaire_ht_xaf: z.number().int().min(0),
   remise_type:          z.enum(['pct', 'forfait']).optional(),
   remise_valeur:        z.number().min(0).optional(),
@@ -160,7 +161,8 @@ const commandeLigneSchema = z.object({
   produit_id:           z.string().optional(),
   designation:          z.string().min(1),
   unite:                z.string().default('unité'),
-  quantite:             z.number().int().positive(),
+  // Décimale autorisée : m², ml, kg, m³ (ex. 3 m × 1,8 m = 5,4 m²). Colonne DB en real.
+  quantite:             z.number().positive(),
   prix_unitaire_ht_xaf: z.number().int().min(0),
   remise_type:          z.enum(['pct', 'forfait']).optional(),
   remise_valeur:        z.number().min(0).optional(),
