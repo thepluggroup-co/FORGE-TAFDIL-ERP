@@ -182,6 +182,19 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return data
 }
 
+export interface MyPermissionsResponse {
+  legacyRole:   string | null
+  rbacRoleName: string | null
+  permissions:  Array<{ module: string; action: string }>
+}
+
+/** Permissions RBAC réelles de l'utilisateur connecté (définies en base). La lecture est
+ *  copiée sur l'appareil par apiFetch : disponible aussi hors ligne après une première connexion. */
+export async function fetchMyPermissions() {
+  const res = await apiFetch<{ data: MyPermissionsResponse }>('/api/profile/permissions')
+  return res.data
+}
+
 export async function registerPushToken(token: string, platform: 'android' | 'ios', appVersion?: string) {
   return apiFetch<{ ok: boolean }>('/api/push/register', {
     method: 'POST',

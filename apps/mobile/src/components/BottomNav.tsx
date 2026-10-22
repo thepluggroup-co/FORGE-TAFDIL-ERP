@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
+import { usePermissions } from '../context/PermissionsContext'
 import { fetchBonsSoumis } from '../lib/api'
 
 function usePendingBons(canApprove: boolean) {
@@ -26,10 +26,13 @@ function usePendingBons(canApprove: boolean) {
 }
 
 export function BottomNav() {
-  const { user } = useAuth()
-  const isLivreur  = user?.role === 'livreur'
-  const canApprove = user?.role === 'admin' || user?.role === 'manager'
-  const canCaisse  = user?.role === 'caissier' || user?.role === 'admin' || user?.role === 'manager'
+  const { canScreen } = usePermissions()
+  // Onglets pilotés par les permissions de la base (mêmes données que la sidebar web).
+  const canOrders  = canScreen('orders')
+  const canStocks  = canScreen('stocks')
+  const canLivr    = canScreen('livraisons')
+  const canApprove = canScreen('approbation')
+  const canCaisse  = canScreen('caisse')
   const pendingCount = usePendingBons(canApprove)
 
   const tabs = [
@@ -42,8 +45,7 @@ export function BottomNav() {
         </svg>
       ),
     },
-    // L'onglet Commandes n'est pas pertinent pour le livreur — il voit ses livraisons à la place
-    ...(!isLivreur ? [{
+    ...(canOrders ? [{
       to: '/orders',
       label: 'Commandes',
       icon: (active: boolean) => (
@@ -52,7 +54,7 @@ export function BottomNav() {
         </svg>
       ),
     }] : []),
-    ...(isLivreur ? [{
+    ...(canLivr ? [{
       to: '/livraisons',
       label: 'Livraisons',
       icon: (active: boolean) => (
@@ -80,7 +82,7 @@ export function BottomNav() {
         </svg>
       ),
     }] : []),
-    ...(!isLivreur ? [{
+    ...(canStocks ? [{
       to: '/stocks',
       label: 'Stocks',
       icon: (active: boolean) => (

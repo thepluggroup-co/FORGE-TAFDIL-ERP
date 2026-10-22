@@ -1,5 +1,6 @@
 import { NumberInput } from '@forge/ui'
 import React, { useCallback, useEffect, useState } from 'react'
+import { usePermissions } from '../context/PermissionsContext'
 import { useNavigate, useParams } from 'react-router-dom'
 import { TopBar } from '../components/TopBar'
 import { fetchStockDetail, createStockMouvement, type StockDetail } from '../lib/api'
@@ -20,6 +21,9 @@ function formatDate(value: string): string {
 export function StockDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  // Les mouvements de stock exigent STOCK:CREATE côté API.
+  const { can } = usePermissions()
+  const canWriteStock = can('STOCK', 'CREATE')
   const [stock, setStock] = useState<StockDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -110,6 +114,7 @@ export function StockDetailPage() {
               </div>
             </section>
 
+            {canWriteStock && (
             <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-4 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -163,6 +168,7 @@ export function StockDetailPage() {
                 </button>
               </div>
             </section>
+            )}
 
             <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-4 space-y-3">
               <div>

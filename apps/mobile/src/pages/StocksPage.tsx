@@ -1,5 +1,6 @@
 import { NumberInput } from '@forge/ui'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { usePermissions } from '../context/PermissionsContext'
 import { useNavigate } from 'react-router-dom'
 import { TopBar } from '../components/TopBar'
 import { fetchStocks, createStock, uploadStockImages, createStockMouvementOffline, type ApiStock, type CreateStockPayload } from '../lib/api'
@@ -20,6 +21,9 @@ export function StocksPage() {
   const [actionLoading, setActionLoading] = useState(false)
   const [actionError, setActionError] = useState('')
   const [queuedMutations, setQueuedMutations] = useState<QueuedMutation[]>([])
+  // Créer un produit et enregistrer un mouvement exigent STOCK:CREATE côté API.
+  const { can } = usePermissions()
+  const canWriteStock = can('STOCK', 'CREATE')
   const [createOpen, setCreateOpen] = useState(false)
   const [createLoading, setCreateLoading] = useState(false)
   const [createError, setCreateError] = useState('')
@@ -189,13 +193,15 @@ export function StocksPage() {
             onChange={e => setSearch(e.target.value)}
             className="flex-1 bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#C62828] focus:border-transparent"
           />
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            className="rounded-2xl bg-[#C62828] text-white py-3 px-4 text-sm font-semibold hover:bg-[#B71C1C]"
-          >
-            Nouveau produit
-          </button>
+          {canWriteStock && (
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="rounded-2xl bg-[#C62828] text-white py-3 px-4 text-sm font-semibold hover:bg-[#B71C1C]"
+            >
+              Nouveau produit
+            </button>
+          )}
         </div>
         {createSuccess && (
           <div className="rounded-2xl bg-green-50 border border-green-100 p-3 text-sm text-green-700">{createSuccess}</div>
@@ -444,6 +450,7 @@ export function StocksPage() {
                       <div className="text-sm font-semibold text-gray-900">{stock.stock_actuel} {stock.unite}</div>
                     </div>
                   </div>
+                  {canWriteStock && (
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
@@ -474,6 +481,7 @@ export function StocksPage() {
                       </button>
                     )}
                   </div>
+                  )}
                 </div>
                 {actionError && (
                   <p className="mt-3 text-xs text-red-600">{actionError}</p>

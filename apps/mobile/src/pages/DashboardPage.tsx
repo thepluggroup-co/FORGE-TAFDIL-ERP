@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { TopBar } from '../components/TopBar'
-import { COMPANY_NAME } from '@forge/shared'
+import { COMPANY_NAME, dashboardSectionsFor, dashboardSourcesFor, type MobileDashboardSection, type MobileDashboardSource } from '@forge/shared'
 import { useAuth, type MobileRole } from '../context/AuthContext'
+import { usePermissions } from '../context/PermissionsContext'
 import {
   fetchCommandes, fetchStocks, fetchBonsSoumis, fetchMesLivraisons, fetchSessionCourante, fetchRapportZ,
   type ApiCommandeClient, type ApiStock, type Livraison, type CaisseSession, type RapportZ,
@@ -52,16 +53,14 @@ function formatXAF(amount: number): string {
 // caissier n'a pas accès aux commandes, et l'ancien chargement commun
 // (stocks + commandes pour tous) leur affichait un écran d'erreur.
 
-type Source = 'commandes' | 'stocks' | 'bons' | 'livraisons' | 'caisse'
-type Section = 'ventes' | 'commandes' | 'approbation' | 'stock' | 'livraisons' | 'caisse'
+type Source = MobileDashboardSource
+type Section = MobileDashboardSection
 
-const ROLE_VIEW: Record<MobileRole, { subtitle: string; sources: Source[]; sections: Section[] }> = {
-  admin:       { subtitle: 'Direction',   sources: ['commandes', 'stocks', 'bons'], sections: ['ventes', 'approbation', 'commandes', 'stock'] },
-  manager: { subtitle: 'Supervision', sources: ['commandes', 'stocks', 'bons'], sections: ['approbation', 'commandes', 'stock'] },
-  operateur:   { subtitle: 'Commercial',  sources: ['commandes', 'stocks'],         sections: ['commandes', 'stock'] },
-  apprenant:   { subtitle: 'Atelier',     sources: ['commandes', 'stocks'],         sections: ['commandes', 'stock'] },
-  caissier:    { subtitle: 'Caisse',      sources: ['caisse', 'stocks'],            sections: ['caisse', 'stock'] },
-  livreur:     { subtitle: 'Livraison',   sources: ['livraisons'],                  sections: ['livraisons'] },
+// Libellé affiché sous le titre (cosmétique) ; les sections et les données chargées
+// viennent des permissions de la base (dashboardSectionsFor / dashboardSourcesFor).
+const ROLE_SUBTITLE: Record<MobileRole, string> = {
+  admin: 'Direction', manager: 'Supervision', operateur: 'Commercial',
+  apprenant: 'Atelier', caissier: 'Caisse', livreur: 'Livraison',
 }
 
 interface DashboardData {
@@ -90,7 +89,15 @@ async function loadSource(source: Source): Promise<Partial<DashboardData>> {
 
 export function DashboardPage() {
   const { user } = useAuth()
-  const view = ROLE_VIEW[user?.role ?? 'operateur']
+  const { permissions } = usePermissions()
+  const view = useMemo(() => {
+    const sections = dashboardSectionsFor(permissions)
+    return {
+      subtitle: ROLE_SUBTITLE[user?.role ?? 'operateur'],
+      sections,
+      sources: dashboardSourcesFor(sections),
+    }
+  }, [permissions, user?.role])
 
   const [data, setData] = useState<DashboardData>(EMPTY)
   const [loading, setLoading] = useState(true)
