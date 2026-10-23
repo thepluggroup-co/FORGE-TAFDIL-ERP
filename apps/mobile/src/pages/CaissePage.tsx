@@ -56,7 +56,7 @@ function OuvertureSession({ onOuverte }: { onOuverte: (s: CaisseSession) => void
 
   return (
     <div className="p-5 flex flex-col items-center justify-center flex-1">
-      <div className="w-full max-w-sm bg-white rounded-3xl shadow-sm p-6 space-y-5">
+      <div className="w-full max-w-sm bg-white rounded-3xl shadow-[0_1px_3px_rgba(16,24,40,0.06)] p-6 space-y-5">
         <div className="text-center">
           <h2 className="text-lg font-bold text-gray-900">Ouverture de caisse</h2>
           <p className="text-sm text-gray-500 mt-1">Saisissez le fond de caisse pour commencer.</p>
@@ -88,7 +88,7 @@ function OuvertureSession({ onOuverte }: { onOuverte: (s: CaisseSession) => void
 function RecuScreen({ ticket, onNouvelleVente }: { ticket: TicketVente; onNouvelleVente: () => void }) {
   return (
     <div className="p-4 flex flex-col items-center flex-1 overflow-y-auto">
-      <div className="w-full max-w-sm bg-white rounded-3xl shadow-sm p-5 font-mono text-sm">
+      <div className="w-full max-w-sm bg-white rounded-3xl shadow-[0_1px_3px_rgba(16,24,40,0.06)] p-5 font-mono text-sm">
         <div className="text-center mb-3">
           <p className="font-bold text-base">FORGE by TAFDIL</p>
           <p className="text-xs text-gray-500">Reçu de vente comptoir</p>
@@ -164,7 +164,7 @@ function FermetureScreen({ session, onFermee, onCancel }: {
     const ecart = rapport.ecart_xaf ?? 0
     return (
       <div className="p-4 flex flex-col items-center flex-1 overflow-y-auto">
-        <div className="w-full max-w-sm bg-white rounded-3xl shadow-sm p-5 space-y-4">
+        <div className="w-full max-w-sm bg-white rounded-3xl shadow-[0_1px_3px_rgba(16,24,40,0.06)] p-5 space-y-4">
           <h2 className="text-lg font-bold text-center">Rapport Z</h2>
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div className="bg-gray-50 rounded-xl p-3">
@@ -437,7 +437,7 @@ function VenteScreen({ session, onFermerCaisse }: { session: CaisseSession; onFe
 
         {searching && <p className="text-xs text-gray-400">Recherche…</p>}
         {results.length > 0 && (
-          <div className="bg-white rounded-2xl shadow-sm divide-y divide-gray-50 max-h-64 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-[0_1px_3px_rgba(16,24,40,0.06)] divide-y divide-gray-50 max-h-64 overflow-y-auto">
             {results.map((p) => (
               <button
                 key={p.id}
@@ -453,7 +453,7 @@ function VenteScreen({ session, onFermerCaisse }: { session: CaisseSession; onFe
         )}
 
         {/* Ticket */}
-        <div className="bg-white rounded-2xl shadow-sm p-3">
+        <div className="bg-white rounded-2xl shadow-[0_1px_3px_rgba(16,24,40,0.06)] p-3">
           <h3 className="text-sm font-semibold text-gray-700 mb-2">Ticket ({lignes.length})</h3>
           {lignes.length === 0 ? (
             <p className="text-sm text-gray-400 text-center py-6">Aucun article</p>
@@ -476,7 +476,7 @@ function VenteScreen({ session, onFermerCaisse }: { session: CaisseSession; onFe
         </div>
 
         {/* Client (crédit) */}
-        <div className="bg-white rounded-2xl shadow-sm p-3">
+        <div className="bg-white rounded-2xl shadow-[0_1px_3px_rgba(16,24,40,0.06)] p-3">
           <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2">Client (optionnel — requis pour crédit)</h3>
           {selectedClient ? (
             <div className="flex items-center justify-between bg-gray-50 rounded-xl px-3 py-2">

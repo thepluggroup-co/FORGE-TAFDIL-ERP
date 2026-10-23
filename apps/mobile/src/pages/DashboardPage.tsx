@@ -6,7 +6,7 @@ import {
 } from '@forge/shared'
 import { useAuth } from '../context/AuthContext'
 import { usePermissions } from '../context/PermissionsContext'
-import { useNotifications } from '../context/NotificationsContext'
+import { KIND_META, useNotifications } from '../context/NotificationsContext'
 import { Avatar, Card, Icon, Sparkline, Trend, formatNumber, formatXAF, timeAgo, trendPct, type IconName } from '../components/ui'
 import {
   fetchCommandes, fetchStocks, fetchBonsSoumis, fetchMesLivraisons, fetchSessionCourante, fetchRapportZ,
@@ -233,7 +233,7 @@ export function DashboardPage() {
                   {notifications.slice(0, 3).map((n) => (
                     <Card key={n.id} className="px-3.5 py-3 flex items-center gap-3">
                       <span className="w-9 h-9 rounded-full bg-red-50 text-[#C62828] flex items-center justify-center shrink-0">
-                        <Icon name={n.kind === 'commandes' ? 'cart' : n.kind === 'stocks' ? 'alert' : 'receipt'} size={17} />
+                        <Icon name={KIND_META[n.kind].icon} size={17} />
                       </span>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-gray-900 truncate">{n.title}</p>

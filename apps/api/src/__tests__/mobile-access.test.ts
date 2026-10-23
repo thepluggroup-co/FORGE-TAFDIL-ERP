@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  canAccessMobileScreen, dashboardSectionsFor, dashboardSourcesFor,
+  accessibleMobileModules, canSeeWorkflowModule, canAccessMobileScreen, dashboardSectionsFor, dashboardSourcesFor,
   hasMobilePermission, legacyPermissionsForRole, type MobilePermission,
 } from '@forge/shared'
 
@@ -69,5 +69,20 @@ describe('Accès mobile piloté par les permissions de la base', () => {
     expect(dashboardSourcesFor(direction).sort()).toEqual(['bons', 'commandes', 'stocks'])
 
     expect(dashboardSectionsFor([])).toEqual([])
+  })
+
+  it("notifications temps réel : un événement n'est affiché que si le rôle peut lire son module", () => {
+    expect(canSeeWorkflowModule(p('STOCK', 'READ'), 'stock')).toBe(true)
+    expect(canSeeWorkflowModule(p('STOCK', 'READ'), 'finance')).toBe(false)
+    expect(canSeeWorkflowModule(p('COMMERCIAL', 'READ'), 'boutique')).toBe(true)
+    expect(canSeeWorkflowModule(p('LOGISTICS', 'READ'), 'logistique')).toBe(true)
+    expect(canSeeWorkflowModule(p('STOCK', 'READ'), 'module-inconnu')).toBe(false)
+    expect(canSeeWorkflowModule(p('STOCK', 'READ'), undefined)).toBe(false)
+  })
+
+  it('navigation : un rôle à un seul module le retrouve seul (accès direct), sinon hub', () => {
+    expect(accessibleMobileModules(p('LOGISTICS', 'READ'))).toEqual(['livraisons'])
+    expect(accessibleMobileModules(legacyPermissionsForRole('caissier'))).toEqual(['orders', 'stocks', 'caisse'])
+    expect(accessibleMobileModules([])).toEqual([])
   })
 })

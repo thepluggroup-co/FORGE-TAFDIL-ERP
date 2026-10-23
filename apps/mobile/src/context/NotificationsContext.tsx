@@ -2,8 +2,31 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { useAuth } from './AuthContext'
 import { usePermissions } from './PermissionsContext'
 import { fetchCommandes, fetchFactures, fetchStocks } from '../lib/api'
+import { supabase } from '../lib/supabase'
+import { canSeeWorkflowModule } from '@forge/shared'
+import type { IconName } from '../components/ui'
 
-export type NotificationKind = 'commandes' | 'stocks' | 'factures'
+// Les catégories suivent les modules du projet (ceux de notifyWorkflow côté API).
+export type NotificationKind = 'commandes' | 'stocks' | 'finance' | 'logistique' | 'production'
+export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error'
+
+export const KIND_META: Record<NotificationKind, { label: string; icon: IconName }> = {
+  commandes:  { label: 'Commandes',  icon: 'cart' },
+  stocks:     { label: 'Stocks',     icon: 'alert' },
+  finance:    { label: 'Finance',    icon: 'receipt' },
+  logistique: { label: 'Logistique', icon: 'truck' },
+  production: { label: 'Production', icon: 'box' },
+}
+
+const WORKFLOW_KIND: Record<string, NotificationKind> = {
+  boutique: 'commandes', commandes: 'commandes', stock: 'stocks',
+  finance: 'finance', logistique: 'logistique', production: 'production',
+}
+
+interface WorkflowPayload {
+  id?: string; event?: string; titre?: string; message?: string; module?: string
+  severite?: NotificationSeverity; ref?: string | null; ts?: string
+}
 
 export interface AppNotification {
   id: string
@@ -12,11 +35,15 @@ export interface AppNotification {
   message: string
   /** Date de l'événement ; absente pour un état courant (ex. stock faible). */
   at: string | null
+  severity?: NotificationSeverity
   read: boolean
 }
 
-// Il n'existe pas (encore) de journal de notifications côté serveur : ce flux est DÉDUIT des
-// données réelles que l'utilisateur a le droit de lire (commandes, stocks, factures), jamais inventé.
+// Le projet n'a pas de journal de notifications persisté : les événements métier sont diffusés en
+// temps réel (canal « forge-workflow », le même que celui du web) et envoyés en push. Ce flux réunit :
+//   1. les événements reçus en direct pendant la session, filtrés par permission du rôle ;
+//   2. un état courant DÉDUIT des données réelles lisibles (commandes récentes, stocks sous le seuil,
+//      factures payées ou en retard), jamais inventé.
 // L'état « lu » est local à l'appareil.
 
 const COMMANDE_TITLE: Record<string, string> = {
@@ -56,6 +83,8 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const { can, source } = usePermissions()
   const userId = user?.id ?? null
   const [raw, setRaw] = useState<Omit<AppNotification, 'read'>[]>([])
+  const [live, setLive] = useState<Omit<AppNotification, 'read'>[]>([])
+  const { permissions } = usePermissions()
   const [read, setRead] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(false)
   const [tick, setTick] = useState(0)
@@ -98,7 +127,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
           .filter((f) => f.statut === 'paye' || (f.statut !== 'annule' && f.statut !== 'brouillon' && f.date_echeance < today))
           .slice(0, 8)
           .map((f) => ({
-            id: `fac:${f.id}:${f.statut}`, kind: 'factures' as const,
+            id: `fac:${f.id}:${f.statut}`, kind: 'finance' as const,
             title: f.statut === 'paye' ? 'Facture payée' : 'Facture en retard',
             message: `${f.numero} · ${f.client_nom}`,
             at: f.date_emission,
@@ -116,6 +145,32 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     return () => { cancelled = true }
   }, [userId, source, canCommandes, canStocks, canFactures, tick])
 
+  // Événements métier en direct (même canal que le web), limités aux modules que le rôle peut lire.
+  useEffect(() => {
+    if (!userId || source === 'loading') return
+    setLive([])
+    const channel = supabase
+      .channel('forge-workflow')
+      .on('broadcast', { event: 'workflow_notification' }, ({ payload }) => {
+        const n = payload as WorkflowPayload
+        if (!canSeeWorkflowModule(permissions, n.module)) return
+        const kind = WORKFLOW_KIND[n.module ?? '']
+        if (!kind) return
+        const item: Omit<AppNotification, 'read'> = {
+          id: `wf:${n.id ?? `${n.event ?? 'evt'}-${Date.now()}`}`,
+          kind,
+          title: n.titre ?? 'Notification',
+          message: n.message ?? '',
+          at: n.ts ?? new Date().toISOString(),
+          severity: n.severite,
+        }
+        setLive((prev) => (prev.some((p) => p.id === item.id) ? prev : [item, ...prev].slice(0, 50)))
+        setTick((t) => t + 1) // l'état courant (stocks, commandes) a pu changer
+      })
+      .subscribe()
+    return () => { void supabase.removeChannel(channel) }
+  }, [userId, source, permissions])
+
   // Rafraîchissement périodique tant que l'application est ouverte.
   useEffect(() => {
     if (!userId) return
@@ -123,16 +178,20 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     return () => clearInterval(id)
   }, [userId])
 
-  const items = useMemo(() => raw.map((n) => ({ ...n, read: read.has(n.id) })), [raw, read])
+  const items = useMemo(() => {
+    const all = [...live, ...raw].sort(
+      (a, b) => (b.at ? new Date(b.at).getTime() : Date.now()) - (a.at ? new Date(a.at).getTime() : Date.now()))
+    return all.map((n) => ({ ...n, read: read.has(n.id) }))
+  }, [live, raw, read])
   const unreadCount = useMemo(() => items.filter((n) => !n.read).length, [items])
 
   const markAllRead = useCallback(() => {
     if (!userId) return
     const next = new Set(read)
-    for (const n of raw) next.add(n.id)
+    for (const n of items) next.add(n.id)
     setRead(next)
     saveRead(userId, next)
-  }, [userId, read, raw])
+  }, [userId, read, items])
 
   const markRead = useCallback((id: string) => {
     if (!userId || read.has(id)) return

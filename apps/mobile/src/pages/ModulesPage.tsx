@@ -1,22 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { TopBar } from '../components/TopBar'
-import { Card, Icon, type IconName } from '../components/ui'
+import { Card, Icon } from '../components/ui'
 import { usePermissions } from '../context/PermissionsContext'
 import { fetchBonsSoumis } from '../lib/api'
-import type { MobileScreen } from '@forge/shared'
-
-interface ModuleTile { screen: MobileScreen; to: string; label: string; hint: string; icon: IconName }
-
-const TILES: ModuleTile[] = [
-  { screen: 'orders',       to: '/orders',       label: 'Commandes',   hint: 'Suivi des commandes clients', icon: 'cart' },
-  { screen: 'stocks',       to: '/stocks',       label: 'Stocks',      hint: 'Matériaux et équipements',    icon: 'box' },
-  { screen: 'factures',     to: '/factures',     label: 'Factures',    hint: 'Payées, en attente, en retard', icon: 'receipt' },
-  { screen: 'performance',  to: '/performance',  label: 'Analytique',  hint: "Chiffre d'affaires",          icon: 'chart' },
-  { screen: 'approbation',  to: '/approbation',  label: 'Approbation', hint: 'Bons de sortie à valider',    icon: 'check' },
-  { screen: 'livraisons',   to: '/livraisons',   label: 'Livraisons',  hint: 'Mes livraisons',              icon: 'truck' },
-  { screen: 'caisse',       to: '/caisse',       label: 'Caisse',      hint: 'Ventes et session',           icon: 'wallet' },
-]
+import { MODULES } from '../lib/modules'
 
 export function ModulesPage() {
   const navigate = useNavigate()
@@ -32,7 +20,7 @@ export function ModulesPage() {
   }, [canApprove])
 
   // Seuls les modules autorisés par les permissions du rôle (définies en base) sont proposés.
-  const tiles = TILES.filter((t) => canScreen(t.screen))
+  const tiles = MODULES.filter((t) => canScreen(t.screen))
 
   return (
     <div>

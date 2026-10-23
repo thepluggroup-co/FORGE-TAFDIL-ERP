@@ -1,46 +1,39 @@
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { TopBar } from '../components/TopBar'
-import { Card, ChipRow, EmptyState, Icon, Spinner, timeAgo, type IconName } from '../components/ui'
-import { useNotifications, type NotificationKind } from '../context/NotificationsContext'
+import { Card, ChipRow, EmptyState, Icon, Spinner, timeAgo } from '../components/ui'
+import { KIND_META, useNotifications, type NotificationKind, type NotificationSeverity } from '../context/NotificationsContext'
 
 type Filter = 'all' | NotificationKind
 
-const KIND_ICON: Record<NotificationKind, { icon: IconName; tone: string }> = {
-  commandes: { icon: 'cart',    tone: 'bg-red-50 text-[#C62828]' },
-  stocks:    { icon: 'alert',   tone: 'bg-orange-50 text-orange-600' },
-  factures:  { icon: 'receipt', tone: 'bg-green-50 text-green-700' },
+const TONE: Record<NotificationSeverity | 'default', string> = {
+  default: 'bg-red-50 text-[#C62828]', info: 'bg-red-50 text-[#C62828]',
+  success: 'bg-green-50 text-green-700', warning: 'bg-orange-50 text-orange-600', error: 'bg-red-100 text-red-700',
 }
 
 export function NotificationsPage() {
   const { items, unreadCount, loading, markAllRead, markRead } = useNotifications()
   const [filter, setFilter] = useState<Filter>('all')
+  // Les puces suivent les catégories réellement présentes (modules du projet autorisés pour ce rôle).
+  const kinds = useMemo(() => [...new Set(items.map((n) => n.kind))], [items])
+  const options = [{ value: 'all' as Filter, label: 'Toutes' }, ...kinds.map((k) => ({ value: k as Filter, label: KIND_META[k].label }))]
   const visible = items.filter((n) => filter === 'all' || n.kind === filter)
 
   return (
     <div>
       <TopBar title="Notifications" subtitle={unreadCount > 0 ? `${unreadCount} non lue${unreadCount > 1 ? 's' : ''}` : 'Tout est à jour'} />
       <div className="px-4 py-4 space-y-3">
-        <ChipRow<Filter>
-          value={filter}
-          onChange={setFilter}
-          options={[
-            { value: 'all', label: 'Toutes' },
-            { value: 'commandes', label: 'Commandes' },
-            { value: 'stocks', label: 'Stocks' },
-            { value: 'factures', label: 'Factures' },
-          ]}
-        />
+        {kinds.length > 1 && <ChipRow<Filter> value={filter} onChange={setFilter} options={options} />}
 
         {loading && items.length === 0 ? <Spinner /> : visible.length === 0 ? (
-          <EmptyState title="Aucune notification" hint="Les événements de vos commandes, stocks et factures apparaîtront ici." />
+          <EmptyState title="Aucune notification" hint="Les événements de vos modules (commandes, stocks, finance, logistique…) apparaîtront ici en direct." />
         ) : (
           visible.map((n) => {
-            const k = KIND_ICON[n.kind]
+            const meta = KIND_META[n.kind]
             return (
               <Card key={n.id} onClick={() => markRead(n.id)} className={`p-3.5 ${n.read ? 'opacity-70' : ''}`}>
                 <div className="flex gap-3">
-                  <span className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${k.tone}`}>
-                    <Icon name={k.icon} size={18} />
+                  <span className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${TONE[n.severity ?? 'default']}`}>
+                    <Icon name={meta.icon} size={18} />
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">

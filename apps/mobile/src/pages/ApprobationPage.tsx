@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { TopBar } from '../components/TopBar'
+import { Icon } from '../components/ui'
 import { fetchBonsSoumis, validerBon, type BonSortie } from '../lib/api'
 
 type ActionState = { bonId: string; type: 'valide' | 'refuse' } | null
@@ -125,7 +126,7 @@ export function ApprobationPage() {
 
         {!loading && !error && bons.length === 0 && (
           <div className="text-center py-16 text-gray-400 space-y-2">
-            <p className="text-3xl">✅</p>
+            <span className="inline-flex w-12 h-12 rounded-full bg-green-50 text-green-600 items-center justify-center"><Icon name="check" size={24} /></span>
             <p className="text-sm font-medium">Aucun bon en attente</p>
             <p className="text-xs">Tous les bons de sortie ont été traités.</p>
           </div>
@@ -138,7 +139,7 @@ export function ApprobationPage() {
           const nbArticles = bon.bons_sortie_lignes?.length ?? 0
 
           return (
-            <div key={bon.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <div key={bon.id} className="bg-white rounded-2xl border border-gray-100 shadow-[0_1px_3px_rgba(16,24,40,0.06)] overflow-hidden">
               {/* Header */}
               <div className="px-4 pt-4 pb-2">
                 <div className="flex items-start justify-between gap-2">
@@ -146,7 +147,7 @@ export function ApprobationPage() {
                     <p className="text-sm font-bold text-gray-900">{bon.numero}</p>
                     <p className="text-xs text-gray-500 mt-0.5">{bon.demandeur} · {date}</p>
                   </div>
-                  <span className="shrink-0 text-xs font-medium bg-orange-100 text-orange-700 px-2 py-1 rounded-full">
+                  <span className="shrink-0 text-xs font-medium bg-orange-50 text-orange-700 px-2 py-1 rounded-full">
                     En attente
                   </span>
                 </div>

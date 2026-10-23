@@ -126,3 +126,33 @@ export function dashboardSourcesFor(sections: readonly MobileDashboardSection[])
   }
   return [...sources]
 }
+
+// ── Flux de notifications du projet (notifyWorkflow, canal temps réel « forge-workflow ») ──
+// Les événements portent un `module` métier ; l'appareil n'affiche que ceux que le rôle
+// peut lire (même logique que les rôles ciblés par les notifications push côté API).
+
+export type WorkflowModule = 'boutique' | 'commandes' | 'stock' | 'finance' | 'logistique' | 'production'
+
+export const WORKFLOW_MODULE_PERMISSION: Record<WorkflowModule, MobilePermission> = {
+  boutique:   { module: 'COMMERCIAL', action: 'READ' },
+  commandes:  { module: 'COMMERCIAL', action: 'READ' },
+  stock:      { module: 'STOCK',      action: 'READ' },
+  finance:    { module: 'FINANCE',    action: 'READ' },
+  logistique: { module: 'LOGISTICS',  action: 'READ' },
+  production: { module: 'PRODUCTION', action: 'READ' },
+}
+
+export function canSeeWorkflowModule(permissions: readonly MobilePermission[], module: string | undefined): boolean {
+  const required = module ? WORKFLOW_MODULE_PERMISSION[module as WorkflowModule] : undefined
+  if (!required) return false
+  return hasMobilePermission(permissions, required.module, required.action)
+}
+
+// ── Navigation : modules métier accessibles (hors accueil, notifications, profil) ──
+export const MOBILE_MODULE_SCREENS: readonly MobileScreen[] = [
+  'orders', 'stocks', 'factures', 'performance', 'approbation', 'livraisons', 'caisse',
+] as const
+
+export function accessibleMobileModules(permissions: readonly MobilePermission[]): MobileScreen[] {
+  return MOBILE_MODULE_SCREENS.filter((s) => canAccessMobileScreen(permissions, s))
+}

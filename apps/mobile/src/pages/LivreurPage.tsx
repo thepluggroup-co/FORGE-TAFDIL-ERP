@@ -25,9 +25,9 @@ const STATUT_LABEL: Record<string, string> = {
 }
 
 const STATUT_COLOR: Record<string, string> = {
-  planifiee:  'bg-orange-100 text-orange-700',
-  en_transit: 'bg-blue-100 text-blue-700',
-  livree:     'bg-green-100 text-green-700',
+  planifiee:  'bg-orange-50 text-orange-700',
+  en_transit: 'bg-blue-50 text-blue-700',
+  livree:     'bg-green-50 text-green-700',
   annulee:    'bg-gray-100 text-gray-500',
 }
 
@@ -294,7 +294,7 @@ export function LivreurPage() {
           const nextStatut = NEXT_STATUT[liv.statut]
 
           return (
-            <div key={liv.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <div key={liv.id} className="bg-white rounded-2xl border border-gray-100 shadow-[0_1px_3px_rgba(16,24,40,0.06)] overflow-hidden">
               {/* En-tête */}
               <div className="px-4 pt-4 pb-3">
                 <div className="flex items-start justify-between gap-2">

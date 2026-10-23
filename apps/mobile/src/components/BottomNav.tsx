@@ -2,20 +2,30 @@ import React from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { Icon, type IconName } from './ui'
 import { useNotifications } from '../context/NotificationsContext'
+import { usePermissions } from '../context/PermissionsContext'
+import { accessibleMobileModules } from '@forge/shared'
+import { MODULES } from '../lib/modules'
 
-// Barre du bas de la maquette : Accueil · Modules · Notifications · Profil.
-// Les écrans métier (commandes, stocks, factures…) s'ouvrent depuis « Modules », où seuls
-// ceux autorisés par les permissions du rôle apparaissent.
+// Barre du bas : Accueil · Modules · Notifications · Profil.
+// Les écrans métier s'ouvrent depuis « Modules », où seuls ceux autorisés par les permissions
+// du rôle apparaissent. Adaptation au projet : un rôle qui n'a qu'UN module (ex. livreur →
+// Livraisons, caissier → Caisse) y accède directement depuis l'onglet, sans passer par le hub.
 const MODULE_ROUTES = ['/modules', '/orders', '/stocks', '/approbation', '/livraisons', '/caisse', '/factures', '/performance']
 
 export function BottomNav() {
   const { unreadCount } = useNotifications()
+  const { permissions } = usePermissions()
   const { pathname } = useLocation()
   const inModules = MODULE_ROUTES.some((r) => pathname === r || pathname.startsWith(r + '/'))
 
+  const accessible = accessibleMobileModules(permissions)
+  const single = accessible.length === 1 ? MODULES.find((m) => m.screen === accessible[0]) : undefined
+
   const tabs: Array<{ to: string; label: string; icon: IconName; badge?: number; active?: boolean }> = [
     { to: '/dashboard', label: 'Accueil', icon: 'home' },
-    { to: '/modules', label: 'Modules', icon: 'grid', active: inModules },
+    single
+      ? { to: single.to, label: single.label, icon: single.icon, active: inModules }
+      : { to: '/modules', label: 'Modules', icon: 'grid', active: inModules },
     { to: '/notifications', label: 'Notifications', icon: 'bell', badge: unreadCount },
     { to: '/profile', label: 'Profil', icon: 'user' },
   ]
