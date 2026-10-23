@@ -65,6 +65,13 @@ interface Ctx {
 
 const NotificationsContext = createContext<Ctx | null>(null)
 
+// Un événement ne reste « récent » que 7 jours ; au-delà ce n'est plus une notification mais de l'historique.
+const RECENT_MS = 7 * 24 * 3600 * 1000
+function recent(iso: string): boolean {
+  const t = new Date(iso).getTime()
+  return Number.isFinite(t) && Date.now() - t <= RECENT_MS
+}
+
 function readKey(userId: string) { return `forge.notif.read.${userId}` }
 
 function loadRead(userId: string): Set<string> {
@@ -102,7 +109,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     const jobs: Array<Promise<Omit<AppNotification, 'read'>[]>> = []
 
     if (canCommandes) {
-      jobs.push(fetchCommandes({ per_page: 8 }).then((r) => r.data.slice(0, 8).map((o) => ({
+      jobs.push(fetchCommandes({ per_page: 30 }).then((r) => r.data.filter((o) => recent(o.date_commande)).slice(0, 8).map((o) => ({
         id: `cmd:${o.id}:${o.statut}`, kind: 'commandes' as const,
         title: COMMANDE_TITLE[o.statut] ?? 'Commande',
         message: `${o.reference} · ${o.client?.nom ?? 'Client'}`,
@@ -124,7 +131,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
       jobs.push(fetchFactures({ per_page: 50 }).then((r) => {
         const today = new Date().toISOString().slice(0, 10)
         return r.data
-          .filter((f) => f.statut === 'paye' || (f.statut !== 'annule' && f.statut !== 'brouillon' && f.date_echeance < today))
+          .filter((f) => (f.statut === 'paye' && recent(f.date_emission)) || (f.statut !== 'paye' && f.statut !== 'annule' && f.statut !== 'brouillon' && f.date_echeance < today))
           .slice(0, 8)
           .map((f) => ({
             id: `fac:${f.id}:${f.statut}`, kind: 'finance' as const,

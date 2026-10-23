@@ -129,6 +129,11 @@ export function DashboardPage() {
 
   const firstName = (user?.name ?? '').split(/\s+/)[0] || 'vous'
   const showHero = has('ventes') && factures.length > 0
+  // Livraisons et caisse sont des activités PERSONNELLES (mes livraisons, ma session) : pour un rôle de
+  // gestion (commercial/finance) elles n'apparaissent que s'il y a une activité réelle, sinon ce seraient
+  // des zéros qui alourdissent l'accueil.
+  const showLivraisons = has('livraisons') && (livraisons.length > 0 || !canCommercial)
+  const showCaisse = has('caisse') && (session !== null || !canFinance)
 
   return (
     <div>
@@ -201,14 +206,14 @@ export function DashboardPage() {
               {has('approbation') && (
                 <Tile icon="check" label="Bons à approuver" value={String(bonsSoumis)} caption={bonsSoumis > 0 ? 'en attente' : 'rien en attente'} alert={bonsSoumis > 0} to="/approbation" />
               )}
-              {has('livraisons') && (
+              {showLivraisons && (
                 <>
                   <Tile icon="truck" label="À livrer" value={String(livraisons.filter((l) => l.statut === 'planifiee').length)} caption="planifiées" to="/livraisons" />
                   <Tile icon="truck" label="En route" value={String(livraisons.filter((l) => l.statut === 'en_transit').length)} caption="en cours" to="/livraisons" />
                   <Tile icon="check" label="Livrées" value={String(livreesAujourdhui)} caption="aujourd'hui" to="/livraisons" />
                 </>
               )}
-              {has('caisse') && (
+              {showCaisse && (
                 <>
                   <Tile icon="wallet" label={session ? 'Session ouverte' : 'Session fermée'} value={session ? formatXAF(session.fond_ouverture_xaf) : '—'} caption="fond de caisse" to="/caisse" />
                   <Tile icon="receipt" label="Ventes session" value={formatXAF(rapport?.total_ttc_xaf ?? 0)} caption={`${rapport?.tickets_count ?? 0} tickets`} to="/caisse" />
@@ -216,7 +221,7 @@ export function DashboardPage() {
               )}
             </div>
 
-            {has('caisse') && (
+            {showCaisse && (
               <Link to="/caisse" className="block text-center bg-[#C62828] text-white text-sm font-semibold rounded-xl py-3 shadow-md active:bg-[#B71C1C]">
                 {session ? 'Reprendre la vente' : 'Ouvrir la caisse'}
               </Link>
@@ -246,7 +251,7 @@ export function DashboardPage() {
               </section>
             )}
 
-            {has('livraisons') && (
+            {showLivraisons && (
               <section>
                 <div className="flex items-center justify-between mb-2">
                   <h2 className="text-sm font-bold text-gray-900">Mes livraisons</h2>

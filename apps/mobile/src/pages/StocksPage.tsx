@@ -475,7 +475,7 @@ export function StocksPage() {
                       type="button"
                       onClick={() => updateStock(stock, 'entree')}
                       disabled={actionLoading}
-                      className="flex-1 rounded-2xl bg-green-600 text-white py-2 text-sm font-semibold hover:bg-green-700 disabled:opacity-60"
+                      className="flex-1 rounded-xl bg-green-50 text-green-700 py-2 text-sm font-semibold active:bg-green-100 disabled:opacity-60"
                     >
                       Entrée
                     </button>
@@ -483,7 +483,7 @@ export function StocksPage() {
                       type="button"
                       onClick={() => updateStock(stock, 'sortie')}
                       disabled={actionLoading || stock.stock_actuel === 0}
-                      className="flex-1 rounded-2xl bg-[#C62828] text-white py-2 text-sm font-semibold hover:bg-[#B71C1C] disabled:opacity-60"
+                      className="flex-1 rounded-xl bg-red-50 text-[#C62828] py-2 text-sm font-semibold active:bg-red-100 disabled:opacity-60"
                     >
                       Sortie
                     </button>
