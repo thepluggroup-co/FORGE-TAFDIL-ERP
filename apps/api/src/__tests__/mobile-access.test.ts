@@ -26,6 +26,15 @@ describe('Accès mobile piloté par les permissions de la base', () => {
     expect(canAccessMobileScreen(p('STOCK', 'READ', 'VALIDATE'), 'approbation')).toBe(true)
   })
 
+  it('modules et notifications toujours accessibles ; factures et analytique exigent FINANCE:READ', () => {
+    expect(canAccessMobileScreen([], 'modules')).toBe(true)
+    expect(canAccessMobileScreen([], 'notifications')).toBe(true)
+    expect(canAccessMobileScreen([], 'factures')).toBe(false)
+    expect(canAccessMobileScreen([], 'performance')).toBe(false)
+    expect(canAccessMobileScreen(p('FINANCE', 'READ'), 'factures')).toBe(true)
+    expect(canAccessMobileScreen(p('FINANCE', 'READ'), 'performance')).toBe(true)
+  })
+
   it('un rôle défini en base avec LOGISTICS:READ voit les livraisons sans être « livreur »', () => {
     expect(canAccessMobileScreen(p('LOGISTICS', 'READ'), 'livraisons')).toBe(true)
   })

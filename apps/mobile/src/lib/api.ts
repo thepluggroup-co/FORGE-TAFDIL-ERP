@@ -182,6 +182,33 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return data
 }
 
+export type FactureStatut = 'brouillon' | 'valide' | 'envoye' | 'paye' | 'annule'
+
+export interface ApiFacture {
+  id: string
+  numero: string
+  client_nom: string
+  statut: FactureStatut
+  date_emission: string
+  date_echeance: string
+  total_ttc_xaf: number
+  net_a_payer_xaf: number | null
+  montant_paye_xaf: number
+}
+
+/** Factures (permission FINANCE:READ). L'API plafonne per_page à 500. */
+export async function fetchFactures(opts?: { per_page?: number }) {
+  const query = buildQuery({ page: 1, per_page: opts?.per_page ?? 200 })
+  return apiFetch<{ data: ApiFacture[]; total: number }>(`/api/factures${query}`)
+}
+
+/** Nombre de devis (permission COMMERCIAL:READ) — une seule ligne demandée, on lit `total`. */
+export async function fetchDevisTotal(): Promise<number> {
+  const query = buildQuery({ page: 1, per_page: 1 })
+  const res = await apiFetch<{ total: number }>(`/api/devis${query}`)
+  return res.total ?? 0
+}
+
 export interface MyPermissionsResponse {
   legacyRole:   string | null
   rbacRoleName: string | null

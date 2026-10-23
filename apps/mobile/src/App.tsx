@@ -2,6 +2,7 @@ import React from 'react'
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { PermissionsProvider, usePermissions } from './context/PermissionsContext'
+import { NotificationsProvider } from './context/NotificationsContext'
 import { BottomNav } from './components/BottomNav'
 import { OfflineBanner } from './components/OfflineBanner'
 import { LoginPage } from './pages/LoginPage'
@@ -9,6 +10,10 @@ import { DashboardPage } from './pages/DashboardPage'
 import { OrdersPage } from './pages/OrdersPage'
 import { StocksPage } from './pages/StocksPage'
 import { StockDetailPage } from './pages/StockDetailPage'
+import { ModulesPage } from './pages/ModulesPage'
+import { NotificationsPage } from './pages/NotificationsPage'
+import { FacturesPage } from './pages/FacturesPage'
+import { PerformancePage } from './pages/PerformancePage'
 import { ProfilePage } from './pages/ProfilePage'
 import { ApprobationPage } from './pages/ApprobationPage'
 import { LivreurPage } from './pages/LivreurPage'
@@ -37,6 +42,10 @@ function AuthenticatedApp() {
           {canScreen('approbation') && <Route path="/approbation" element={<ApprobationPage />} />}
           {canScreen('stocks') && <Route path="/stocks" element={<StocksPage />} />}
           {canScreen('stocks') && <Route path="/stocks/:id" element={<StockDetailPage />} />}
+          <Route path="/modules" element={<ModulesPage />} />
+          <Route path="/notifications" element={<NotificationsPage />} />
+          {canScreen('factures') && <Route path="/factures" element={<FacturesPage />} />}
+          {canScreen('performance') && <Route path="/performance" element={<PerformancePage />} />}
           <Route path="/profile" element={<ProfilePage />} />
           {canScreen('livraisons') && <Route path="/livraisons" element={<LivreurPage />} />}
           {canScreen('caisse') && <Route path="/caisse" element={<CaissePage />} />}
@@ -64,9 +73,11 @@ export default function App() {
   return (
     <AuthProvider>
       <PermissionsProvider>
-        <HashRouter>
-          <AppRoutes />
-        </HashRouter>
+        <NotificationsProvider>
+          <HashRouter>
+            <AppRoutes />
+          </HashRouter>
+        </NotificationsProvider>
       </PermissionsProvider>
     </AuthProvider>
   )

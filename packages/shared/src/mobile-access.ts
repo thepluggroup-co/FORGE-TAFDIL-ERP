@@ -26,11 +26,14 @@ export interface MobilePermission {
 }
 
 export type MobileScreen =
-  | 'dashboard' | 'orders' | 'stocks' | 'approbation' | 'livraisons' | 'caisse' | 'profile'
+  | 'dashboard' | 'modules' | 'notifications' | 'orders' | 'stocks' | 'approbation'
+  | 'livraisons' | 'caisse' | 'factures' | 'performance' | 'profile'
 
 /** Permission minimale pour voir chaque écran. `null` = toujours accessible. */
 export const MOBILE_SCREEN_PERMISSION: Record<MobileScreen, MobilePermission | null> = {
   dashboard:   null,
+  modules:     null,
+  notifications: null,
   profile:     null,
   orders:      { module: 'COMMERCIAL', action: 'READ' },
   stocks:      { module: 'STOCK',      action: 'READ' },
@@ -38,6 +41,8 @@ export const MOBILE_SCREEN_PERMISSION: Record<MobileScreen, MobilePermission | n
   approbation: { module: 'STOCK',      action: 'VALIDATE' },
   livraisons:  { module: 'LOGISTICS',  action: 'READ' },
   caisse:      { module: 'CAISSE',     action: 'READ' },
+  factures:    { module: 'FINANCE',    action: 'READ' },
+  performance: { module: 'FINANCE',    action: 'READ' },
 }
 
 export function hasMobilePermission(

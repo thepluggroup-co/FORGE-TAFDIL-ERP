@@ -1,133 +1,46 @@
-import React, { useEffect, useState } from 'react'
-import { NavLink } from 'react-router-dom'
-import { usePermissions } from '../context/PermissionsContext'
-import { fetchBonsSoumis } from '../lib/api'
+import React from 'react'
+import { NavLink, useLocation } from 'react-router-dom'
+import { Icon, type IconName } from './ui'
+import { useNotifications } from '../context/NotificationsContext'
 
-function usePendingBons(canApprove: boolean) {
-  const [count, setCount] = useState(0)
-
-  useEffect(() => {
-    if (!canApprove) return
-    let cancelled = false
-
-    async function check() {
-      try {
-        const bons = await fetchBonsSoumis()
-        if (!cancelled) setCount(bons.length)
-      } catch { /* silently ignore */ }
-    }
-
-    check()
-    const id = setInterval(check, 30_000)
-    return () => { cancelled = true; clearInterval(id) }
-  }, [canApprove])
-
-  return count
-}
+// Barre du bas de la maquette : Accueil · Modules · Notifications · Profil.
+// Les écrans métier (commandes, stocks, factures…) s'ouvrent depuis « Modules », où seuls
+// ceux autorisés par les permissions du rôle apparaissent.
+const MODULE_ROUTES = ['/modules', '/orders', '/stocks', '/approbation', '/livraisons', '/caisse', '/factures', '/performance']
 
 export function BottomNav() {
-  const { canScreen } = usePermissions()
-  // Onglets pilotés par les permissions de la base (mêmes données que la sidebar web).
-  const canOrders  = canScreen('orders')
-  const canStocks  = canScreen('stocks')
-  const canLivr    = canScreen('livraisons')
-  const canApprove = canScreen('approbation')
-  const canCaisse  = canScreen('caisse')
-  const pendingCount = usePendingBons(canApprove)
+  const { unreadCount } = useNotifications()
+  const { pathname } = useLocation()
+  const inModules = MODULE_ROUTES.some((r) => pathname === r || pathname.startsWith(r + '/'))
 
-  const tabs = [
-    {
-      to: '/dashboard',
-      label: 'Accueil',
-      icon: (active: boolean) => (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-6 h-6">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-        </svg>
-      ),
-    },
-    ...(canOrders ? [{
-      to: '/orders',
-      label: 'Commandes',
-      icon: (active: boolean) => (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-6 h-6">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
-        </svg>
-      ),
-    }] : []),
-    ...(canLivr ? [{
-      to: '/livraisons',
-      label: 'Livraisons',
-      icon: (active: boolean) => (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-6 h-6">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0" />
-        </svg>
-      ),
-    }] : []),
-    ...(canCaisse ? [{
-      to: '/caisse',
-      label: 'Caisse',
-      icon: (active: boolean) => (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-6 h-6">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M5 6h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2zM8 14h.01M12 14h4" />
-        </svg>
-      ),
-    }] : []),
-    ...(canApprove ? [{
-      to: '/approbation',
-      label: 'Approbation',
-      badge: pendingCount > 0 ? pendingCount : undefined,
-      icon: (active: boolean) => (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-6 h-6">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-      ),
-    }] : []),
-    ...(canStocks ? [{
-      to: '/stocks',
-      label: 'Stocks',
-      icon: (active: boolean) => (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-6 h-6">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-        </svg>
-      ),
-    }] : []),
-    {
-      to: '/profile',
-      label: 'Profil',
-      icon: (active: boolean) => (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-6 h-6">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-        </svg>
-      ),
-    },
+  const tabs: Array<{ to: string; label: string; icon: IconName; badge?: number; active?: boolean }> = [
+    { to: '/dashboard', label: 'Accueil', icon: 'home' },
+    { to: '/modules', label: 'Modules', icon: 'grid', active: inModules },
+    { to: '/notifications', label: 'Notifications', icon: 'bell', badge: unreadCount },
+    { to: '/profile', label: 'Profil', icon: 'user' },
   ]
 
   return (
-    <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-gray-200 safe-bottom z-50">
-      <div className="flex">
-        {tabs.map(tab => (
+    <nav className="fixed bottom-0 inset-x-0 z-40 bg-white border-t border-gray-100 safe-bottom">
+      <div className="grid grid-cols-4">
+        {tabs.map((tab) => (
           <NavLink
             key={tab.to}
             to={tab.to}
-            className={({ isActive }) =>
-              `flex-1 flex flex-col items-center justify-center py-2 gap-0.5 transition-colors ${
-                isActive ? 'text-[#C62828]' : 'text-gray-400'
-              }`
-            }
+            className={({ isActive }) => {
+              const on = tab.active ?? isActive
+              return `relative flex flex-col items-center gap-0.5 py-2.5 text-[10px] font-medium ${on ? 'text-[#C62828]' : 'text-gray-400'}`
+            }}
           >
-            {({ isActive }) => (
-              <>
-                <div className="relative">
-                  {tab.icon(isActive)}
-                  {'badge' in tab && tab.badge !== undefined && (
-                    <span className="absolute -top-1 -right-1 bg-[#C62828] text-white text-[9px] font-bold rounded-full min-w-[14px] h-[14px] flex items-center justify-center px-0.5">
-                      {tab.badge > 99 ? '99+' : tab.badge}
-                    </span>
-                  )}
-                </div>
-                <span className="text-[10px] font-medium">{tab.label}</span>
-              </>
-            )}
+            <span className="relative">
+              <Icon name={tab.icon} size={22} />
+              {!!tab.badge && (
+                <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-4 px-1 rounded-full bg-[#C62828] text-white text-[9px] font-bold flex items-center justify-center">
+                  {tab.badge > 9 ? '9+' : tab.badge}
+                </span>
+              )}
+            </span>
+            {tab.label}
           </NavLink>
         ))}
       </div>

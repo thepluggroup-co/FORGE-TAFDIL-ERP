@@ -1,67 +1,24 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { TopBar } from '../components/TopBar'
-import { COMPANY_NAME, dashboardSectionsFor, dashboardSourcesFor, type MobileDashboardSection, type MobileDashboardSource } from '@forge/shared'
-import { useAuth, type MobileRole } from '../context/AuthContext'
+import { Link, useNavigate } from 'react-router-dom'
+import {
+  ROLE_LABELS, analyticsFromFactures, dashboardSectionsFor, dashboardSourcesFor,
+  type MobileDashboardSection, type MobileDashboardSource,
+} from '@forge/shared'
+import { useAuth } from '../context/AuthContext'
 import { usePermissions } from '../context/PermissionsContext'
+import { useNotifications } from '../context/NotificationsContext'
+import { Avatar, Card, Icon, Sparkline, Trend, formatNumber, formatXAF, timeAgo, trendPct, type IconName } from '../components/ui'
 import {
   fetchCommandes, fetchStocks, fetchBonsSoumis, fetchMesLivraisons, fetchSessionCourante, fetchRapportZ,
-  type ApiCommandeClient, type ApiStock, type Livraison, type CaisseSession, type RapportZ,
+  fetchFactures, fetchDevisTotal,
+  type ApiCommandeClient, type ApiStock, type ApiFacture, type Livraison, type CaisseSession, type RapportZ,
 } from '../lib/api'
 
-// Valeurs réelles de commandes.statut (commandeStatutEnum, packages/db/src/schema.pg.ts) —
-// cf. même correction dans OrdersPage.tsx.
-const statusLabels: Record<string, string> = {
-  confirmed: 'Confirmé',
-  in_production: 'En production',
-  pret: 'Prêt',
-  delivered: 'Livré',
-  cancelled: 'Annulé',
-}
-
-const statusColor: Record<string, string> = {
-  confirmed: 'bg-blue-100 text-blue-700',
-  in_production: 'bg-yellow-100 text-yellow-700',
-  pret: 'bg-purple-100 text-purple-700',
-  delivered: 'bg-green-100 text-green-700',
-  cancelled: 'bg-red-100 text-red-700',
-}
-
-const livraisonLabels: Record<string, string> = {
-  planifiee: 'Planifiée',
-  en_transit: 'En route',
-  livree: 'Livrée',
-  annulee: 'Annulée',
-}
-
-const livraisonColor: Record<string, string> = {
-  planifiee: 'bg-blue-100 text-blue-700',
-  en_transit: 'bg-yellow-100 text-yellow-700',
-  livree: 'bg-green-100 text-green-700',
-  annulee: 'bg-red-100 text-red-700',
-}
-
-function formatXAF(amount: number): string {
-  return new Intl.NumberFormat('fr-CM', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(amount) + ' FCFA'
-}
-
-// ── Contenu par rôle ──────────────────────────────────────────────────────────
-// Chaque rôle ne charge que les données de son activité : un livreur ou un
-// caissier n'a pas accès aux commandes, et l'ancien chargement commun
-// (stocks + commandes pour tous) leur affichait un écran d'erreur.
-
-type Source = MobileDashboardSource
+type Source = MobileDashboardSource | 'factures' | 'devis'
 type Section = MobileDashboardSection
 
-// Libellé affiché sous le titre (cosmétique) ; les sections et les données chargées
-// viennent des permissions de la base (dashboardSectionsFor / dashboardSourcesFor).
-const ROLE_SUBTITLE: Record<MobileRole, string> = {
-  admin: 'Direction', manager: 'Supervision', operateur: 'Commercial',
-  apprenant: 'Atelier', caissier: 'Caisse', livreur: 'Livraison',
-}
+// Les sections et les données chargées viennent des permissions de la base
+// (dashboardSectionsFor / dashboardSourcesFor) : un rôle ne charge que ce qu'il peut lire.
 
 interface DashboardData {
   orders: ApiCommandeClient[]
@@ -70,9 +27,13 @@ interface DashboardData {
   livraisons: Livraison[]
   session: CaisseSession | null
   rapport: RapportZ | null
+  factures: ApiFacture[]
+  devisTotal: number | null
 }
 
-const EMPTY: DashboardData = { orders: [], stocks: [], bonsSoumis: 0, livraisons: [], session: null, rapport: null }
+const EMPTY: DashboardData = {
+  orders: [], stocks: [], bonsSoumis: 0, livraisons: [], session: null, rapport: null, factures: [], devisTotal: null,
+}
 
 async function loadSource(source: Source): Promise<Partial<DashboardData>> {
   switch (source) {
@@ -80,6 +41,8 @@ async function loadSource(source: Source): Promise<Partial<DashboardData>> {
     case 'stocks':     return { stocks: (await fetchStocks({ per_page: 100 })).data }
     case 'bons':       return { bonsSoumis: (await fetchBonsSoumis()).length }
     case 'livraisons': return { livraisons: await fetchMesLivraisons() }
+    case 'factures':   return { factures: (await fetchFactures({ per_page: 500 })).data }
+    case 'devis':      return { devisTotal: await fetchDevisTotal() }
     case 'caisse': {
       const session = await fetchSessionCourante()
       return { session, rapport: session ? await fetchRapportZ(session.id) : null }
@@ -87,17 +50,26 @@ async function loadSource(source: Source): Promise<Partial<DashboardData>> {
   }
 }
 
+const livraisonLabels: Record<string, string> = {
+  planifiee: 'Planifiée', en_transit: 'En route', livree: 'Livrée', annulee: 'Annulée',
+}
+
 export function DashboardPage() {
   const { user } = useAuth()
-  const { permissions } = usePermissions()
+  const { permissions, can } = usePermissions()
+  const { items: notifications, unreadCount } = useNotifications()
+  const navigate = useNavigate()
+
+  const canFinance = can('FINANCE')
+  const canCommercial = can('COMMERCIAL')
+
   const view = useMemo(() => {
     const sections = dashboardSectionsFor(permissions)
-    return {
-      subtitle: ROLE_SUBTITLE[user?.role ?? 'operateur'],
-      sections,
-      sources: dashboardSourcesFor(sections),
-    }
-  }, [permissions, user?.role])
+    const sources: Source[] = dashboardSourcesFor(sections)
+    if (canFinance) sources.push('factures')
+    if (canCommercial) sources.push('devis')
+    return { sections, sources }
+  }, [permissions, canFinance, canCommercial])
 
   const [data, setData] = useState<DashboardData>(EMPTY)
   const [loading, setLoading] = useState(true)
@@ -107,7 +79,6 @@ export function DashboardPage() {
     let cancelled = false
     setLoading(true)
     setError('')
-
     // allSettled : une source refusée ou indisponible ne vide pas tout l'écran.
     Promise.allSettled(view.sources.map(loadSource)).then((results) => {
       if (cancelled) return
@@ -124,304 +95,235 @@ export function DashboardPage() {
       }
       setLoading(false)
     })
-
     return () => { cancelled = true }
   }, [view])
 
-  const { orders, stocks, bonsSoumis, livraisons, session, rapport } = data
+  const { orders, stocks, bonsSoumis, livraisons, session, rapport, factures, devisTotal } = data
+  const has = (section: Section) => view.sections.includes(section)
 
-  const totalRevenue = useMemo(
-    () => orders
-      .filter(order => order.statut === 'delivered')
-      .reduce((sum, order) => sum + order.montant_ttc_xaf, 0),
-    [orders],
-  )
+  const ca = useMemo(() => analyticsFromFactures(factures, 'mois'), [factures])
 
-  const totalSales = useMemo(
-    () => orders
-      .filter(order => order.statut !== 'cancelled')
-      .reduce((sum, order) => sum + order.montant_ttc_xaf, 0),
-    [orders],
-  )
+  const ordersTrend = useMemo(() => {
+    const now = new Date()
+    const key = (d: Date) => d.toISOString().slice(0, 7)
+    const cur = key(now)
+    const prev = key(new Date(now.getFullYear(), now.getMonth() - 1, 15))
+    const count = (k: string) => orders.filter((o) => o.statut !== 'cancelled' && o.date_commande.slice(0, 7) === k).length
+    return { current: count(cur), pct: trendPct(count(cur), count(prev)) }
+  }, [orders])
 
-  const activeOrders = useMemo(
-    () => orders.filter(order => !['delivered', 'cancelled'].includes(order.statut)),
-    [orders],
-  )
+  const unpaid = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    const open = factures.filter((f) => f.statut === 'valide' || f.statut === 'envoye')
+    return { count: open.length, late: open.filter((f) => f.date_echeance < today).length }
+  }, [factures])
 
-  const readyOrders = useMemo(() => orders.filter(order => order.statut === 'pret').length, [orders])
-
-  const lowStockItems = useMemo(() => stocks.filter(stock => stock.stock_actuel < 10), [stocks])
-  const lowStock = lowStockItems.length
-
-  const recentOrders = useMemo(
-    () => [...orders].sort((a, b) => new Date(b.date_commande).getTime() - new Date(a.date_commande).getTime()).slice(0, 3),
-    [orders],
-  )
-
+  const lowStockItems = useMemo(() => stocks.filter((s) => s.stock_actuel <= s.stock_min), [stocks])
   const livraisonsOuvertes = useMemo(
-    () => livraisons.filter(l => l.statut === 'planifiee' || l.statut === 'en_transit'),
-    [livraisons],
-  )
+    () => livraisons.filter((l) => l.statut === 'planifiee' || l.statut === 'en_transit'), [livraisons])
   const livreesAujourdhui = useMemo(() => {
     const today = new Date().toDateString()
-    return livraisons.filter(l =>
-      l.statut === 'livree' && !!l.date_livraison_reelle && new Date(l.date_livraison_reelle).toDateString() === today,
-    ).length
+    return livraisons.filter((l) =>
+      l.statut === 'livree' && !!l.date_livraison_reelle && new Date(l.date_livraison_reelle).toDateString() === today).length
   }, [livraisons])
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-gray-600">Chargement des données…</div>
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 px-6">
-        <div className="bg-white p-6 rounded-3xl border border-red-100 shadow-sm text-center">
-          <p className="text-sm text-red-600 mb-2">{error}</p>
-          <p className="text-sm text-gray-500">Vérifiez que l'API backend est bien démarrée et accessible.</p>
-        </div>
-      </div>
-    )
-  }
-
-  const has = (section: Section) => view.sections.includes(section)
-  const lowStockTile = (
-    <KpiTile
-      label="Stock faible"
-      value={String(lowStock)}
-      icon="⚠️"
-      color={lowStock > 0 ? 'bg-red-50 text-red-700' : 'bg-gray-50 text-gray-500'}
-    />
-  )
+  const firstName = (user?.name ?? '').split(/\s+/)[0] || 'vous'
+  const showHero = has('ventes') && factures.length > 0
 
   return (
     <div>
-      <TopBar title="Tableau de bord" subtitle={`${COMPANY_NAME} · ${view.subtitle}`} />
-
-      <div className="px-4 py-4 space-y-5">
-        <div className="grid grid-cols-2 gap-3">
-          {has('caisse') && (
-            <>
-              <KpiTile
-                label={session ? 'Session ouverte' : 'Session fermée'}
-                value={session ? formatXAF(session.fond_ouverture_xaf) : '—'}
-                icon="🏦"
-                color={session ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}
-              />
-              <KpiTile
-                label="Ventes de la session"
-                value={formatXAF(rapport?.total_ttc_xaf ?? 0)}
-                icon="💰"
-                color="bg-indigo-50 text-indigo-700"
-              />
-              <KpiTile
-                label="Tickets"
-                value={String(rapport?.tickets_count ?? 0)}
-                icon="🧾"
-                color="bg-teal-50 text-teal-700"
-              />
-            </>
-          )}
-
-          {has('livraisons') && (
-            <>
-              <KpiTile
-                label="À livrer"
-                value={String(livraisons.filter(l => l.statut === 'planifiee').length)}
-                icon="📦"
-                color="bg-blue-50 text-blue-700"
-              />
-              <KpiTile
-                label="En route"
-                value={String(livraisons.filter(l => l.statut === 'en_transit').length)}
-                icon="🚚"
-                color="bg-yellow-50 text-yellow-700"
-              />
-              <KpiTile
-                label="Livrées aujourd'hui"
-                value={String(livreesAujourdhui)}
-                icon="✅"
-                color="bg-green-50 text-green-700"
-              />
-            </>
-          )}
-
-          {has('ventes') && (
-            <>
-              <KpiTile
-                label="Revenus livrés"
-                value={formatXAF(totalRevenue)}
-                icon="💰"
-                color="bg-green-50 text-green-700"
-              />
-              <KpiTile
-                label="Total commandes"
-                value={formatXAF(totalSales)}
-                icon="🛍️"
-                color="bg-indigo-50 text-indigo-700"
-              />
-            </>
-          )}
-
-          {has('approbation') && (
-            <KpiTile
-              label="Bons à approuver"
-              value={String(bonsSoumis)}
-              icon="📝"
-              color={bonsSoumis > 0 ? 'bg-orange-50 text-orange-700' : 'bg-gray-50 text-gray-500'}
-              to="/approbation"
-            />
-          )}
-
-          {has('commandes') && (
-            <>
-              <KpiTile
-                label="Commandes actives"
-                value={String(activeOrders.length)}
-                icon="📦"
-                color="bg-blue-50 text-blue-700"
-              />
-              <KpiTile
-                label="Commandes prêtes"
-                value={String(readyOrders)}
-                icon="🧾"
-                color="bg-purple-50 text-purple-700"
-              />
-            </>
-          )}
-
-          {has('stock') && lowStockTile}
+      {/* En-tête : salutation, cloche, avatar */}
+      <div className="bg-white safe-top px-4 pt-4 pb-4 flex items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <p className="text-lg font-bold text-gray-900 truncate">Bonjour, {firstName}</p>
+          <p className="text-xs text-gray-500">{user ? (ROLE_LABELS[user.role] ?? user.role) : ''}</p>
         </div>
+        <button type="button" onClick={() => navigate('/notifications')} aria-label="Notifications" className="relative p-2 text-gray-700 active:opacity-60">
+          <Icon name="bell" size={22} />
+          {unreadCount > 0 && (
+            <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-[#C62828] text-white text-[9px] font-bold flex items-center justify-center">
+              {unreadCount > 9 ? '9+' : unreadCount}
+            </span>
+          )}
+        </button>
+        <button type="button" onClick={() => navigate('/profile')} aria-label="Profil">
+          <Avatar name={user?.name ?? '?'} size={38} />
+        </button>
+      </div>
 
-        {has('caisse') && (
-          <Link
-            to="/caisse"
-            className="block text-center bg-[#C62828] text-white text-sm font-semibold rounded-xl py-3"
-          >
-            {session ? 'Reprendre la vente' : 'Ouvrir la caisse'}
-          </Link>
-        )}
+      <div className="px-4 pb-6 space-y-5">
+        {loading ? (
+          <div className="flex justify-center py-16">
+            <div className="w-7 h-7 border-2 border-[#C62828] border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : error ? (
+          <Card className="p-6 text-center">
+            <p className="text-sm text-red-600 mb-2">{error}</p>
+            <p className="text-sm text-gray-500">Vérifiez la connexion puis rouvrez l'application.</p>
+          </Card>
+        ) : (
+          <>
+            {/* Vue d'ensemble : chiffre d'affaires du mois (commandes + finance) */}
+            {showHero && (
+              <div className="rounded-2xl bg-gradient-to-br from-[#1b1f24] to-[#2d333b] p-4 text-white shadow-md">
+                <div className="flex items-center justify-between">
+                  <p className="flex items-center gap-1.5 text-xs font-semibold text-red-300">
+                    <Icon name="chart" size={14} /> Vue d'ensemble
+                  </p>
+                  <button type="button" onClick={() => navigate('/performance')} aria-label="Voir l'analytique" className="text-gray-300">
+                    <Icon name="arrowRight" size={16} />
+                  </button>
+                </div>
+                <p className="mt-2 text-[11px] text-gray-400">Chiffre d'affaires du mois</p>
+                <p className="text-2xl font-extrabold">{formatXAF(ca.current)}</p>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <Trend pct={ca.trend} />
+                  {ca.trend !== null && <span className="text-[11px] text-gray-400">vs mois dernier</span>}
+                </div>
+                <div className="mt-2"><Sparkline values={ca.values} height={56} /></div>
+              </div>
+            )}
 
-        {has('livraisons') && (
-          <section>
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
-                Mes livraisons
-              </h2>
-              <Link to="/livraisons" className="text-xs font-medium text-[#C62828]">
-                Voir tout →
-              </Link>
-            </div>
-            <div className="space-y-2">
-              {livraisonsOuvertes.length === 0 && (
-                <p className="text-sm text-gray-400 bg-white rounded-xl border border-gray-100 px-4 py-6 text-center">
-                  Aucune livraison en attente
-                </p>
+            {/* Tuiles : seulement ce que le rôle peut lire */}
+            <div className="grid grid-cols-2 gap-3">
+              {has('commandes') && (
+                <Tile icon="cart" label="Commandes" value={formatNumber(ordersTrend.current)} trend={ordersTrend.pct} caption="ce mois" to="/orders" />
               )}
-              {livraisonsOuvertes.slice(0, 5).map(l => (
-                <div
-                  key={l.id}
-                  className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3 flex items-center justify-between"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{l.client_nom}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      {l.numero}
-                      {l.date_livraison_prevue && ` · ${new Date(l.date_livraison_prevue).toLocaleDateString('fr-CM')}`}
-                    </p>
-                  </div>
-                  <span className={`text-xs font-medium px-2 py-1 rounded-full shrink-0 ml-2 ${livraisonColor[l.statut]}`}>
-                    {livraisonLabels[l.statut] ?? l.statut}
-                  </span>
-                </div>
-              ))}
+              {canCommercial && devisTotal !== null && (
+                <Tile icon="doc" label="Devis" value={formatNumber(devisTotal)} caption="au total" />
+              )}
+              {has('stock') && (
+                <Tile icon="box" label="Stocks" value={formatNumber(stocks.length)} caption={lowStockItems.length > 0 ? `${lowStockItems.length} en alerte` : 'références'} alert={lowStockItems.length > 0} to="/stocks" />
+              )}
+              {canFinance && factures.length > 0 && (
+                <Tile icon="receipt" label="Factures" value={formatNumber(unpaid.count)} caption={unpaid.late > 0 ? `${unpaid.late} en retard` : 'à encaisser'} alert={unpaid.late > 0} to="/factures" />
+              )}
+              {has('approbation') && (
+                <Tile icon="check" label="Bons à approuver" value={String(bonsSoumis)} caption={bonsSoumis > 0 ? 'en attente' : 'rien en attente'} alert={bonsSoumis > 0} to="/approbation" />
+              )}
+              {has('livraisons') && (
+                <>
+                  <Tile icon="truck" label="À livrer" value={String(livraisons.filter((l) => l.statut === 'planifiee').length)} caption="planifiées" to="/livraisons" />
+                  <Tile icon="truck" label="En route" value={String(livraisons.filter((l) => l.statut === 'en_transit').length)} caption="en cours" to="/livraisons" />
+                  <Tile icon="check" label="Livrées" value={String(livreesAujourdhui)} caption="aujourd'hui" to="/livraisons" />
+                </>
+              )}
+              {has('caisse') && (
+                <>
+                  <Tile icon="wallet" label={session ? 'Session ouverte' : 'Session fermée'} value={session ? formatXAF(session.fond_ouverture_xaf) : '—'} caption="fond de caisse" to="/caisse" />
+                  <Tile icon="receipt" label="Ventes session" value={formatXAF(rapport?.total_ttc_xaf ?? 0)} caption={`${rapport?.tickets_count ?? 0} tickets`} to="/caisse" />
+                </>
+              )}
             </div>
-          </section>
-        )}
 
-        {has('commandes') && (
-          <section>
-            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">
-              Commandes récentes
-            </h2>
-            <div className="space-y-2">
-              {recentOrders.map(order => (
-                <div
-                  key={order.id}
-                  className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3 flex items-center justify-between"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{order.client.nom}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">{formatXAF(order.montant_ttc_xaf)}</p>
-                  </div>
-                  <span className={`text-xs font-medium px-2 py-1 rounded-full shrink-0 ml-2 ${statusColor[order.statut]}`}>
-                    {statusLabels[order.statut] ?? order.statut}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {has('stock') && lowStock > 0 && (
-          <section>
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
-                Stocks en alerte
-              </h2>
-              <Link to="/stocks" className="text-xs font-medium text-[#C62828]">
-                Voir tout →
+            {has('caisse') && (
+              <Link to="/caisse" className="block text-center bg-[#C62828] text-white text-sm font-semibold rounded-xl py-3 shadow-md active:bg-[#B71C1C]">
+                {session ? 'Reprendre la vente' : 'Ouvrir la caisse'}
               </Link>
-            </div>
-            <div className="space-y-2">
-              {lowStockItems.slice(0, 5).map(stock => (
-                <div
-                  key={stock.id}
-                  className="bg-white rounded-xl border border-red-100 px-4 py-3 flex items-center justify-between"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{stock.designation}</p>
-                    <p className="text-xs text-gray-400">{stock.ref}</p>
-                  </div>
-                  <span className={`text-sm font-bold shrink-0 ml-2 ${stock.stock_actuel === 0 ? 'text-red-600' : 'text-orange-500'}`}>
-                    {stock.stock_actuel === 0 ? 'Épuisé' : `${stock.stock_actuel} restants`}
-                  </span>
+            )}
+
+            {/* Activités récentes : déduites des commandes, stocks et factures réels */}
+            {notifications.length > 0 && (
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-sm font-bold text-gray-900">Activités récentes</h2>
+                  <Link to="/notifications" className="text-xs font-semibold text-[#C62828]">Voir tout →</Link>
                 </div>
-              ))}
-            </div>
-          </section>
+                <div className="space-y-2">
+                  {notifications.slice(0, 3).map((n) => (
+                    <Card key={n.id} className="px-3.5 py-3 flex items-center gap-3">
+                      <span className="w-9 h-9 rounded-full bg-red-50 text-[#C62828] flex items-center justify-center shrink-0">
+                        <Icon name={n.kind === 'commandes' ? 'cart' : n.kind === 'stocks' ? 'alert' : 'receipt'} size={17} />
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-gray-900 truncate">{n.title}</p>
+                        <p className="text-[11px] text-gray-500 truncate">{n.message}</p>
+                      </div>
+                      <span className="text-[10px] text-gray-400 shrink-0">{n.at ? timeAgo(n.at) : ''}</span>
+                    </Card>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {has('livraisons') && (
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-sm font-bold text-gray-900">Mes livraisons</h2>
+                  <Link to="/livraisons" className="text-xs font-semibold text-[#C62828]">Voir tout →</Link>
+                </div>
+                <div className="space-y-2">
+                  {livraisonsOuvertes.length === 0 && (
+                    <Card className="px-4 py-6 text-center text-sm text-gray-400">Aucune livraison en attente</Card>
+                  )}
+                  {livraisonsOuvertes.slice(0, 5).map((l) => (
+                    <Card key={l.id} className="px-4 py-3 flex items-center justify-between">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-gray-900 truncate">{l.client_nom}</p>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          {l.numero}{l.date_livraison_prevue && ` · ${new Date(l.date_livraison_prevue).toLocaleDateString('fr-FR')}`}
+                        </p>
+                      </div>
+                      <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full shrink-0 ml-2 bg-blue-50 text-blue-700">
+                        {livraisonLabels[l.statut] ?? l.statut}
+                      </span>
+                    </Card>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {has('stock') && lowStockItems.length > 0 && (
+              <section>
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-sm font-bold text-gray-900">Stocks en alerte</h2>
+                  <Link to="/stocks" className="text-xs font-semibold text-[#C62828]">Voir tout →</Link>
+                </div>
+                <div className="space-y-2">
+                  {lowStockItems.slice(0, 5).map((s) => (
+                    <Card key={s.id} className="px-4 py-3 flex items-center justify-between">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-gray-900 truncate">{s.designation}</p>
+                        <p className="text-xs text-gray-400">{s.ref}</p>
+                      </div>
+                      <span className={`text-sm font-bold shrink-0 ml-2 ${s.stock_actuel === 0 ? 'text-red-600' : 'text-orange-500'}`}>
+                        {s.stock_actuel === 0 ? 'Épuisé' : `${s.stock_actuel} restants`}
+                      </span>
+                    </Card>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {view.sections.length === 0 && !showHero && (
+              <p className="text-center text-sm text-gray-500 py-10">
+                Aucun indicateur n'est activé pour votre rôle. Contactez l'administrateur.
+              </p>
+            )}
+          </>
         )}
       </div>
     </div>
   )
 }
 
-function KpiTile({
-  label,
-  value,
-  icon,
-  color,
-  to,
-}: {
-  label: string
-  value: string
-  icon: string
-  color: string
-  to?: string
+function Tile({ icon, label, value, caption, trend, alert, to }: {
+  icon: IconName; label: string; value: string; caption?: string; trend?: number | null; alert?: boolean; to?: string
 }) {
-  const tile = (
-    <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-4">
-      <div className={`inline-flex items-center justify-center w-9 h-9 rounded-lg text-lg mb-2 ${color}`}>
-        {icon}
+  const navigate = useNavigate()
+  return (
+    <Card onClick={to ? () => navigate(to) : undefined} className="p-3.5">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-gray-500 truncate">{label}</p>
+        <span className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${alert ? 'bg-orange-50 text-orange-600' : 'bg-red-50 text-[#C62828]'}`}>
+          <Icon name={icon} size={15} />
+        </span>
       </div>
-      <p className="text-xl font-bold text-gray-900 leading-tight truncate">{value}</p>
-      <p className="text-xs text-gray-500 mt-0.5">{label}</p>
-    </div>
+      <p className="mt-1.5 text-xl font-extrabold text-gray-900 truncate">{value}</p>
+      <div className="flex items-center gap-1.5 mt-0.5 min-h-[16px]">
+        {trend !== undefined && <Trend pct={trend} />}
+        {caption && <span className={`text-[11px] ${alert ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>{caption}</span>}
+      </div>
+    </Card>
   )
-  return to ? <Link to={to}>{tile}</Link> : tile
 }
