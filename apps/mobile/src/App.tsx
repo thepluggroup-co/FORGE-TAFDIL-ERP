@@ -1,6 +1,8 @@
 import React from 'react'
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
+import { PermissionsProvider, usePermissions } from './context/PermissionsContext'
+import { NotificationsProvider } from './context/NotificationsContext'
 import { BottomNav } from './components/BottomNav'
 import { OfflineBanner } from './components/OfflineBanner'
 import { LoginPage } from './pages/LoginPage'
@@ -8,13 +10,26 @@ import { DashboardPage } from './pages/DashboardPage'
 import { OrdersPage } from './pages/OrdersPage'
 import { StocksPage } from './pages/StocksPage'
 import { StockDetailPage } from './pages/StockDetailPage'
+import { ModulesPage } from './pages/ModulesPage'
+import { NotificationsPage } from './pages/NotificationsPage'
+import { FacturesPage } from './pages/FacturesPage'
+import { PerformancePage } from './pages/PerformancePage'
 import { ProfilePage } from './pages/ProfilePage'
 import { ApprobationPage } from './pages/ApprobationPage'
 import { LivreurPage } from './pages/LivreurPage'
 import { CaissePage } from './pages/CaissePage'
 
 function AuthenticatedApp() {
-  const { user } = useAuth()
+  const { source, canScreen } = usePermissions()
+
+  // Permissions pas encore connues : rien de privilégié ne s'affiche (même principe que le web).
+  if (source === 'loading') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="w-8 h-8 border-2 border-[#C62828] border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-screen bg-gray-50 overflow-hidden">
@@ -23,17 +38,17 @@ function AuthenticatedApp() {
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/orders" element={<OrdersPage />} />
-          <Route path="/approbation" element={<ApprobationPage />} />
-          <Route path="/stocks" element={<StocksPage />} />
-          <Route path="/stocks/:id" element={<StockDetailPage />} />
+          {canScreen('orders') && <Route path="/orders" element={<OrdersPage />} />}
+          {canScreen('approbation') && <Route path="/approbation" element={<ApprobationPage />} />}
+          {canScreen('stocks') && <Route path="/stocks" element={<StocksPage />} />}
+          {canScreen('stocks') && <Route path="/stocks/:id" element={<StockDetailPage />} />}
+          <Route path="/modules" element={<ModulesPage />} />
+          <Route path="/notifications" element={<NotificationsPage />} />
+          {canScreen('factures') && <Route path="/factures" element={<FacturesPage />} />}
+          {canScreen('performance') && <Route path="/performance" element={<PerformancePage />} />}
           <Route path="/profile" element={<ProfilePage />} />
-          {user?.role === 'livreur' && (
-            <Route path="/livraisons" element={<LivreurPage />} />
-          )}
-          {(user?.role === 'caissier' || user?.role === 'admin' || user?.role === 'manager') && (
-            <Route path="/caisse" element={<CaissePage />} />
-          )}
+          {canScreen('livraisons') && <Route path="/livraisons" element={<LivreurPage />} />}
+          {canScreen('caisse') && <Route path="/caisse" element={<CaissePage />} />}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </main>
@@ -57,9 +72,13 @@ function AppRoutes() {
 export default function App() {
   return (
     <AuthProvider>
-      <HashRouter>
-        <AppRoutes />
-      </HashRouter>
+      <PermissionsProvider>
+        <NotificationsProvider>
+          <HashRouter>
+            <AppRoutes />
+          </HashRouter>
+        </NotificationsProvider>
+      </PermissionsProvider>
     </AuthProvider>
   )
 }

@@ -1,7 +1,9 @@
 import { NumberInput } from '@forge/ui'
 import React, { useCallback, useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { usePermissions } from '../context/PermissionsContext'
+import { useParams } from 'react-router-dom'
 import { TopBar } from '../components/TopBar'
+import { Icon } from '../components/ui'
 import { fetchStockDetail, createStockMouvement, type StockDetail } from '../lib/api'
 
 function formatXAF(amount: number): string {
@@ -19,7 +21,9 @@ function formatDate(value: string): string {
 
 export function StockDetailPage() {
   const { id } = useParams<{ id: string }>()
-  const navigate = useNavigate()
+  // Les mouvements de stock exigent STOCK:CREATE côté API.
+  const { can } = usePermissions()
+  const canWriteStock = can('STOCK', 'CREATE')
   const [stock, setStock] = useState<StockDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -68,48 +72,64 @@ export function StockDetailPage() {
 
   return (
     <div>
-      <TopBar title="Détail stock" subtitle={stock ? stock.designation : '...'} />
+      <TopBar title="Détail produit" back />
 
       <div className="px-4 py-3 space-y-4">
-        <button
-          type="button"
-          onClick={() => navigate(-1)}
-          className="text-sm text-[#C62828] font-semibold"
-        >
-          ← Retour
-        </button>
-
         {loading ? (
           <div className="py-16 text-center text-gray-500">Chargement...</div>
         ) : error ? (
           <div className="py-16 text-center text-red-600">{error}</div>
         ) : stock ? (
           <>
-            <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-4 space-y-4">
-              <div className="space-y-1">
-                <p className="text-sm font-semibold text-gray-900">{stock.designation}</p>
-                <p className="text-xs text-gray-500">{stock.ref} · {stock.categorie}</p>
+            <section className="bg-white rounded-2xl border border-gray-100 shadow-[0_1px_3px_rgba(16,24,40,0.06)] overflow-hidden">
+              <div className="aspect-[4/3] bg-gray-100 flex items-center justify-center text-gray-300">
+                {stock.image_url
+                  ? <img src={stock.image_url} alt={stock.designation} className="w-full h-full object-cover" />
+                  : <Icon name="box" size={56} strokeWidth={1.4} />}
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-3xl bg-gray-50 p-3">
-                  <p className="text-xs text-gray-500">Quantité</p>
-                  <p className="text-lg font-semibold text-gray-900">{stock.stock_actuel} {stock.unite}</p>
+              <div className="p-4 space-y-3">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">{stock.designation}</h2>
+                  {stock.description && <p className="text-sm text-gray-500 mt-0.5">{stock.description}</p>}
                 </div>
-                <div className="rounded-3xl bg-gray-50 p-3">
-                  <p className="text-xs text-gray-500">Valeur unitaire</p>
-                  <p className="text-lg font-semibold text-[#C62828]">{formatXAF(stock.prix_unitaire_xaf)}</p>
+                <p className="text-2xl font-extrabold text-gray-900">
+                  {formatXAF(stock.prix_unitaire_xaf)} <span className="text-sm font-medium text-gray-400">/ {stock.unite}</span>
+                </p>
+                <div className={`flex items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-medium ${
+                  stock.stock_actuel <= stock.stock_critique ? 'bg-red-50 text-red-700'
+                    : stock.stock_actuel <= stock.stock_min ? 'bg-orange-50 text-orange-700'
+                    : 'bg-green-50 text-green-700'}`}
+                >
+                  <span className="flex items-center gap-2">
+                    <Icon name={stock.stock_actuel <= stock.stock_min ? 'alert' : 'check'} size={16} />
+                    {stock.stock_actuel === 0 ? 'Épuisé'
+                      : stock.stock_actuel <= stock.stock_critique ? 'Stock critique'
+                      : stock.stock_actuel <= stock.stock_min ? 'Stock faible'
+                      : 'Stock disponible'}
+                  </span>
+                  <span className="font-bold">{stock.stock_actuel} {stock.unite}</span>
                 </div>
-                <div className="rounded-3xl bg-gray-50 p-3">
-                  <p className="text-xs text-gray-500">Seuil alerte</p>
-                  <p className="text-lg font-semibold text-gray-900">{stock.stock_min} {stock.unite}</p>
-                </div>
-                <div className="rounded-3xl bg-gray-50 p-3">
-                  <p className="text-xs text-gray-500">Seuil critique</p>
-                  <p className="text-lg font-semibold text-gray-900">{stock.stock_critique} {stock.unite}</p>
+                <div>
+                  <p className="text-sm font-bold text-gray-900 mb-1">Détails</p>
+                  <dl className="divide-y divide-gray-100 text-sm">
+                    {([
+                      ['Référence', stock.ref],
+                      ['Catégorie', stock.categorie],
+                      ['Unité', stock.unite],
+                      ['Seuil minimum', `${stock.stock_min} ${stock.unite}`],
+                      ['Seuil critique', `${stock.stock_critique} ${stock.unite}`],
+                    ] as Array<[string, string]>).map(([k, v]) => (
+                      <div key={k} className="flex items-center justify-between py-2.5">
+                        <dt className="text-gray-500">{k}</dt>
+                        <dd className="font-medium text-gray-900">{v}</dd>
+                      </div>
+                    ))}
+                  </dl>
                 </div>
               </div>
             </section>
 
+            {canWriteStock && (
             <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-4 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -163,6 +183,7 @@ export function StockDetailPage() {
                 </button>
               </div>
             </section>
+            )}
 
             <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-4 space-y-3">
               <div>

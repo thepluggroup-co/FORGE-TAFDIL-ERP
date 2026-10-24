@@ -1,153 +1,86 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { TopBar } from '../components/TopBar'
+import { Card, ChipRow, EmptyState, SearchField, Spinner, StatusPill, formatDateShort, formatXAF, type PillTone } from '../components/ui'
 import { fetchCommandes, type ApiCommandeClient } from '../lib/api'
 
-// Valeurs réelles de commandes.statut (commandeStatutEnum, packages/db/src/schema.pg.ts) —
-// @forge/shared OrderStatus utilise un autre jeu de valeurs (draft/shipped n'existent pas
-// en base, "pret" en manquait), ce qui rendait 2 des 6 filtres toujours vides et aucun
-// filtre possible sur "Prêt".
-type OrderStatus = 'confirmed' | 'in_production' | 'pret' | 'delivered' | 'cancelled'
+// Valeurs réelles de commandes.statut (commandeStatutEnum, packages/db/src/schema.pg.ts).
+type Filter = 'all' | 'en_cours' | 'livrees' | 'annulees'
 
-const ALL_STATUSES: OrderStatus[] = ['confirmed', 'in_production', 'pret', 'delivered', 'cancelled']
-
-const statusLabel: Record<OrderStatus, string> = {
-  confirmed: 'Confirmé',
-  in_production: 'En production',
-  pret: 'Prêt',
-  delivered: 'Livré',
-  cancelled: 'Annulé',
+const STATUT_UI: Record<string, { label: string; tone: PillTone }> = {
+  confirmed:     { label: 'Confirmée',     tone: 'orange' },
+  in_production: { label: 'En production', tone: 'red' },
+  pret:          { label: 'Prête',         tone: 'blue' },
+  delivered:     { label: 'Livrée',        tone: 'green' },
+  cancelled:     { label: 'Annulée',       tone: 'gray' },
 }
 
-const statusColor: Record<OrderStatus, string> = {
-  confirmed: 'bg-blue-100 text-blue-700',
-  in_production: 'bg-yellow-100 text-yellow-700',
-  pret: 'bg-purple-100 text-purple-700',
-  delivered: 'bg-green-100 text-green-700',
-  cancelled: 'bg-red-100 text-red-700',
-}
-
-function formatXAF(amount: number): string {
-  return new Intl.NumberFormat('fr-CM', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(amount) + ' FCFA'
+function inFilter(statut: string, filter: Filter): boolean {
+  if (filter === 'all') return true
+  if (filter === 'en_cours') return ['confirmed', 'in_production', 'pret'].includes(statut)
+  if (filter === 'livrees') return statut === 'delivered'
+  return statut === 'cancelled'
 }
 
 export function OrdersPage() {
-  const [filter, setFilter] = useState<OrderStatus | 'all'>('all')
   const [orders, setOrders] = useState<ApiCommandeClient[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-
-  const loadOrders = useCallback(async () => {
-    setLoading(true)
-    setError('')
-
-    try {
-      const result = await fetchCommandes({
-        statut: filter === 'all' ? undefined : filter,
-        per_page: 100,
-      })
-      setOrders(result.data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erreur de chargement des commandes')
-    } finally {
-      setLoading(false)
-    }
-  }, [filter])
+  const [filter, setFilter] = useState<Filter>('all')
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
-    loadOrders()
-  }, [loadOrders])
+    let cancelled = false
+    fetchCommandes({ per_page: 100 })
+      .then((r) => { if (!cancelled) setOrders(r.data) })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : 'Erreur de chargement des commandes') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
 
-  const activeCount = orders.filter(
-    order => !['delivered', 'cancelled'].includes(order.statut),
-  ).length
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return [...orders]
+      .sort((a, b) => b.date_commande.localeCompare(a.date_commande))
+      .filter((o) => inFilter(o.statut, filter))
+      .filter((o) => !q || o.reference.toLowerCase().includes(q) || (o.client?.nom ?? '').toLowerCase().includes(q))
+  }, [orders, filter, search])
 
   return (
     <div>
-      <TopBar title="Commandes" subtitle={`${activeCount} active${activeCount > 1 ? 's' : ''}`} />
-
-      <div className="px-4 py-3 flex gap-2 overflow-x-auto no-scrollbar">
-        <FilterChip
-          label="Toutes"
-          active={filter === 'all'}
-          onClick={() => setFilter('all')}
+      <TopBar title="Commandes" back />
+      <div className="px-4 py-4 space-y-3">
+        <SearchField value={search} onChange={setSearch} placeholder="Rechercher une commande…" />
+        <ChipRow<Filter>
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { value: 'all', label: 'Toutes' },
+            { value: 'en_cours', label: 'En cours' },
+            { value: 'livrees', label: 'Livrées' },
+            { value: 'annulees', label: 'Annulées' },
+          ]}
         />
-        {ALL_STATUSES.map(s => (
-          <FilterChip
-            key={s}
-            label={statusLabel[s]}
-            active={filter === s}
-            onClick={() => setFilter(s)}
-          />
-        ))}
-      </div>
-
-      {loading ? (
-        <div className="px-4 py-10 text-center text-gray-500">Chargement des commandes…</div>
-      ) : error ? (
-        <div className="px-4 py-10 text-center text-red-600">{error}</div>
-      ) : orders.length === 0 ? (
-        <div className="px-4 py-16 text-center text-gray-400">
-          <p className="text-3xl mb-2">📋</p>
-          <p className="text-sm">Aucune commande</p>
-        </div>
-      ) : (
-        <div className="px-4 pb-4 space-y-2">
-          {orders.map(order => {
-            const date = new Date(order.date_commande).toLocaleDateString('fr-FR', {
-              day: '2-digit',
-              month: 'short',
-            })
-            return (
-              <div
-                key={order.id}
-                className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{order.client.nom}</p>
-                    {order.client.telephone && (
-                      <p className="text-xs text-gray-400 mt-0.5">{order.client.telephone}</p>
-                    )}
-                  </div>
-                  <span className={`text-xs font-medium px-2 py-1 rounded-full shrink-0 ${statusColor[order.statut as OrderStatus] ?? 'bg-gray-100 text-gray-600'}`}>
-                    {statusLabel[order.statut as OrderStatus] ?? order.statut}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="text-sm font-bold text-[#C62828]">{formatXAF(order.montant_ttc_xaf)}</span>
-                  <span className="text-xs text-gray-400">{date}</span>
-                </div>
+        {loading ? <Spinner /> : error ? (
+          <p className="text-sm text-red-600 bg-red-50 rounded-xl px-4 py-3">{error}</p>
+        ) : rows.length === 0 ? (
+          <EmptyState title="Aucune commande" hint="Aucune commande ne correspond à ce filtre." />
+        ) : rows.map((o) => {
+          const ui = STATUT_UI[o.statut] ?? { label: o.statut, tone: 'gray' as PillTone }
+          return (
+            <Card key={o.id} className="p-4">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm font-bold text-gray-900">{o.reference}</p>
+                <StatusPill label={ui.label} tone={ui.tone} />
               </div>
-            )
-          })}
-        </div>
-      )}
+              <p className="text-xs text-gray-500 mt-1">Client : {o.client?.nom ?? '—'}</p>
+              <div className="flex items-end justify-between mt-1">
+                <p className="text-xs text-gray-500">Montant : <span className="font-semibold text-gray-800">{formatXAF(o.montant_ttc_xaf)}</span></p>
+                <p className="text-[11px] text-gray-400">{formatDateShort(o.date_commande)}</p>
+              </div>
+            </Card>
+          )
+        })}
+      </div>
     </div>
-  )
-}
-
-function FilterChip({
-  label,
-  active,
-  onClick,
-}: {
-  label: string
-  active: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-        active
-          ? 'bg-[#C62828] text-white'
-          : 'bg-white border border-gray-200 text-gray-600'
-      }`}
-    >
-      {label}
-    </button>
   )
 }
