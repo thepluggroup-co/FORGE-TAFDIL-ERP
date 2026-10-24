@@ -706,11 +706,14 @@ describe('GET /api/shop/catalogue — produits finis STANDARD', () => {
     expect(body.data[1]).toMatchObject({ commercial_mode: 'CONFIGURABLE', prix_public: null, promotion: null })
   })
 
-  it('n’affiche jamais un modèle SUR DEVIS au catalogue produit', async () => {
+  it('affiche un modèle SUR DEVIS au catalogue produit, sans prix ni panier', async () => {
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [], error: null }) as never)
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [rowModele({ typeGamme: 'sur_mesure' })], error: null }) as never)
     const res = await app.request('/api/shop/catalogue')
-    expect((await res.json() as { total: number }).total).toBe(0)
+    const body = await res.json() as { data: Array<Record<string, unknown>>; total: number }
+    expect(body.total).toBe(1)
+    // Jamais de prix fixe en sur devis, même si prix_public traîne sur la ligne modeles_shop.
+    expect(body.data[0]).toMatchObject({ commercial_mode: 'QUOTE', prix_public: null, promotion: null })
   })
 
   it('résout le détail d un modèle quand l id n est pas un article de stock', async () => {
@@ -796,7 +799,7 @@ describe('POST /api/shop/commandes — produit fini STANDARD (CAS 1 pilote)', ()
 describe('Vitrine ERP des produits finis — /api/shop-erp/modeles', () => {
   const HEADERS = { ...authHeaders('admin'), 'Content-Type': 'application/json' }
 
-  it('GET liste les modèles STANDARD et CONFIGURABLE, jamais SUR DEVIS', async () => {
+  it('GET liste les modèles STANDARD, CONFIGURABLE et SUR DEVIS', async () => {
     allow()
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
       data: [
@@ -810,20 +813,22 @@ describe('Vitrine ERP des produits finis — /api/shop-erp/modeles', () => {
     const res = await app.request('/api/shop-erp/modeles', { headers: HEADERS })
     expect(res.status).toBe(200)
     const body = await res.json() as { data: Array<{ reference: string; commercial_mode: string }> }
-    expect(body.data.map((m) => `${m.reference}:${m.commercial_mode}`)).toEqual(['P001:STANDARD', 'P003:CONFIGURABLE'])
+    expect(body.data.map((m) => `${m.reference}:${m.commercial_mode}`)).toEqual(['P001:STANDARD', 'P003:CONFIGURABLE', 'PX:QUOTE'])
   })
 
-  it('PUT refuse une vitrine pour un modèle SUR DEVIS (422)', async () => {
+  it('PUT publie une vitrine pour un modèle SUR DEVIS sans exiger de prix', async () => {
     allow()
     vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
       data: { id: MID, designation: 'Portail personnalisé', type_gamme: 'sur_mesure', actif: true, familles: { nom: 'Portail', type_gamme: 'configuration' }, modeles_shop: null },
       error: null,
     }) as never)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({
+      data: { modele_id: MID, visible_shop: true, prix_public: null }, error: null,
+    }) as never)
     const res = await app.request(`/api/shop-erp/modeles/${MID}/vitrine`, {
-      method: 'PUT', headers: HEADERS, body: JSON.stringify({ visible_shop: true, prix_public: 500000 }),
+      method: 'PUT', headers: HEADERS, body: JSON.stringify({ visible_shop: true }),
     })
-    expect(res.status).toBe(422)
-    expect((await res.json() as { code: string }).code).toBe('MODE_NON_VITRINE')
+    expect(res.status).toBe(200)
   })
 
   it('PUT met en ligne un modèle CONFIGURABLE sans prix public (prix calculé par le configurateur)', async () => {

@@ -54,7 +54,7 @@ interface AddPayload {
   image: string | null
   type_article?: TypeArticle
   /** CONFIGURABLE : jamais ajouté au panier, redirigé vers le configurateur (prix calculé côté serveur). */
-  commercial_mode?: 'STANDARD' | 'CONFIGURABLE'
+  commercial_mode?: 'STANDARD' | 'CONFIGURABLE' | 'QUOTE'
 }
 
 interface CartStore {

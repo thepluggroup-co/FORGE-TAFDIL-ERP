@@ -338,6 +338,25 @@ describe('C5 — POST /api/devis : création devis avec PDF', () => {
     expect(body.statut).toBe('brouillon')
   })
 
+  it('accepte une quantité décimale (5,4 m² = 3 m × 1,8 m) — régression .int() du 16/10', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, count: 0, error: null }) as never)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: CLIENT, error: null }) as never)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: DEVIS, error: null }) as never)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: [DEVIS_LIGNE], error: null }) as never)
+    vi.mocked(supabase.from).mockReturnValueOnce(mkChain({ data: null, error: null }) as never)
+
+    const res = await app.request('/api/devis', {
+      method:  'POST',
+      headers: new Headers(authHeaders('operateur')),
+      body:    JSON.stringify({
+        ...DEVIS_CREATE_BODY,
+        lignes: [{ designation: 'Barrière B-01', unite: 'm2', quantite: 5.4, prix_unitaire_ht_xaf: 25_000 }],
+      }),
+    })
+    expect(res.status).toBe(201)
+  })
+
   it('retourne 400 si lignes vides (Zod)', async () => {
     const res = await app.request('/api/devis', {
       method:  'POST',
@@ -401,6 +420,22 @@ describe('C6 — PATCH /api/devis/:id/statut : transition devis', () => {
       body:    JSON.stringify({ statut: 'envoye' }),
     })
     expect(res.status).toBe(403)
+  })
+
+  it('validation interne (envoye → accepte) marque approuve_par_client = true, sans attendre le lien client', async () => {
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({ data: { ...DEVIS, statut: 'envoye', approuve_par_client: false }, error: null }) as never,
+    )
+    vi.mocked(supabase.from).mockReturnValueOnce(
+      mkChain({ data: { ...DEVIS, statut: 'accepte', approuve_par_client: true }, error: null }) as never,
+    )
+    const res = await app.request(`/api/devis/${DEVIS_ID}/statut`, {
+      method:  'PATCH',
+      headers: new Headers(authHeaders('manager')),
+      body:    JSON.stringify({ statut: 'accepte' }),
+    })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { approuve_par_client: boolean }).approuve_par_client).toBe(true)
   })
 })
 
